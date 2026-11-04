@@ -262,8 +262,12 @@ def collect(audit, image_digest):
                         sha = item["sha256"]
                         if not re.fullmatch(r"[a-f0-9]{64}", sha):
                             raise ValueError("invalid native release notice digest")
+                        source_sbom = item.get("content_kind") == "source_sbom"
+                        if source_sbom and item["file"] != "NOTICE-SOURCE-SBOM-" + sha + ".json":
+                            raise ValueError("invalid native source SBOM filename")
                         text = read_capped(audit / "prepared/notices/sha256" / sha,
-                                           512 * 1024, raise_on_refusal=True)
+                                           (4 * 1024 * 1024 if source_sbom else 512 * 1024),
+                                           raise_on_refusal=True)
                         if hashlib.sha256(text).hexdigest() != sha:
                             raise ValueError("native release notice hash mismatch")
                 report.native_notice_collections.append(receipt)

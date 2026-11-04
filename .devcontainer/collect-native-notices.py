@@ -14,15 +14,16 @@ import urllib.error
 import urllib.request
 
 MAX_ARCHIVE = 32 * 1024 * 1024
+MAX_SOURCE_SBOM = 4 * 1024 * 1024
 MAX_TEXT = 512 * 1024
 MAX_TOTAL = 8 * 1024 * 1024
 NOTICE = re.compile(r"(?:licen[cs]e|copying|copyright|notice|authors)(?:[._-].*)?\Z", re.I)
 
 
-def download(url):
+def download(url, *, max_bytes=MAX_ARCHIVE):
     with urllib.request.urlopen(url, timeout=45) as response:
-        data = response.read(MAX_ARCHIVE + 1)
-    if len(data) > MAX_ARCHIVE:
+        data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise ValueError("release archive exceeds byte budget")
     return data
 
@@ -75,7 +76,54 @@ def identify(binary, args, pattern):
     return match[1]
 
 
-def collect(name, binary, args, pattern, repository, tag_prefix, output):
+def _unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate source SBOM field")
+        result[key] = value
+    return result
+
+
+def verify_python_source(sbom, version, archive_url, archive_sha):
+    """Bind notices to the exact release archive described by python.org."""
+    document = json.loads(sbom, object_pairs_hook=_unique)
+    if not isinstance(document, dict) or document.get("spdxVersion") != "SPDX-2.3":
+        raise ValueError("unsupported Python source SBOM")
+    packages = document.get("packages")
+    if not isinstance(packages, list) or any(not isinstance(row, dict) for row in packages):
+        raise ValueError("invalid Python source package inventory")
+    matches = [row for row in packages if row.get("name") == "CPython"]
+    if len(matches) != 1:
+        raise ValueError("ambiguous Python source identity")
+    package = matches[0]
+    checksums = package.get("checksums", [])
+    if not isinstance(checksums, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("algorithm"), str)
+            or not isinstance(row.get("checksumValue"), str) for row in checksums):
+        raise ValueError("invalid Python source checksums")
+    described = document.get("documentDescribes", [])
+    if not isinstance(described, list) or any(not isinstance(value, str) for value in described):
+        raise ValueError("invalid Python source document identity")
+    described = set(described)
+    relationships = document.get("relationships", [])
+    if not isinstance(relationships, list) or any(not isinstance(row, dict) for row in relationships):
+        raise ValueError("invalid Python source relationships")
+    for row in relationships:
+        if (row.get("relationshipType") == "DESCRIBES"
+                and row.get("spdxElementId") == document.get("SPDXID", "SPDXRef-DOCUMENT")):
+            target = row.get("relatedSpdxElement")
+            if not isinstance(target, str):
+                raise ValueError("invalid Python source relationship target")
+            described.add(target)
+    sha256 = {row.get("checksumValue") for row in checksums if row.get("algorithm") == "SHA256"}
+    if (package.get("versionInfo") != version or package.get("downloadLocation") != archive_url
+            or package.get("SPDXID") not in described
+            or sha256 != {archive_sha}):
+        raise ValueError("Python source SBOM does not match the selected release archive")
+
+
+def collect(name, binary, args, pattern, repository, tag_prefix, output, *, python_source=False):
     record = {"name": name, "binary": str(binary), "status": "unavailable", "files": [],
               "limitations": ["Release notice candidates do not prove exact build-source correspondence.",
                               "Statically linked and bundled dependency completeness is not established."]}
@@ -87,13 +135,26 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output):
             record["binary_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
         version = identify(binary, args, pattern)
         record["version"] = version
-        url = f"https://codeload.github.com/{repository}/tar.gz/refs/tags/{tag_prefix}{version}"
+        url = (f"https://www.python.org/ftp/python/{version}/Python-{version}.tgz" if python_source else
+               f"https://codeload.github.com/{repository}/tar.gz/refs/tags/{tag_prefix}{version}")
         record["source_url"] = url
         archive = download(url)
         record["source_archive_sha256"] = hashlib.sha256(archive).hexdigest()
+        sbom = None
+        if python_source:
+            record["source_sbom_url"] = url + ".spdx.json"
+            sbom = download(record["source_sbom_url"], max_bytes=MAX_SOURCE_SBOM)
+            verify_python_source(sbom, version, url, record["source_archive_sha256"])
         record["files"], contents = release_notices(archive)
+        if sbom is not None:
+            sha = hashlib.sha256(sbom).hexdigest()
+            filename = "NOTICE-SOURCE-SBOM-" + sha + ".json"
+            record["source_sbom_sha256"] = sha
+            record["files"].append({"file": filename, "sha256": sha,
+                                    "source_url": record["source_sbom_url"], "content_kind": "source_sbom"})
+            contents[filename] = sbom
         record["status"] = "release_notice_candidates_captured"
-    except (OSError, ValueError, UnicodeError, tarfile.TarError, EOFError,
+    except (OSError, ValueError, UnicodeError, RecursionError, tarfile.TarError, EOFError,
             subprocess.SubprocessError, urllib.error.URLError) as exc:
         record["error"] = type(exc).__name__ + ": " + str(exc)[:500]
         print("Native notice collection warning; inspect /usr/share/doc/raptor-native-notices.")
@@ -101,8 +162,9 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output):
     destination.mkdir(parents=True, exist_ok=True)
     # This directory belongs only to this collector. Never leave old texts
     # looking current after a version change or failed retrieval.
-    for old in destination.glob("LICENSE-*.txt"):
-        old.unlink()
+    for pattern in ("LICENSE-*.txt", "NOTICE-SOURCE-SBOM-*.json"):
+        for old in destination.glob(pattern):
+            old.unlink()
     for filename, text in contents.items():
         (destination / filename).write_bytes(text)
     (destination / "NOTICE-PROVENANCE.json").write_text(
@@ -120,6 +182,9 @@ def main():
             r"git version ([0-9]+\.[0-9]+\.[0-9]+)", "git/git", "v", args.output)
     collect("subversion", Path("/usr/bin/svn"), ["--version", "--quiet"],
             r"([0-9]+\.[0-9]+\.[0-9]+)", "apache/subversion", "", args.output)
+    collect("cpython", Path("/usr/local/bin/python3"), ["--version"],
+            r"Python ([0-9]+\.[0-9]+\.[0-9]+)", "python/cpython", "v", args.output,
+            python_source=True)
 
 
 if __name__ == "__main__":

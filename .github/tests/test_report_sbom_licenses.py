@@ -300,3 +300,27 @@ def test_pipeline_collects_sha256_for_files_outside_package_catalogue():
     assert "SYFT_FILE_METADATA_SELECTION: all" in step
     assert "SYFT_FILE_METADATA_DIGESTS: sha256" in step
     assert "continue-on-error: true" in step
+
+
+@pytest.mark.parametrize("kind", ["source_sbom", "notice_candidate"])
+def test_larger_upstream_sbom_is_bounded_separately_from_notice_text(tmp_path, kind):
+    _, provenance, digest = inputs(tmp_path)
+    source = json.dumps({"spdxVersion": "SPDX-2.3", "padding": "x" * (600 * 1024)}).encode()
+    source_sha = hashlib.sha256(source).hexdigest()
+    filename = "NOTICE-SOURCE-SBOM-" + source_sha + ".json"
+    receipt = {"name": "cpython", "version": "3.14.10", "status": "release_notice_candidates_captured",
+               "files": [{"file": filename, "sha256": source_sha, "content_kind": kind}]}
+    raw = json.dumps(receipt).encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    directory = tmp_path / "prepared/notices/sha256"
+    directory.mkdir(parents=True)
+    (directory / sha).write_bytes(raw)
+    (directory / source_sha).write_bytes(source)
+    prefix = "/usr/share/doc/raptor-native-notices/cpython/"
+    provenance["notice_evidence"]["unassociated_files"] = [
+        {"path": prefix + "NOTICE-PROVENANCE.json", "sha256": sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"},
+        {"path": prefix + filename, "sha256": source_sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"}]
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert bool(report.native_notice_collections) == (kind == "source_sbom")
+    assert bool(report.inventory_errors) == (kind != "source_sbom")
