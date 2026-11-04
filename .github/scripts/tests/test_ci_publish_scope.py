@@ -52,6 +52,9 @@ def repo(tmp_path):
     ('.devcontainer/helper.py', True), ('.devcontainer/notices/LICENSE', True),
     ('.devcontainer/notices/NEW_NOTICE', True), ('pyproject.toml', True), ('uv.lock', True),
     ('.github/actions/enable-userns/action.yml', True),
+    ('.github/scripts/prepare_sbom.py', True),
+    ('.github/scripts/check_playwright_source.py', True),
+    ('.github/scripts/check_node_release.py', True),
 ])
 def test_image_inputs_not_audit_or_test_changes(repo, name, expected):
     base = git(repo, 'rev-parse', 'HEAD')

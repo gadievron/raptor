@@ -24,6 +24,9 @@ DOCKERFILE = '.devcontainer/Dockerfile'
 OPTIONAL_INPUTS = ['.dockerignore', '.devcontainer/Dockerfile.dockerignore']
 BUILD_INPUTS = [DOCKERFILE, '.github/workflows/dockerhub-publish.yml',
                 '.github/scripts/dockerhub_scope.py',
+                '.github/scripts/prepare_sbom.py',
+                '.github/scripts/check_playwright_source.py',
+                '.github/scripts/check_node_release.py',
                 '.github/actions/enable-userns']
 
 
