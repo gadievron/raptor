@@ -483,7 +483,7 @@ class TestKeepRootfs:
         assert product.rootfs is None
         assert not keep.exists()
 
-    def test_build_failure_discards_rootfs_dir(self, tmp_path):
+    def test_preexisting_rootfs_is_preserved_when_build_is_refused(self, tmp_path):
         keep = tmp_path / "rootfs"
         keep.mkdir()
         (keep / "stale").write_text("x")
@@ -493,7 +493,8 @@ class TestKeepRootfs:
                 self._repo(tmp_path), "make",
                 out_dir=tmp_path / "out", keep_rootfs=keep)
         assert not product.ok
-        assert not keep.exists()
+        assert product.reason == "rejected_input"
+        assert (keep / "stale").read_text() == "x"
 
     def test_default_call_has_no_rootfs(self, tmp_path):
         from pathlib import Path as _P

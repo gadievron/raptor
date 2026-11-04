@@ -27,12 +27,14 @@ import logging
 import os
 import re
 import shutil
+import stat
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.env.spec import ToolchainSpec
+from core.run.scratch import scratch_dir
 
 logger = logging.getLogger(__name__)
 
@@ -180,30 +182,67 @@ def containerized_build(
     binary against the exact toolchain runtime that produced it. The
     directory is LARGE (the full flattened image, potentially millions
     of inodes): point it at disk-backed run storage, never a tmpfs,
-    and delete it when the run is done. On any failure path the
-    partial directory is removed.
+    and delete it when the run is done. The path must not already
+    exist. Partial exports stay in private sibling scratch until the
+    build succeeds; failures reclaim only this call's scratch.
 
     Never raises for build-class failures; see :class:`BuildProduct`.
     """
+    options = dict(
+        out_dir=out_dir, toolchain=toolchain, base_image=base_image,
+        timeout_seconds=timeout_seconds, keep_rootfs=None, run_env=run_env,
+        aux_builds=aux_builds, subdir=subdir,
+    )
+    if not keep_rootfs:
+        return _containerized_build(repo_dir, command, **options)
+    keep = Path(keep_rootfs)
     try:
-        product = _containerized_build(
-            repo_dir, command, out_dir=out_dir, toolchain=toolchain,
-            base_image=base_image, timeout_seconds=timeout_seconds,
-            keep_rootfs=keep_rootfs, run_env=run_env,
-            aux_builds=aux_builds, subdir=subdir,
-        )
+        # Reserve exclusively before any build work. An existing tree is
+        # operator-owned, even when a build would otherwise have failed.
+        keep.mkdir(parents=True)
+    except OSError as exc:
+        return BuildProduct(ok=False, reason="rejected_input", detail=str(exc)[:500])
+    try:
+        reservation = keep.lstat()
     except BaseException:
-        if keep_rootfs:
-            shutil.rmtree(keep_rootfs, ignore_errors=True)
+        # Setup failed before any image data exists; only an empty
+        # reservation can be removed here.
+        try:
+            keep.rmdir()
+        except OSError:
+            pass
         raise
-    if keep_rootfs:
-        if product.ok:
-            product.rootfs = Path(keep_rootfs)
-        else:
-            # A failed build must not leave a multi-GB partial image
-            # tree in the run directory.
-            shutil.rmtree(keep_rootfs, ignore_errors=True)
-    return product
+    try:
+        with scratch_dir("raptor-rootfs-build-", dir=keep.parent) as scratch:
+            rootfs = scratch / "rootfs"
+            options["keep_rootfs"] = rootfs
+            product = _containerized_build(repo_dir, command, **options)
+            if product.ok:
+                try:
+                    if not stat.S_ISDIR(rootfs.lstat().st_mode):
+                        raise OSError("staged rootfs is not a real directory")
+                    current = keep.lstat()
+                    if (current.st_dev, current.st_ino) != (reservation.st_dev, reservation.st_ino):
+                        raise FileExistsError("rootfs destination changed during build")
+                    os.replace(rootfs, keep)
+                except OSError as exc:
+                    product.ok = False
+                    product.reason = "export_failed"
+                    product.detail = f"rootfs publication failed: {exc}"[:500]
+                    product.rootfs = None
+                else:
+                    product.rootfs = keep
+            return product
+    finally:
+        # Only remove our original EMPTY reservation, never a replacement
+        # or data written there while the build ran. All partial image data
+        # is confined to scratch_dir, whose cleanup handles restricted trees.
+        try:
+            current = keep.lstat()
+            if (current.st_dev, current.st_ino) == (reservation.st_dev, reservation.st_ino):
+                keep.rmdir()
+        except OSError:
+            pass
 
 
 def _containerized_build(
