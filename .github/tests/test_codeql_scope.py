@@ -443,3 +443,29 @@ def test_preparsed_import_extraction_matches_disk_tree(tmp_path):
     (tmp_path / path).write_text(text)
     expected = extract_imports(path, tmp_path)
     assert extract_imports(path, tmp_path, source_tree=ast.parse(text)) == expected
+
+
+def test_import_passes_keep_late_aliases_exports_and_literal_references(tmp_path):
+    """Conservative dependency discovery must retain every extraction arm."""
+    path = Path("core/example/__init__.py")
+    (tmp_path / path).parent.mkdir(parents=True)
+    (tmp_path / path).write_text(textwrap.dedent('''\
+        import core.json
+        from . import helpers
+        dynamic("core.audit.executor")
+        from importlib import import_module as dynamic
+        importlib.import_module("packages.web.browser")
+        __import__("engine.coccinelle")
+        _LAZY_EXPORTS = {"run": ("core.audit.orchestrator", "run_orchestrator")}
+        patch_target = "core.llm.client.generate"
+        runner = "libexec/raptor-audit"
+    '''))
+    references = {"libexec/raptor-audit": set(), "unrelated-script": set()}
+    assert set(extract_imports(path, tmp_path, literal_references=references)) == {
+        "core.json", "core.example", "core.example.helpers",
+        "core.audit.executor", "packages.web.browser", "engine.coccinelle",
+        "core.audit.orchestrator", "core.llm.client.generate",
+    }
+    assert references == {
+        "libexec/raptor-audit": {path}, "unrelated-script": set(),
+    }
