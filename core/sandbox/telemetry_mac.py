@@ -249,7 +249,9 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
 
 def tamper_events() -> list[dict]:
     """Parsed tamper-marker records, oldest first (forensics /
-    triage). Best-effort: unparseable lines are skipped."""
+    triage). Best-effort: unparseable lines are skipped. Successfully
+    parsed events survive a later read or descriptor-close failure.
+    """
     events: list[dict] = []
     try:
         fd = os.open(
@@ -272,7 +274,9 @@ def tamper_events() -> list[dict]:
         finally:
             os.close(fd)
     except OSError:
-        return []
+        # Keep recovered history when a later read or close fails.
+        # Returning [] here erased valid earlier tamper evidence.
+        pass
     return events
 
 
