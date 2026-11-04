@@ -328,6 +328,8 @@ def _open_record_is_write_intent(record: dict) -> bool:
     """
     name = record.get("syscall")
     args = record.get("args") or []
+    if not isinstance(args, (list, tuple)):
+        args = []
     if name == "open":
         # open(path, flags, mode) → flags at args[1]
         if len(args) < 2:
@@ -342,7 +344,7 @@ def _open_record_is_write_intent(record: dict) -> bool:
         # openat2: conservative write-classify (see docstring).
         # Any other syscall name is not an open-family record.
         return name == "openat2"
-    if not isinstance(flags, int):
+    if type(flags) is not int:
         return False
     if flags & (_O_WRONLY | _O_RDWR):
         return True
@@ -370,6 +372,8 @@ def _parse_macos_connect_destination(path: str) -> ConnectTarget | None:
     Returns None for unix-domain socket paths (local IPC, not
     egress) and for destinations without a trailing ``:<port>``.
     """
+    if not isinstance(path, str):
+        return None
     if _is_local_socket_destination(path):
         return None
     m = _MACOS_CONNECT_DEST_RE.match(path)
@@ -411,7 +415,7 @@ def _parse_connect_path(record: dict) -> ConnectTarget | None:
     in args[1] only, which the parser can't decode at parse time.
     """
     path = record.get("path")
-    if not path:
+    if not isinstance(path, str) or not path:
         return None
     m = _CONNECT_PATH_RE.match(path)
     if m is not None:
@@ -497,6 +501,8 @@ def _iter_records(path: Path) -> Iterable[dict]:
             chunks.append(chunk)
             remaining -= len(chunk)
         data = b"".join(chunks)
+    except OSError:
+        return
     finally:
         try:
             _os.close(fd)
@@ -511,7 +517,7 @@ def _iter_records(path: Path) -> Iterable[dict]:
             continue
         try:
             yield json.loads(line.decode("utf-8", errors="replace"))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
 
 
@@ -670,11 +676,12 @@ def parse_observe_log(run_dir, *,
         if rec.get("type") == "audit_summary":
             dropped = rec.get("dropped_by_category") or {}
             if isinstance(dropped, dict) and dropped:
-                # Coerce values to int (JSON re-decode may give us
-                # ints already; guard against floats/strings).
+                # The writers emit nonnegative integer counts.
+                # Ignore corrupt values rather than converting NaN,
+                # infinity, booleans, or negatives into budget state.
                 profile.dropped_by_category = {
-                    str(k): int(v) for k, v in dropped.items()
-                    if isinstance(v, (int, float))
+                    str(k): v for k, v in dropped.items()
+                    if type(v) is int and v >= 0
                 }
                 profile.budget_truncated = any(
                     profile.dropped_by_category.values()
@@ -688,7 +695,10 @@ def parse_observe_log(run_dir, *,
         # syscall is recognised — the JSONL filename is the primary
         # signal.
         name = rec.get("syscall")
-        if not name:
+        if not isinstance(name, str) or not name:
+            continue
+        path = rec.get("path")
+        if path is not None and not isinstance(path, str):
             continue
         if "observe" in rec and not rec.get("observe"):
             continue
