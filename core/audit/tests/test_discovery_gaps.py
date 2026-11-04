@@ -129,8 +129,10 @@ class TestStalenessOnLoad:
             resume=False,
         )
 
+        # Patch the consumer re-export: importing it while the canonical
+        # function is mocked can retain that mock after patch teardown.
         with patch(
-            "core.coverage.journal.load_domain_model",
+            "core.audit.journal.load_domain_model",
             return_value=dm,
         ):
             result = _load_domain_model(config)
