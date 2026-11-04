@@ -499,3 +499,20 @@ def test_nested_and_compound_assignments_preserve_access_order():
     assert [(r.line, r.owner) for r in target.reads] == [
         (4, "obj"), (3, "obj"), (2, "peer"),
     ]
+
+
+@requires_ts
+@pytest.mark.parametrize("qualifier", ["", "static "])
+def test_static_detection_ignores_large_unicode_body(qualifier):
+    source = (
+        f"{qualifier}void process(struct Obj *obj, void (*cb)(int)) {{\n"
+        + '    /* é🙂 static ( body text */\n' * 2000
+        + "    obj->target = 1;\n}\n"
+    )
+    spans = function_spans(source, "unicode.c")
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "process"
+    assert set(span.params) == {"obj", "cb"}
+    assert span.is_static is bool(qualifier)
+    assert (span.start, span.end) == (1, 2003)
