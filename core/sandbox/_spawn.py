@@ -454,6 +454,7 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
     sibling cannot inject data (it never writes our status_w).
     """
     raw = b""
+    read_failed = False
     try:
         while len(raw) < 1024:
             try:
@@ -464,6 +465,7 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
                 break
             raw += chunk
     except OSError as e:
+        read_failed = True
         # An unreadable status pipe is NOT the same thing as EOF: EOF
         # means the write end closed cleanly (normally: the target
         # exec'd and CLOEXEC reaped status_w), while a read error means
@@ -486,7 +488,13 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
         except OSError:
             pass
         parent_fds.discard(status_r)
-    return _parse_setup_status(raw)
+    parsed = _parse_setup_status(raw)
+    if read_failed and parsed is None:
+        # G: is only positive confirmation when the remaining channel was
+        # drained successfully; a read error may hide a following X report.
+        return ("!", "exec-status pipe read failed after exec confirmation; "
+                "target execution status is unknown")
+    return parsed
 
 
 def _should_warn_proc_mount_failure(proc_rc: int, libc_loaded: bool,
