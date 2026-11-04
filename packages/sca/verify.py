@@ -44,13 +44,18 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import shutil
+import stat
+import uuid
 import sys
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.atomic_fs import rmtree_hardened
+from core.atomic_fs.fs_lock import artifact_lock
 from core.json import JsonCache, load_json, save_json
+from core.run.output import unique_run_suffix
+from core.run.scratch import scratch_dir
 
 # findings.json byte budgets (single owner + rationale: kinds.py) —
 # steered-path budget for the operator-supplied --findings read,
@@ -109,15 +114,38 @@ def main(
     if http is None:
         http = default_client()
 
-    out_dir = _resolve_out(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = _resolve_out(args.out).resolve()
+    # Validate before allocating output or replacing any reserved artifacts.
+    # A baseline inside verify-after would be overwritten before comparison,
+    # producing a misleading comparison of the new findings against themselves.
+    inputs = [target, proposed]
+    if args.findings:
+        inputs.append(Path(args.findings).resolve())
+    reserved = [out_dir / name for name in (
+        "overlay", "verify-before", "verify-after", "delta.md", "delta.json",
+    )]
+    if (out_dir in (target, proposed)
+            or any(source.is_relative_to(slot) for source in inputs for slot in reserved)):
+        print("raptor-sca verify: output artifacts overlap an input path",
+              file=sys.stderr)
+        return 2
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Keep one explicit output's overlay and findings together throughout
+        # analysis and rendering; another invocation must not replace it early.
+        with artifact_lock(out_dir / ".verify", required=True,
+                           subject="SCA verification output"):
+            return _verify_in_output(target, proposed, out_dir, args, http, cache)
+    except OSError as exc:
+        print(f"raptor-sca verify: verification failed: {exc}", file=sys.stderr)
+        return 3
 
+
+def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
     overlay_dir = out_dir / "overlay"
     try:
-        shutil.rmtree(overlay_dir, ignore_errors=True)
-        _copy_target(target, overlay_dir)
-        applied = _apply_overlay(proposed, overlay_dir)
-    except OSError as e:
+        applied = _prepare_overlay(target, proposed, out_dir)
+    except (OSError, ValueError) as e:
         print(f"raptor-sca verify: cannot prepare overlay: {e}", file=sys.stderr)
         return 3
     if not applied:
@@ -262,61 +290,146 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def _resolve_out(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).resolve()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path("out") / f"sca-verify-{ts}"
+    return Path("out") / f"sca-verify-{unique_run_suffix('-')}"
 
 
 # ---------------------------------------------------------------------------
 # Overlay construction
 # ---------------------------------------------------------------------------
 
-def _copy_target(src: Path, dst: Path) -> None:
-    """Mirror the target into ``dst``, skipping vendored / build dirs.
+# Conservative per-preparation I/O/inode budgets, including proposed files.
+# Higher budgets admit larger monorepos but increase peak disk usage; lower
+# budgets can refuse legitimate source trees. Per-file limits still apply.
+_OVERLAY_MAX_BYTES = 2 * 1024**3
+_OVERLAY_MAX_ENTRIES = 200_000
 
-    Walks with ``os.walk(..., followlinks=False)`` — NOT ``rglob``:
-    before Python 3.13 ``Path.rglob`` recurses THROUGH directory
-    symlinks, so a hostile repo's ``docs -> ~/.ssh`` link pulled
-    operator files into the overlay (which is then scanned and lands
-    in delta artifacts); a cyclic symlink additionally recursed
-    unboundedly. Files are copied through the resolvers' lstat-gated,
-    size-bounded ``copy_regular_file`` so symlinked / non-regular /
-    oversized entries are refused with a log line instead of followed.
-    """
+
+@dataclass
+class _CopyBudget:
+    entries: int = 0
+    copied_bytes: int = 0
+
+    def entry(self) -> None:
+        self.entries += 1
+        if self.entries > _OVERLAY_MAX_ENTRIES:
+            raise ValueError(f"overlay exceeds {_OVERLAY_MAX_ENTRIES} entries")
+
+    def copied(self, path: Path) -> None:
+        self.copied_bytes += path.stat().st_size
+        if self.copied_bytes > _OVERLAY_MAX_BYTES:
+            raise ValueError(f"overlay exceeds {_OVERLAY_MAX_BYTES} copied bytes")
+
+
+def _overlay_files(root, excluded, budget, *, proposed=False):
+    def walk_failed(exc):
+        raise exc
+
+    for dirpath, dirs, files in os.walk(root, followlinks=False,
+                                        onerror=walk_failed):
+        budget.entry()
+        cur = Path(dirpath)
+        kept = []
+        for name in dirs:
+            child = cur / name
+            if child in excluded or (not proposed and name in _SKIP_DIR_NAMES):
+                continue
+            if child.is_symlink():
+                if proposed:
+                    raise ValueError(f"proposed directory is a symlink: {child}")
+                continue
+            kept.append(name)
+        dirs[:] = kept
+        for name in files:
+            budget.entry()
+            yield cur / name
+
+
+def _copy_target(src: Path, dst: Path, *, exclude_roots=(), budget=None) -> None:
+    """Copy source without vendors, symlinks, output recursion, or silent walk errors."""
     from .resolvers._safe_io import copy_regular_file
 
+    src, dst = src.resolve(), dst.resolve()
+    if src.is_relative_to(dst):
+        raise ValueError("overlay destination contains the source")
+    excluded = {dst, *(Path(p).resolve() for p in exclude_roots)}
+    budget = budget if budget is not None else _CopyBudget()
     dst.mkdir(parents=True, exist_ok=False)
-    src = src.resolve()
-    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
-        # In-place prune: neither descends into nor recreates the
-        # vendored/build dirs. Symlinked directories are listed in
-        # ``dirnames`` but never walked (followlinks=False) and never
-        # recreated (only walked dirpaths get a mkdir below).
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
-        cur = Path(dirpath)
-        target_dir = dst / cur.relative_to(src)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for fn in filenames:
-            path = cur / fn
-            if path.is_symlink():
-                continue        # never follow, silently (matches discovery)
-            copy_regular_file(path, target_dir / fn)
+    for path in _overlay_files(src, excluded, budget):
+        destination = dst / path.relative_to(src)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if copy_regular_file(path, destination):
+            budget.copied(destination)
 
 
-def _apply_overlay(proposed: Path, overlay: Path) -> list[Path]:
-    """Copy every file from ``proposed/`` onto its same-named relative
-    path in the overlay. Returns the list of relative paths applied.
-    """
-    applied: list[Path] = []
-    proposed = proposed.resolve()
-    for src in sorted(proposed.rglob("*")):
-        if not src.is_file():
-            continue
+def _apply_overlay(proposed: Path, overlay: Path, *, exclude_roots=(), budget=None) -> list[Path]:
+    """Apply only complete, readable regular proposed files; refuse partial proposals."""
+    from .resolvers._safe_io import copy_regular_file
+
+    proposed, overlay = proposed.resolve(), overlay.resolve()
+    if proposed.is_relative_to(overlay):
+        raise ValueError("overlay destination contains proposed inputs")
+    excluded = {overlay, *(Path(p).resolve() for p in exclude_roots)}
+    budget = budget if budget is not None else _CopyBudget()
+    applied = []
+    for src in _overlay_files(proposed, excluded, budget, proposed=True):
         rel = src.relative_to(proposed)
-        dst = overlay / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        destination = overlay / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not copy_regular_file(src, destination):
+            raise ValueError(f"proposed file could not be copied: {src}")
+        budget.copied(destination)
         applied.append(rel)
-    return applied
+    return sorted(applied)
+
+
+def _overlay_identity(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("existing overlay must be a real directory")
+    return info.st_dev, info.st_ino
+
+
+def _prepare_overlay(target, proposed, out_dir):
+    overlay = out_dir / "overlay"
+    original = _overlay_identity(overlay)
+    with scratch_dir(".verify-overlay-", dir=out_dir) as scratch:
+        staged = scratch / "overlay"
+        budget = _CopyBudget()
+        excluded = [out_dir, scratch, overlay]
+        if proposed != target:
+            excluded.append(proposed)
+        _copy_target(target, staged, exclude_roots=excluded, budget=budget)
+        applied = _apply_overlay(proposed, staged,
+                                 exclude_roots=(out_dir, scratch, overlay), budget=budget)
+        if not applied:
+            return []
+        if _overlay_identity(overlay) != original:
+            raise ValueError("overlay changed during preparation")
+        backup = None
+        try:
+            if original is not None:
+                backup = out_dir / (".verify-retired-" + uuid.uuid4().hex)
+                os.rename(overlay, backup)
+            os.rename(staged, overlay)
+        except BaseException:
+            # Recovery copies live outside scratch so a failed rollback
+            # cannot discard the last successful overlay during teardown.
+            if backup is not None and os.path.lexists(backup):
+                try:
+                    if not os.path.lexists(overlay):
+                        os.rename(backup, overlay)
+                    else:
+                        logger.warning("previous overlay retained at %r", backup)
+                except OSError:
+                    logger.warning("cannot restore previous overlay; retained at %r",
+                                   backup, exc_info=True)
+            raise
+        if backup is not None and not rmtree_hardened(backup):
+            logger.warning("retired overlay cleanup incomplete: %r", backup)
+        return applied
 
 
 # ---------------------------------------------------------------------------
