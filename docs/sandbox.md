@@ -134,6 +134,11 @@ file limits and does not require the target to read `/proc`. If the kernel
 range-close operation is unavailable, it enumerates actual open descriptors;
 if neither method is available, startup refuses rather than leaking them.
 
+**Sandbox-root cleanup:** The unrestricted parent uses descriptor-based
+recursive deletion so a confined sibling cannot redirect cleanup through a
+swapped directory symlink. If safe recursive deletion is unavailable, it
+leaves non-empty stubs behind rather than traversing them by pathname.
+
 **Landlock is fail-closed.** If installing the Landlock ruleset fails
 in the child (kernel drift, ABI mismatch), the run never continues
 unsandboxed. On the mount-ns spawn lane the failure reports through
