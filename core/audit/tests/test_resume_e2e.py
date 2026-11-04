@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import contextlib
 import subprocess
 import sys
@@ -83,6 +84,7 @@ _DRIVER = textwrap.dedent("""\
     from core.audit.orchestrator import (
         OrchestratorConfig, ReviewOutcome, run_orchestrator,
     )
+    from core.audit.tests.test_resume_e2e import _review_loop_only
 
     def review_fn(ctx, config):
         time.sleep(0.6)   # window for the parent's SIGKILL
@@ -108,8 +110,11 @@ _DRIVER = textwrap.dedent("""\
         propagate_constraints=False,
         include_stale=False,
         on_demand_synthesis=False,
+        open_discovery=False,
+        joern_overrides={"enabled": False},
     )
-    run_orchestrator(config, review_fn)
+    with _review_loop_only():
+        run_orchestrator(config, review_fn)
 """) % {"cost": _COST_PER_REVIEW, "cap": _ORIGINAL_CAP_USD}
 
 
@@ -132,6 +137,48 @@ def _home(base: Path) -> Path:
 #: real model budget. Default = hermetic children; export
 #: RAPTOR_TEST_LIVE_LLM=1 to deliberately exercise the live shapes.
 _LIVE_LLM_OPT_IN = "RAPTOR_TEST_LIVE_LLM"
+_HERMETIC_OLLAMA_HOST: str | None = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _reserve_unavailable_ollama():
+    """Reserve a closed endpoint so a local Ollama cannot enter the test.
+
+    Keep the socket bound but not listening until all child segments exit;
+    another process cannot claim the port between discovery and use.
+    """
+    global _HERMETIC_OLLAMA_HOST
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        _HERMETIC_OLLAMA_HOST = f"http://127.0.0.1:{reserved.getsockname()[1]}"
+        try:
+            yield
+        finally:
+            _HERMETIC_OLLAMA_HOST = None
+
+
+@contextlib.contextmanager
+def _review_loop_only():
+    """Keep real review/journal/resume behavior without unrelated tools.
+
+    Both segments supply canned reviews. Native detector startup and
+    model-backed study are covered separately and can consume the entire
+    pre-kill deadline before the first canned review starts.
+    """
+    from core.audit import capabilities, orchestrator
+    from core.testing import reset_llm_egress_state
+
+    with pytest.MonkeyPatch.context() as mp:
+        reset = contextlib.contextmanager(reset_llm_egress_state)
+        with reset(mp, pin_ollama_host=False):
+            if _HERMETIC_OLLAMA_HOST:
+                mp.setenv("OLLAMA_HOST", _HERMETIC_OLLAMA_HOST)
+            mp.setattr(orchestrator, "_run_mechanical_detectors",
+                       lambda *a, **kw: ({}, set()))
+            mp.setattr(capabilities, "probe_capabilities",
+                       lambda *a, **kw: capabilities.AuditCapabilities())
+            mp.setattr(orchestrator, "_study_consumer", lambda *a, **kw: None)
+            yield
 
 
 def _env(home: Path):
@@ -152,6 +199,7 @@ def _env(home: Path):
     # subtractive scrubbing misses the next credential variable by
     # construction, so the operator's API keys, models.json pointer
     # and session identity are absent rather than removed.
+    assert _HERMETIC_OLLAMA_HOST is not None, "module endpoint fixture must be active"
     env = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(home),
@@ -170,6 +218,7 @@ def _env(home: Path):
         # Nonexistent by construction — a configured operator
         # models.json can never steer the child's model selection.
         "RAPTOR_CONFIG": str(home / "no-operator-models.json"),
+        "OLLAMA_HOST": _HERMETIC_OLLAMA_HOST,
         "RAPTOR_REACH_VERDICT_LOG_DISABLED": "1",
     }
     # Inherit only behaviour-neutral plumbing.
@@ -270,41 +319,49 @@ def killed_run(tmp_path_factory):
 
     driver = out.parent / "driver.py"
     driver.write_text(_DRIVER)
-    child = subprocess.Popen(
-        [sys.executable, str(driver), str(target), str(out),
-         str(_RAPTOR_DIR)],
-        env=_env(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    child_log = root / "segment-1.log"
+    with child_log.open("wb") as log:
+        child = subprocess.Popen(
+            [sys.executable, str(driver), str(target), str(out),
+             str(_RAPTOR_DIR)],
+            env=_env(home), stdout=log, stderr=subprocess.STDOUT,
+        )
 
-    # Record the child as the run's worker — in production the
-    # lifecycle-start subprocess records its parent (the raptor-audit
-    # process), which is exactly what the supervisor kills. The
-    # eligibility check keys "still in flight" off this pid.
-    from core.json import load_json, save_json
-    from core.run import RUN_METADATA_FILE
-    meta_path = out / RUN_METADATA_FILE
-    meta = load_json(meta_path)
-    meta["tool_pid"] = child.pid
-    save_json(meta_path, meta)
+    try:
+        # Record the child as the run's worker — in production the
+        # lifecycle-start subprocess records its parent (the raptor-audit
+        # process), which is exactly what the supervisor kills. The
+        # eligibility check keys "still in flight" off this pid.
+        from core.json import load_json, save_json
+        from core.run import RUN_METADATA_FILE
+        meta_path = out / RUN_METADATA_FILE
+        meta = load_json(meta_path)
+        meta["tool_pid"] = child.pid
+        save_json(meta_path, meta)
 
-    # SIGKILL once at least two reviews are journaled — mid-loop, some
-    # work done, more remaining.
-    deadline = time.monotonic() + 180
-    while time.monotonic() < deadline:
-        if child.poll() is not None:
-            pytest.fail(
-                "segment-1 child finished before the kill — "
-                "no mid-loop window",
-            )
-        if len(_journal_entries(out)) >= 2:
-            break
-        time.sleep(0.1)
-    else:
-        child.kill()
-        pytest.fail("segment-1 child produced no journal entries in time")
+        # SIGKILL once at least two reviews are journaled — mid-loop, some
+        # work done, more remaining.
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if child.poll() is not None:
+                pytest.fail(
+                    "segment-1 child finished before the kill — "
+                    "no mid-loop window\n" + child_log.read_text(errors="replace")[-4000:],
+                )
+            if len(_journal_entries(out)) >= 2:
+                break
+            time.sleep(0.1)
+        else:
+            child.kill()
+            pytest.fail("segment-1 child produced no journal entries in time\n"
+                        + child_log.read_text(errors="replace")[-4000:])
 
-    os.kill(child.pid, signal.SIGKILL)
-    child.wait(timeout=30)
+        os.kill(child.pid, signal.SIGKILL)
+        child.wait(timeout=30)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=30)
 
     from core.audit.resume import resume_ineligibility
     from core.run import load_run_metadata
@@ -401,11 +458,13 @@ def resumed_run(killed_run):
         propagate_constraints=False,
         include_stale=False,
         on_demand_synthesis=False,
+        open_discovery=False,
+        joern_overrides={"enabled": False},
         same_run_reuse=True,
         prior_cost_breakdown={"totals": {"total_spend_usd": booked}},
         resume_segment=segment,
     )
-    with _isolated_registries(_home(out.parent)):
+    with _isolated_registries(_home(out.parent)), _review_loop_only():
         result = run_orchestrator(config, review_fn)
     return {
         "out": out,
@@ -529,12 +588,14 @@ class TestHermeticByDefault:
         fake_models.write_text('{"models": []}')
         monkeypatch.setenv("RAPTOR_CONFIG", str(fake_models))
         monkeypatch.setenv("RAPTOR_SESSION_PID", "12345")
+        monkeypatch.setenv("OLLAMA_HOST", "http://operator-ollama.invalid")
 
         env = _env(_home(tmp_path))
 
         assert "ANTHROPIC_API_KEY" not in env
         assert "RAPTOR_SESSION_PID" not in env
         assert env["RAPTOR_CC_TRANSPORT_DISABLED"] == "1"
+        assert env["OLLAMA_HOST"] == _HERMETIC_OLLAMA_HOST
         # The child's config pointer is OURS and nonexistent — the
         # ambient (operator-shaped) models.json cannot steer it.
         assert env["RAPTOR_CONFIG"] != str(fake_models)
@@ -618,7 +679,7 @@ class TestHermeticByDefault:
         assert probe.returncode == 0, probe.stderr
         data = json.loads(probe.stdout.strip().splitlines()[-1])
         assert data["external_llm"] is False, (
-            "ambient key/models.json leaked into the child"
+            "a model backend remained available in the hermetic child"
         )
         assert data["kill_switch"] is True
         assert data["which"] == str(canary), (
