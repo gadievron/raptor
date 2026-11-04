@@ -212,21 +212,73 @@ jobs:
     name: preflight-passed
     if: always()
     needs: [changes, preflight]
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Verify all simulations passed
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+        shell: python
         run: |
-          set -euo pipefail
-          echo "Job results: ${RESULTS}"
-          ok=1
-          for r in ${RESULTS}; do
-            case "$r" in
-              success|skipped) ;;
-              *) echo "::error::A preflight job reported '${r}'"; ok=0 ;;
-            esac
-          done
-          [ "$ok" -eq 1 ] || exit 1
-          echo "Preflight passed or was legitimately skipped."
+          import json
+          import os
+          import subprocess
+          import sys
+
+
+          def annotation(level, message):
+              message = str(message).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print(f"::{level}::{message}", flush=True)
+
+
+          def cell(value):
+              return str(value).replace('\r', ' ').replace('\n', ' ').replace('|', chr(92) + '|')
+
+
+          needs = json.loads(os.environ['NEEDS_JSON'])
+          failed = {name: job['result'] for name, job in needs.items()
+                    if job['result'] not in ('success', 'skipped')}
+          run_url = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                     f"/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/"
+                     f"{os.environ['GITHUB_RUN_ATTEMPT']}")
+          summary = ['## Required job results', '', '| Job | Result |', '| --- | --- |']
+          for name, job in sorted(needs.items()):
+              print(f"{name}: {job['result']}", flush=True)
+              summary.append(f"| {cell(name)} | {cell(job['result'])} |")
+          for name, result in sorted(failed.items()):
+              annotation('error', f"Required job {name} reported {result}. Job details: {run_url}")
+          if failed:
+              summary += ['', f'[Inspect upstream jobs and runner annotations]({run_url}).', '']
+              # Fetch the current attempt only: earlier reruns must not supply stale failures.
+              # Diagnostics are best effort; they never change the prerequisite verdict.
+              try:
+                  endpoint = (f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                              f"{os.environ['GITHUB_RUN_ID']}/attempts/"
+                              f"{os.environ['GITHUB_RUN_ATTEMPT']}/jobs?per_page=100")
+                  response = subprocess.run(
+                      ['gh', 'api', '--paginate', '--slurp', endpoint],
+                      capture_output=True, text=True, timeout=30, check=True,
+                  )
+                  for page in json.loads(response.stdout):
+                      for job in page['jobs']:
+                          if job.get('conclusion') not in ('failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale'):
+                              continue
+                          labels = ', '.join(job.get('labels') or []) or 'unknown'
+                          runner = job.get('runner_name') or 'not assigned'
+                          steps = [s['name'] for s in job.get('steps', [])
+                                   if s.get('conclusion') not in (None, 'success', 'skipped')]
+                          detail = ('Failed/cancelled steps: ' + ', '.join(steps) if steps else
+                                    'No failing step was reported; inspect job annotations for runner/service errors.')
+                          message = (f"{job['name']}: {job['conclusion']}; runner={runner}; "
+                                     f"labels={labels}. {detail} {job['html_url']}")
+                          annotation('error', message)
+                          summary.append(f"- {cell(message)}")
+              except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+                  annotation('warning', f"Could not retrieve upstream runner details. Inspect {run_url}. Required-job failures remain blocking.")
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('\n'.join(summary) + '\n')
+          sys.exit(1 if failed else 0)
