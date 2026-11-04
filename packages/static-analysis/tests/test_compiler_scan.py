@@ -331,6 +331,7 @@ int use_after_free(void) {
 
 
 @needs_analyzer
+@pytest.mark.slow
 def test_e2e_real_compiler_finds_uaf(tmp_path, sandbox_spy):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -519,6 +520,7 @@ def test_suppressed_tu_carries_coverage_limitation(
     assert all(c["block_network"] is True for c in sandbox_spy)
 
 
+@pytest.mark.slow
 def test_clean_control_has_no_limitation_and_keeps_finding(
     tmp_path, sandbox_spy, _clang_only,
 ):
@@ -535,6 +537,7 @@ def test_clean_control_has_no_limitation_and_keeps_finding(
     assert "invocations" not in run
 
 
+@pytest.mark.slow
 def test_suppression_construct_in_comment_is_inert(
     tmp_path, sandbox_spy, _clang_only,
 ):
@@ -554,6 +557,7 @@ def test_suppression_construct_in_comment_is_inert(
     assert result.suppressed_tus == []
 
 
+@pytest.mark.slow
 def test_annotation_never_drops_a_finding_that_still_fires(
     tmp_path, sandbox_spy, _clang_only,
 ):
@@ -594,6 +598,7 @@ def test_failed_closure_vet_recorded_as_unvetted(tmp_path, monkeypatch):
     assert "preprocessor exited 1" in tu.suppression_unvetted
 
 
+@pytest.mark.slow
 def test_vet_crash_keeps_findings_and_records_unvetted(
     tmp_path, sandbox_spy, _clang_only, monkeypatch,
 ):
@@ -725,6 +730,7 @@ def test_attribute_list_spellings_carry_limitation(
     )
 
 
+@pytest.mark.slow
 def test_cpp_using_prefix_carries_limitation(
     tmp_path, sandbox_spy, _clang_only,
 ):
@@ -742,6 +748,7 @@ def test_cpp_using_prefix_carries_limitation(
     assert [s["tu"] for s in result.suppressed_tus] == ["t.cpp"]
 
 
+@pytest.mark.slow
 def test_quoted_header_name_is_vetted(tmp_path, sandbox_spy, _clang_only):
     """-E escapes the quote in this header's name; its analyzer
     conditional must still be found rather than the TU reading as
@@ -916,6 +923,7 @@ def _scan_files(tmp_path, files):
 
 
 @pytest.mark.parametrize("name", sorted(_E2E_SUPPRESSED))
+@pytest.mark.slow
 def test_e2e_suppressed_spellings(tmp_path, sandbox_spy, _clang_only, name):
     """Digraph, pasted, raw-string-adjacent and spliced attribute
     spellings silence clang end to end and must produce a limitation."""
@@ -949,6 +957,7 @@ def test_e2e_laundering_line_is_unvetted(
 
 
 @pytest.mark.parametrize("name", sorted(_E2E_DOCUMENTED_FP))
+@pytest.mark.slow
 def test_e2e_documented_false_positive_keeps_finding(
     tmp_path, sandbox_spy, _clang_only, name,
 ):
@@ -985,6 +994,7 @@ _LAYER2_SUPPRESSED = {
 
 
 @pytest.mark.parametrize("name", sorted(_LAYER2_UNVETTED))
+@pytest.mark.slow
 def test_layer2_escaping_relabel_is_unvetted(tmp_path, sandbox_spy, _clang_only, name):
     result = _scan_files(tmp_path, {name: _LAYER2_UNVETTED[name]})
     assert _null_findings(result) == []          # the finding was relabelled away
@@ -1042,6 +1052,7 @@ def test_sarif_notification_has_witness_kind(tmp_path):
     assert note["properties"]["suppression_witness"] == "_Pragma("
 
 
+@pytest.mark.slow
 def test_sarif_carries_no_absolute_target_path(tmp_path, sandbox_spy, _clang_only):
     import json
     hdr_dir = tmp_path / "repo" / "inc"
@@ -1095,6 +1106,7 @@ _LEAK_TU = ("#define S suppress\n[[gnu::aligned(sizeof(int)),\n"
             "int g(int *p){ p = 0; return *p; }\n")
 
 
+@pytest.mark.slow
 def test_sarif_has_no_toolchain_path_from_linemarkers(
     tmp_path, sandbox_spy, _clang_only,
 ):
@@ -1132,6 +1144,7 @@ def test_sarif_has_no_toolchain_path_from_linemarkers(
     assert str((tmp_path / "repo").resolve()) not in text
 
 
+@pytest.mark.slow
 def test_resolution_limit_marks_tu_unvetted(tmp_path, sandbox_spy, _clang_only):
     deep = "d/" * 400 + "x.c"
     result = _scan_files(tmp_path, {"deep.c": (
@@ -1144,6 +1157,7 @@ def test_resolution_limit_marks_tu_unvetted(tmp_path, sandbox_spy, _clang_only):
     assert "not vetted" in result.summary_line()
 
 
+@pytest.mark.slow
 def test_limit_reason_under_a_long_root_carries_no_path_text(
     tmp_path, sandbox_spy, _clang_only,
 ):
