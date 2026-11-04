@@ -568,14 +568,14 @@ class TestRelayWiring:
             audit_path=tmp_path / "audit.jsonl",
             token_ttl_s=3600, token_budget=100,
         )
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url="http://127.0.0.1:1",
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
         try:
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url="http://127.0.0.1:1",
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=10.0) as c:
