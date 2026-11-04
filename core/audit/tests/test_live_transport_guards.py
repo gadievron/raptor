@@ -1632,6 +1632,7 @@ class TestCompilerSurfaceFences:
             calls, "run_compiler_analyzer_sweep_guarded",
         ) == {"_guarded_compiler_sweep"}
         assert _callers_of(calls, "_guarded_compiler_sweep") == {
+            "test_cpp_leak_checker_and_cleanup_controls",
             "test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs",
             "test_aliasing_no_clang_retains_candidate",
             "test_aliasing_proof_cannot_confirm_another_identifier",
