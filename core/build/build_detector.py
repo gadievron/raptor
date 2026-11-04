@@ -20,6 +20,7 @@ from pathlib import Path
 from shlex import quote
 from typing import Any, ClassVar
 
+from core.build.artifacts import cleanup_build_paths
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
@@ -1306,36 +1307,20 @@ class BuildDetector:
         # tmp reaper only sweeps the system tmp root, so a SIGKILL
         # residue here is operator-visible in the target tree instead.
         import tempfile
-        build_dir = Path(tempfile.mkdtemp(prefix=".raptor_build_", dir=self.repo_path))
-        fd, script_name = tempfile.mkstemp(
-            prefix=".raptor_build_", suffix=".py", dir=self.repo_path,
-        )
-        os.close(fd)
-        script_path = Path(script_name)
-        build_cmd = f"{sys.executable} {quote(str(script_path))}"
-        cleanup = [script_path, build_dir]
-
-        # cleanup_paths is only returned to the caller on SUCCESS (via the
-        # BuildSystem at the bottom of this method). If ANYTHING between
-        # here and that return raises — a _write_build_script (heuristic
-        # or CC-retry rewrite), a _dry_run re-raising SandboxSetupError —
-        # the caller never sees cleanup_paths and both the script stub AND
-        # the build dir leak UNDER self.repo_path (= pollutes the target
-        # repo; the next scan inventories RAPTOR's own build script as
-        # project source). Guard the WHOLE synthesis with try/except that
-        # walks the cleanup list on failure before re-raising.
-        def _cleanup_on_failure() -> None:
-            for p in cleanup:
-                try:
-                    if p.is_dir():
-                        import shutil
-                        shutil.rmtree(str(p), ignore_errors=True)
-                    else:
-                        p.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
+        cleanup: list[Path] = []
         try:
+            build_dir = Path(tempfile.mkdtemp(prefix=".raptor_build_", dir=self.repo_path))
+            cleanup.append(build_dir)
+            fd, script_name = tempfile.mkstemp(
+                prefix=".raptor_build_", suffix=".py", dir=self.repo_path,
+            )
+            script_path = Path(script_name)
+            cleanup.insert(0, script_path)
+            # Record ownership before close: even a close failure must remove
+            # the script and directory. Never retry close on an uncertain fd.
+            os.close(fd)
+            build_cmd = f"{sys.executable} {quote(str(script_path))}"
+
             # Write heuristic build script and dry-run
             self._write_build_script(
                 script_path, build_dir,
@@ -1405,16 +1390,16 @@ class BuildDetector:
                     confidence = 0.5
             else:
                 logger.info("  Dry-run: all files compiled successfully")
+            # Ownership transfers only after constructing the result.
+            return BuildSystem(
+                type=build_type, command=build_cmd,
+                working_dir=self.repo_path, env_vars={},
+                confidence=confidence, detected_files=[],
+                cleanup_paths=cleanup,
+            )
         except BaseException:
-            _cleanup_on_failure()
+            cleanup_build_paths(cleanup)
             raise
-
-        return BuildSystem(
-            type=build_type, command=build_cmd,
-            working_dir=self.repo_path, env_vars={},
-            confidence=confidence, detected_files=[],
-            cleanup_paths=cleanup,
-        )
 
     def _detect_build_params(self, language: str):
         """Detect source files, compiler, and include/define flags."""
