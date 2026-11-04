@@ -544,6 +544,39 @@ def _blank(chars: list[str], start: int, end: int) -> None:
             chars[i] = " "
 
 
+
+# A bounded fill/recycle buffer instead of a second region-sized list.
+_C_BLANK_CHUNK = (" ",) * 1024
+_C_BULK_BLANK_MIN = 64
+
+
+def _blank_c_region(chars: list[str], source: str, start: int, end: int) -> None:
+    """Blank native C-view characters using their original LF positions.
+
+    C-view mutations replace characters with spaces without moving or
+    changing LF. Keep the existing loop for small or unusual ranges;
+    bulk slice assignments always replace exactly the same length.
+    """
+    if end - start < _C_BULK_BLANK_MIN or start < 0 or end > len(chars):
+        _blank(chars, start, end)
+        return
+    # Per-line slice setup loses to the loop when LF is very frequent.
+    if source.count("\n", start, end) * 16 > end - start:
+        _blank(chars, start, end)
+        return
+    cursor = start
+    chunk_size = len(_C_BLANK_CHUNK)
+    while cursor < end:
+        newline = source.find("\n", cursor, end)
+        stop = end if newline < 0 else newline
+        while cursor < stop:
+            width = min(chunk_size, stop - cursor)
+            fill = _C_BLANK_CHUNK if width == chunk_size else _C_BLANK_CHUNK[:width]
+            chars[cursor:cursor + width] = fill
+            cursor += width
+        cursor = stop + 1
+
+
 def _strip_c_family(
     source: str, spec: _CFamilySpec, *, keep_strings: bool = False,
     reasons: set[str] | None = None,
@@ -598,11 +631,16 @@ def _scan_c_family(
     chars = list(source)
     n = len(source)
     flag = found.add
+    # Capture an alias, keeping source as a fast local in the main loop.
+    c_source = source if plain_c else None
 
     def blank_str(start: int, end: int) -> None:
         """Blank STRING content — a no-op on the comments-only view."""
         if not keep_strings:
-            _blank(chars, start, end)
+            if c_source is None or end - start < _C_BULK_BLANK_MIN:
+                _blank(chars, start, end)
+            else:
+                _blank_c_region(chars, c_source, start, end)
 
     def verbatim(start: int, end: int) -> None:
         """Ambiguous region: shown as-is in both views, never lexed."""
@@ -662,7 +700,10 @@ def _scan_c_family(
             end = n if end < 0 else end
             if spec.php_tags:
                 end = _php_line_comment_end(source, i, end)
-            _blank(chars, i, end)
+            if c_source is None or end - i < _C_BULK_BLANK_MIN:
+                _blank(chars, i, end)
+            else:
+                _blank_c_region(chars, c_source, i, end)
             i = end
         elif spec.php_tags and ch == "?" and nxt == ">":
             # `?>` in CODE state (every string/comment/heredoc arm
@@ -681,7 +722,10 @@ def _scan_c_family(
                 if close < 0:
                     flag("unterminated-block-comment")
                 end = n if close < 0 else close + 2
-            _blank(chars, i, end)
+            if c_source is None or end - i < _C_BULK_BLANK_MIN:
+                _blank(chars, i, end)
+            else:
+                _blank_c_region(chars, c_source, i, end)
             i = end
         elif (spec.regex_literals and ch == "/"
                 and (rex_end := _js_regex_end(
