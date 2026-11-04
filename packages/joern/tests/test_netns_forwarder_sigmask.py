@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -38,6 +39,11 @@ from packages.joern.netns_forwarder import Forwarder, create_listener
 #: (bit ``signum - 1`` of the SigBlk hex mask).
 _TERM_BIT = 1 << (signal.SIGTERM - 1)
 _INT_BIT = 1 << (signal.SIGINT - 1)
+
+
+def _close_socket(sock):
+    with contextlib.suppress(OSError):
+        sock.close()
 
 
 def _sig_blk(tid: int) -> int:
@@ -65,8 +71,8 @@ def test_start_signal_shielded_blocks_in_worker_restores_caller() -> None:
         release.wait(10)
 
     t = threading.Thread(target=_probe, daemon=True)
-    netns_forwarder._start_signal_shielded(t)
     try:
+        netns_forwarder._start_signal_shielded(t)
         assert ready.wait(10)
         assert signal.SIGTERM in seen["mask"]
         assert signal.SIGINT in seen["mask"]
@@ -75,32 +81,38 @@ def test_start_signal_shielded_blocks_in_worker_restores_caller() -> None:
         assert signal.pthread_sigmask(signal.SIG_BLOCK, ()) == caller_before
     finally:
         release.set()
-        t.join(10)
+        if t.ident is not None:
+            t.join(10)
 
 
 def test_forwarder_threads_block_handled_terminal_signals() -> None:
     """Accept loop, connection handler, and back pump all run with
     SIGTERM/SIGINT blocked; the main thread stays unblocked."""
-    d = tempfile.mkdtemp(prefix="sigmask-")
-    sock_path = os.path.join(d, "f.sock")
+    with contextlib.ExitStack() as cleanup:
+        d = tempfile.mkdtemp(prefix="sigmask-")
+        cleanup.callback(shutil.rmtree, d)
+        sock_path = os.path.join(d, "f.sock")
 
-    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    upstream.bind(("127.0.0.1", 0))
-    upstream.listen(4)
-    port = upstream.getsockname()[1]
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cleanup.callback(_close_socket, upstream)
+        upstream.bind(("127.0.0.1", 0))
+        upstream.listen(4)
+        port = upstream.getsockname()[1]
 
-    listener = create_listener(sock_path)
-    fwd = Forwarder(listener, ("127.0.0.1", port), socket_path=sock_path)
+        listener = create_listener(sock_path)
+        cleanup.callback(_close_socket, listener)
+        fwd = Forwarder(listener, ("127.0.0.1", port), socket_path=sock_path)
+        cleanup.callback(fwd.stop)
 
-    tids_before = set(os.listdir("/proc/self/task"))
-    fwd.start()
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    accepted = None
-    try:
+        tids_before = set(os.listdir("/proc/self/task"))
+        fwd.start()
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        cleanup.callback(_close_socket, client)
         client.settimeout(10)
         client.connect(sock_path)
         upstream.settimeout(10)
         accepted, _ = upstream.accept()
+        cleanup.callback(_close_socket, accepted)
 
         # Accept thread + connection handler + back pump: all three
         # new threads must carry the block while the splice is live.
@@ -125,35 +137,27 @@ def test_forwarder_threads_block_handled_terminal_signals() -> None:
         blk = _sig_blk(main_tid)
         assert not (blk & _TERM_BIT), f"main thread blocks SIGTERM {blk:#x}"
         assert not (blk & _INT_BIT), f"main thread blocks SIGINT {blk:#x}"
-    finally:
-        with contextlib.suppress(OSError):
-            client.close()
-        if accepted is not None:
-            with contextlib.suppress(OSError):
-                accepted.close()
-        with contextlib.suppress(OSError):
-            upstream.close()
-        fwd.stop()
-        with contextlib.suppress(OSError):
-            os.rmdir(d)
 
 
 def _watchdog_signal_mask_case() -> None:
     # This watchdog has no stop API. Its thread and unreadable pipe are
     # process-owned; run this assertion only in the private child below.
-    d = tempfile.mkdtemp(prefix="sigmaskw-")
-    sock_path = os.path.join(d, "w.sock")
-    listener = create_listener(sock_path)
-    fwd = Forwarder(listener, ("127.0.0.1", 1), socket_path=sock_path)
-    # Drive the watchdog's parent-gone stage from a pipe we never write
-    # and never close: the real watchdog escalates to killpg(0, SIGKILL)
-    # of OUR OWN process group once it thinks the parent died and the
-    # idle horizon lapsed — a getppid()-polling watchdog inside a pytest
-    # worker could reach that if the xdist master ever died mid-run.
-    # With an unreadable parent_gone_fd, stage 1 is unreachable no
-    # matter what happens to this process's ancestry.
-    gone_r, _gone_w = os.pipe()  # both ends stay open: never-readable by design
-    try:
+    with contextlib.ExitStack() as cleanup:
+        d = tempfile.mkdtemp(prefix="sigmaskw-")
+        cleanup.callback(shutil.rmtree, d)
+        sock_path = os.path.join(d, "w.sock")
+        listener = create_listener(sock_path)
+        cleanup.callback(_close_socket, listener)
+        fwd = Forwarder(listener, ("127.0.0.1", 1), socket_path=sock_path)
+        cleanup.callback(fwd.stop)
+        # Drive the watchdog's parent-gone stage from a pipe we never write
+        # and never close: the real watchdog escalates to killpg(0, SIGKILL)
+        # of OUR OWN process group once it thinks the parent died and the
+        # idle horizon lapsed — a getppid()-polling watchdog inside a pytest
+        # worker could reach that if the xdist master ever died mid-run.
+        # With an unreadable parent_gone_fd, stage 1 is unreachable no
+        # matter what happens to this process's ancestry.
+        gone_r, _gone_w = os.pipe()  # both ends stay open: never-readable by design
         t = netns_forwarder._start_orphan_watchdog(
             lambda: None, fwd, poll_s=30.0, parent_gone_fd=gone_r,
         )
@@ -162,10 +166,6 @@ def _watchdog_signal_mask_case() -> None:
             f"watchdog does not block SIGTERM+SIGINT: "
             f"SigBlk={_sig_blk(t.native_id):#x}"
         )
-    finally:
-        fwd.stop()
-        with contextlib.suppress(OSError):
-            os.rmdir(d)
 
 
 @pytest.mark.wall_budget(20)
@@ -225,10 +225,11 @@ def test_shield_masks_creator_around_start_and_restores_exactly() -> None:
     # so a strip-style restore (SIG_UNBLOCK of the handled pair instead
     # of SETMASK(old)) is caught here, not only by the suite's
     # inner-shield inheritance pins.
-    old = signal.pthread_sigmask(
-        signal.SIG_SETMASK, {signal.SIGUSR1, signal.SIGTERM},
-    )
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, ())
     try:
+        signal.pthread_sigmask(
+            signal.SIG_SETMASK, {signal.SIGUSR1, signal.SIGTERM},
+        )
         netns_forwarder._start_signal_shielded(
             _RecordingThread(target=lambda: None, daemon=True),
         )
