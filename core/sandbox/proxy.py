@@ -1904,6 +1904,8 @@ class EgressProxy:
         self._unix_tasks: set = set()
         self._client_tasks: set = set()
         self._stopping = False
+        self._startup_cancelled = threading.Event()
+        self._startup_task: "asyncio.Task | None" = None
 
         # Request-line parsing is delegated to the confined parser
         # worker — this process never interprets raw CONNECT
@@ -1919,43 +1921,45 @@ class EgressProxy:
             name="raptor-egress-proxy",
             daemon=True,
         )
-        self._thread.start()
-        # Bound the readiness wait. Pre-fix `self._ready.wait()` was
-        # unbounded — if the proxy thread crashed before reaching the
-        # `self._ready.set()` call AND before assigning to
-        # `_start_error` (race window between thread start and the
-        # first listening-socket bind), the caller would block forever
-        # holding the singleton lock that wraps `EgressProxy.start()`.
-        # Every subsequent sandbox acquire would then block waiting
-        # for the same lock — operator saw "everything hung after
-        # /scan started". 30s is well above any realistic
-        # asyncio-loop-startup latency on a busy host (sub-second in
-        # practice).
-        if not self._ready.wait(timeout=_PROXY_CONNECT_TIMEOUT_S):
-            # Defensive: stop the thread so we don't leak a zombie
-            # background loop trying forever to bind. Pre-fix the
-            # raise just abandoned ``self._thread`` (daemon, so it
-            # died with the process — but every retry stacked another
-            # daemon thread on top, multiplying the bind churn).
+        try:
+            self._thread.start()
+            # Bound the readiness wait. Pre-fix `self._ready.wait()` was
+            # unbounded — if the proxy thread crashed before reaching the
+            # `self._ready.set()` call AND before assigning to
+            # `_start_error` (race window between thread start and the
+            # first listening-socket bind), the caller would block forever
+            # holding the singleton lock that wraps `EgressProxy.start()`.
+            # Every subsequent sandbox acquire would then block waiting
+            # for the same lock — operator saw "everything hung after
+            # /scan started". 30s is well above any realistic
+            # asyncio-loop-startup latency on a busy host (sub-second in
+            # practice).
+            if not self._ready.wait(timeout=_PROXY_CONNECT_TIMEOUT_S):
+                # Defensive: stop the thread so we don't leak a zombie
+                # background loop trying forever to bind. Pre-fix the
+                # raise just abandoned ``self._thread`` (daemon, so it
+                # died with the process — but every retry stacked another
+                # daemon thread on top, multiplying the bind churn).
+                # Use the actual timeout constant in the message so an
+                # operator bumping ``_PROXY_CONNECT_TIMEOUT_S`` sees a
+                # consistent error rather than the hardcoded "30s" lie.
+                msg = (
+                    f"egress proxy did not become ready within "
+                    f"{_PROXY_CONNECT_TIMEOUT_S:.0f}s "
+                    f"(thread may have crashed before signalling)"
+                )
+                raise RuntimeError(msg)
+            if self._start_error is not None:
+                # Same cleanup: if the thread came up far enough to set
+                # ``_start_error`` but not ``_ready``, stop it before
+                # propagating so a future retry from the same process
+                # doesn't see an orphan thread holding the listening
+                # socket.
+                msg = f"egress proxy failed to start: {self._start_error}"
+                raise RuntimeError(msg) from self._start_error
+        except BaseException:
             self._stop_thread_best_effort()
-            # Use the actual timeout constant in the message so an
-            # operator bumping ``_PROXY_CONNECT_TIMEOUT_S`` sees a
-            # consistent error rather than the hardcoded "30s" lie.
-            msg = (
-                f"egress proxy did not become ready within "
-                f"{_PROXY_CONNECT_TIMEOUT_S:.0f}s "
-                f"(thread may have crashed before signalling)"
-            )
-            raise RuntimeError(msg)
-        if self._start_error is not None:
-            # Same cleanup: if the thread came up far enough to set
-            # ``_start_error`` but not ``_ready``, stop it before
-            # propagating so a future retry from the same process
-            # doesn't see an orphan thread holding the listening
-            # socket.
-            self._stop_thread_best_effort()
-            msg = f"egress proxy failed to start: {self._start_error}"
-            raise RuntimeError(msg) from self._start_error
+            raise
 
     # ----- public API -----
 
@@ -3160,19 +3164,20 @@ class EgressProxy:
                 self._log_stats_line("summary", force=True)
 
     def _stop_thread_best_effort(self) -> None:
-        """Defensive cleanup helper called from ``__init__`` when the
-        proxy thread fails to come up (readiness timeout or
-        ``_start_error`` populated). Tries to stop the asyncio loop
-        if one was assigned, then joins the thread briefly. Never
-        raises — caller will re-raise its own startup error.
-        """
+        """Cancel startup even if the worker has not created its loop yet."""
+        self._startup_cancelled.set()
         if self._loop is not None:
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except RuntimeError:
-                pass
+            def cancel_startup() -> None:
+                task = self._startup_task
+                if task is not None and not task.done():
+                    task.cancel()
+                elif self._ready.is_set():
+                    self._loop.stop()
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(cancel_startup)
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            with contextlib.suppress(RuntimeError):
+                self._thread.join(timeout=2.0)
 
     def is_alive(self) -> bool:
         """True if the proxy's event-loop thread is still running.
@@ -3308,9 +3313,13 @@ class EgressProxy:
 
     def _run_loop(self) -> None:
         try:
+            if self._startup_cancelled.is_set():
+                return
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            self._server = self._loop.run_until_complete(
+            if self._startup_cancelled.is_set():
+                return
+            self._startup_task = self._loop.create_task(
                 asyncio.start_server(
                     self._on_client_connected,
                     host="127.0.0.1",     # loopback ONLY
@@ -3318,6 +3327,9 @@ class EgressProxy:
                     reuse_address=False,
                 )
             )
+            self._server = self._loop.run_until_complete(self._startup_task)
+            if self._startup_cancelled.is_set():
+                return
             sock = self._server.sockets[0]
             bound_host, bound_port = sock.getsockname()[:2]
             # Defence against a misconfigured interpreter or OS that
@@ -3339,6 +3351,10 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
+            if self._startup_task is not None and not self._startup_task.done():
+                self._startup_task.cancel()
+                with contextlib.suppress(RuntimeError, OSError, asyncio.CancelledError):
+                    self._loop.run_until_complete(self._startup_task)
             for task in list(self._client_tasks):
                 task.cancel()
             self._client_tasks.clear()
