@@ -540,6 +540,9 @@ class LogStreamer:
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._stopped = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._stop_complete = False
+        self._capture_closed = False
         # Lineage state (see class docstring; _require_scope itself is
         # assigned with the PID-scoping block below). All of it is
         # guarded by _scope_lock. The process-tree probes are
@@ -879,8 +882,8 @@ class LogStreamer:
         events can never pass the scoped predicate and the gate
         would always time out. Callers choosing predicate-level
         scoping trade away the cold-start attachment confirmation."""
-        if self._proc is not None:
-            raise RuntimeError("seatbelt audit streamer has already been started")
+        if self._proc is not None or self._capture_closed:
+            raise RuntimeError("seatbelt audit streamer has already been started or stopped")
         predicate = self._build_predicate()
         self._proc = subprocess.Popen(
             [
@@ -1220,6 +1223,12 @@ class LogStreamer:
             # append-failure promote above.
             logger.warning("seatbelt audit reader thread crashed",
                            exc_info=True)
+        finally:
+            if self._proc is not None and self._proc.stdout is not None:
+                close_stdout = getattr(self._proc.stdout, "close", None)
+                if close_stdout is not None:
+                    with contextlib.suppress(OSError):
+                        close_stdout()
 
     def _filter_and_append(self, record: dict) -> None:
         """Scope gate + budget + JSONL append for one parsed record."""
@@ -1293,6 +1302,8 @@ class LogStreamer:
             self._maybe_escalate_credential_path(record)
 
             with self._append_lock:
+                if self._capture_closed:
+                    return
                 if record.get("parse_ambiguous"):
                     # Budget EXEMPTION plus a dedicated admission cap
                     # (_AMBIGUOUS_ADMIT_MAX — rationale at the
@@ -1385,6 +1396,8 @@ class LogStreamer:
         the target away from the path entirely; this is the
         defence-in-depth layer for operator-misconfigured profiles.
         """
+        if self._capture_closed:
+            return
         if self._evidence is None:
             # First call: materialise run_dir AND pin the evidence
             # file beneath it.
@@ -1400,6 +1413,14 @@ class LogStreamer:
             raise OSError(msg)
 
     def stop(self, *, drain_timeout: float = 1.5) -> None:
+        """Drain and finalise once, including concurrent stop calls."""
+        with self._stop_lock:
+            if self._stop_complete:
+                return
+            self._stop(drain_timeout=drain_timeout)
+            self._stop_complete = True
+
+    def _stop(self, *, drain_timeout: float) -> None:
         """Stop the streamer. Gives `log stream` a brief window to
         flush any in-flight records, then terminates.
 
@@ -1421,11 +1442,13 @@ class LogStreamer:
             # Terminate the producer: no new lines are generated, the
             # pipe's write end closes, and whatever is already
             # buffered drains to EOF under the reader.
-            self._proc.terminate()
+            with contextlib.suppress(OSError):
+                self._proc.terminate()
             try:
                 self._proc.wait(timeout=drain_timeout)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                with contextlib.suppress(OSError):
+                    self._proc.kill()
                 try:
                     self._proc.wait(timeout=1)
                 except subprocess.TimeoutExpired:
@@ -1445,6 +1468,17 @@ class LogStreamer:
             # still gets killed by interpreter shutdown.
             if self._reader is not None and self._reader.is_alive():
                 self._reader.join(timeout=3.0)
+        reader_drained = self._reader is None or not self._reader.is_alive()
+        if not reader_drained:
+            logger.warning(
+                "seatbelt audit: reader did not drain before shutdown; "
+                "audit capture is incomplete",
+            )
+        elif self._proc is not None and self._proc.stdout is not None:
+            close_stdout = getattr(self._proc.stdout, "close", None)
+            if close_stdout is not None:
+                with contextlib.suppress(OSError):
+                    close_stdout()
         # Stop flag AFTER the drain: _read_loop runs to EOF by design
         # (see its docstring); the flag's remaining consumer is the
         # lineage poller's clock.
@@ -1502,32 +1536,41 @@ class LogStreamer:
             # snapshot read and the JSONL write are atomic with
             # respect to any reader thread still draining.
             with self._append_lock:
-                summary = self._budget.summary_record()
-                # Parse-ratio surface for operators reading the JSONL
-                # (extra keys tolerated by consumers per contract).
-                summary["kext_lines_seen"] = seen
-                summary["kext_lines_parsed"] = parsed
-                # Scope-gate diagnostic: how many records were
-                # rejected as outside the workload's process scope.
-                summary["foreign_records_dropped"] = foreign_dropped
-                # Tamper diagnostic: kext lines whose PID field could
-                # not be anchored (kept, flagged parse_ambiguous).
-                if self._ambiguous_records:
-                    summary["parse_ambiguous_records"] = (
-                        self._ambiguous_records)
-                    # Cap accounting (_AMBIGUOUS_ADMIT_MAX): dropped
-                    # records stay visible as a count even though
-                    # their bodies were not appended.
-                    if self._ambiguous_dropped:
-                        summary["parse_ambiguous_records_dropped"] = (
-                            self._ambiguous_dropped)
-                # Stamp nonce on the summary so an observe-mode
-                # parser attributes it to this run and rejects one
-                # spoofed by a target binary writing a fake summary
-                # into the JSONL.
-                if self._observe_nonce is not None:
-                    summary["nonce"] = self._observe_nonce
-                self._append_record_locked(summary)
+                try:
+                    summary = self._budget.summary_record()
+                    # Parse-ratio surface for operators reading the JSONL
+                    # (extra keys tolerated by consumers per contract).
+                    summary["reader_drained"] = reader_drained
+                    summary["kext_lines_seen"] = seen
+                    summary["kext_lines_parsed"] = parsed
+                    # Scope-gate diagnostic: how many records were
+                    # rejected as outside the workload's process scope.
+                    summary["foreign_records_dropped"] = foreign_dropped
+                    # Tamper diagnostic: kext lines whose PID field could
+                    # not be anchored (kept, flagged parse_ambiguous).
+                    if self._ambiguous_records:
+                        summary["parse_ambiguous_records"] = (
+                            self._ambiguous_records)
+                        # Cap accounting (_AMBIGUOUS_ADMIT_MAX): dropped
+                        # records stay visible as a count even though
+                        # their bodies were not appended.
+                        if self._ambiguous_dropped:
+                            summary["parse_ambiguous_records_dropped"] = (
+                                self._ambiguous_dropped)
+                    # Stamp nonce on the summary so an observe-mode
+                    # parser attributes it to this run and rejects one
+                    # spoofed by a target binary writing a fake summary
+                    # into the JSONL.
+                    if self._observe_nonce is not None:
+                        summary["nonce"] = self._observe_nonce
+                    self._append_record_locked(summary)
+                finally:
+                    self._capture_closed = True
+                    if self._evidence is not None:
+                        try:
+                            self._evidence.close()
+                        finally:
+                            self._evidence = None
         except OSError:
             # WARNING (F070 W21 promote): the summary record is the
             # last write of every audit-mode run and the only record
@@ -1536,14 +1579,6 @@ class LogStreamer:
             # Mirrors c5a4505 / 8edf0f6 promotion family.
             logger.warning("seatbelt audit summary append failed",
                            exc_info=True)
-        # Finalise the held evidence fd: verify the on-disk path
-        # still names the inode created at first append (loud
-        # warning inside close() on a swap), then release the fd so
-        # test runs stay free of ResourceWarnings.
-        with self._append_lock:
-            if self._evidence is not None:
-                self._evidence.close()
-                self._evidence = None
 
 
 def start_log_streamer(run_dir: Path, *,
