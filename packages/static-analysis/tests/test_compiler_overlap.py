@@ -307,3 +307,61 @@ def test_native_header_macros_reach_compiler_without_exporting_candidates(tmp_pa
     semgrep = [cmd for cmd, _ in calls if 'scan' in cmd]
     assert len(semgrep) == 1  # Expanded candidates do not depend on Semgrep's C parser.
     assert all(kw['block_network'] for _, kw in calls)
+
+
+def test_include_discovery_shared_across_baseline_and_overlap_and_fresh_next_scan(
+    tmp_path, harness, monkeypatch,
+):
+    from core.audit import compiler_sweep
+    walks = []
+    derive = compiler_sweep._derive_include_dirs
+    def count(target, directory):
+        walks.append((target, directory))
+        return derive(target, directory)
+    monkeypatch.setattr(compiler_sweep, '_derive_include_dirs', count)
+    monkeypatch.setattr(cs, '_derive_include_dirs', count)
+    first = cs.scan_target(tmp_path)
+    assert first.tus_analyzed == 3 and len(first.findings) == 6
+    # Concurrent baseline TUs and repeated supplementary request construction
+    # all refer to the same directory, so they share one bounded tree walk.
+    assert walks == [(tmp_path, tmp_path)]
+    first_commands = [cmd for cmd, _ in harness['calls'] if '-c' in cmd]
+    assert len(first_commands) == 6  # sharing paths must not skip an analysis
+    assert all([arg for arg in cmd if arg.startswith('-I')] == [f'-I{tmp_path}']
+               for cmd in first_commands)
+    harness['calls'].clear()
+    added = tmp_path / 'generated' / 'include'
+    added.mkdir(parents=True)
+    second = cs.scan_target(tmp_path)
+    assert len(walks) == 2  # no stale directory inventory across scans
+    assert first.findings == second.findings
+    commands = [cmd for cmd, _ in harness['calls'] if '-c' in cmd]
+    assert len(commands) == 6
+    assert all([arg for arg in cmd if arg.startswith('-I')] == [f'-I{tmp_path}', f'-I{added}']
+               for cmd in commands)
+
+
+def test_include_memo_keeps_translation_unit_directories_distinct(tmp_path, harness, monkeypatch):
+    from collections import Counter
+    from core.audit import compiler_sweep
+    sub = tmp_path / 'sub'
+    sub.mkdir()
+    (sub / 'b.c').write_text('void f(void) {}\n')
+    walks = []
+    derive = compiler_sweep._derive_include_dirs
+    def count(target, directory):
+        walks.append(directory)
+        return derive(target, directory)
+    monkeypatch.setattr(compiler_sweep, '_derive_include_dirs', count)
+    monkeypatch.setattr(cs, '_derive_include_dirs', count)
+    result = cs.scan_target(tmp_path)
+    assert result.tus_analyzed == 4
+    assert Counter(walks) == Counter({tmp_path: 1, sub: 1})
+    for command, _ in harness['calls']:
+        if '-c' not in command:
+            continue
+        source = Path(command[command.index('-c') + 1])
+        expected = [f'-I{tmp_path}']
+        if source.parent == sub:
+            expected.append(f'-I{sub}')
+        assert [arg for arg in command if arg.startswith('-I')] == expected

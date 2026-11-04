@@ -58,7 +58,8 @@ from core.run.scratch import scratch_dir
 from core.source import read_text_capped
 
 from ._util import safe_join
-from .compiler_sweep import _derive_include_dirs
+from .compiler_sweep import _derive_include_dirs, _cached_include_dirs
+from .run_memo import BoundedMemo
 from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -418,6 +419,7 @@ def expand_translation_unit(
     out_dir: Path | None = None,
     timeout: float = _PREPROCESS_TIMEOUT_S,
     preprocessor: tuple[str, ...] | None = None,
+    include_dirs_memo: BoundedMemo[list[str]] | None = None,
 ) -> ExpandedView:
     """Run the preprocessor on one TU and return the fidelity-3 view.
 
@@ -433,6 +435,8 @@ def expand_translation_unit(
         preprocessor: Optional trusted, caller-pinned argv prefix (for example
             the same GCC executable used by an already successful compile).
             Never load this prefix from target build metadata.
+        include_dirs_memo: Optional bounded, caller-owned scan/run memo.
+            Share directory discovery only; compiler output is never cached here.
 
     Returns:
         ExpandedView.  ``ok=False`` (degraded, never an exception, never
@@ -461,7 +465,9 @@ def expand_translation_unit(
             file_path, "no C preprocessor available (need gcc, g++ or cpp)",
         )
 
-    include_dirs = _derive_include_dirs(target_path, full_path.parent)
+    include_dirs = (_derive_include_dirs(target_path, full_path.parent)
+                    if include_dirs_memo is None else
+                    _cached_include_dirs(target_path, full_path.parent, include_dirs_memo))
     include_flags = [f"-I{d}" for d in include_dirs]
     macro_flags = _macro_flags(macro_config)
 

@@ -19,6 +19,7 @@ import math
 import re
 from time import monotonic
 
+from core.audit.run_memo import BoundedMemo
 from core.run.scratch import scratch_dir
 from core.source.strip import blank_c_noncode
 
@@ -46,6 +47,7 @@ class OverlapAnalysis:
     candidates: set[str] = field(default_factory=set)
     diagnostics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     limitations: list[dict[str, str]] = field(default_factory=list)
+    include_dirs_memo: BoundedMemo[list[str]] | None = None
 
 
 def _limited(state: OverlapAnalysis, reason: str, *, tu: str = "") -> None:
@@ -100,6 +102,7 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
                 view = expand_translation_unit(
                     target_path=root, file_path=rel, out_dir=scratch,
                     preprocessor=(request.command[0], "-E", "-x", "c"), timeout=remaining,
+                    include_dirs_memo=state.include_dirs_memo,
                 )
                 if not view.ok:
                     failed += 1
@@ -251,8 +254,9 @@ def run_memcpy_overlap(
     target: Path, files: tuple[str, ...], *,
     request_for: Callable[[str], CompilerRequest] | None,
     sandbox_run: Callable[..., Any], max_workers: int = 4,
+    include_dirs_memo: BoundedMemo[list[str]] | None = None,
 ) -> DetectorResult[OverlapAnalysis]:
     """Run only capped, baseline-successful C TUs supplied by the caller."""
     return run_detector(DETECTOR, OverlapAnalysis(
-        target, files, request_for, sandbox_run, max_workers,
+        target, files, request_for, sandbox_run, max_workers, include_dirs_memo=include_dirs_memo,
     ))
