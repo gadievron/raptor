@@ -1597,6 +1597,16 @@ def _parse_tls_client_hello_sni(buf: bytes) -> "tuple[str, str | None]":
     return ("sni", sni)
 
 
+
+def _submit_to_loop(coroutine, loop):
+    """Release the actual coroutine if its loop rejects submission."""
+    try:
+        return asyncio.run_coroutine_threadsafe(coroutine, loop)
+    except RuntimeError:
+        coroutine.close()
+        raise
+
+
 class EgressProxy:
     """HTTPS CONNECT proxy with hostname allowlist.
 
@@ -2060,9 +2070,6 @@ class EgressProxy:
         lane = _Lane(label=label,
                      allowed_hosts=_normalise_lane_hosts(allowed_hosts),
                      allowed_ports=_normalise_lane_ports(allowed_ports))
-        with self._lanes_lock:
-            self._unix_lanes[path] = lane
-
         async def _bind():
             old_umask = _os.umask(0o077)
             try:
@@ -2074,9 +2081,11 @@ class EgressProxy:
                 _os.umask(old_umask)
             with self._unix_lock:
                 self._unix_servers[path] = srv
+            with self._lanes_lock:
+                self._unix_lanes[path] = lane
             return srv
 
-        future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+        future = _submit_to_loop(_bind(), self._loop)
         future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
         logger.info("egress proxy: unix socket bound at %s", path)
 
@@ -2116,7 +2125,7 @@ class EgressProxy:
                 self._tcp_lane_servers[port] = srv
             return port
 
-        future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+        future = _submit_to_loop(_bind(), self._loop)
         port = future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
         logger.info("egress proxy: tcp lane %r bound at 127.0.0.1:%d",
                     label, port)
@@ -2140,7 +2149,7 @@ class EgressProxy:
             # scheduling (RuntimeError); a wedged loop times out the
             # future (TimeoutError).
             with contextlib.suppress(RuntimeError, TimeoutError):
-                future = asyncio.run_coroutine_threadsafe(
+                future = _submit_to_loop(
                     _close(), self._loop,
                 )
                 future.result(timeout=2.0)
@@ -2225,7 +2234,7 @@ class EgressProxy:
             # Same failure modes as close_tcp_lane: loop shutdown race
             # (RuntimeError) or a wedged loop (TimeoutError).
             with contextlib.suppress(RuntimeError, TimeoutError):
-                future = asyncio.run_coroutine_threadsafe(
+                future = _submit_to_loop(
                     _close(), self._loop,
                 )
                 future.result(timeout=2.0)
@@ -3105,9 +3114,9 @@ class EgressProxy:
                 self._client_tasks.clear()
                 self._loop.stop()  # type: ignore[union-attr]
             try:
-                asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
+                _submit_to_loop(_graceful(), self._loop)
             except RuntimeError:
-                _graceful().close()
+                pass
         elif self._loop is not None and self._loop.is_running():
             async def _cancel_unix() -> None:
                 stale = [t for t in self._unix_tasks if not t.done()]
@@ -3117,7 +3126,7 @@ class EgressProxy:
                     await asyncio.gather(*stale, return_exceptions=True)
                 self._loop.stop()  # type: ignore[union-attr]
             try:
-                asyncio.run_coroutine_threadsafe(_cancel_unix(), self._loop)
+                _submit_to_loop(_cancel_unix(), self._loop)
             except RuntimeError:
                 pass
         else:
