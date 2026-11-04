@@ -14,16 +14,28 @@ class SocketServer:
     def __init__(self, listener: socket.socket, handler: Callable[[socket.socket], None]):
         self._listener = listener
         self._handler = handler
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._clients: set[socket.socket] = set()
-        self._threads: list[threading.Thread] = []
+        self._accept_thread = None
         try:
+            self._stop = threading.Event()
+            self._lock = threading.Lock()
+            self._clients: set[socket.socket] = set()
+            self._threads: list[threading.Thread] = []
             listener.settimeout(0.1)
             self._accept_thread = threading.Thread(target=self._accept, daemon=True)
             self._accept_thread.start()
         except BaseException:
-            listener.close()
+            with contextlib.ExitStack() as cleanup:
+                if self._accept_thread is not None and self._accept_thread.ident is not None:
+                    cleanup.callback(self._accept_thread.join, timeout=2)
+                cleanup.callback(listener.close)
+                if hasattr(self, "_stop"):
+                    self._stop.set()
+                with contextlib.suppress(OSError):
+                    listener.shutdown(socket.SHUT_RDWR)
+            if (self._accept_thread is not None
+                    and self._accept_thread.ident is not None
+                    and self._accept_thread.is_alive()):
+                raise RuntimeError("SocketServer acceptor did not stop after failed setup")
             raise
 
     def _accept(self):
@@ -45,11 +57,25 @@ class SocketServer:
                     self._threads.append(thread)
                 thread.start()
             except BaseException:
-                conn.close()
-                with self._lock:
-                    self._clients.discard(conn)
-                    if thread in self._threads:
-                        self._threads.remove(thread)
+                # The accept loop exits on this failure; wake-up errors in its
+                # partially started handler are teardown, not handler failures.
+                self._stop.set()
+                started = thread is not None and thread.ident is not None
+                try:
+                    with contextlib.ExitStack() as cleanup:
+                        cleanup.callback(conn.close)
+                        if started:
+                            cleanup.callback(thread.join, timeout=2)
+                        if started:
+                            with contextlib.suppress(OSError):
+                                conn.shutdown(socket.SHUT_RDWR)
+                finally:
+                    with self._lock:
+                        self._clients.discard(conn)
+                        if thread in self._threads and not thread.is_alive():
+                            self._threads.remove(thread)
+                if started and thread.is_alive():
+                    raise RuntimeError("SocketServer handler did not stop after failed setup")
                 raise
 
     def _serve(self, conn):
@@ -59,28 +85,46 @@ class SocketServer:
             if not self._stop.is_set():
                 raise
         finally:
-            conn.close()
-            with self._lock:
-                self._clients.discard(conn)
+            try:
+                conn.close()
+            finally:
+                with self._lock:
+                    self._clients.discard(conn)
 
     def close(self):
+        errors = []
+
+        def attempt(action, *args, **kwargs):
+            # One failed close or interrupted join must not abandon the rest.
+            try:
+                action(*args, **kwargs)
+            except BaseException as exc:
+                errors.append(exc)
+
         self._stop.set()
-        with contextlib.suppress(OSError):
-            self._listener.shutdown(socket.SHUT_RDWR)
-        self._listener.close()
-        self._accept_thread.join(timeout=2)
+        def shutdown_listener():
+            with contextlib.suppress(OSError):
+                self._listener.shutdown(socket.SHUT_RDWR)
+
+        attempt(shutdown_listener)
+        attempt(self._listener.close)
+        attempt(self._accept_thread.join, timeout=2)
         with self._lock:
             clients = list(self._clients)
         for conn in clients:
-            with contextlib.suppress(OSError):
-                conn.shutdown(socket.SHUT_RDWR)
+            def shutdown(conn=conn):
+                with contextlib.suppress(OSError):
+                    conn.shutdown(socket.SHUT_RDWR)
+            attempt(shutdown)
         for thread in self._threads:
-            thread.join(timeout=2)
+            attempt(thread.join, timeout=2)
         for conn in clients:
-            conn.close()
+            attempt(conn.close)
         alive = [t.name for t in (self._accept_thread, *self._threads) if t.is_alive()]
         if alive:
             raise RuntimeError(f"SocketServer threads did not stop: {alive}")
+        if errors:
+            raise errors[0]
 
     def __enter__(self):
         return self
