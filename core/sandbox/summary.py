@@ -1000,13 +1000,17 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     )
     try:
         os.replace(str(jsonl), str(tmp))
+    except FileNotFoundError:
+        # A sibling summariser won the rename race, or the input
+        # vanished. Keep this expected race quiet.
+        return None
     except OSError:
-        # KEEP-SILENT (F071 per-site triage W21): the realistic
-        # branch here is "sibling summariser won the rename race and
-        # is producing the summary in our place", or "jsonl already
-        # vanished (operator deleted it)". Neither is data loss from
-        # our perspective — the contract caller observes via the None
-        # return. WARNING noise would obscure the actual outcome.
+        # Permission/storage failures leave the input in place for a
+        # retry, but no summary was produced. Surface that distinction.
+        logger.warning(
+            "summarize_and_write: failed to rename denial evidence %s",
+            jsonl, exc_info=True,
+        )
         return None
 
     records = []
