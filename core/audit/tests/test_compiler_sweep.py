@@ -3531,7 +3531,7 @@ def test_aliasing_warning_needs_an_independent_access_proof(tmp_path, sandbox_sp
     target.mkdir()
     source = "void *f(float value) { " + body + " }\n" if body.startswith("return (") else "int f(float value) { " + body + " }\n"
     (target / "a.c").write_text(source)
-    result = run_compiler_analyzer_sweep(
+    result = _guarded_compiler_sweep(
         target_path=target, file_path="a.c", function_name="f",
         line_start=1, line_end=1, cwe="CWE-843",
         hypothesis="incompatible access",
@@ -3552,7 +3552,7 @@ def test_aliasing_proof_cannot_confirm_another_identifier(tmp_path, sandbox_spy)
     target = tmp_path / "repo"
     target.mkdir()
     (target / "a.c").write_text("int f(float value) { int other=1; return *(int*)&value; }\n")
-    result = run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+    result = _guarded_compiler_sweep(target_path=target, file_path="a.c", function_name="f",
         line_start=1, line_end=1, cwe="CWE-843", hypothesis="type punning of `other`")
     assert result.outcome == "inconclusive"
     assert result.details["candidate_only"]
@@ -3564,7 +3564,7 @@ def test_aliasing_no_clang_retains_candidate(tmp_path, sandbox_spy, monkeypatch)
     target = tmp_path / "repo"
     target.mkdir()
     (target / "a.c").write_text("int f(float value) { return *(int*)&value; }\n")
-    result = run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+    result = _guarded_compiler_sweep(target_path=target, file_path="a.c", function_name="f",
         line_start=1, line_end=1, cwe="CWE-843", hypothesis="incompatible access")
     assert result.outcome == "inconclusive" and result.matches
     assert result.details["corroboration_limitations"]
@@ -3580,7 +3580,7 @@ def test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs(tmp_path, sandbox_
                               "int g(float other) { int *p=(int*)&other; return *p; }\n")
     memo = BoundedMemo(8)
     def sweep(fn, line):
-        return run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name=fn,
+        return _guarded_compiler_sweep(target_path=target, file_path="a.c", function_name=fn,
             line_start=line, line_end=line, cwe="CWE-843", hypothesis="incompatible access", tu_cache=memo)
     first = sweep("f", 1)
     assert first.outcome == "confirmed"
@@ -3610,7 +3610,7 @@ def test_incomplete_aliasing_attempt_is_not_memoized(tmp_path, sandbox_spy, monk
     monkeypatch.setattr(scalar_aliasing, "corroborate_aliasing", transient)
     memo = BoundedMemo(8)
     def sweep():
-        return run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+        return _guarded_compiler_sweep(target_path=target, file_path="a.c", function_name="f",
             line_start=1, line_end=1, cwe="CWE-843", hypothesis="incompatible access", tu_cache=memo)
     assert sweep().outcome == "inconclusive"
     assert sweep().outcome == "confirmed"
