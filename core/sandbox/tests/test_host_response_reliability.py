@@ -7,7 +7,6 @@ import os
 import resource
 import struct
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from core.sandbox import host as host_mod
+from core.sandbox.tests.pipe_host import fake_host
+from core.testing.pipes import pipes_for_setup
 
 
 def frame(body):
@@ -100,40 +101,6 @@ def test_one_shot_matching_reply_still_accepted(monkeypatch, tmp_path):
     assert call() == {"ok": True}
 
 
-def fake_host(reply):
-    in_r, in_w = os.pipe()
-    out_r, out_w = os.pipe()
-    errors = []
-
-    def read_exact(fd, size):
-        data = bytearray()
-        while len(data) < size:
-            chunk = os.read(fd, size - len(data))
-            if not chunk:
-                raise EOFError("parent closed request channel")
-            data.extend(chunk)
-        return bytes(data)
-
-    def serve():
-        try:
-            size, = struct.unpack("!I", read_exact(in_r, 4))
-            request = json.loads(read_exact(in_r, size))
-            os.write(out_w, frame(json.dumps(reply(request)).encode()))
-        except Exception as exc:
-            errors.append(exc)
-        finally:
-            os.close(in_r)
-            os.close(out_w)
-
-    thread = threading.Thread(target=serve, daemon=True)
-    host = host_mod.SandboxHost(
-        _thread=thread, _read_fd=out_r, _write_fd=in_w,
-        _daemon_fds=None, _lock=threading.Lock(),
-    )
-    thread.start()
-    return host, thread, errors
-
-
 def test_close_releases_descriptors_after_nonobject_reply():
     host, thread, errors = fake_host(lambda request: [])
     owned = (host._read_fd, host._write_fd)
@@ -167,8 +134,10 @@ def test_high_numbered_reply_descriptor_is_supported():
         host._read_fd = high
         assert host._rpc({"cmd": "ping"}, timeout=2) == {"ok": True}
     finally:
-        host.close()
-        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+        try:
+            host.close()
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
     assert not thread.is_alive()
     assert not errors
 
@@ -193,10 +162,10 @@ def test_zero_progress_request_write_raises_host_rpc_error(monkeypatch):
 
 
 def test_reply_eof_wakes_poll_without_waiting_for_deadline():
-    read_fd, write_fd = os.pipe()
+    with pipes_for_setup(1) as ((read_fd, write_fd),):
+        host = object.__new__(host_mod.SandboxHost)
+        host._read_fd = read_fd
     os.close(write_fd)
-    host = object.__new__(host_mod.SandboxHost)
-    host._read_fd = read_fd
     try:
         with pytest.raises(host_mod.HostRPCError, match="daemon EOF"):
             host._read_exact(1, time.monotonic() + 10)

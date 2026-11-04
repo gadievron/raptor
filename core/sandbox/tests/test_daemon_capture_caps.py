@@ -18,9 +18,7 @@ Pipe-level tests; the cap is monkeypatched small so they stay fast.
 
 from __future__ import annotations
 
-import json
 import os
-import struct
 import sys
 import threading
 
@@ -28,6 +26,7 @@ import pytest
 
 from core.sandbox import _daemon
 from core.sandbox import host as host_mod
+from core.sandbox.tests.pipe_host import fake_host
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -169,10 +168,6 @@ class TestConversationCaps:
         assert resp["target_exit"] == "clean"
 
 
-def _frame(obj: dict) -> bytes:
-    body = json.dumps(obj).encode("utf-8")
-    return struct.pack("!I", len(body)) + body
-
 
 class TestParentReplyCeiling:
 
@@ -188,53 +183,18 @@ class TestParentReplyCeiling:
         """A reply between the old 64 MiB ceiling and the new bounded
         one is read intact — pre-fix _read_frame raised mid-stream
         and desynced the channel."""
-        in_r, in_w = os.pipe()
-        out_r, out_w = os.pipe()
         blob = "x" * (65 * 1024 * 1024)
-
-        def _serve():
-            try:
-                # Consume the request to learn the rid, then reply big.
-                hdr = b""
-                while len(hdr) < 4:
-                    hdr += os.read(in_r, 4 - len(hdr))
-                (length,) = struct.unpack("!I", hdr)
-                body = b""
-                while len(body) < length:
-                    body += os.read(in_r, length - len(body))
-                rid = json.loads(body)["rid"]
-                data = _frame({"ok": True, "blob": blob, "rid": rid})
-                view = memoryview(data)
-                while view:
-                    n = os.write(out_w, view)
-                    view = view[n:]
-            finally:
-                for fd in (in_r, out_w):
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-
-        thread = threading.Thread(target=_serve, daemon=True)
-        thread.start()
-        host = host_mod.SandboxHost(
-            _thread=thread,
-            _write_fd=in_w,
-            _read_fd=out_r,
-            _daemon_fds=None,
-            _lock=threading.Lock(),
+        host, thread, errors = fake_host(
+            lambda request: {"ok": True, "blob": blob, "rid": request["rid"]},
         )
         try:
             response = host._rpc({"cmd": "ping"}, timeout=60.0)
             assert response["ok"] is True
             assert len(response["blob"]) == len(blob)
         finally:
-            for fd in (in_w, out_r):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-            thread.join(timeout=10)
+            host.close()
+        assert not thread.is_alive()
+        assert not errors
 
 
 class TestSpawnWrapperPassthrough:
