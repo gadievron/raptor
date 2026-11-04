@@ -175,13 +175,13 @@ def _parse_assessments(text: str, report: dict) -> tuple:
     raw = strip_json_fences(text)
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
             return [], "", 0
         try:
             parsed = json.loads(raw[start:end + 1])
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             return [], "", 0
     if not isinstance(parsed, dict):
         return [], "", 0
@@ -194,15 +194,15 @@ def _parse_assessments(text: str, report: dict) -> tuple:
             dropped += 1
             continue
         signal_type = item.get("signal_type")
-        if signal_type not in known_types:
+        if not isinstance(signal_type, str) or signal_type not in known_types:
             dropped += 1
             continue
         judgement = item.get("judgement")
-        if judgement not in _JUDGEMENTS:
+        if not isinstance(judgement, str) or judgement not in _JUDGEMENTS:
             judgement = JUDGEMENT_UNCLEAR
         try:
             confidence = min(1.0, max(0.0, float(item.get("confidence"))))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             confidence = 0.0
         rationale = item.get("rationale")
         rationale = (escape_nonprintable(str(rationale))
