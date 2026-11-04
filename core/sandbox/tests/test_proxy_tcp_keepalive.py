@@ -15,6 +15,7 @@ import socket
 
 import pytest
 
+from core.sandbox.tests.socket_server import SocketServer
 from core.sandbox.proxy import (
     _TCP_KEEPALIVE_IDLE_S,
     _enable_tcp_keepalive,
@@ -95,8 +96,6 @@ def test_setsockopt_failure_is_non_fatal(tcp_pair):
 def test_established_tunnel_enables_keepalive_on_both_legs(monkeypatch):
     """End-to-end call-site check: a CONNECT that reaches the relay
     stage must arm keepalive on the client leg AND the upstream leg."""
-    import threading
-
     from core.sandbox import proxy as proxy_mod
 
     armed = []
@@ -111,40 +110,33 @@ def test_established_tunnel_enables_keepalive_on_both_legs(monkeypatch):
     # this test lives on loopback, so stand the gate down for it.
     monkeypatch.setattr(proxy_mod, "_ip_is_blocked", lambda ip: False)
 
-    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    upstream.bind(("127.0.0.1", 0))
-    upstream.listen(1)
-    up_port = upstream.getsockname()[1]
+    with ExitStack() as cleanup:
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cleanup.callback(upstream.close)
+        upstream.bind(("127.0.0.1", 0))
+        upstream.listen(1)
+        up_port = upstream.getsockname()[1]
 
-    def serve_once():
-        conn, _ = upstream.accept()
-        conn.recv(16)
-        conn.close()
+        def serve_once(conn):
+            conn.recv(16)
 
-    server_thread = threading.Thread(target=serve_once, daemon=True)
-    server_thread.start()
-
-    proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-    try:
+        server = SocketServer(upstream, serve_once)
+        cleanup.callback(server.close)
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+        cleanup.callback(proxy.stop)
         s = socket.create_connection(("127.0.0.1", proxy.port), timeout=5.0)
-        try:
-            s.sendall(
-                f"CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\n"
-                f"Host: 127.0.0.1:{up_port}\r\n\r\n".encode("latin-1")
-            )
-            buf = b""
-            while b"\r\n\r\n" not in buf:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-            assert b" 200 " in buf.split(b"\r\n", 1)[0]
-            s.sendall(b"ping")
-        finally:
-            s.close()
-        server_thread.join(timeout=5.0)
-    finally:
-        proxy.stop()
-        upstream.close()
+        cleanup.callback(s.close)
+        s.sendall(
+            f"CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{up_port}\r\n\r\n".encode("latin-1")
+        )
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        assert b" 200 " in buf.split(b"\r\n", 1)[0]
+        s.sendall(b"ping")
 
     assert len(armed) == 2, "keepalive must be armed on both tunnel legs"
