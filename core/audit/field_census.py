@@ -987,7 +987,10 @@ def _scan_file_ts(
         function = span.name if span else ""
         params = span.params if span else ()
         code = lines[line - 1].strip() if 1 <= line <= len(lines) else ""
-        rec = raw.setdefault(name, FieldRecord(field=name))
+        rec = raw.get(name)
+        if rec is None:
+            rec = FieldRecord(field=name)
+            raw[name] = rec
         if (node.start_byte, node.end_byte) in write_lhs:
             assign = node.parent
             rhs = assign.child_by_field_name("right") \
@@ -1049,9 +1052,10 @@ def _scan_file_regex(
                 continue
             written.add((owner, name))
             rhs = text[m.end():].strip()
-            rec = raw.setdefault(name, FieldRecord(
-                field=name, tier=TIER_REGEX,
-            ))
+            rec = raw.get(name)
+            if rec is None:
+                rec = FieldRecord(field=name, tier=TIER_REGEX)
+                raw[name] = rec
             rec.tier = TIER_REGEX
             rec.writes.append(FieldWrite(
                 file=file_path, line=lineno, function=function,
@@ -1074,9 +1078,10 @@ def _scan_file_regex(
                 context = f"alias_assign:{alias.group(1)}"
             elif "return" in text.split("->")[0]:
                 context = "return"
-            rec = raw.setdefault(name, FieldRecord(
-                field=name, tier=TIER_REGEX,
-            ))
+            rec = raw.get(name)
+            if rec is None:
+                rec = FieldRecord(field=name, tier=TIER_REGEX)
+                raw[name] = rec
             rec.tier = TIER_REGEX
             rec.reads.append(FieldRead(
                 file=file_path, line=lineno, function=function,
