@@ -16,6 +16,8 @@ Hermetic — captive loopback upstream, no LLM, no network egress.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import os
@@ -148,9 +150,11 @@ class TestChildLedgerOnVetoedDeath:
     def test_one_booking_and_reservation_released(
         self, fake_creds, tmp_path,
     ):
-        upstream = _AbortSSEUpstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _AbortSSEUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             worker = _worker_token(d)
             minted = mint_child_token(
                 budget_usd=1.0, models=[_PRICED_MODEL], ttl_s=120,
@@ -202,6 +206,3 @@ class TestChildLedgerOnVetoedDeath:
             assert upstream.requests == 1
             spend2 = d.child_spend(minted["token_id"])
             assert spend2["spent_usd"] == spend["spent_usd"]
-        finally:
-            upstream.shutdown()
-            d.shutdown()

@@ -14,6 +14,8 @@ All hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import os
@@ -161,9 +163,11 @@ class TestBodyLimits:
         self, fake_creds, tmp_path, monkeypatch,
     ):
         monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_MAX_BODY_BYTES", "65536")
-        upstream = _Upstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             with _uds_client(d) as client:
                 resp = client.post(
@@ -173,9 +177,6 @@ class TestBodyLimits:
                 )
             assert resp.status_code == 200
             assert upstream.requests == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_negative_content_length_rejected_400(
         self, fake_creds, tmp_path,
@@ -280,9 +281,11 @@ class TestChildBudgetReservation:
     ):
         """End-to-end: a forwarded child request must release its
         reservation once booked — a leak would strangle the token."""
-        upstream = _Upstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child(
                 "cc-settle", budget_usd=1.0, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -303,6 +306,3 @@ class TestChildBudgetReservation:
                 time.sleep(0.02)
             assert rec.reserved_usd == 0.0
             assert rec.spent_usd > 0.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()

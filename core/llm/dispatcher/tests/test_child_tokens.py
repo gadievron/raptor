@@ -9,6 +9,8 @@ server inside the test; no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import os
@@ -298,9 +300,11 @@ class TestMintAndDispatch:
 
     @pytest.mark.upstream_forward
     def test_child_token_round_trip_and_booking(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child(
                 "cc-test", budget_usd=1.0, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -325,17 +329,16 @@ class TestMintAndDispatch:
             assert spend["spent_usd"] == pytest.approx(_expected_cost())
             assert spend["last_model"] == _PRICED_MODEL
             assert spend["requests_made"] == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_streamed_response_books_from_final_usage_frame(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("sse")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("sse")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child(
                 "cc-sse", budget_usd=1.0, ttl_s=600,
             )
@@ -348,17 +351,16 @@ class TestMintAndDispatch:
             # output_tokens from the FINAL message_delta frame (500),
             # not the message_start placeholder (1).
             assert spend["spent_usd"] == pytest.approx(_expected_cost())
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_streamed_abort_books_what_upstream_reported(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("abort")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("abort")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child(
                 "cc-abort", budget_usd=1.0, ttl_s=600,
             )
@@ -374,14 +376,13 @@ class TestMintAndDispatch:
             assert spend["spent_usd"] == pytest.approx(
                 _expected_cost(in_tokens=1000, out_tokens=1),
             )
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_unpriced_model_books_zero_and_flags(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             # Upstream reports a model absent from the pricing table.
             upstream.mode = "json"
             token, info = d.allocate_child(
@@ -402,9 +403,6 @@ class TestMintAndDispatch:
             spend = d.child_spend(info["token_id"])
             assert spend["spent_usd"] == 0.0
             assert spend["unpriced_requests"] == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -415,9 +413,11 @@ class TestMintAndDispatch:
 class TestEnforcement:
 
     def test_model_not_in_allowlist_rejected(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _ = d.allocate_child(
                 "cc-allow", budget_usd=1.0, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -429,17 +429,16 @@ class TestEnforcement:
             assert resp.status_code == 403
             assert "not in allowlist" in resp.json()["error"]
             assert upstream.requests == []  # never forwarded
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_allowlist_matches_across_id_spellings(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _ = d.allocate_child(
                 "cc-norm", budget_usd=1.0,
                 models=[f"us.anthropic.{_PRICED_MODEL}"], ttl_s=600,
@@ -449,17 +448,16 @@ class TestEnforcement:
                     client, token, model=f"anthropic.{_PRICED_MODEL}",
                 )
             assert resp.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_budget_exhaustion_refuses_before_forward(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             # Budget below the cost of one call: first call is allowed
             # (spent 0 < budget), booking pushes spent past the cap,
             # second call must 402 WITHOUT touching the upstream.
@@ -478,14 +476,13 @@ class TestEnforcement:
             assert "spent" in err  # actionable numbers in the message
             assert len(upstream.requests) == n_forwarded
             assert d.child_spend(info["token_id"])["status"] == "exhausted"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_provider_scope_and_shape(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _ = d.allocate_child("cc-shape", budget_usd=1.0)
             with _uds_client(d) as client:
                 # Provider outside the child set (openai is worker-only).
@@ -508,9 +505,6 @@ class TestEnforcement:
                     content=b'{"messages":[]}',
                 )
                 assert r.status_code == 400
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -528,9 +522,11 @@ class TestReservationIsACap:
         worst-case cost over the remaining budget must be refused
         BEFORE the forward leg — pre-fix the flat $0.25 reservation
         admitted it and the upstream could book any amount."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child(
                 "cc-cap", budget_usd=1.0, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -548,9 +544,6 @@ class TestReservationIsACap:
                 assert rec.reserved_usd == 0.0
                 ok = _messages_post(client, token, max_tokens=100)
                 assert ok.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_booked_spend_at_budget_refuses_next_admission(
@@ -559,9 +552,11 @@ class TestReservationIsACap:
         """Once actual booked spend reaches the budget the very next
         admission is refused — worst-case overrun is bounded by the
         in-flight set's ceilings, never by future admissions."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             # One affordable call whose actual booked cost exceeds
             # the whole budget (the stub reports 1000/500 tokens).
             token, info = d.allocate_child(
@@ -578,9 +573,6 @@ class TestReservationIsACap:
             assert "exhausted" in second.json()["error"]
             assert len(upstream.requests) == n_forwarded
             assert d.child_spend(info["token_id"])["status"] == "exhausted"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_count_tokens_exempt_from_reservation_ceiling(
@@ -591,9 +583,11 @@ class TestReservationIsACap:
         must never be refused by the full-output-window ceiling
         fallback. Pre-fix a small-budget token got a 402 on the free
         endpoint."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child(
                 "cc-count", budget_usd=0.01, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -628,9 +622,6 @@ class TestReservationIsACap:
                 # Nothing stays reserved after the free call settles.
                 rec = d._tokens[token]
                 assert rec.reserved_usd == 0.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_fragment_masquerade_cannot_claim_the_exemption(
         self, fake_creds, tmp_path,
@@ -646,9 +637,11 @@ class TestReservationIsACap:
         strip the fragment client-side, hiding the masquerade."""
         import socket as _socket
 
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child(
                 "cc-frag", budget_usd=0.01, models=[_PRICED_MODEL],
                 ttl_s=600,
@@ -683,18 +676,17 @@ class TestReservationIsACap:
             # Nothing left reserved on the token.
             rec = d._tokens[token]
             assert rec.reserved_usd == 0.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_count_tokens_still_enforces_scope_and_exhaustion(
         self, fake_creds, tmp_path,
     ):
         """The exemption skips only the reservation: model allowlist
         and hard budget exhaustion still refuse the free endpoint."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child(
                 "cc-count-scope", budget_usd=0.01,
                 models=[_PRICED_MODEL], ttl_s=600,
@@ -725,9 +717,6 @@ class TestReservationIsACap:
                 )
                 assert exhausted.status_code == 402
                 assert "exhausted" in exhausted.json()["error"]
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_release_returns_captured_amount_after_knob_lowered(
@@ -741,9 +730,11 @@ class TestReservationIsACap:
             "RAPTOR_LLM_DISPATCHER_CHILD_RESERVE_USD", "0.25",
         )
         # Unpriced model → the flat-knob reservation path.
-        upstream = _GatedUpstream(model="zz-unpriced-model-e2e")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _GatedUpstream(model="zz-unpriced-model-e2e")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child(
                 "cc-knob", budget_usd=1.0, ttl_s=600,
             )
@@ -780,9 +771,6 @@ class TestReservationIsACap:
                     client, token, model="zz-unpriced-model-e2e",
                 )
             assert follow_up.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -794,9 +782,11 @@ class TestLifecycle:
 
     @pytest.mark.upstream_forward
     def test_expiry_enforced_and_spend_survives(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             # Generous TTL + deterministic expiry: the former 1s TTL
             # with sleep(1.1) raced the FIRST request's full HTTP
             # round trip against the real clock — under load it
@@ -820,14 +810,13 @@ class TestLifecycle:
             spend = d.child_spend(info["token_id"])
             assert spend is not None
             assert spend["spent_usd"] > 0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_revocation(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("cc-rev", budget_usd=1.0)
             assert d.revoke_child(info["token_id"]) is True
             with _uds_client(d) as client:
@@ -835,9 +824,6 @@ class TestLifecycle:
             assert resp.status_code == 401
             assert "revoked" in resp.json()["error"]
             assert d.revoke_child("no-such-id") is False
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_mint_validation(self, fake_creds, tmp_path):
         d = LLMDispatcher(run_id="mint-val", creds=fake_creds,
@@ -861,9 +847,11 @@ class TestLifecycle:
         the same request appeared under two identifiers and
         secret-derived material landed where a purpose-built public
         id exists."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("cc-audit", budget_usd=1.0)
             with _uds_client(d) as client:
                 resp = _messages_post(client, token)
@@ -891,15 +879,14 @@ class TestLifecycle:
             )
             # No row anywhere in the trail carries the secret prefix.
             assert all(r.get("token_id") != token[:12] for r in rows)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_audit_never_contains_token_value(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("cc-audit", budget_usd=1.0)
             with _uds_client(d) as client:
                 _messages_post(client, token)
@@ -907,9 +894,6 @@ class TestLifecycle:
             audit_text = (tmp_path / "audit.jsonl").read_text()
             assert token not in audit_text
             assert info["token_id"] in audit_text
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestMintValidationHardening:
@@ -1030,23 +1014,24 @@ class TestPlanes:
 
     @pytest.mark.upstream_forward
     def test_tcp_plane_serves_child_tokens(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _ = d.allocate_child("cc-tcp", budget_usd=1.0)
             with _tcp_client(d) as client:
                 resp = _messages_post(
                     client, token, url="/anthropic/v1/messages",
                 )
             assert resp.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_tcp_plane_refuses_worker_tokens(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             worker = _worker_token(d)
             with _tcp_client(d) as client:
                 resp = client.post(
@@ -1056,14 +1041,13 @@ class TestPlanes:
                 )
             assert resp.status_code == 401
             assert upstream.requests == []
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_admin_unreachable_with_child_token(self, fake_creds, tmp_path):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("cc-esc", budget_usd=1.0)
             # A child must not mint, revoke, or read spend — on either
             # plane.
@@ -1094,17 +1078,16 @@ class TestPlanes:
             spend = d.child_spend(info["token_id"])
             assert spend["status"] in ("pending", "active")
             assert spend["budget_usd"] == 1.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_admin_endpoints_with_worker_token_over_uds(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             worker = _worker_token(d)
             minted = mint_child_token(
                 budget_usd=0.5, models=[_PRICED_MODEL], ttl_s=120,
@@ -1130,9 +1113,6 @@ class TestPlanes:
             with _uds_client(d) as client:
                 resp = _messages_post(client, minted["token"])
             assert resp.status_code == 401
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_mint_fails_fast_when_dispatcher_unreachable(self, tmp_path):
         dead_socket = tmp_path / "no-dispatcher.sock"
@@ -1152,9 +1132,11 @@ class TestPlanes:
         plane and returns its port — idempotently, so concurrent
         workers share one listener — and a scoped child token
         authenticates on that port."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             worker = _worker_token(d)
             port = enable_child_loopback(
                 socket_path=str(d.socket_path), token=worker,
@@ -1172,18 +1154,17 @@ class TestPlanes:
                     client, token, url="/anthropic/v1/messages",
                 )
             assert resp.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_loopback_admin_op_refused_for_child_tokens(
         self, fake_creds, tmp_path,
     ):
         """A scoped child token cannot open the TCP plane — on the
         UDS or on the (already-open) TCP plane itself."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _ = d.allocate_child("cc-esc", budget_usd=1.0)
             for client, url in (
                 (_uds_client(d), "http://_/_child/loopback"),
@@ -1196,9 +1177,6 @@ class TestPlanes:
                         content=b"{}",
                     )
                 assert r.status_code == 403, url
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_mint_request_budget_travels_and_enforces(
@@ -1207,9 +1185,11 @@ class TestPlanes:
         """The client's ``request_budget`` reaches allocate_child:
         request N+1 against an N-request token is refused without an
         upstream forward."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             worker = _worker_token(d)
             minted = mint_child_token(
                 budget_usd=1.0, models=[_PRICED_MODEL], ttl_s=120,
@@ -1224,9 +1204,6 @@ class TestPlanes:
                 resp = _messages_post(client, minted["token"])
             assert resp.status_code == 401
             assert len(upstream.requests) == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestAnthropicSDKDialect:
@@ -1257,9 +1234,11 @@ class TestAnthropicSDKDialect:
     def test_x_api_key_dialect_books_once_and_releases_reservation(
         self, fake_creds, tmp_path,
     ):
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("sdk-child", budget_usd=1.0)
             with _tcp_client(d) as client:
                 resp = self._sdk_shaped_post(client, token)
@@ -1275,18 +1254,17 @@ class TestAnthropicSDKDialect:
                 "real-secret-anthropic-key-NOT-LEAKED"
             assert token not in json.dumps(upstream.requests[0]["headers"])
             assert sent.get("Accept-Encoding") == "identity"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_x_api_key_dialect_scope_still_enforced(
         self, fake_creds, tmp_path,
     ):
         """The dialect earns no scope: a non-allowlisted upstream path
         is 403'd unforwarded, and a revoked token's reuse is 401'd."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("sdk-esc", budget_usd=1.0)
             with _tcp_client(d) as client:
                 resp = self._sdk_shaped_post(
@@ -1298,18 +1276,17 @@ class TestAnthropicSDKDialect:
                 resp = self._sdk_shaped_post(client, token)
             assert resp.status_code == 401
             assert upstream.requests == []
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_x_api_key_dialect_budget_exhaustion_402(
         self, fake_creds, tmp_path,
     ):
         """Overspend surfaces as a 402 the SDK raises as a typed API
         error — the child reports it, never silently retries free."""
-        upstream = _Upstream("json")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("json")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("sdk-poor", budget_usd=0.02)
             with d._tokens_lock:
                 rec = d._child_by_id_locked(info["token_id"])
@@ -1319,9 +1296,6 @@ class TestAnthropicSDKDialect:
             assert resp.status_code == 402
             assert "budget exhausted" in resp.json()["error"]
             assert upstream.requests == []
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,8 @@ Hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import contextlib
 import json
 import os
@@ -144,9 +146,11 @@ class TestUpstreamStaleRetry:
         dispatcher: the worker sees two clean 200s, the audit records
         a ``request.retry`` and — the pre-fix burst shape — NO
         ``request.error``."""
-        upstream = MockUpstream("half-open", idle_s=_IDLE_S)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("half-open", idle_s=_IDLE_S)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             first = _post(d, token)
             assert first.status_code == 200
@@ -168,9 +172,6 @@ class TestUpstreamStaleRetry:
             # stale write never reached request handling upstream.
             assert counters["requests_processed"] == 2
             assert counters["stale_hits"] == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_persistent_pre_response_failure_is_bounded(
         self, fake_creds, tmp_path,
@@ -180,9 +181,11 @@ class TestUpstreamStaleRetry:
         retry's fresh connection rules out reuse artifacts, so exactly
         one retry fires, then the worker gets the ordinary 502 +
         ``request.error`` it always did."""
-        upstream = MockUpstream("no-response-close")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("no-response-close")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             resp = _post(d, token)
             assert resp.status_code == 502
@@ -200,9 +203,6 @@ class TestUpstreamStaleRetry:
             # real generation work to be at stake — and to exactly
             # one extra send per worker attempt.
             assert counters["requests_processed"] == 2
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_slow_pre_response_death_past_ceiling_is_not_retried(
         self, fake_creds, tmp_path, monkeypatch,
@@ -218,9 +218,11 @@ class TestUpstreamStaleRetry:
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S", "0.1",
         )
-        upstream = MockUpstream("no-response-close", response_delay_s=0.4)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("no-response-close", response_delay_s=0.4)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             resp = _post(d, token)
             assert resp.status_code == 502
@@ -230,9 +232,6 @@ class TestUpstreamStaleRetry:
             assert counters["connections"] == 1
             # Processed exactly once — the slow death was NOT re-sent.
             assert counters["requests_processed"] == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_large_body_stale_reuse_recovers(
         self, fake_creds, tmp_path,
@@ -243,9 +242,11 @@ class TestUpstreamStaleRetry:
         the same read-class shapes ``_STALE_REUSE_ERRORS`` names.
         Version-dependent behaviour: this pins that a large-body
         stale death still lands in the retryable set."""
-        upstream = MockUpstream("half-open", idle_s=_IDLE_S)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("half-open", idle_s=_IDLE_S)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             assert _post(d, token, body_bytes=262144).status_code == 200
             time.sleep(_IDLE_S * 3)
@@ -253,9 +254,6 @@ class TestUpstreamStaleRetry:
             assert _wait_audit(d, "request.retry")
             assert not _audit_events(d, "request.error")
             assert upstream.counters()["requests_processed"] == 2
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_mid_response_failure_is_not_retried(
         self, fake_creds, tmp_path,
@@ -264,18 +262,17 @@ class TestUpstreamStaleRetry:
         follow upstream processing that already cost real money —
         re-sending would double-process. The dispatcher must surface
         it as the ordinary relay failure, with zero retry attempts."""
-        upstream = MockUpstream("rst-mid-response")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("rst-mid-response")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             _post_streaming(d, token)
             assert _wait_audit(d, "request.error")
             assert not _audit_events(d, "request.retry")
             # Processed exactly once — no transparent re-send.
             assert upstream.counters()["requests_processed"] == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestStaleRetryShardEvidence:
@@ -339,9 +336,11 @@ class TestStaleRetryShardEvidence:
         single stale-retried death drains and rebuilds the shard even
         though the worker saw a clean 200."""
         monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "1")
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             pooled = self._sole_shard_client(d)
             self._condemn_while(monkeypatch, pooled, {"fail": True})
@@ -353,9 +352,6 @@ class TestStaleRetryShardEvidence:
             assert rebuilt is not pooled
             assert pooled.is_closed
             assert not rebuilt.is_closed
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_consecutive_stale_deaths_drain_at_threshold(
         self, fake_creds, tmp_path, monkeypatch,
@@ -365,9 +361,11 @@ class TestStaleRetryShardEvidence:
         whose idle pool keeps getting condemned finally gets the
         drain repair instead of paying a one-shot per relay."""
         monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             pooled = self._sole_shard_client(d)
             self._condemn_while(monkeypatch, pooled, {"fail": True})
@@ -382,9 +380,6 @@ class TestStaleRetryShardEvidence:
             assert pooled.is_closed
             assert len(_audit_events(d, "request.retry")) == 2
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_clean_completion_still_resets_after_stale_strike(
         self, fake_creds, tmp_path, monkeypatch,
@@ -394,9 +389,11 @@ class TestStaleRetryShardEvidence:
         count below a threshold of 2, so the shard survives where the
         consecutive test above drains."""
         monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             pooled = self._sole_shard_client(d)
             state = {"fail": True}
@@ -418,9 +415,6 @@ class TestStaleRetryShardEvidence:
             assert not pooled.is_closed
             assert len(_audit_events(d, "request.retry")) == 2
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_oneshot_failure_never_strikes_twice(
         self, fake_creds, tmp_path, monkeypatch,

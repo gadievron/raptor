@@ -15,6 +15,8 @@ Hermetic — captive loopback upstreams, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import os
@@ -131,17 +133,16 @@ class TestUpstreamStateHeader:
         """A head that came from the upstream carries the
         ``response-started`` stamp — the worker gate's evidence that
         any later transport death follows billed upstream work."""
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 200
             assert resp.headers.get(_UPSTREAM_STATE_HEADER) == (
                 "response-started"
             )
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_pre_response_502_is_stamped_pre_response(
@@ -150,17 +151,16 @@ class TestUpstreamStateHeader:
         """The dispatcher's own 502 for a forward-leg failure before
         any upstream response byte carries ``pre-response`` — the
         worker's existing retry policy stays in force for it."""
-        upstream = MockUpstream("no-response-close")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("no-response-close")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 502
             assert resp.headers.get(_UPSTREAM_STATE_HEADER) == (
                 "pre-response"
             )
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_upstream_copy_of_the_header_cannot_impersonate(
@@ -171,16 +171,15 @@ class TestUpstreamStateHeader:
         compromised) upstream must not be able to mark its completed
         response ``pre-response`` and steer the worker into blind
         re-sends of consumed generations."""
-        upstream = _CannedUpstream(200, spoof=True)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CannedUpstream(200, spoof=True)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 200
             values = resp.headers.get_list(_UPSTREAM_STATE_HEADER)
             assert values == ["response-started"]
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_relayed_error_head_carries_no_stamp(
@@ -192,15 +191,14 @@ class TestUpstreamStateHeader:
         storms where retry matters most) must keep the worker's
         status-code retry policy, not trip a false billed-spend veto.
         Two-direction with the relayed-200 test above."""
-        upstream = _CannedUpstream(429)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CannedUpstream(429)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 429
             assert _UPSTREAM_STATE_HEADER not in resp.headers
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     @pytest.mark.upstream_forward
     def test_spoofed_stamp_on_error_head_is_stripped(
@@ -208,15 +206,14 @@ class TestUpstreamStateHeader:
     ):
         """An error head gets no dispatcher stamp AND loses any
         upstream-supplied copy — unstamped, not upstream-controlled."""
-        upstream = _CannedUpstream(429, spoof=True)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CannedUpstream(429, spoof=True)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 429
             assert _UPSTREAM_STATE_HEADER not in resp.headers
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_control_plane_responses_carry_no_stamp(
         self, fake_creds, tmp_path,
@@ -224,12 +221,11 @@ class TestUpstreamStateHeader:
         """Responses that never involved the upstream forward leg
         (here: an auth reject) carry no attempt-state header — absence
         means "no signal" to the worker gate, never a verdict."""
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+            cleanup.callback(d.shutdown)
             resp = _post(d, "not-a-valid-token")
             assert resp.status_code == 401
             assert _UPSTREAM_STATE_HEADER not in resp.headers
-        finally:
-            upstream.shutdown()
-            d.shutdown()

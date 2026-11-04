@@ -15,6 +15,8 @@ Hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import json
 import os
 import time
@@ -142,9 +144,11 @@ class TestErrorRowProvenance:
         connections included, so the one stale retry is exhausted)
         yields a request.error row with response_started=False and a
         plausible in-flight duration."""
-        upstream = MockUpstream("no-response-close")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("no-response-close")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             assert _post(d, token).status_code == 502
             rows = _wait_audit(d, "request.error")
@@ -156,9 +160,6 @@ class TestErrorRowProvenance:
             # 30s budget is plausible, negative or absent is not.
             assert isinstance(row["elapsed_s"], float)
             assert 0.0 <= row["elapsed_s"] < 30.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_mid_response_failure_marks_response_started(
         self, fake_creds, tmp_path,
@@ -166,9 +167,11 @@ class TestErrorRowProvenance:
         """A death after the response head + partial body was relayed
         yields response_started=True — the genuine mid-response-loss
         shape, distinguishable from the belated-orphan one."""
-        upstream = MockUpstream("rst-mid-response")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("rst-mid-response")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             _post_streaming(d, token)
             rows = _wait_audit(d, "request.error")
@@ -178,9 +181,6 @@ class TestErrorRowProvenance:
             assert row["response_started"] is True
             assert isinstance(row["elapsed_s"], float)
             assert 0.0 <= row["elapsed_s"] < 30.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_retry_row_carries_the_same_provenance_fields(
         self, fake_creds, tmp_path,
@@ -193,9 +193,11 @@ class TestErrorRowProvenance:
         # the reuse below waits on the mock's condemnation counter,
         # not on a multiple of this value.
         idle_s = 0.15
-        upstream = MockUpstream("half-open", idle_s=idle_s)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("half-open", idle_s=idle_s)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             assert _post(d, token).status_code == 200
 
@@ -224,6 +226,3 @@ class TestErrorRowProvenance:
             # Retry eligibility is gated on the stale-retry ceiling
             # (2s default) — the recorded duration must sit inside it.
             assert 0.0 <= row["elapsed_s"] <= 2.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
