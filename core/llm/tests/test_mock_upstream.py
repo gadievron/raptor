@@ -92,3 +92,50 @@ def test_shutdown_wakes_half_open_reader(monkeypatch):
             _assert_stopped(server)
     finally:
         server.shutdown()
+
+
+@pytest.mark.parametrize("fault", ["bind", "listen", "thread-start"])
+def test_failed_startup_closes_listener(monkeypatch, fault):
+    from types import SimpleNamespace
+    from core.llm.tests import mock_upstream
+
+    listeners = []
+
+    class Listener(socket.socket):
+        def bind(self, address):
+            if fault == "bind":
+                raise OSError("injected bind failure")
+            return super().bind(address)
+
+        def listen(self, backlog):
+            if fault == "listen":
+                raise OSError("injected listen failure")
+            return super().listen(backlog)
+
+    def socket_factory(*args, **kwargs):
+        listener = Listener(*args, **kwargs)
+        listeners.append(listener)
+        return listener
+
+    class StartFailure(threading.Thread):
+        def start(self):
+            raise RuntimeError("injected thread-start failure")
+
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(mock_upstream, "socket", SimpleNamespace(
+                socket=socket_factory, AF_INET=socket.AF_INET,
+                SOCK_STREAM=socket.SOCK_STREAM, SOL_SOCKET=socket.SOL_SOCKET,
+                SO_REUSEADDR=socket.SO_REUSEADDR,
+            ))
+            if fault == "thread-start":
+                patcher.setattr(mock_upstream, "threading", SimpleNamespace(
+                    Lock=threading.Lock, Event=threading.Event, Thread=StartFailure,
+                ))
+            with pytest.raises((OSError, RuntimeError), match="injected .* failure"):
+                MockUpstream()
+        assert len(listeners) == 1
+        assert listeners[0].fileno() == -1, "failed startup left its listener open"
+    finally:
+        for listener in listeners:
+            listener.close()

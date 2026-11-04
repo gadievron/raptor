@@ -110,18 +110,22 @@ class MockUpstream:
 
         self._stop = threading.Event()
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(64)
-        self._listener.settimeout(0.1)
-        self.port = self._listener.getsockname()[1]
-        self.base_url = f"http://127.0.0.1:{self.port}"
-        self._threads: list[threading.Thread] = []
-        self._clients: set[socket.socket] = set()
-        self._accept_thread = threading.Thread(
-            target=self._accept_loop, daemon=True,
-        )
-        self._accept_thread.start()
+        try:
+            self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(64)
+            self._listener.settimeout(0.1)
+            self.port = self._listener.getsockname()[1]
+            self.base_url = f"http://127.0.0.1:{self.port}"
+            self._threads: list[threading.Thread] = []
+            self._clients: set[socket.socket] = set()
+            self._accept_thread = threading.Thread(
+                target=self._accept_loop, daemon=True,
+            )
+            self._accept_thread.start()
+        except BaseException:
+            self._listener.close()
+            raise
 
     # ---- lifecycle ----
 
