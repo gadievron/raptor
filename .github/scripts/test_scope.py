@@ -279,6 +279,7 @@ FAST_TIER_IGNORES = {
 #: and surfaced on the next real PR or the cron, misattributed —
 #: the same delayed-failure shape as the root pytest case above.
 ROOT_HARNESS_FILES = frozenset({
+    ".github/scripts/sca_test_matrix.py",
     "conftest.py",
     "pytest.ini",
     ".github/workflows/tests.yml",
