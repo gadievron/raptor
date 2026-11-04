@@ -23418,6 +23418,9 @@ def _run_tool_chain(
                         # unresolvable.
                         line_end=_cc_line_end,
                         language=_cc_language,
+                        # Fresh executions and memo/checkpoint reads own their
+                        # result; cached backing objects remain isolated.
+                        copy_result=False,
                     )
                 _cc_oc = _classify_sweep_outcome(cocci_result)
                 if _cc_oc == "confirmed":

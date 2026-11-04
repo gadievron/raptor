@@ -2027,11 +2027,13 @@ def scope_coccinelle_result(
     line_start: int | None = None,
     line_end: int | None = None,
     language: str | None = None,
+    copy_result: bool = True,
 ) -> SweepResult:
     """Narrow a file-scoped Coccinelle result to one function.
 
-    Works on a deep copy so a memoized ``file_result`` can be scoped
-    to any number of functions without cross-contamination.
+    Defaults to a deep copy so shared file results can be scoped to
+    multiple functions without cross-contamination. Owners of an already
+    isolated result can consume it directly to avoid a redundant copy.
 
     Args:
         file_result: Output of :func:`run_coccinelle_file_sweep`
@@ -2050,13 +2052,16 @@ def scope_coccinelle_result(
         language: Canonical language hint for the substrate-receipt
             recompute; None detects it via the canonical machinery.
 
+        copy_result: False consumes a private result from a fresh runner
+            or memo retrieval. Never disable copying for a shared result.
+
     Returns:
         SweepResult with the function-scoped match set and
         confirmed/refuted re-derived from it. Non-match outcomes
         (error / skipped / inconclusive / novel) pass through with
         only ``function_name`` stamped.
     """
-    scoped = copy.deepcopy(file_result)
+    scoped = copy.deepcopy(file_result) if copy_result else file_result
     scoped.function_name = function_name
     if scoped.outcome not in ("confirmed", "refuted"):
         # error / skipped payloads (reasons, substrate receipts) are
@@ -2145,6 +2150,7 @@ def run_coccinelle_sweep(
         line_start=line_start,
         line_end=line_end,
         language=language,
+        copy_result=False,
     )
 
 
