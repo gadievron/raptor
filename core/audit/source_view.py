@@ -338,6 +338,13 @@ _C_FAMILY_SPECS = {
     ),
 }
 
+# Restrict ordinary-text skipping to these established C/C++ grammars.
+_C_IDENTITY_SPECS = (
+    _DEFAULT_C_SPEC, _C_FAMILY_SPECS["c"], _C_FAMILY_SPECS["cpp"],
+)
+_C_BLANKING_START_RE = re.compile(r"""[/"']""")
+
+
 _C_FAMILY_EXT_LANG = {
     ".c": "c", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
     ".hpp": "cpp", ".hh": "cpp", ".hxx": "cpp",
@@ -502,6 +509,8 @@ def _blank_if0_regions(view: str) -> str:
     direction for receipt consumers). Line lengths are preserved, so
     offsets keep mapping 1:1.
     """
+    if type(view) is str and "#" not in view:
+        return view
     lines = view.split("\n")  # line-model: view text derives from \n-model audit reads; lengths kept 1:1
     out: list[str] = []
     depth = 0
@@ -572,6 +581,15 @@ def _scan_c_family(
     source: str, spec: _CFamilySpec, keep_strings: bool,
     found: set[str], fallback: bool, pre73: bool = False,
 ) -> str:
+    # Only slash or quote can open a text-changing or ambiguous construct
+    # in these C/C++ grammars. _build_view still handles #if 0 afterward.
+    # Direct checks keep spec as a fast local throughout the scan.
+    plain_c = (type(source) is str
+               and (spec is _C_IDENTITY_SPECS[0]
+                    or spec is _C_IDENTITY_SPECS[1]
+                    or spec is _C_IDENTITY_SPECS[2]))
+    if plain_c and "/" not in source and '"' not in source and "'" not in source:
+        return source
     chars = list(source)
     n = len(source)
     flag = found.add
@@ -845,7 +863,13 @@ def _scan_c_family(
                 php_brackets.pop()
             i += 1
         else:
-            i += 1
+            if plain_c:
+                # These grammars have no state transition on ordinary
+                # characters. Keep the existing handlers for each opener.
+                marker = _C_BLANKING_START_RE.search(source, i + 1)
+                i = n if marker is None else marker.start()
+            else:
+                i += 1
     return "".join(chars)
 
 
