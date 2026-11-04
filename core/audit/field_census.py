@@ -913,21 +913,20 @@ def _scan_file_ts(
     # identity-stable across child_by_field_name calls.
     write_lhs: set[tuple[int, int]] = set()
     stack = [tree.root_node]
-    nodes: list[Any] = []
+    field_nodes: list[Any] = []
     while stack:
         node = stack.pop()
-        nodes.append(node)
-        stack.extend(node.children)
-
-    for node in nodes:
         if node.type == "assignment_expression":
             left = node.child_by_field_name("left")
             if left is not None and left.type == "field_expression":
                 write_lhs.add((left.start_byte, left.end_byte))
+        elif node.type == "field_expression":
+            field_nodes.append(node)
+        stack.extend(node.children)
 
-    for node in nodes:
-        if node.type != "field_expression":
-            continue
+    # Finish collecting writes before processing fields, in the same
+    # traversal order as before. Other node wrappers need not be retained.
+    for node in field_nodes:
         owner, name = _field_base_and_name(node, src)
         if not name or not keep(name):
             continue
