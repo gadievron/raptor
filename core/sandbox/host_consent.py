@@ -64,6 +64,7 @@ TTY-only host grant ceremony on the operator's behalf.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import errno
 import json
@@ -253,14 +254,21 @@ def _read_marker_record(path: Path) -> "tuple[dict | None, str | None]":
             return None, "permissive-mode"
         if st.st_size > _MAX_MARKER_BYTES:
             return None, "too-large"
-        raw = os.read(fd, _MAX_MARKER_BYTES + 1)
+        raw = bytearray()
+        while len(raw) <= _MAX_MARKER_BYTES:
+            chunk = os.read(fd, _MAX_MARKER_BYTES + 1 - len(raw))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > _MAX_MARKER_BYTES:
+            return None, "too-large"
     except OSError:
         return None, "unreadable"
     finally:
         os.close(fd)
     try:
         record = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return None, "invalid-json"
     if not isinstance(record, dict):
         return None, "wrong-schema"
@@ -486,24 +494,32 @@ def write_marker() -> Path:
     }
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    fd: int | None
     fd, tmp_name = tempfile.mkstemp(
         prefix=_MARKER_NAME + ".", dir=str(path.parent))
+    published = False
     try:
         os.fchmod(fd, 0o600)
-        os.write(fd, payload.encode("utf-8"))
+        remaining = memoryview(payload.encode("utf-8"))
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "host consent marker write made no progress")
+            remaining = remaining[written:]
         os.fsync(fd)
-        os.close(fd)
+        # Transfer ownership before close: a later replace failure must
+        # not close a descriptor number that another thread has reused.
+        closing_fd, fd = fd, None
+        os.close(closing_fd)
         os.replace(tmp_name, str(path))
-    except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+        published = True
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if not published:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
     return path
 
 
