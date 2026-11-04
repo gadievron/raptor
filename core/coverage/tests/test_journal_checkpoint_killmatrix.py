@@ -82,8 +82,9 @@ def _kill_at(phase: str, out: Path, tmp_path: Path) -> None:
          phase, str(ready)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    deadline = time.monotonic() + _READY_TIMEOUT_S
-    try:
+    from core.testing.processes import reap_on_exit
+    with reap_on_exit(proc, wait_timeout=30):
+        deadline = time.monotonic() + _READY_TIMEOUT_S
         while not ready.exists():
             if proc.poll() is not None:
                 _out, err = proc.communicate()
@@ -94,10 +95,6 @@ def _kill_at(phase: str, out: Path, tmp_path: Path) -> None:
             if time.monotonic() > deadline:
                 pytest.fail(f"child never reached the {phase} seam")
             time.sleep(0.02)
-    finally:
-        if proc.poll() is None:
-            proc.send_signal(signal.SIGKILL)
-        proc.wait(timeout=30)
     assert proc.returncode == -signal.SIGKILL
 
 

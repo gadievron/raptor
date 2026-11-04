@@ -57,9 +57,11 @@ def _spawn(script: str, *argv: str) -> subprocess.Popen:
         [sys.executable, "-c", script, *argv],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
     )
-    line = proc.stdout.readline()
-    assert line.startswith("READY"), f"child failed to start: {line!r}"
-    return proc
+    from core.testing.processes import cleanup_on_startup_error
+    with cleanup_on_startup_error(proc):
+        line = proc.stdout.readline()
+        assert line.startswith("READY"), f"child failed to start: {line!r}"
+        return proc
 
 
 def _finish(proc: subprocess.Popen) -> None:
