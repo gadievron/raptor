@@ -294,10 +294,15 @@ def test_stage_uses_callers_setup(tmp_path, monkeypatch):
     assert seen == [setup]
 
 
-def test_scanner_owns_one_setup_for_compiler_and_expanded_stages():
+@pytest.mark.parametrize('compiler,disabled,expanded,count,retained', [
+    (True, False, True, 2, True), (True, False, False, 1, False),
+    (False, False, True, 1, False), (True, True, True, 1, False),
+    (False, False, False, 0, False),
+])
+def test_scanner_owns_one_setup_for_compiler_and_expanded_stages(compiler, disabled, expanded, count, retained):
     import ast
     from types import SimpleNamespace
-    from core.detectors.setup import AnalysisSetup
+    from core.detectors.setup import AnalysisSetup, PreparedViews
     tree = ast.parse(_SCANNER_PATH.read_text())
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
     # Execute the actual adjacent dispatch statements, without running unrelated
@@ -315,10 +320,12 @@ def test_scanner_owns_one_setup_for_compiler_and_expanded_stages():
     def stage(*a, **kw):
         calls.append(kw['setup'])
         return []
-    env = {'AnalysisSetup': AnalysisSetup, 'args': SimpleNamespace(
-        compiler_scan=True, no_compiler_scan=False, compiler_scan_max_tus=None,
-        expanded_semgrep=True, extra_config=[]), 'repo_path': Path('/target'),
+    env = {'AnalysisSetup': AnalysisSetup, 'PreparedViews': PreparedViews, 'args': SimpleNamespace(
+        compiler_scan=compiler, no_compiler_scan=disabled, compiler_scan_max_tus=None,
+        expanded_semgrep=expanded, extra_config=[]), 'repo_path': Path('/target'),
         'out_dir': Path('/output'), 'rules_dirs': [], 'resolved_baseline': [],
         'run_compiler_scan_stage': stage, 'run_expanded_semgrep_stage': stage}
     exec(compile(program, '<scanner setup dispatch>', 'exec'), env)
-    assert len(calls) == 2 and calls[0] is calls[1]
+    assert len(calls) == count
+    assert all(setup is env["analysis_setup"] for setup in calls)
+    assert (env["analysis_setup"].preprocessed_views is not None) == retained

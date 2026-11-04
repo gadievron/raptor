@@ -618,7 +618,7 @@ def scan_target(
             extra = run_memcpy_overlap(
                 target_path, eligible, request_for=overlap_request if gcc else None,
                 sandbox_run=sandbox_run, max_workers=workers,
-                include_dirs_memo=include_dirs_memo,
+                include_dirs_memo=include_dirs_memo, setup=setup,
             ).value
             result.detector_limitations.extend({
                 "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
@@ -668,7 +668,7 @@ def scan_target(
             return expand_translation_unit(
                 target_path=target_path, file_path=tu, out_dir=scratch,
                 preprocessor=(gcc[0], "-fanalyzer", *_union_flags("gcc_flags"), "-E", "-x", "c"),
-                include_dirs_memo=include_dirs_memo,
+                include_dirs_memo=include_dirs_memo, setup=setup,
             )
 
         def stack_request(tu, source):

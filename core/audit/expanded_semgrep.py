@@ -453,7 +453,7 @@ def build_expanded_corpus(
             file_path=rel,
             macro_config=macro_config,
             out_dir=out_dir,
-            include_dirs_memo=setup.include_dirs_memo,
+            include_dirs_memo=setup.include_dirs_memo, setup=setup,
         )
         if not view.ok:
             corpus.failed += 1
