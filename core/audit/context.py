@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from functools import partial
 from itertools import islice
 from pathlib import Path
@@ -3675,7 +3676,32 @@ def _find_headers(target_path: Path, source_file: str) -> list[Path]:
     return headers
 
 
+# Cache exact contents, never paths/stat metadata. Outer admission bounds
+# retained header text to 64 * 256 KiB; each header retains at most 64
+# small type-query results. Files are still reread through the source gate.
+_type_definition_cache: BoundedMemo[BoundedMemo[tuple[int, str] | None]] = BoundedMemo(64)
+
+
 def _extract_type_definition(
+    content: str, type_name: str,
+) -> dict[str, Any] | None:
+    """Reuse immutable extraction facts, returning a fresh result dict."""
+    if (type(content) is not str or type(type_name) is not str
+            or sys.getsizeof(content) > 256 * 1024 or len(type_name) > 256):
+        return _extract_type_definition_uncached(content, type_name)
+    queries, _ = _type_definition_cache.get_or_compute(
+        content, lambda: BoundedMemo(64),
+    )
+
+    def compute() -> tuple[int, str] | None:
+        result = _extract_type_definition_uncached(content, type_name)
+        return (result["line"], result["source"]) if result is not None else None
+
+    fact, _ = queries.get_or_compute(type_name, compute)
+    return {"line": fact[0], "source": fact[1]} if fact is not None else None
+
+
+def _extract_type_definition_uncached(
     content: str, type_name: str,
 ) -> dict[str, Any] | None:
     """Extract a struct/typedef/enum definition from file content."""
