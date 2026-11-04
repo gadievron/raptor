@@ -635,3 +635,41 @@ class TestResultInvariants:
         assert view.origin_of(0) is None
         assert view.origin_of(2) is None
         assert view.origin_of(1) == ("x.c", 1)
+
+
+def test_pinned_preprocessor_uses_remaining_budget_without_tool_discovery(tmp_path, monkeypatch):
+    import core.audit.preprocessor_view as view_module
+    target = tmp_path / 'repo'
+    target.mkdir()
+    (target / 'input.c').write_text('void f(void) {}\n')
+    calls = []
+    monkeypatch.setattr(view_module, '_preprocessor_for', lambda *a: pytest.fail('must use pinned executable'))
+    monkeypatch.setattr(view_module, '_derive_include_dirs', lambda *a: [])
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        Path(cmd[cmd.index('-o') + 1]).write_text(f'# 1 "{target / "input.c"}"\nvoid f(void) {{}}\n')
+        return subprocess.CompletedProcess(cmd, 0, '', '')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    view = expand_translation_unit(target_path=target, file_path='input.c', timeout=3,
+                                   preprocessor=('/pinned/gcc', '-E', '-x', 'c'))
+    assert view.ok and calls[0][0][0] == '/pinned/gcc'
+    kw = calls[0][1]
+    assert 0 < kw['timeout'] <= 3 and kw['block_network']
+    assert kw['target'] == str(target) and kw['cwd'] == kw['output']
+    assert not Path(kw['output']).exists()
+
+
+def test_preprocessor_deadline_exhausted_during_preparation_does_not_launch(tmp_path, monkeypatch):
+    import core.audit.preprocessor_view as view_module
+    target = tmp_path / 'repo'
+    target.mkdir()
+    (target / 'input.c').write_text('void f(void) {}\n')
+    ticks = iter([0.0, 5.0])
+    monkeypatch.setattr(view_module, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(view_module, '_derive_include_dirs', lambda *a: [])
+    monkeypatch.setattr('core.sandbox.context.run', lambda *a, **kw: pytest.fail('deadline already exhausted'))
+    view = expand_translation_unit(target_path=target, file_path='input.c', timeout=1,
+                                   preprocessor=('/pinned/gcc', '-E', '-x', 'c'))
+    assert not view.ok and 'budget exhausted' in view.errors[0]

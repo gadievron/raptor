@@ -48,6 +48,7 @@ import re
 import shutil
 import subprocess
 import threading
+from time import monotonic
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -415,6 +416,8 @@ def expand_translation_unit(
     file_path: str,
     macro_config: Any = None,
     out_dir: Path | None = None,
+    timeout: float = _PREPROCESS_TIMEOUT_S,
+    preprocessor: tuple[str, ...] | None = None,
 ) -> ExpandedView:
     """Run the preprocessor on one TU and return the fidelity-3 view.
 
@@ -426,12 +429,17 @@ def expand_translation_unit(
             of ``-DNAME[=VALUE]`` / ``-UNAME`` strings.
         out_dir: Run output directory — scratch space and the
             sandbox's writable surface.  A temp dir is used when None.
+        timeout: Remaining preparation/tool budget, capped at the normal limit.
+        preprocessor: Optional trusted, caller-pinned argv prefix (for example
+            the same GCC executable used by an already successful compile).
+            Never load this prefix from target build metadata.
 
     Returns:
         ExpandedView.  ``ok=False`` (degraded, never an exception, never
         a fabricated view) on preprocess failure, missing tools, missing
         sandbox, non-C/C++ TU, or path escape.
     """
+    deadline = monotonic() + min(timeout, _PREPROCESS_TIMEOUT_S)
     target_path = Path(target_path)
     full_path = safe_join(target_path, file_path)
     if full_path is None:
@@ -447,8 +455,8 @@ def expand_translation_unit(
             file_path, f"not a C/C++ translation unit: {suffix or '<no suffix>'}",
         )
 
-    pre = _preprocessor_for(is_cxx)
-    if pre is None:
+    pre = list(preprocessor) if preprocessor is not None else _preprocessor_for(is_cxx)
+    if not pre:
         return _degraded(
             file_path, "no C preprocessor available (need gcc, g++ or cpp)",
         )
@@ -477,6 +485,9 @@ def expand_translation_unit(
                 tool=Path(pre[0]).name,
             )
 
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return _degraded(file_path, "preprocessor time budget exhausted")
         try:
             proc = sandbox_run(
                 cmd,
@@ -486,13 +497,13 @@ def expand_translation_unit(
                 cwd=str(workdir),
                 capture_output=True,
                 text=True,
-                timeout=_PREPROCESS_TIMEOUT_S,
+                timeout=remaining,
                 caller_label="audit-preprocessor-view",
             )
         except subprocess.TimeoutExpired:
             return _degraded(
                 file_path,
-                f"preprocessor timed out ({_PREPROCESS_TIMEOUT_S}s)",
+                f"preprocessor timed out ({remaining:g}s)",
                 tool=Path(pre[0]).name,
             )
         except (subprocess.SubprocessError, OSError, ValueError, TypeError) as exc:
