@@ -51,6 +51,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import tempfile
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -72,6 +73,9 @@ logger = logging.getLogger(__name__)
 # bleed reduces the surface for misconfigured shared homedirs
 # (e.g. tmpfs /home setups in CI).
 _CACHE_VERSION = 1
+# Match the observation reader's total input ceiling. Cache entries are
+# normally much smaller, but damaged artifacts must not be unbounded.
+_MAX_CACHE_BYTES = 64 * 1024 * 1024
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "sandbox-profiles"
 
 
@@ -572,14 +576,38 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
                        path, exc)
 
 
+
+def _read_cache_profile(path: Path) -> SandboxProfile:
+    """Read one bounded regular cache file without blocking on a FIFO."""
+    fd = os.open(
+        path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("calibration cache entry is not a regular file")
+        if metadata.st_size > _MAX_CACHE_BYTES:
+            raise ValueError("calibration cache entry exceeds the byte limit")
+        data = bytearray()
+        while len(data) <= _MAX_CACHE_BYTES:
+            chunk = os.read(fd, min(1 << 20, _MAX_CACHE_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > _MAX_CACHE_BYTES:
+            raise ValueError("calibration cache entry exceeds the byte limit")
+    finally:
+        os.close(fd)
+    return SandboxProfile.from_json(data.decode("utf-8"))
+
+
 def _load_from_cache(fingerprint: str) -> SandboxProfile | None:
     path = _cache_path_for(fingerprint)
-    if not path.exists():
-        return None
     try:
-        return SandboxProfile.from_json(
-            path.read_text(encoding="utf-8"),
-        )
+        return _read_cache_profile(path)
+    except FileNotFoundError:
+        return None
     except (OSError, ValueError, TypeError, KeyError) as exc:
         # Corrupt cache file (manual edit, partial write that
         # somehow escaped the atomic rename). Treat as miss; the
@@ -620,9 +648,7 @@ def clear_cache(bin_path=None) -> int:
     n = 0
     for p in _CACHE_DIR.glob("*.json"):
         try:
-            cached = SandboxProfile.from_json(
-                p.read_text(encoding="utf-8"),
-            )
+            cached = _read_cache_profile(p)
             if cached.binary_sha256 == target_sha:
                 p.unlink()
                 n += 1
