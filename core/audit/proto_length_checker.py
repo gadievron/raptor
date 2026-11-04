@@ -152,7 +152,7 @@ _RETURN_CHECK_RE = re.compile(
 
 
 def _find_line(source: str, pos: int) -> int:
-    return source[:pos].count('\n') + 1
+    return source.count('\n', 0, pos) + 1
 
 
 # Chunk marker the xref producer emits between concatenated neighbor

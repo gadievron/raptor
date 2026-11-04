@@ -3743,7 +3743,7 @@ def _extract_type_definition_uncached(
     )
     m = multiline_pat.search(content)
     if m:
-        start_line = content[:m.start()].count("\n")
+        start_line = content.count("\n", 0, m.start())
         matched_text = m.group()
         if len(matched_text) > 800:
             matched_text = matched_text[:800] + "\n  /* ... truncated */"

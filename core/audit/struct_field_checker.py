@@ -168,7 +168,7 @@ def _parse_int(s: str) -> Optional[int]:
 
 
 def _find_line(source: str, pos: int) -> int:
-    return source[:pos].count('\n') + 1
+    return source.count('\n', 0, pos) + 1
 
 
 def _extract_struct_layouts(

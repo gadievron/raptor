@@ -653,14 +653,14 @@ def _constants_for_root(
             name = m.group(1)
             if name in _SKIP_IDENTS_C or m.group(2):
                 continue
-            line = text[:m.start()].count("\n") + 1
+            line = text.count("\n", 0, m.start()) + 1
             if depths.get(line, 0) != 0:
                 continue
             value = _try_evaluate(m.group(3).strip())
             if value is not None:
                 defs.setdefault(name, []).append(value)
         for block_start, body in _iter_enum_bodies(text):
-            line = text[:block_start].count("\n") + 1
+            line = text.count("\n", 0, block_start) + 1
             if depths.get(line, 0) != 0:
                 continue
             for ev in _ENUMERATOR_NAME_RE.finditer(body):

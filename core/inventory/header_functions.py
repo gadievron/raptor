@@ -130,7 +130,7 @@ def build_header_function_index(
                 name = m.group(1)
                 if name in _SKIP_NAMES or name in index:
                     continue
-                line_no = text[:m.start()].count("\n")
+                line_no = text.count("\n", 0, m.start())
                 body = _extract_function_body(lines, line_no)
                 if body:
                     rel = str(p.relative_to(target_path))

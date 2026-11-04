@@ -297,7 +297,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                 evalue = _parse_enumerator_value(body, ev.end())
                 if ename in _SKIP_IDENTS_C:
                     continue
-                enum_line = block_line + body[:ev.start()].count("\n")
+                enum_line = block_line + body.count("\n", 0, ev.start())
                 defs.setdefault(ename, []).append(
                     _RawDefinition(ename, "", evalue, rel, enum_line, block_depth)
                 )

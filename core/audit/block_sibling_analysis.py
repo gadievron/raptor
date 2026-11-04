@@ -369,7 +369,7 @@ def _collect_case_groups(case_matches, lines, source, _file_path, groups) -> Non
         branches: list[tuple[str, str, int]] = []
         for i, m in enumerate(matches):
             label = (m.group(2) or m.group(3) or "default").strip()
-            start_line = source[:m.start()].count("\n")
+            start_line = source.count("\n", 0, m.start())
             if i + 1 < len(matches):
                 end_pos = matches[i + 1].start()
             else:
@@ -418,7 +418,7 @@ def _collect_if_groups_regex(lines, source, _file_path, groups) -> None:
         branches: list[tuple[str, str, int]] = []
         for i, m in enumerate(chain):
             label = re.sub(r"\s+", " ", m.group(2)).strip()
-            start_line = source[:m.start()].count("\n") + 1
+            start_line = source.count("\n", 0, m.start()) + 1
             if i + 1 < len(chain):
                 body = source[m.end():chain[i + 1].start()]
             else:

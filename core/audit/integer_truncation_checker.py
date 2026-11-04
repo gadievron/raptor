@@ -150,7 +150,7 @@ _BYTE_ORDER_RE = re.compile(
 
 
 def _find_line(source: str, pos: int) -> int:
-    return source[:pos].count('\n') + 1
+    return source.count('\n', 0, pos) + 1
 
 
 def _is_network_tainted(source: str, var_name: str) -> bool:
