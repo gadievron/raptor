@@ -25,11 +25,16 @@ def _driver(tmp_path, script, *args):
 @pytest.mark.linux_native
 @pytest.mark.integration
 @pytest.mark.slow
-@pytest.mark.parametrize('planted', [300, 70000])
-def test_restricted_procfs_and_lowered_hard_limit_do_not_leak_at_exec(tmp_path, planted):
+@pytest.mark.parametrize('case', ['above-reduced-limit', 'highest-available'])
+def test_restricted_procfs_and_lowered_hard_limit_do_not_leak_at_exec(tmp_path, case):
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if hard != resource.RLIM_INFINITY and hard <= planted + 1:
-        pytest.skip('inherited hard limit cannot accommodate high descriptor fixture')
+    planted = 300 if case == 'above-reduced-limit' else 70000
+    if hard != resource.RLIM_INFINITY:
+        # Hosted runners can cap NOFILE below 70002. Exercise their highest
+        # available descriptor rather than skip mandatory native acceptance.
+        planted = min(planted, hard - 2)
+    if planted <= 64:
+        pytest.skip('inherited hard limit cannot accommodate a descriptor above 64')
     secret = tmp_path / 'outside-policy'
     secret.write_bytes(b'owned-secret')
     result = _driver(tmp_path, r'''
@@ -45,9 +50,14 @@ os.dup2(source, planted)
 os.dup2(source, planted + 1)
 os.close(source)
 status_r, status_w = os.pipe()
+# The venv executable may be a copy outside base_prefix. Re-exec the base
+# interpreter and grant its loader/runtime, without exposing the fixture.
+executable = os.path.realpath(getattr(sys, '_base_executable', sys.executable))
 restrict = _make_landlock_preexec(
-    [], readable_paths=[os.path.realpath(sys.base_prefix),
-                       os.path.realpath(sys.base_exec_prefix)], fail_raise=True)
+    [], readable_paths=['/usr', '/lib', '/lib64',
+                       os.path.realpath(sys.base_prefix),
+                       os.path.realpath(sys.base_exec_prefix),
+                       os.path.dirname(executable)], fail_raise=True)
 resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
 restrict()
 try:
@@ -74,7 +84,7 @@ for descriptor in (ambient, status):
     else: raise AssertionError('undeclared descriptor survived exec')
 print('closed ambient and status; preserved declared capability')
 """
-os.execv(sys.executable, [sys.executable, '-I', '-S', '-c', probe,
+os.execv(executable, [executable, '-I', '-S', '-c', probe,
                          str(planted + 1), str(planted), str(status_w)])
 ''', secret, planted)
     assert result.stdout.strip() == 'closed ambient and status; preserved declared capability'
@@ -163,3 +173,17 @@ assert result.sandbox_info['containment_tier'] == 'mount-ns', result.sandbox_inf
 print(result.stdout, end='')
 ''', secret, work, audit)
     assert result.stdout.strip() == 'closed ambient descriptor in mount namespace'
+
+
+def test_range_sweep_has_no_numeric_ceiling(monkeypatch):
+    """Even low-limit CI hosts must guard the full descriptor-table bound."""
+    from core.sandbox import _fd_sweep
+    ranges = []
+
+    def close_range(first, last, flags):
+        ranges.append((first, last, flags))
+        return 0
+
+    monkeypatch.setattr(_fd_sweep, '_close_range', close_range)
+    _fd_sweep.close_fds_except((7, 70001))
+    assert ranges == [(3, 6, 0), (8, 70000, 0), (70002, 0xffffffff, 0)]
