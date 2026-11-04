@@ -1634,6 +1634,36 @@ class TestExcerptIncludeClosure:
         finally:
             run_corpus._release_excerpt_trees(dirs)
 
+    def test_wrapper_caller_resolves_to_included_static_helper(self, tmp_path):
+        from core.audit.cross_entry import build_access_index
+        from core.audit.callsite_consistency import parse_source_cached
+
+        if parse_source_cached("a.c", "int f(void) { return 0; }")[0] is None:
+            pytest.skip("requires tree-sitter C")
+        src = tmp_path / "repo"
+        src.mkdir()
+        (src / "impl.c").write_text(
+            "static void helper(int task) { observe(task); }\n",
+        )
+        (src / "api.c").write_text(
+            '#include "impl.c"\nvoid proxy(int task) { helper(task); }\n',
+        )
+        dirs = run_corpus._build_excerpt_tree(
+            [_label(repo="r", file="impl.c", fid="impl.c:helper")], {"r": src},
+        )
+        try:
+            tree = dirs["r"]
+            index = build_access_index(
+                {p.name: p.read_text() for p in tree.glob("*.c")},
+                include_edges={"api.c": {"impl.c": "impl.c"}},
+            )
+            helper = next(f.id for f in index.functions.values() if f.name == "helper")
+            call = next(c for c in index.calls if c.name == "helper")
+            assert call.targets == [helper]
+            assert index.functions[call.caller].name == "proxy"
+        finally:
+            run_corpus._release_excerpt_trees(dirs)
+
     def test_unresolvable_closure_is_best_effort(self, tmp_path):
         src = tmp_path / "repo"
         src.mkdir()

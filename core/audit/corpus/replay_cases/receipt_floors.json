@@ -1,0 +1,445 @@
+{
+  "schema_version": 1,
+  "scope": "receipt_decision_only",
+  "limitations": [
+    "Captured hypotheses and persisted receipts only; original source, live pre-screen receipts and full dispatch context are unavailable.",
+    "Expected clean means no receipt override, not a clean audit verdict.",
+    "The remove_waiter labelled-positive case remains an explicitly reported detection gap."
+  ],
+  "corpus_results_sha256": "02ceb9e998c22201b6bdac3669450fcf5fa88ebefd933325f8619f73636694c7",
+  "cases": [
+    {
+      "id": "ptrace_attach",
+      "provenance": {
+        "run": "audit-corpus-1793800446",
+        "function_id": "kernel/ptrace.c:ptrace_attach",
+        "journal_sha256": "693acd3e68fdb3eb57d65da400203baa94e579df690e4a2d03e8572df9c9a9a8",
+        "record_integrity": "caa3b5cadddc4d2405328b3ee530c3e56b60f25d1c1ee996b1773c7e2c6e2815"
+      },
+      "label_expected": "clean",
+      "outcome": {
+        "file": "kernel/ptrace.c",
+        "function": "ptrace_attach",
+        "line": 409,
+        "hypothesis": "Credential check under task_lock but state modification under write_lock_irq(&tasklist_lock) \u2014 between these two lock domains (lines 450-456), a concurrent thread can modify task->exit_state or task->ptrace, invalidating the authorization decision made by __ptrace_may_access.",
+        "hypotheses": [
+          {
+            "mechanism": "TOCTOU on task->exit_state: checked under write_lock_irq(&tasklist_lock) at line 457, but task can exit between credential check at line 451 and tasklist_lock acquisition at line 456",
+            "confidence": "refuted",
+            "counter": "cred_guard_mutex held across both the credential check (line 451) and the exit_state check (line 457) \u2014 the lock domain is unified at the outer scope (lines 447-466), not per-lock. The task_lock at line 450 is released before tasklist_lock at line 456, but cred_guard_mutex remains held throughout, serializing credential-dependent operations.",
+            "counter_scope": "cross_function",
+            "guard_type": "ordering",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "TOCTOU on task->ptrace: checked at line 459 under write_lock_irq(&tasklist_lock), but a concurrent ptrace_attach or ptrace_traceme could race if tasklist_lock is not held during the authorization phase",
+            "confidence": "refuted",
+            "counter": "The ptrace check at line 459 is the FIRST check under write_lock_irq(&tasklist_lock) \u2014 if a concurrent attach were in progress, it would also be holding write_lock_irq(&tasklist_lock) at the same line, serializing both attempts. The write lock ensures only one thread can enter the critical section at a time.",
+            "counter_scope": "cross_function",
+            "guard_type": "ordering",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Credential check race with concurrent exec: __ptrace_may_access() at line 451 checks task credentials, but task->signal->cred_guard_mutex is held (line 447-448) to prevent concurrent exec() from modifying those credentials during the check",
+            "confidence": "high",
+            "counter": null,
+            "counter_scope": null,
+            "guard_type": "null_safety",
+            "assumed_property": "cred_guard_mutex serializes credential-dependent ptrace authorization against exec() credential changes"
+          },
+          {
+            "mechanism": "Early task_lock release: task_lock is released at line 454 (end of scoped_guard scope), but task->ptrace and task->exit_state are still used after the unlock at lines 457-462, which are under write_lock_irq(&tasklist_lock) not task_lock. These are different lock domains \u2014 a concurrent writer holding write_lock_irq could modify these fields.",
+            "confidence": "refuted",
+            "counter": "task->ptrace and task->exit_state are protected by write_lock_irq(&tasklist_lock), not task_lock. The task_lock is released at line 454, but the tasklist_lock is acquired at line 456 and held until line 465. The fields accessed at lines 457-462 are all under tasklist_lock, so they are protected. The two locks protect different phases: task_lock protects the credential check, tasklist_lock protects the state modification.",
+            "counter_scope": "local",
+            "guard_type": "ordering",
+            "assumed_property": null
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [],
+      "detector_findings": [],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    },
+    {
+      "id": "ptrace_traceme",
+      "provenance": {
+        "run": "audit-corpus-1793800446",
+        "function_id": "kernel/ptrace.c:ptrace_traceme",
+        "journal_sha256": "693acd3e68fdb3eb57d65da400203baa94e579df690e4a2d03e8572df9c9a9a8",
+        "record_integrity": "e06385d6815e056b5f0317f77d86742851c38a059a78b5fcc8fd1ec85bd52072"
+      },
+      "label_expected": "clean",
+      "outcome": {
+        "file": "kernel/ptrace.c",
+        "function": "ptrace_traceme",
+        "line": 487,
+        "hypothesis": "The function ptrace_traceme writes to current->ptrace and calls ptrace_link without verifying that current->real_parent has not exited between the PF_EXITING check and the ptrace_link call, creating a use-after-free window where the parent task_struct could be freed by exit_ptrace() running concurrently.",
+        "hypotheses": [
+          {
+            "mechanism": "TOCTOU on parent exit state: PF_EXITING flag check at line 500 followed by ptrace_link call at line 502 without holding a reference to current->real_parent. The flag is checked under tasklist_lock, but the lock is released before the ptrace_link uses the parent pointer.",
+            "confidence": "refuted",
+            "counter": "The tasklist_lock write lock is held continuously from line 491 to line 505, covering both the PF_EXITING check (line 500) and the ptrace_link call (line 502). The lock prevents concurrent exit_ptrace() from clearing the parent reference during this window.",
+            "counter_scope": "local",
+            "guard_type": "ordering",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Lock-domain mismatch: current->ptrace is accessed without lock at line 493 (read of current->ptrace), but the co-accessor analysis reports it is accessed under lock by __ptrace_unlink, ptrace_check_attach, and ptrace_request. This suggests ptrace field access must be synchronized.",
+            "confidence": "refuted",
+            "counter": "The read at line 493 occurs inside write_lock_irq(&tasklist_lock) at line 491, which is held until line 505. The tasklist_lock is the lock protecting ptrace field access. The co-accessor analysis is reporting that OTHER functions access ptrace without the same lock, which is a finding in those functions, not this one.",
+            "counter_scope": "cross_function",
+            "guard_type": "null_safety",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Unprotected parent pointer dereference: current->real_parent is dereferenced at line 500 (->flags access) and line 502 (passed to ptrace_link) without incrementing its refcount. If a concurrent thread calls exit_ptrace() on the parent, the parent task_struct could be freed.",
+            "confidence": "refuted",
+            "counter": "The tasklist_lock write lock is held from line 491 to line 505. The exit_ptrace() function must acquire tasklist_lock to modify the parent's state and unlink children. Holding the write lock prevents concurrent exit_ptrace() from running. The parent pointer is safe to dereference within this critical section without an explicit refcount.",
+            "counter_scope": "local",
+            "guard_type": "lifetime",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Early return without proper cleanup: if security_ptrace_traceme returns 0 but the PF_EXITING check fails at line 500, the function returns ret=0 (success) at line 507, but ptrace_link was never called. This violates the invariant that a successful traceme call establishes the ptrace relationship.",
+            "confidence": "low",
+            "counter": "The comment at lines 496-498 explicitly addresses this case: 'pretend ->real_parent untraces us right after return.' When the parent is exiting, the kernel intentionally skips ptrace_link and returns success (ret=0 from line 494). The caller is expected to handle this edge case where the parent exits immediately after traceme succeeds. This is by design, not a bug.",
+            "counter_scope": "local",
+            "guard_type": "other",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Race between security check and ptrace_link: security_ptrace_traceme(current->parent) at line 494 checks if the parent is authorized, but current->parent could differ from current->real_parent (line 500, 502) due to reparenting. If the parent changed between the security check and the ptrace_link, the link could be established to an unauthorized parent.",
+            "confidence": "refuted",
+            "counter": "Line 494 calls security_ptrace_traceme(current->parent), which is the CURRENT parent. Line 500 checks current->real_parent->flags. In normal cases, current->parent == current->real_parent. Reparenting only occurs during exit_ptrace() or when a parent dies, which requires tasklist_lock. Since we hold tasklist_lock (write lock, not just read), no reparenting can occur during this function. The parent cannot change between lines 494 and 502.",
+            "counter_scope": "local",
+            "guard_type": "validation",
+            "assumed_property": null
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [],
+      "detector_findings": [],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    },
+    {
+      "id": "__waiter_prio",
+      "provenance": {
+        "run": "audit-corpus-1793800446",
+        "function_id": "kernel/locking/rtmutex.c:__waiter_prio",
+        "journal_sha256": "693acd3e68fdb3eb57d65da400203baa94e579df690e4a2d03e8572df9c9a9a8",
+        "record_integrity": "9ea97ad5e65304e2eca0dc52605fce568eefb730904c30b3d0224d4aa10ca0b6"
+      },
+      "label_expected": "clean",
+      "outcome": {
+        "file": "kernel/locking/rtmutex.c",
+        "function": "__waiter_prio",
+        "line": 349,
+        "hypothesis": "__waiter_prio dereferences task->prio without NULL checking the task parameter, but task is always non-NULL when passed from waiter_update_prio because it is dereferenced immediately after waiter_update_prio calls __waiter_prio.",
+        "hypotheses": [
+          {
+            "mechanism": "Null pointer dereference on task parameter",
+            "confidence": "refuted",
+            "counter": "task is dereferenced in waiter_update_prio (caller context) before __waiter_prio is invoked",
+            "counter_scope": "cross_function",
+            "guard_type": "null_safety",
+            "assumed_property": null
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [],
+      "detector_findings": [],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    },
+    {
+      "id": "remove_waiter",
+      "provenance": {
+        "run": "audit-corpus-1793800446",
+        "function_id": "kernel/locking/rtmutex.c:remove_waiter",
+        "journal_sha256": "693acd3e68fdb3eb57d65da400203baa94e579df690e4a2d03e8572df9c9a9a8",
+        "record_integrity": "a04d5422b3080813becb997340d50c76a9432a38596e6a9a38a1844e16af7d8c"
+      },
+      "label_expected": "finding",
+      "outcome": {
+        "file": "kernel/locking/rtmutex.c",
+        "function": "remove_waiter",
+        "line": 1539,
+        "hypothesis": "Concurrent modification of task_struct or rt_mutex_base state between lock release and reacquisition creates a race condition where the function operates on stale or freed state.",
+        "hypotheses": [
+          {
+            "mechanism": "Early lock release: raw_spin_unlock_irq(&lock->wait_lock) at line 1584 releases the lock protecting the chain walk state, then raw_spin_lock_irq(&lock->wait_lock) reacquires it at line 1589. Between release and reacquisition, the owner task or lock state can be modified by concurrent callers.",
+            "confidence": "refuted",
+            "counter": "rt_mutex_adjust_prio_chain() is called with get_task_struct(owner) at line 1582 before the unlock, and the comment at line 1581 explicitly states 'gets dropped in rt_mutex_adjust_prio_chain()!' This refcounts the task, preventing use-after-free. The lock state is protected by the refcount on owner across the gap.",
+            "counter_scope": "cross_function",
+            "guard_type": "ordering",
+            "assumed_property": "The owner task_struct remains valid and the lock state remains consistent across the unlock/lock gap"
+          },
+          {
+            "mechanism": "Lock-domain mismatch: pi_lock is released at line 1572 before reading the lock state via task_blocked_on_lock(owner) at line 1570. The pi_lock protects owner->pi_blocked_on, but task_blocked_on_lock() may read different state. Another thread can modify owner's blocking state between pi_lock release and the check at line 1578.",
+            "confidence": "refuted",
+            "counter": "task_blocked_on_lock(owner) is called BEFORE pi_lock is released (line 1570 is before line 1572). The read is protected by the pi_lock held from line 1560.",
+            "counter_scope": "local",
+            "guard_type": "null_safety",
+            "assumed_property": "The value of next_lock computed at line 1570 remains valid after pi_lock is released"
+          },
+          {
+            "mechanism": "Inconsistent synchronization: current->pi_blocked_on is cleared at line 1550 under current->pi_lock (held from line 1548), but rt_mutex_adjust_prio_chain() called at line 1586 may walk the pi_blocked_on chain of other tasks. If another CPU concurrently reads current->pi_blocked_on after line 1551 (unlock) but before line 1586 (chain walk), it observes NULL but the waiter is still in flight for priority inheritance.",
+            "confidence": "refuted",
+            "counter": "current->pi_blocked_on is cleared BEFORE the chain walk is initiated (line 1550 before line 1586). The waiter is dequeued from the lock at line 1549 and from the owner's pi queue at line 1562, so no other task will attempt to traverse through current. The clearing at line 1550 is consistent with the dequeue operations.",
+            "counter_scope": "local",
+            "guard_type": "ordering",
+            "assumed_property": "current->pi_blocked_on is stable across the function"
+          },
+          {
+            "mechanism": "Use-after-free via callback race: if rt_mutex_adjust_prio_chain() or a concurrent path can trigger a callback or wakeup that frees the owner task_struct before line 1589 reacquires the lock, the reacquisition at line 1589 operates on freed state.",
+            "confidence": "refuted",
+            "counter": "get_task_struct(owner) at line 1582 increments the refcount before the unlock at line 1584. The comment at line 1581 documents that the refcount is dropped INSIDE rt_mutex_adjust_prio_chain(), not immediately after. The lock->wait_lock is reacquired at line 1589 while the refcount is still held by the call at line 1582. After line 1589, if rt_mutex_adjust_prio_chain() has returned, the refcount drop has already occurred (inside that function), but the wait_lock is held again, so any teardown is serialized.",
+            "counter_scope": "cross_function",
+            "guard_type": "lifetime",
+            "assumed_property": "The owner task_struct remains allocated until after line 1589"
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [
+        {
+          "check_type": "lock_ordering",
+          "expected": "consistent lock acquisition order to prevent deadlocks",
+          "evidence": "in remove_waiter: acquires multiple locks (raw_spin_lock, raw_spin_lock_irq) \u2014 verify ordering is consistent with other call sites",
+          "cwe": "CWE-764",
+          "confidence": "medium",
+          "convention": "",
+          "strategy": "pattern_scan",
+          "file": "kernel/locking/rtmutex.c",
+          "function": "remove_waiter",
+          "title": "Multiple lock acquisitions (potential ordering violation)"
+        }
+      ],
+      "detector_findings": [],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    },
+    {
+      "id": "esp_ssg_unref",
+      "provenance": {
+        "run": "audit-corpus-1793800446",
+        "function_id": "net/ipv4/esp4.c:esp_ssg_unref",
+        "journal_sha256": "693acd3e68fdb3eb57d65da400203baa94e579df690e4a2d03e8572df9c9a9a8",
+        "record_integrity": "0254369a541ebefb3ae318f584ea3ce9d0ec6065420d88afb0b7e7158102f825"
+      },
+      "label_expected": "clean",
+      "outcome": {
+        "file": "net/ipv4/esp4.c",
+        "function": "esp_ssg_unref",
+        "line": 99,
+        "hypothesis": "No vulnerability. The function safely iterates through a scatterlist and decrements page references. The loop guard (sg_next returning NULL) is correct, and all preconditions from the caller are met.",
+        "hypotheses": [
+          {
+            "mechanism": "Null pointer dereference in sg_next loop",
+            "confidence": "refuted",
+            "counter": "sg_next could return a stale pointer or skip entries, causing dereference of invalid memory",
+            "counter_scope": "local",
+            "guard_type": "null_safety",
+            "assumed_property": "sg_next(sg) returns NULL when sg is the last entry, terminating the loop safely"
+          },
+          {
+            "mechanism": "Uninitialized pointer from esp_tmp_iv or esp_tmp_req",
+            "confidence": "refuted",
+            "counter": "If tmp is NULL or too small, these functions could return uninitialized pointers, leading to invalid dereferences",
+            "counter_scope": "local",
+            "guard_type": "lifetime",
+            "assumed_property": "esp_tmp_iv and esp_tmp_req return valid pointers derived from the tmp buffer"
+          },
+          {
+            "mechanism": "Buffer overread via missing bounds check on tmp parameter",
+            "confidence": "refuted",
+            "counter": "If tmp is smaller than expected, esp_tmp_iv or esp_tmp_req could return pointers outside the tmp buffer, leading to OOB access",
+            "counter_scope": "cross_function",
+            "guard_type": "bounds",
+            "assumed_property": "The tmp buffer has sufficient length to hold esp_output_extra (if ESN is set) + IV + aead_request structure"
+          },
+          {
+            "mechanism": "Page reference leak if sg_page returns NULL",
+            "confidence": "refuted",
+            "counter": "If sg_page returns NULL, skb_page_unref receives NULL and may dereference it",
+            "counter_scope": "local",
+            "guard_type": "null_safety",
+            "assumed_property": "sg_page(sg) returns a valid struct page pointer for all sg entries in the loop"
+          },
+          {
+            "mechanism": "Inconsistent scatterlist state if req->src and req->dst are misaligned",
+            "confidence": "refuted",
+            "counter": "If src and dst point to different lists with overlapping pages, the unref could double-decrement or miss pages",
+            "counter_scope": "cross_function",
+            "guard_type": "ordering",
+            "assumed_property": "The condition (req->src != req->dst) correctly identifies when pages need unreferencing"
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [],
+      "detector_findings": [
+        {
+          "file": "net/ipv4/esp4.c",
+          "function": "esp_ssg_unref",
+          "detector": "transform_order",
+          "line": 117,
+          "description": "duplicate transform: 'sg_next' applied twice to `sg` (steps 1 and 2) \u2014 likely copy-paste error or redundant processing \u2014 fix: verify 'sg_next' is intentionally applied twice"
+        }
+      ],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    },
+    {
+      "id": "WriteProgress",
+      "provenance": {
+        "run": "audit-corpus-1793811121",
+        "function_id": "pkg/streamformatter/streamformatter.go:WriteProgress",
+        "journal_sha256": "e1726c43c1383afee832a5330fa4c37dc65612be783df72c29a0c9fa7fa7f8b9",
+        "record_integrity": "1f1507f160c6447385088502c032abd2fb05d3476949d7e9e1f5f1750ced7387"
+      },
+      "label_expected": "finding",
+      "outcome": {
+        "file": "pkg/streamformatter/streamformatter.go",
+        "function": "WriteProgress",
+        "line": 115,
+        "hypothesis": "WriteProgress performs two separate Write() calls without holding a lock, allowing concurrent callers to interleave the formatted output fragments. If two goroutines call WriteProgress concurrently, their progress messages may be interleaved mid-stream, corrupting the output format.",
+        "hypotheses": [
+          {
+            "mechanism": "concurrent Write() calls without synchronization",
+            "confidence": "high",
+            "counter": null,
+            "counter_scope": null,
+            "guard_type": null,
+            "assumed_property": "progressOutput.out.Write() is atomic or the caller serializes WriteProgress() calls"
+          },
+          {
+            "mechanism": "formatProgress() returns nil on json.Marshal failure (observed in session)",
+            "confidence": "high",
+            "counter": null,
+            "counter_scope": null,
+            "guard_type": "validation",
+            "assumed_property": "formatProgress() always returns valid []byte, never nil"
+          },
+          {
+            "mechanism": "formatStatus() return value not validated",
+            "confidence": "medium",
+            "counter": null,
+            "counter_scope": null,
+            "guard_type": "validation",
+            "assumed_property": "formatStatus() always returns valid []byte"
+          },
+          {
+            "mechanism": "nil Write() result passed to Write() without nil check",
+            "confidence": "medium",
+            "counter": null,
+            "counter_scope": null,
+            "guard_type": "null_safety",
+            "assumed_property": "formatProgress() and formatStatus() never return nil"
+          }
+        ],
+        "evidence_tool": "llm-claimed:session-observations + convention-deviation + mechanical-findings"
+      },
+      "receipts": [
+        {
+          "check_type": "shared_writer_race",
+          "expected": "WriteProgress() writes to the shared writer atomically or under a lock",
+          "evidence": "WriteProgress() performs 2 separate Write() calls on out's writer field per invocation, holds no lock, and progressOutput carries no mutex. Two concurrent callers interleave the fragments even on a thread-safe writer. Do NOT assume a single feeding goroutine: check the actual caller set \u2014 a receiver handed out through a constructor/interface escapes to arbitrary callers.",
+          "cwe": "CWE-362",
+          "confidence": "medium",
+          "convention": "",
+          "strategy": "sibling_asymmetry",
+          "file": "pkg/streamformatter/streamformatter.go",
+          "function": "WriteProgress",
+          "title": "non-atomic multi-write in WriteProgress() without lock"
+        }
+      ],
+      "detector_findings": [
+        {
+          "file": "pkg/streamformatter/streamformatter.go",
+          "function": "WriteProgress",
+          "detector": "transform_order",
+          "line": 129,
+          "description": "duplicate transform: 'out.out.Write' applied twice to `_` (steps 1 and 2) \u2014 likely copy-paste error or redundant processing \u2014 fix: verify 'out.out.Write' is intentionally applied twice"
+        }
+      ],
+      "expected": {
+        "status": "suspicious",
+        "gate": "receipt_corroborated_hypothesis"
+      }
+    },
+    {
+      "id": "setRoot",
+      "provenance": {
+        "run": "audit-corpus-1793815916",
+        "function_id": "pkg/oci/spec_opts.go:setRoot",
+        "journal_sha256": "13aa0c2bb232e71d1e80b4d4666f889bbdd973fc8e53ba646fe3a95862fbf77a",
+        "record_integrity": "eaa1b07bbc5d584a6d1abc51b11c986f13adfea3b8f7560139ff3f5014f624be"
+      },
+      "label_expected": "clean",
+      "outcome": {
+        "file": "pkg/oci/spec_opts.go",
+        "function": "setRoot",
+        "line": 67,
+        "hypothesis": "The function allocates a Root struct if nil, which could be exploited if a caller relies on this side effect to initialize shared state without proper synchronization, leading to a race condition or use-after-free if multiple goroutines call setRoot concurrently on the same Spec.",
+        "hypotheses": [
+          {
+            "mechanism": "Nil pointer dereference if s is nil",
+            "confidence": "refuted",
+            "counter": "The function would panic on nil receiver, but this is a logic error in the caller, not a vulnerability in setRoot itself; the function has no guard against it but the caller must provide a valid pointer by contract.",
+            "counter_scope": null,
+            "guard_type": null,
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Race condition on concurrent setRoot calls to the same Spec",
+            "confidence": "low",
+            "counter": "The function performs a single check-and-allocate without holding a lock. However, the Spec type is not shown in context, and if callers are expected to synchronize externally (as is common in Go), this is not a vulnerability in setRoot itself \u2014 it is a usage contract violation by the caller.",
+            "counter_scope": null,
+            "guard_type": "concurrency",
+            "assumed_property": null
+          },
+          {
+            "mechanism": "Memory disclosure if Root allocation fails silently",
+            "confidence": "refuted",
+            "counter": "Go's allocator panics on allocation failure; there is no silent failure path.",
+            "counter_scope": null,
+            "guard_type": null,
+            "assumed_property": null
+          }
+        ],
+        "evidence_tool": ""
+      },
+      "receipts": [],
+      "detector_findings": [
+        {
+          "file": "pkg/oci/spec_opts.go",
+          "function": "setRoot",
+          "detector": "semantic_consistency",
+          "line": 0,
+          "description": "13/23 siblings return error codes on failure; setRoot silently continues [CWE-390, confidence 0.57]"
+        }
+      ],
+      "expected": {
+        "status": "clean",
+        "gate": null
+      }
+    }
+  ]
+}
