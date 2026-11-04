@@ -115,3 +115,42 @@ def test_injected_sandbox_runner_needs_reviewed_binding(tmp_path):
     assert inventory.registry_errors(tmp_path, registry) == []
     source.write_text(source.read_text() + '\ndef another(state):\n    state.sandbox_run(["false"])\n')
     assert any("entrypoints changed" in error for error in inventory.registry_errors(tmp_path, registry))
+
+
+def test_scoped_runner_keeps_only_registered_platform_targets(tmp_path):
+    registry = _fixture(tmp_path)
+    target = registry['wrappers'][0]['contracts'][0]
+    selection = {'platform': 'linux', 'contracts': [target], 'families': [], 'full': False}
+    assert runner.selected_targets(registry, selection, 'linux') == ([target], [])
+    with pytest.raises(ValueError, match='platform'):
+        runner.selected_targets(registry, selection, 'darwin')
+    with pytest.raises(ValueError, match='unregistered'):
+        runner.selected_targets(registry, dict(selection, contracts=['tests/test_unknown.py::test_unknown']), 'linux')
+    with pytest.raises(ValueError, match='unique'):
+        runner.selected_targets(registry, dict(selection, contracts=[target, target]), 'linux')
+    with pytest.raises(ValueError, match='omits'):
+        runner.selected_targets(registry, dict(selection, full=True, contracts=[]), 'linux')
+    assert runner.selected_targets(registry, dict(selection, full=True), 'linux') == ([target], None)
+
+
+def test_empty_scoped_native_selection_cannot_fall_back_to_all(tmp_path, monkeypatch):
+    import json
+    registry = _fixture(tmp_path)
+    monkeypatch.setattr(runner, 'load_registry', lambda: registry)
+    monkeypatch.setattr(runner, 'registry_errors', lambda *args: [])
+    monkeypatch.setattr(runner.sys, 'platform', 'linux')
+    selection = {'platform': 'linux', 'contracts': registry['wrappers'][0]['contracts'], 'families': [], 'full': False}
+    monkeypatch.setattr(sys, 'argv', ['runner', '--lane', 'native', '--report-dir', str(tmp_path / 'out'),
+                                    '--selection-json', json.dumps(selection), '--list'])
+    with pytest.raises(SystemExit) as error:
+        runner.main()
+    assert error.value.code == 2
+
+
+def test_registry_cache_is_local_and_sees_changed_test_bodies(tmp_path):
+    registry = _fixture(tmp_path)
+    selector = registry['wrappers'][0]['contracts'][0]
+    registry['wrappers'][0]['contract_platforms'] = {'linux': [selector], 'darwin': [selector]}
+    assert inventory.registry_errors(tmp_path, registry) == []
+    (tmp_path / 'tests/test_owned.py').write_text('def test_replaced():\n    pass\n')
+    assert any('missing' in error for error in inventory.registry_errors(tmp_path, registry))

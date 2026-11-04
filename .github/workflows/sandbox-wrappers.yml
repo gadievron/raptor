@@ -3,10 +3,10 @@ name: Sandbox wrapper acceptance
 on:
   merge_group:
   pull_request:
-    paths: ['core/**', 'packages/**', 'libexec/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
+    paths: ['core/**', 'packages/**', 'engine/**', 'tuning.json', 'libexec/**', 'bin/**', '*.py', 'test/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
   push:
     branches: [main]
-    paths: ['core/**', 'packages/**', 'libexec/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
+    paths: ['core/**', 'packages/**', 'engine/**', 'tuning.json', 'libexec/**', 'bin/**', '*.py', 'test/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
   schedule:
     - cron: '30 7 * * *'
   workflow_dispatch:
@@ -23,15 +23,34 @@ env:
   VENV_PATH: .venv
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      matrix: ${{ steps.scope.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check registration and select affected wrappers
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 .github/scripts/sandbox_wrapper_scope.py
+
   acceptance:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     name: wrappers-${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        # Playwright 1.60 cannot install Chromium/dependencies on Ubuntu 26.04.
-        os: [ubuntu-24.04, macos-latest]
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      WRAPPER_SELECTION: ${{ toJSON(matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,19 +103,21 @@ jobs:
           fi
       - name: Exercise registered dispatch contracts
         id: contracts
+        if: toJSON(matrix.contracts) != '[]'
         shell: bash
         run: |
           "$VENV_PATH/bin/python" .github/scripts/run_sandbox_wrapper_tests.py \
-            --lane contracts --report-dir "$RUNNER_TEMP/wrapper-contracts"
+            --lane contracts --selection-json "$WRAPPER_SELECTION" --report-dir "$RUNNER_TEMP/wrapper-contracts"
       - name: Exercise real platform confinement
         id: native
+        if: toJSON(matrix.families) != '[]'
         shell: bash
         env:
           RAPTOR_TEST_GEM_ROOT: ${{ runner.temp }}/wrapper-gems
           GEM_HOME: ${{ runner.temp }}/wrapper-gems
         run: |
           "$VENV_PATH/bin/python" .github/scripts/run_sandbox_wrapper_tests.py \
-            --lane native --report-dir "$RUNNER_TEMP/wrapper-native"
+            --lane native --selection-json "$WRAPPER_SELECTION" --report-dir "$RUNNER_TEMP/wrapper-native"
       - name: Retain coverage and native exclusions
         if: always() && (steps.contracts.outcome != 'skipped' || steps.native.outcome != 'skipped')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -106,3 +127,18 @@ jobs:
             ${{ runner.temp }}/wrapper-contracts
             ${{ runner.temp }}/wrapper-native
           if-no-files-found: error
+
+  sandbox-wrappers-passed:
+    if: always()
+    needs: [scope, acceptance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify registration and selected acceptance passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done

@@ -86,13 +86,18 @@ def load_registry(path: Path = REGISTRY) -> dict:
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def node_exists(root: Path, selector: str) -> bool:
+def node_exists(root: Path, selector: str, *, trees: dict | None = None) -> bool:
     filename, *parts = selector.split('::')
     path = root / filename
     if not path.is_file() or not parts:
         return False
     try:
-        node = ast.parse(path.read_text(encoding='utf-8'))
+        if trees is None:
+            node = ast.parse(path.read_text(encoding='utf-8'))
+        else:
+            if path not in trees:
+                trees[path] = ast.parse(path.read_text(encoding='utf-8'))
+            node = trees[path]
         for part in parts:
             name = part.split('[', 1)[0]
             node = next(child for child in node.body
@@ -104,6 +109,9 @@ def node_exists(root: Path, selector: str) -> bool:
 
 def registry_errors(root: Path, registry: dict) -> list[str]:
     errors = []
+    # Local to this census: repeated selectors share an AST, while a later
+    # census still sees source/test mutations rather than stale cached trees.
+    trees = {}
     rows = registry['wrappers']
     indexed = {row['source']: row for row in rows}
     if len(indexed) != len(rows):
@@ -122,12 +130,12 @@ def registry_errors(root: Path, registry: dict) -> list[str]:
             errors.append(row['source'] + ': no contract test case')
         for selectors in row.get('contract_platforms', {}).values():
             for selector in selectors:
-                if not node_exists(root, selector):
+                if not node_exists(root, selector, trees=trees):
                     errors.append(row['source'] + ': missing platform test ' + selector)
         if row['source'] not in discovered and not row.get('discovery'):
             errors.append(row['source'] + ': explicit wrapper needs discovery rationale')
         for selector in row.get('contracts', []):
-            if not node_exists(root, selector):
+            if not node_exists(root, selector, trees=trees):
                 errors.append(row['source'] + ': missing test ' + selector)
     families = registry['native']
     if len({family['id'] for family in families}) != len(families):
@@ -142,7 +150,7 @@ def registry_errors(root: Path, registry: dict) -> list[str]:
                 if type(cell.get('expected')) is not int or cell['expected'] < 1:
                     errors.append(family['id'] + ': missing execution count')
                 for selector in cell['tests']:
-                    if not node_exists(root, selector):
+                    if not node_exists(root, selector, trees=trees):
                         errors.append(family['id'] + ': missing native test ' + selector)
             elif not cell.get('reason'):
                 errors.append(family['id'] + ': untested platform needs an explicit reason')

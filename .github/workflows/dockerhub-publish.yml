@@ -25,8 +25,7 @@ name: Publish devcontainer image to Docker Hub
 # the previous version.) So release.yml
 # dispatches THIS workflow with the tag name once the re-tag has
 # landed (workflow_dispatch IS deliverable by GITHUB_TOKEN — the
-# documented exception to the no-retrigger rule), and the tag-push
-# arm below builds only :latest-equivalent moving state. The `tag`
+# documented exception to the no-retrigger rule). The `tag`
 # input is validated before it reaches checkout's ref (release.yml's
 # own pre-checkout validation lesson).
 
@@ -34,18 +33,19 @@ on:
   push:
     branches: [ main ]
     paths:
-      # Include future notice helpers and evidence without maintaining a file list.
+      # Broad wake-up paths; the scope job compares actual COPY/build inputs.
       - '.devcontainer/**'
-      # These files determine the Python packages installed into the image.
+      - '.dockerignore'
+      - '.gitattributes'
+      - '**/.gitattributes'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
-      - '.github/scripts/*sbom*.py'
-      - '.github/scripts/capture_container_evidence.py'
-      - '.github/sbom-*'
-      - 'core/oci/**'
-      - 'packages/sca/sbom*.py'
-      - 'packages/sca/data/license_identifications.json'
+      - '.github/scripts/dockerhub_scope.py'
+      - '.github/actions/enable-userns/**'
+  schedule:
+    # Refresh mutable base images and apt packages, even without source changes.
+    - cron: '0 2 * * 3'
   workflow_dispatch:
     inputs:
       tag:
@@ -58,15 +58,45 @@ on:
         default: ''
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag || 'latest' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  build-push:
+  scope:
     if: github.repository == 'gadievron/raptor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      build: ${{ steps.scope.outputs.build }}
+      fingerprint: ${{ steps.scope.outputs.fingerprint }}
+    steps:
+      - name: Validate publish target before checkout
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_TAG" ]]; then
+            [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]] || exit 1
+          else
+            [[ "$REF" == 'refs/heads/main' ]] || { echo '::error::latest must be published from main'; exit 1; }
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare image inputs
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: python3 .github/scripts/dockerhub_scope.py
+
+  build-push:
+    needs: scope
+    if: needs.scope.outputs.build == 'true' && github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -89,8 +119,8 @@ jobs:
         with:
           # Tag dispatches build the STAMPED tag ref (see the
           # versioned-image coupling note above); everything else
-          # builds the triggering ref (main).
-          ref: ${{ github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          # builds the same immutable commit that the scope job fingerprinted.
+          ref: ${{ github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.sha }}
           persist-credentials: false
 
       - name: Determine image tags
@@ -123,9 +153,11 @@ jobs:
       - uses: ./.github/actions/enable-userns
 
       - name: Build and verify cleaned image
+        env:
+          IMAGE_INPUTS: ${{ needs.scope.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          sudo buildah build --format docker --squash \
+          sudo buildah build --format docker --squash --label "io.raptor.ci.inputs=${IMAGE_INPUTS}" \
             -f .devcontainer/Dockerfile -t localhost/raptor-publish:checked .
           test "$(sudo buildah inspect --type image --format '{{len .OCIv1.RootFS.DiffIDs}}' localhost/raptor-publish:checked)" = 1
           candidate_container=$(sudo buildah from localhost/raptor-publish:checked)
@@ -273,9 +305,17 @@ jobs:
 
       - name: Publish verified image
         env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          IMAGE_INPUTS: ${{ needs.scope.outputs.fingerprint }}
           TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           set -euo pipefail
+          if [[ -z "$INPUT_TAG" ]]; then
+            rc=0
+            python3 .github/scripts/dockerhub_scope.py --check-main || rc=$?
+            if [[ "$rc" -eq 1 ]]; then exit 0; fi
+            if [[ "$rc" -ne 0 ]]; then exit "$rc"; fi
+          fi
           source="oci:${RUNNER_TEMP}/container-oci:verified"
           exported_digest=$(cat "${RUNNER_TEMP}/container-sbom/image-digest.txt")
           skopeo inspect --raw "$source" > "${RUNNER_TEMP}/manifest-to-push.json"
