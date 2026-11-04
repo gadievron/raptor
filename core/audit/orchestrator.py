@@ -29,7 +29,7 @@ import tempfile
 import threading as _threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, NoReturn, TYPE_CHECKING
@@ -10262,6 +10262,13 @@ def _run_audit_body(
         # passes (§Immediate hypothesis verification, §Post-loop
         # pipeline optimisations in docs/audit.md design).
         if not config.immediate_verify:
+            # Queue contradictory review claims BEFORE verification;
+            # doing this after the sweep left them with no chance to
+            # earn a receipt before final resolution.
+            logger.debug("entering _promote_hypothesis_inconsistent")
+            _promote_hypothesis_inconsistent(result)
+            logger.debug("exited _promote_hypothesis_inconsistent")
+
             logger.debug("entering _resweep_zero_dispatch_suspicious")
             try:
                 _resweep_zero_dispatch_suspicious(
@@ -10358,10 +10365,6 @@ def _run_audit_body(
         logger.debug("exited _demote_self_contradictions")
 
         if not config.immediate_verify:
-            logger.debug("entering _promote_hypothesis_inconsistent")
-            _promote_hypothesis_inconsistent(result)
-            logger.debug("exited _promote_hypothesis_inconsistent")
-
             # Run refutation gates on newly-promoted suspicious outcomes.
             # Hypothesis-consistency promotes clean→suspicious when the
             # LLM had high-confidence race/leak hypotheses but said
@@ -31990,26 +31993,21 @@ def _promote_hypothesis_inconsistent(result: OrchestratorResult) -> None:
 
         best = unrefuted[0]
         mechanism = best.get("mechanism", "")[:120]
-        promoted = ReviewOutcome(
-            file=outcome.file,
-            function=outcome.function,
+        claim = best.get("mechanism") or outcome.hypothesis
+        # Sweep consumers read the structured primary claim first.
+        # Keep both views aligned without mutating the original review.
+        review = dict(outcome.review_result or {})
+        review["hypothesis"] = claim
+        promoted = replace(
+            outcome,
             status="suspicious",
             body=(
                 f"[hypothesis-consistency: {len(unrefuted)} unrefuted "
                 f"hypothesis(es) at high/medium confidence]\n\n"
                 f"{outcome.body}"
             ),
-            hypothesis=outcome.hypothesis,
-            hypotheses=outcome.hypotheses,
-            evidence_tool="",
-            cost_usd=outcome.cost_usd,
-            model=outcome.model,
-            duration_s=outcome.duration_s,
-            review_result=outcome.review_result,
-            line=outcome.line,
-        )
-        promoted.function_qualified = getattr(
-            outcome, "function_qualified", "",
+            hypothesis=claim,
+            review_result=review,
         )
         result.outcomes[i] = promoted
         with result._lock:
@@ -32636,10 +32634,9 @@ def _resolve_gate_demoted(
             continue
         gate_demoted = outcome.body.startswith(_GATE_DEMOTED_PREFIXES)
         if not gate_demoted and _is_machine_raised(outcome):
-            # Counter-escalation evidence floor. This suspicious was
-            # machine-raised off the review's own counter_hypothesis:
-            # the model's verdict was clean, with a completed
-            # hypothesis-refutation ladder behind it. The escalation
+            # Machine-escalation evidence floor. The model's verdict
+            # was clean; another field (counter, refutation, or live
+            # hypothesis) prompted the pipeline to verify a lead. The escalation
             # exists so deepen/verification can convict a lead the
             # model may have talked itself out of — by the time this
             # end-of-run pass runs, they have had their chance. If no
@@ -32671,33 +32668,20 @@ def _resolve_gate_demoted(
             # that no lane could demote). Model-emitted suspicious
             # keeps the demotion-referee floor unchanged — there the
             # probe corroborates a conviction the model itself holds.
-            resolved = ReviewOutcome(
-                file=outcome.file,
-                function=outcome.function,
+            resolved = replace(
+                outcome,
                 status="clean",
                 body=(
                     "[machine-escalation resolution: machine-raised "
                     "suspicious earned no verification-grade receipt "
                     "— model verdict clean restored]\n\n" + outcome.body
                 ),
-                hypothesis=outcome.hypothesis,
-                hypotheses=outcome.hypotheses,
-                evidence_tool=outcome.evidence_tool,
-                cost_usd=outcome.cost_usd,
-                model=outcome.model,
-                duration_s=outcome.duration_s,
-                review_result=outcome.review_result,
-                line=outcome.line,
             )
-            resolved.tools_dispatched = outcome.tools_dispatched
-            resolved.tools_errored = outcome.tools_errored
-            resolved.tools_inconclusive = outcome.tools_inconclusive
-            resolved.tools_skipped = outcome.tools_skipped
             result.outcomes[i] = resolved
             result.suspicious -= 1
             result.clean += 1
             logger.info(
-                "counter-escalation floor: %s:%s → clean "
+                "machine-escalation floor: %s:%s → clean "
                 "(machine-raised suspicious, no receipt survived "
                 "verification)",
                 outcome.file,
@@ -33544,18 +33528,21 @@ def _is_verification_evidence_for_gate(outcome: ReviewOutcome) -> bool:
 
 _COUNTER_ESCALATION_PREFIX = "[counter-hypothesis escalation:"
 _ANTI_SELF_REFUTATION_PREFIX = "[anti_self_refutation:"
+_HYPOTHESIS_CONSISTENCY_PREFIX = "[hypothesis-consistency:"
 
 
 def _is_machine_raised(outcome: ReviewOutcome) -> bool:
     """True when this suspicious verdict was machine-raised from a
     model-clean verdict — by the counter-hypothesis escalation OR the
-    anti-self-refutation gate. Both lanes exist to force verification
-    of a claim the model talked itself out of; neither is a model
-    conviction, so end-of-run retention demands verification-grade
+    anti-self-refutation or hypothesis-consistency gates. These lanes
+    force verification of a claim the model talked itself out of;
+    none is a model conviction, so end-of-run retention demands verification-grade
     evidence (see the resolution pass)."""
     if _is_counter_escalated(outcome):
         return True
-    return (outcome.body or "").startswith(_ANTI_SELF_REFUTATION_PREFIX)
+    return (outcome.body or "").startswith((
+        _ANTI_SELF_REFUTATION_PREFIX, _HYPOTHESIS_CONSISTENCY_PREFIX,
+    ))
 
 
 def _is_counter_escalated(outcome: ReviewOutcome) -> bool:
