@@ -13,6 +13,7 @@ mint a second local user).
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import socket
 import sys
@@ -81,24 +82,21 @@ class TestUnixPeerCredentials:
 class TestLoopbackPeerUidLookup:
 
     def test_established_loopback_pair_reports_own_uid(self):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        cli = None
-        conn = None
-        try:
+        with ExitStack() as cleanup:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cleanup.callback(srv.close)
             srv.bind(("127.0.0.1", 0))
             srv.listen(1)
             cli = socket.create_connection(srv.getsockname(), timeout=5.0)
+            cleanup.callback(cli.close)
             conn, _ = srv.accept()
+            cleanup.callback(conn.close)
             # From the server's perspective: peer == the client's
             # (addr, port); sockname == the accepted socket's local end.
             uid = proxy_mod._loopback_peer_uid(
                 conn.getpeername(), conn.getsockname(),
             )
             assert uid == os.geteuid()
-        finally:
-            for s in (conn, cli, srv):
-                if s is not None:
-                    s.close()
 
     def test_unknown_peer_returns_none(self):
         # A (peer, sockname) pair that matches no established socket.

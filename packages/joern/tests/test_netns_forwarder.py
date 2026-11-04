@@ -65,10 +65,14 @@ class _EchoServer:
 
     def __init__(self) -> None:
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(16)
-        self.port: int = self._listener.getsockname()[1]
-        self._server = SocketServer(self._listener, self._serve)
+        try:
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(16)
+            self.port: int = self._listener.getsockname()[1]
+            self._server = SocketServer(self._listener, self._serve)
+        except BaseException:
+            self._listener.close()
+            raise
 
     @staticmethod
     def _serve(conn: socket.socket) -> None:
@@ -92,10 +96,14 @@ class _BlastServer:
     def __init__(self, size: int) -> None:
         self._size = size
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(4)
-        self.port: int = self._listener.getsockname()[1]
-        self._server = SocketServer(self._listener, self._serve)
+        try:
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(4)
+            self.port: int = self._listener.getsockname()[1]
+            self._server = SocketServer(self._listener, self._serve)
+        except BaseException:
+            self._listener.close()
+            raise
 
     def _serve(self, conn: socket.socket) -> None:
         try:
