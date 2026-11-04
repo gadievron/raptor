@@ -23,7 +23,9 @@ def test_native_crash_marker_requires_explicit_option(tmp_path, opt_in):
         "def test_native_case():\n"
         f"    Path({str(marker)!r}).write_text('ran')\n"
     )
-    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    # Exercise the explicitly loaded root plugin without loading unrelated
+    # installed plugins (and their SDKs) in each selection-only child.
+    env = dict(os.environ, PYTHONPATH=str(ROOT), PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
     env.pop("PYTEST_ADDOPTS", None)
     args = [sys.executable, "-m", "pytest", "-p", "conftest", "--noconftest",
             "-c", str(ROOT / "pytest.ini"), str(tests), "-m", "", "-q"]

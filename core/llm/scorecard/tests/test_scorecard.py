@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -691,8 +692,9 @@ def test_reset_requires_a_filter(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _bump_in_subprocess(path_str: str, dc: str, model: str, n: int):
-    """Module-level so multiprocessing.Pool can pickle it."""
+def _bump_in_subprocess(path_str: str, dc: str, model: str, n: int, data_home: str):
+    """Use this test's key even when a persistent forkserver predates it."""
+    os.environ["XDG_DATA_HOME"] = data_home
     sc = ModelScorecard(Path(path_str))
     for _ in range(n):
         sc.record_event(
@@ -703,7 +705,7 @@ def _bump_in_subprocess(path_str: str, dc: str, model: str, n: int):
 @pytest.mark.slow
 @pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
 def test_concurrent_writes_do_not_lose_updates(tmp_path):
-    """Two processes recording on different cells of the same
+    """Four processes recording on different cells of the same
     sidecar must each see all of their own increments preserved.
     Without flock, a read-modify-write race would lose one set of
     increments.
@@ -722,17 +724,21 @@ def test_concurrent_writes_do_not_lose_updates(tmp_path):
     for i in range(4):
         p = multiprocessing.Process(
             target=_bump_in_subprocess,
-            args=(str(path), f"dc{i}", "m", 25),
+            args=(str(path), f"dc{i}", "m", 25, os.environ["XDG_DATA_HOME"]),
         )
         p.start()
         procs.append(p)
-    for p in procs:
-        # Bounded join + liveness assert: a wedged child (flock
-        # deadlock regression) must fail the test, not hang the
-        # whole slow tier.
-        p.join(timeout=60)
-        assert not p.is_alive(), "subprocess wedged past the join timeout"
-        assert p.exitcode == 0, f"subprocess exited {p.exitcode}"
+    try:
+        for p in procs:
+            # A wedged writer must fail without leaking its siblings.
+            p.join(timeout=60)
+            assert not p.is_alive(), "subprocess wedged past the join timeout"
+            assert p.exitcode == 0, f"subprocess exited {p.exitcode}"
+    finally:
+        for p in procs:
+            if p.is_alive():
+                p.kill()
+            p.join()
 
     sc = ModelScorecard(path)
     stats = {s.decision_class: s for s in sc.get_stats()}
