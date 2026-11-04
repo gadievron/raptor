@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -164,7 +165,8 @@ def _denial_context(run_dir: Path, *, allow_legacy: bool = False) -> list:
 def _response_text(response) -> str:
     if isinstance(response, str):
         return response
-    return getattr(response, "content", "") or ""
+    content = getattr(response, "content", "")
+    return content if isinstance(content, str) else ""
 
 
 def _parse_assessments(text: str, report: dict) -> tuple:
@@ -201,7 +203,8 @@ def _parse_assessments(text: str, report: dict) -> tuple:
         if not isinstance(judgement, str) or judgement not in _JUDGEMENTS:
             judgement = JUDGEMENT_UNCLEAR
         try:
-            confidence = min(1.0, max(0.0, float(item.get("confidence"))))  # type: ignore[arg-type]
+            value = float(item.get("confidence"))  # type: ignore[arg-type]
+            confidence = min(1.0, max(0.0, value)) if math.isfinite(value) else 0.0
         except (TypeError, ValueError, OverflowError):
             confidence = 0.0
         rationale = item.get("rationale")
