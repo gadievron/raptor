@@ -9,13 +9,12 @@ leg), so the exact target shape from the rule header fires.
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
+
+from engine.coccinelle.tests._rule_runner import run_rule
 
 _RULE = (
     Path(__file__).resolve().parents[1] / "rules" / "init_after_register.cocci"
@@ -27,18 +26,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run_rule(tmp_path: Path, source: str) -> list[dict]:
-    src = tmp_path / "target.c"
-    src.write_text(textwrap.dedent(source), encoding="utf-8")
-    proc = subprocess.run(  # noqa: S603 — fixed local binary, fixture input
-        ["spatch", "--sp-file", str(_RULE), str(src), "--no-show-diff"],
-        capture_output=True, text=True, timeout=120,
-    )
-    results = []
-    for stream in (proc.stdout, proc.stderr):
-        for line in stream.splitlines():
-            if line.startswith("COCCIRESULT:"):
-                results.append(json.loads(line[len("COCCIRESULT:"):]))
-    return results
+    return run_rule(tmp_path, source, _RULE)
 
 
 class TestChrdevLeg:
