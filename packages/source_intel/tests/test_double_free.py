@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.adapter import (
@@ -54,7 +56,7 @@ def test_e2e_double_free_fires_on_classic_pattern(tmp_path):
         "    kfree(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert len(r.double_frees) >= 2, f"got {r.double_frees!r}"
     roles = {df.role for df in r.double_frees}
     assert "first" in roles
@@ -81,7 +83,7 @@ def test_e2e_double_free_skipped_on_reassign(tmp_path):
         "    kfree(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert not r.double_frees, f"got {r.double_frees!r}"
 
 
@@ -101,7 +103,7 @@ def test_e2e_double_free_skipped_on_single_free(tmp_path):
         "    kfree(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert not r.double_frees
 
 

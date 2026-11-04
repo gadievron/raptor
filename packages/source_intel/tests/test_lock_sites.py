@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     LockSiteEvidence,
     SourceIntelResult,
@@ -165,7 +167,7 @@ int driver(void) {
 )
 def test_e2e_lock_sites_covers_every_family(tmp_path: Path) -> None:
     (tmp_path / "lk.c").write_text(_LOCK_FIXTURE_HEADER + _LOCK_FIXTURE_BODY)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("concurrency"))
 
     # Every covered family fires at least once on the fixture.
     triples = {(s.kind, s.op, s.fn) for s in r.lock_sites}
@@ -196,7 +198,7 @@ def test_e2e_lock_sites_skips_out_of_axis_primitives(tmp_path: Path) -> None:
     # Atomics / CPU hints / futex aren't lock sites; they belong to other
     # axes (deferred). If they appear in lock_sites, our cocci is too broad.
     (tmp_path / "lk.c").write_text(_LOCK_FIXTURE_HEADER + _LOCK_FIXTURE_BODY)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("concurrency"))
 
     fns = {s.fn for s in r.lock_sites}
     assert "cpu_relax" not in fns
@@ -210,7 +212,7 @@ def test_e2e_lock_sites_skips_out_of_axis_primitives(tmp_path: Path) -> None:
 )
 def test_e2e_lock_sites_carry_enclosing_function(tmp_path: Path) -> None:
     (tmp_path / "lk.c").write_text(_LOCK_FIXTURE_HEADER + _LOCK_FIXTURE_BODY)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("concurrency"))
 
     fns = {s.enclosing_function for s in r.lock_sites}
     # Every site comes from `driver` — no stray attributions.

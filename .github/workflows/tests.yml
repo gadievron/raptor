@@ -987,8 +987,9 @@ jobs:
   # `skipif(not shutil.which("spatch"))`, and the broad ``python`` fast
   # tier installs no spatch — so before this job they NEVER ran in CI.
   # The CI deps image bakes in coccinelle so the container path gets
-  # real spatch coverage; the runner fallback (fork PRs) skips those
-  # tests via the skipif guard.
+  # real spatch coverage. Run the tool-backed integration/slow cases
+  # separately after the guarded default tier, rather than excluding them.
+  # The runner fallback (fork PRs) skips unavailable tools via the guards.
   #
   # Known: when a PR that changes the Dockerfile merges, ci-deps-image.yml
   # and tests.yml fire concurrently — tests pull the old image (no new
@@ -1006,7 +1007,8 @@ jobs:
     with:
       tier: source_intel
       test_path: ${{ needs.changes.outputs.source_intel_files }}
-      pytest_args: ""
+      pytest_args: "-n 2 --dist loadfile"
+      native_pytest_markers: "(slow or integration) and not corpus"
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # engine tier: the semgrep/coccinelle rule engines' own precision
@@ -1028,11 +1030,8 @@ jobs:
     with:
       tier: engine
       test_path: ${{ needs.changes.outputs.engine_files }}
-      # Serial pytest, deliberately (no -n): the rule tests are
-      # spatch/semgrep subprocess drivers whose wall-clock is the
-      # external tool, not collection — xdist worker startup would buy
-      # little and the source_intel precedent (same spatch profile)
-      # runs serial. Revisit only with a measured win.
+      # Keep the engine's existing serial execution here; its subprocess-
+      # heavy rule corpus needs a separate parallelism measurement.
       pytest_args: ""
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 

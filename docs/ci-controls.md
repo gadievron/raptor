@@ -82,6 +82,10 @@ This page is split into:
 
 - **Sandbox and feasibility parallelism** — broad selections use two pytest workers on the existing runner, with `--dist loadfile` keeping each module and its fixtures together. A single selected file stays serial. Job names and scoped test selections are unchanged.
 
+- **Source-intelligence native tier** — the scoped `source_intel` job in [`tests.yml`](../.github/workflows/tests.yml) runs its selected files with two workers. The default phase retains the 10-second guard; a separate `-m "(slow or integration) and not corpus"` phase runs real-tool coverage even if the first phase fails. Either failure fails the job, and skip accounting includes both JUnit reports. Axis-specific tests run only the shipped rules they assert; full-dispatch and mixed-axis cases retain the default rule root. Missing optional tools still skip on the runner fallback. Other tiers retain their default selection unless they set `native_pytest_markers`.
+
+  **Run locally:** `python3 -m pytest -n 2 --dist loadfile packages/source_intel/tests`, then `RAPTOR_MAX_TEST_SECONDS= python3 -m pytest -n 2 --dist loadfile -m "(slow or integration) and not corpus" packages/source_intel/tests`.
+
 - **Sandbox slow/integration tier** — [`tests.yml`](../.github/workflows/tests.yml), sandbox job on sandbox-gated PRs, with a package-scoped mirror step in the exploit-feasibility job for PRs that fire only that gate. When both gates fire, the sandbox job covers this tier once. Any CI-equivalent local gate run must include it: `python3 -m pytest -n 2 --dist loadfile -m "slow or integration" core/sandbox packages/exploit_feasibility`.
 
 - **Darwin-emulation gate** — [`tests.yml`](../.github/workflows/tests.yml), sandbox job on sandbox-gated PRs. Re-runs the sandbox test files with `RAPTOR_TEST_EMULATE_PLATFORM=darwin` so Linux-authored assertions against platform-resolved values (or the Linux tmp layout) fail in the cheap Linux lane instead of on the macOS runner; `*_native`-marked tests are deselected because emulation never stacks on real kernel behaviour.

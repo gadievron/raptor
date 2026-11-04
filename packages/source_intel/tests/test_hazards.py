@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.adapter import (
@@ -54,7 +56,7 @@ def test_e2e_deprecated_functions_fires(tmp_path):
         "    sprintf(buf, \"%s\", s);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("hazards"))
     kinds = {(h.kind, h.detail) for h in r.hazards}
     assert ("deprecated_func", "strcpy") in kinds
     assert ("deprecated_func", "sprintf") in kinds
@@ -75,7 +77,7 @@ def test_e2e_deprecated_skipped_for_strncpy(tmp_path):
         "    strncpy(buf, s, 16);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("hazards"))
     assert not any(
         h.detail == "strncpy" for h in r.hazards
         if h.kind == "deprecated_func"
@@ -102,7 +104,7 @@ def test_e2e_signed_alloc_fires(tmp_path):
         "    return kmalloc(n * sizeof(int), 0);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("hazards"))
     hits = [h for h in r.hazards if h.kind == "signed_alloc"]
     assert hits, f"expected signed_alloc evidence, got {r.hazards!r}"
     assert "kmalloc" in hits[0].detail

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     CryptoCallEvidence,
     SourceIntelResult,
@@ -168,7 +170,7 @@ int driver(void) {
 )
 def test_e2e_crypto_calls_covers_every_api_kind_combination(tmp_path: Path) -> None:
     (tmp_path / "c.c").write_text(_CRYPTO_FIXTURE)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("crypto"))
 
     triples = {(c.kind, c.api, c.fn) for c in r.crypto_calls}
     expected = {
@@ -201,7 +203,7 @@ def test_e2e_crypto_calls_skips_out_of_axis_apis(tmp_path: Path) -> None:
     # memcpy / strcmp aren't crypto; they belong to other rules (or none).
     # If they appear in crypto_calls, the cocci is too broad.
     (tmp_path / "c.c").write_text(_CRYPTO_FIXTURE)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("crypto"))
 
     fns = {c.fn for c in r.crypto_calls}
     assert "memcpy" not in fns
@@ -214,7 +216,7 @@ def test_e2e_crypto_calls_skips_out_of_axis_apis(tmp_path: Path) -> None:
 )
 def test_e2e_crypto_calls_carry_enclosing_function(tmp_path: Path) -> None:
     (tmp_path / "c.c").write_text(_CRYPTO_FIXTURE)
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("crypto"))
 
     # Every site comes from `driver` — no stray attributions.
     fns = {c.enclosing_function for c in r.crypto_calls}

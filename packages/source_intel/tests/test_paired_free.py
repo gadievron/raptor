@@ -10,6 +10,8 @@ import shutil
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     SourceIntelResult,
     analyze,
@@ -33,7 +35,7 @@ def test_e2e_paired_free_fires_on_kmalloc_kfree(tmp_path):
         "    kfree(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     pairs = [(p.allocator, p.free_fn) for p in r.paired_frees]
     assert ("kmalloc", "kfree") in pairs
 
@@ -55,7 +57,7 @@ def test_e2e_paired_free_fires_on_vmalloc_vfree(tmp_path):
         "    vfree(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     pairs = [(p.allocator, p.free_fn) for p in r.paired_frees]
     assert ("vmalloc", "vfree") in pairs
 
@@ -77,7 +79,7 @@ def test_e2e_paired_free_skipped_on_unpaired_alloc(tmp_path):
         "    /* leak */\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert not r.paired_frees, f"got {r.paired_frees!r}"
 
 

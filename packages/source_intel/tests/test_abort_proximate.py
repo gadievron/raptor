@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.adapter import (
@@ -99,7 +101,7 @@ def test_e2e_abort_proximate_fires_on_bug_on(tmp_path):
         "}\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("proximity"))
     macros = {ab.macro for ab in r.aborts}
     assert "BUG_ON" in macros
     assert "panic" in macros
@@ -127,7 +129,7 @@ def test_e2e_abort_captures_enclosing_function(tmp_path):
         "}\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("proximity"))
     abort_in_a = [ab for ab in r.aborts if ab.enclosing_function == "func_a"]
     assert abort_in_a, (
         f"expected BUG_ON attributed to func_a; got "
