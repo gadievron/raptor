@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from packages.web.oob import OobContext, OobListener, token_of
 from packages.web.scanner import WebScanner, _parse_oob_listen
+from packages.web.tests.http_server import start_http_server
 
 
 def _fetch(url: str) -> int:
@@ -186,7 +187,6 @@ class TestCanaryReplacesTheOriginalParameter(unittest.TestCase):
 
     def _serve_first_param_wins(self):
         import http.server
-        import threading
         from urllib.parse import parse_qsl
 
         requests_seen: list[str] = []
@@ -208,15 +208,13 @@ class TestCanaryReplacesTheOriginalParameter(unittest.TestCase):
                 pass
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        start_http_server(server, self.addCleanup)
         return server, requests_seen
 
     def test_first_param_wins_backend_sees_the_canary_on_both_legs(self):
         from packages.web.client import WebClient
 
         server, requests_seen = self._serve_first_param_wins()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
         host, port = server.server_address
         base = f"http://{host}:{port}"
 
