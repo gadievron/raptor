@@ -962,6 +962,8 @@ class TestCppGuardDirections:
     @pytest.mark.parametrize("reason", [
         "preprocessor timed out (60s)",
         "preprocessor timed out (5s)",
+        "preprocessor timed out (59.9998s)",
+        "preprocessor timed out (0.0001s)",
         "preprocessor invocation failed: [Errno 11] Resource "
         "temporarily unavailable",
         "preprocessor invocation failed: [Errno 12] Cannot allocate "
@@ -1056,6 +1058,11 @@ class TestCppGuardDirections:
         # Anchoring look-alikes.
         "preprocessor timed out (60s) again",
         "preprocessor timed out (60s)\n",
+        "preprocessor timed out (59.9998s) again",
+        "preprocessor timed out (59.9998s)\n",
+        "preprocessor timed out (59.s)",
+        "preprocessor timed out (.5s)",
+        "preprocessor timed out (-1.5s)",
         "preprocess failed — no fidelity-3 view: exit code -9; retried",
         "preprocess failed — no fidelity-3 view: exit code -9\n",
     ])
@@ -1703,12 +1710,15 @@ class TestCppSurfaceFences:
         # escape / missing file / non-C — degraded before any spawn)
         # and the deliberate availability mint (it manufactures the
         # guard's transport arm on purpose, so it must bypass the
-        # guard).
+        # guard). The pinned-budget tests also bypass the guard to
+        # inspect deterministic sandbox stubs and pre-launch exhaustion.
         assert _callers_of(calls, "expand_translation_unit") == {
             "test_non_c_file_degrades",
             "test_path_escape_degrades",
             "test_missing_file_degrades",
             "test_no_preprocessor_degrades",
+            "test_pinned_preprocessor_uses_remaining_budget_without_tool_discovery",
+            "test_preprocessor_deadline_exhausted_during_preparation_does_not_launch",
         }
         assert _callers_of(calls, "expand_translation_unit_guarded") == {
             "_expand_tu_guarded",

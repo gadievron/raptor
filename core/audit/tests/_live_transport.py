@@ -313,7 +313,7 @@ def run_compiler_analyzer_sweep_guarded(
 # in this channel (the sandbox seam is monkeypatched by the live
 # fixtures, so the import cannot flip under load) and stays hard.
 CPP_TRANSPORT_RE = re.compile(
-    r"preprocessor timed out \(\d+s\)\Z"
+    r"preprocessor timed out \(\d+(?:\.\d+)?s\)\Z"
     r"|preprocessor invocation failed: \[Errno \d+\] "
     r"|preprocess failed — no fidelity-3 view: exit code -9\Z",
 )
