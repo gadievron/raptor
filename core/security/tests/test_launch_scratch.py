@@ -1,4 +1,5 @@
 """Session-authenticated scratch, independent of mutable tool environment."""
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import time
 
 import pytest
 
+from core.testing.processes import reap_on_exit
 from core.config import RaptorConfig
 from core.project import sessions
 from core.security import env_sanitisation, launch_scratch
@@ -181,10 +183,14 @@ print(result.stdout.strip(),flush=True)
     env = dict(os.environ, HOME=str(home), TMPDIR=str(base), RAPTOR_REGISTRY_HOME=str(registry), CI='1')
     for key in ('_RAPTOR_SCRATCH_AUTH', 'RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN'):
         env.pop(key, None)
-    processes = [subprocess.Popen([sys.executable, '-I', '-c', code, str(ROOT)],
-                                 env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, text=True) for _ in range(2)]
-    try:
+    with ExitStack() as cleanup:
+        processes = []
+        for _ in range(2):
+            process = subprocess.Popen([sys.executable, '-I', '-c', code, str(ROOT)],
+                                     env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+            cleanup.enter_context(reap_on_exit(process))
+            processes.append(process)
         for process in processes:
             assert process.stdout.readline().strip() == 'ready'
         paths = []
@@ -196,11 +202,6 @@ print(result.stdout.strip(),flush=True)
             assert (path / 'child-probe').read_text() == 'ok'
             paths.append(path)
         assert paths[0] != paths[1]
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
 
 
 @pytest.mark.parametrize('mutation', ['token', 'identity', 'issuer', 'symlink', 'hardlink'])

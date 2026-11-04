@@ -414,6 +414,7 @@ def test_in_flight_registry_tracks_scans(tmp_path, monkeypatch) -> None:
 def test_sigterm_prints_in_flight_and_partial_summary(tmp_path) -> None:
     """Runner cancellation (SIGTERM grace) must name the in-flight
     scans and print a partial summary before the process dies."""
+    from core.testing.processes import reap_on_exit
     import signal
     import subprocess
     import sys
@@ -460,7 +461,7 @@ run_sweep_and_report([mk("fastproj"), mk("slowproj")], baseline,
         env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
              "RAPTOR_DIR": repo},
     )
-    try:
+    with reap_on_exit(proc):
         # Wait for the scan to be registered before signalling.
         deadline = _time.monotonic() + 8
         line = ""
@@ -471,8 +472,6 @@ run_sweep_and_report([mk("fastproj"), mk("slowproj")], baseline,
         assert "SCAN_STARTED" in line, "scan never started"
         proc.send_signal(signal.SIGTERM)
         out, err = proc.communicate(timeout=8)
-    finally:
-        proc.kill()
     assert "sweep interrupted — SIGTERM" in out, out + err
     assert "in-flight scans: PyPI/slowproj" in out, out
     # The COMPLETED scan is visible to the post-mortem — a partial
