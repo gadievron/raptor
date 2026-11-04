@@ -1141,11 +1141,15 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                 break
             total += len(chunk)
             carry += chunk
+            # Scan by offset: repeatedly slicing the unread suffix copies
+            # the same bytes once per record in a busy chunk.
+            start = 0
             while True:
-                nl = carry.find(b"\n")
+                nl = carry.find(b"\n", start)
                 if nl < 0:
                     break
-                line, carry = carry[:nl], carry[nl + 1:]
+                line = carry[start:nl]
+                start = nl + 1
                 if skipping_oversize_line:
                     # Tail of a line that already blew the per-line
                     # cap — resynchronise at this newline.
@@ -1155,6 +1159,7 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                 if len(out) >= _MAX_EVENTS_PARSED:
                     over_bound = True
                     return out, over_bound
+            carry = carry[start:]
             if len(carry) > _MAX_EVENT_LINE_BYTES:
                 # Oversize line: drop what we have and skip to the
                 # next newline (same treatment as a corrupt line).
