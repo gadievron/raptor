@@ -43,12 +43,16 @@ class _RstUpstream(threading.Thread):
     def __init__(self, rst_delay: float = 0.15):
         super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(16)
-        self.sock.settimeout(0.2)
-        self.port = self.sock.getsockname()[1]
-        self.rst_delay = rst_delay
-        self._stop = threading.Event()
+        try:
+            self.sock.bind(("127.0.0.1", 0))
+            self.sock.listen(16)
+            self.sock.settimeout(0.2)
+            self.port = self.sock.getsockname()[1]
+            self.rst_delay = rst_delay
+            self._stop = threading.Event()
+        except BaseException:
+            self.sock.close()
+            raise
 
     def run(self):
         while not self._stop.is_set():
@@ -99,12 +103,16 @@ class _HoldingUpstream(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(4)
-        self.sock.settimeout(0.2)
-        self.port = self.sock.getsockname()[1]
-        self.held: list[socket.socket] = []
-        self._stop = threading.Event()
+        try:
+            self.sock.bind(("127.0.0.1", 0))
+            self.sock.listen(4)
+            self.sock.settimeout(0.2)
+            self.port = self.sock.getsockname()[1]
+            self.held: list[socket.socket] = []
+            self._stop = threading.Event()
+        except BaseException:
+            self.sock.close()
+            raise
 
     def run(self):
         while not self._stop.is_set():
