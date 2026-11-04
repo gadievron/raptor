@@ -191,9 +191,11 @@ class SandboxHost:
         # caller didn't pass one; removed in close().
         self._owned_output = _owned_output
         # Parent-held copies of the daemon-side pipe ends. Kept open
-        # only until the startup ping proves the daemon inherited its
-        # own copies, then closed so EOF tracks daemon death.
+        # until the startup ping proves the daemon inherited its own
+        # copies, or the backend exits. Release is shared with the
+        # worker so failed startup also exposes EOF promptly.
         self._daemon_fds = _daemon_fds
+        self._daemon_fds_lock = threading.Lock()
         # The fd numbers as they appear inside the daemon's fd table
         # (pass_fds preserves numbers). Retained after the parent
         # copies are closed — diagnostics and the hostile-peer tests
@@ -242,68 +244,83 @@ class SandboxHost:
         target_path = Path(target).resolve()
         output_dir, owned_output = _resolve_output(target_path, output)
 
-        # Two pipe pairs. os.pipe() fds are CLOEXEC/non-inheritable by
-        # default (PEP 446); pass_fds below clears CLOEXEC on the two
-        # daemon-side ends in the spawned child ONLY, so the parent's
-        # copies never leak into any other subprocess this process
-        # spawns.
-        in_r, in_w = os.pipe()      # rpc_in: parent writes → daemon reads
-        out_r, out_w = os.pipe()    # rpc_out: daemon writes → parent reads
-
-        readable = list(readable_paths or [])
-        readable.append(str(daemon))
-        from core.sandbox.python_paths import python_runtime_tool_paths
-        readable.extend(python_runtime_tool_paths())
-
-        result_holder: dict[str, Any] = {"error": None, "returncode": None}
-
-        def _worker() -> None:
-            try:
-                r = sandbox_run(
-                    ["python3", "-S", str(daemon),
-                     "--rpc-in-fd", str(in_r),
-                     "--rpc-out-fd", str(out_w)],
-                    target=str(target_path),
-                    output=output_dir,
-                    block_network=True,
-                    restrict_reads=True,
-                    omit_proc_reads=_omit_proc,
-                    readable_paths=readable,
-                    writable_paths=writable_paths,
-                    etc_overlay=etc_overlay,
-                    env=env or None,
-                    env_caller_filtered=True,
-                    # Declared intent for the PATH-divergence gate: the
-                    # daemon is stdlib-only (-S, no site imports) and
-                    # runs under WHATEVER python3 the sandbox view
-                    # resolves — the caller's venv interpreter is
-                    # deliberately not required, so a venv-active
-                    # caller diverging from the child's system python3
-                    # is fine here.
-                    allow_path_divergence=True,
-                    capture_output=True,
-                    text=False,
-                    timeout=None,
-                    # Inherit exactly the daemon-side pipe ends across
-                    # the sandbox spawn. sandbox().run() audits each
-                    # entry (rejects sockets, allows pipes) and the
-                    # subprocess backend keeps the fd NUMBERS stable,
-                    # so the argv above stays valid inside the daemon.
-                    pass_fds=(in_r, out_w),
-                )
-                result_holder["returncode"] = r.returncode
-                result_holder["stderr"] = (r.stderr or b"").decode(
-                    "utf-8", errors="replace",
-                )[-4000:]
-            except Exception as e:  # noqa: BLE001
-                result_holder["error"] = f"{type(e).__name__}: {e}"
-
+        setup_fds: list[int] = []
+        launch_gate = None
+        worker_enabled = False
+        thread = None
         try:
+            # Two pipe pairs. os.pipe() fds are CLOEXEC/non-inheritable by
+            # default (PEP 446); pass_fds below clears CLOEXEC on the two
+            # daemon-side ends in the spawned child ONLY, so the parent's
+            # copies never leak into any other subprocess this process
+            # spawns.
+            in_r, in_w = os.pipe()      # rpc_in: parent writes → daemon reads
+            setup_fds.extend((in_r, in_w))
+            out_r, out_w = os.pipe()    # rpc_out: daemon writes → parent reads
+            setup_fds.extend((out_r, out_w))
+
+            readable = list(readable_paths or [])
+            readable.append(str(daemon))
+            from core.sandbox.python_paths import python_runtime_tool_paths
+            readable.extend(python_runtime_tool_paths())
+
+            result_holder: dict[str, Any] = {"error": None, "returncode": None}
+            launch_gate = threading.Event()
+
+            def _worker() -> None:
+                launch_gate.wait()
+                if not worker_enabled:
+                    return
+                try:
+                    r = sandbox_run(
+                        ["python3", "-S", str(daemon),
+                         "--rpc-in-fd", str(in_r),
+                         "--rpc-out-fd", str(out_w)],
+                        target=str(target_path),
+                        output=output_dir,
+                        block_network=True,
+                        restrict_reads=True,
+                        omit_proc_reads=_omit_proc,
+                        readable_paths=readable,
+                        writable_paths=writable_paths,
+                        etc_overlay=etc_overlay,
+                        env=env or None,
+                        env_caller_filtered=True,
+                        # Declared intent for the PATH-divergence gate: the
+                        # daemon is stdlib-only (-S, no site imports) and
+                        # runs under WHATEVER python3 the sandbox view
+                        # resolves — the caller's venv interpreter is
+                        # deliberately not required, so a venv-active
+                        # caller diverging from the child's system python3
+                        # is fine here.
+                        allow_path_divergence=True,
+                        capture_output=True,
+                        text=False,
+                        timeout=None,
+                        # Inherit exactly the daemon-side pipe ends across
+                        # the sandbox spawn. sandbox().run() audits each
+                        # entry (rejects sockets, allows pipes) and the
+                        # subprocess backend keeps the fd NUMBERS stable,
+                        # so the argv above stays valid inside the daemon.
+                        pass_fds=(in_r, out_w),
+                    )
+                    result_holder["returncode"] = r.returncode
+                    result_holder["stderr"] = (r.stderr or b"").decode(
+                        "utf-8", errors="replace",
+                    )[-4000:]
+                except Exception as e:  # noqa: BLE001
+                    result_holder["error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    # A failed or cancelled startup may never receive a
+                    # ping. Keep spawn fds valid until the backend exits,
+                    # then release them so readers observe daemon EOF.
+                    host._release_daemon_fds()
+                    if host._closed:
+                        host._cleanup_owned_output()
+
             thread = threading.Thread(
                 target=_worker, name="sandbox-host-daemon", daemon=True,
             )
-            thread.start()
-
             host = cls(
                 _thread=thread,
                 _write_fd=in_w,
@@ -312,19 +329,35 @@ class SandboxHost:
                 _lock=threading.Lock(),
                 _owned_output=owned_output,
             )
+            thread.start()
         except BaseException:
-            # host.close() owns the cleanup from here on; before the
-            # handle exists the mkdtemp must not leak.
+            # A thread whose start was interrupted must exit without
+            # using descriptors this failure path is about to release.
+            if launch_gate is not None:
+                launch_gate.set()
+            if thread is not None:
+                with contextlib.suppress(RuntimeError):
+                    thread.join(timeout=5.0)
+            # Before startup succeeds, this scope owns every pipe end
+            # and any private scratch directory it allocated.
+            for fd in setup_fds:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
             if owned_output:
                 shutil.rmtree(owned_output, ignore_errors=True)
             raise
         try:
+            worker_enabled = True
+            launch_gate.set()
             pong = host._rpc({"cmd": "ping"}, timeout=startup_timeout)
             if not pong.get("ok"):
                 msg = f"daemon ping failed: {pong}"
                 raise HostRPCError(msg)
-        except Exception as e:
+        except BaseException as e:
+            launch_gate.set()
             host.close()
+            if not isinstance(e, Exception):
+                raise
             if not thread.is_alive():
                 msg = (
                     f"daemon died during startup: "
@@ -344,20 +377,28 @@ class SandboxHost:
 
     def _release_daemon_fds(self) -> None:
         """Close the parent's copies of the daemon-side pipe ends."""
-        fds, self._daemon_fds = self._daemon_fds, None
+        with self._daemon_fds_lock:
+            fds, self._daemon_fds = self._daemon_fds, None
         for fd in fds or ():
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+    def _cleanup_owned_output(self) -> None:
+        """Remove private scratch once, after its backend has returned."""
+        with self._daemon_fds_lock:
+            output, self._owned_output = self._owned_output, None
+        if output:
+            shutil.rmtree(output, ignore_errors=True)
 
     def close(self) -> None:
         """Terminate the daemon and close the pipe fds."""
         if self._closed:
             return
         self._closed = True
-        # Release the daemon-side copies first: if the daemon is
-        # already dead, the close RPC below then fails fast with
-        # EPIPE instead of waiting out its timeout.
-        self._release_daemon_fds()
+        # Startup acknowledgement already released the daemon-side
+        # copies for a live session. Before acknowledgement, the worker
+        # retains them until its backend returns: releasing them here
+        # could invalidate pass_fds while a delayed spawn still uses it.
         # Channel failures and malformed replies must not interrupt
         # release of this handle's descriptors and worker ownership.
         with contextlib.suppress(HostRPCError, ValueError):
@@ -368,11 +409,10 @@ class SandboxHost:
         self._thread.join(timeout=5.0)
         if self._thread.is_alive():
             log.warning("sandbox_host worker thread did not exit within 5s")
-        if getattr(self, "_owned_output", None):
-            # Default-output scratch dir this host created; removed
-            # after the worker released the sandbox that bound it.
-            shutil.rmtree(self._owned_output, ignore_errors=True)  # type: ignore[arg-type]
-            self._owned_output = None
+        else:
+            self._cleanup_owned_output()
+        # A worker still running owns its scratch until its backend
+        # returns; its finally block performs deferred cleanup.
 
     # ------------------------------------------------------------------
     # RPC verbs
@@ -575,44 +615,45 @@ def one_shot_call(
     daemon = _resolve_daemon_script()
     target_path = Path(target).resolve()
     output_dir, owned_output = _resolve_output(target_path, output)
-    readable = list(readable_paths or [])
-    readable.append(str(daemon))
-    from core.sandbox.python_paths import python_runtime_tool_paths
-    readable.extend(python_runtime_tool_paths())
-
-    # Same request/response binding as SandboxHost._rpc: the daemon
-    # echoes the parent-minted ``rid`` and the reply is rejected on a
-    # mismatch (a target that reopened the daemon's stdout could
-    # otherwise substitute the verdict frame).
-    rid = os.urandom(16).hex()
-    body = json.dumps({"cmd": cmd, **payload, "rid": rid}).encode("utf-8")
-    frame = struct.pack("!I", len(body)) + body
-
     try:
-        r = sandbox_run(
-            ["python3", "-S", str(daemon), "--one-shot"],
-            target=str(target_path),
-            output=output_dir,
-            block_network=True,
-            restrict_reads=True,
-            omit_proc_reads=_omit_proc,
-            readable_paths=readable,
-            writable_paths=writable_paths,
-            etc_overlay=etc_overlay,
-            env=env or None,
-            env_caller_filtered=True,
-            # Same declared intent as the persistent-daemon spawn: the
-            # stdlib-only daemon runs under the sandbox view's python3;
-            # caller-venv divergence is fine here.
-            allow_path_divergence=True,
-            input=frame,
-            capture_output=True,
-            text=False,
-            timeout=timeout,
-        )
-    except Exception as e:
-        msg = f"one-shot daemon spawn failed: {type(e).__name__}: {e}"
-        raise HostRPCError(msg) from e
+        readable = list(readable_paths or [])
+        readable.append(str(daemon))
+        from core.sandbox.python_paths import python_runtime_tool_paths
+        readable.extend(python_runtime_tool_paths())
+
+        # Same request/response binding as SandboxHost._rpc: the daemon
+        # echoes the parent-minted ``rid`` and the reply is rejected on a
+        # mismatch (a target that reopened the daemon's stdout could
+        # otherwise substitute the verdict frame).
+        rid = os.urandom(16).hex()
+        body = json.dumps({"cmd": cmd, **payload, "rid": rid}).encode("utf-8")
+        frame = struct.pack("!I", len(body)) + body
+
+        try:
+            r = sandbox_run(
+                ["python3", "-S", str(daemon), "--one-shot"],
+                target=str(target_path),
+                output=output_dir,
+                block_network=True,
+                restrict_reads=True,
+                omit_proc_reads=_omit_proc,
+                readable_paths=readable,
+                writable_paths=writable_paths,
+                etc_overlay=etc_overlay,
+                env=env or None,
+                env_caller_filtered=True,
+                # Same declared intent as the persistent-daemon spawn: the
+                # stdlib-only daemon runs under the sandbox view's python3;
+                # caller-venv divergence is fine here.
+                allow_path_divergence=True,
+                input=frame,
+                capture_output=True,
+                text=False,
+                timeout=timeout,
+            )
+        except Exception as e:
+            msg = f"one-shot daemon spawn failed: {type(e).__name__}: {e}"
+            raise HostRPCError(msg) from e
     finally:
         if owned_output:
             shutil.rmtree(owned_output, ignore_errors=True)
