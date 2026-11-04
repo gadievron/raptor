@@ -137,7 +137,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -149,6 +148,7 @@ from core.binary.identity import (
     content_identity,
     identity_anchor,
 )
+from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.fs_lock import artifact_lock
 from core.hash import sha256_file, sha256_string
 from core.json import load_json, save_json
@@ -914,7 +914,7 @@ class _Builder:
         failed = ""
         summary: dict[str, Any] | None = None
         dest = _extract_root(self.output_dir, artifact_id)
-        shutil.rmtree(dest, ignore_errors=True)
+        keep_extraction = False
         from core.archive.errors import (
             ArchiveError,
             DecompressionLimitExceeded,
@@ -922,17 +922,26 @@ class _Builder:
         )
         from core.archive.extract import extract_to_dir
         try:
+            if not rmtree_hardened(dest):
+                raise OSError("cannot clear previous archive extraction")
             summary = extract_to_dir(
                 path, dest,
                 max_total_bytes=self.caps.max_archive_total_bytes,
                 max_files=self.caps.max_archive_children,
                 max_member_bytes=self.caps.max_archive_member_bytes,
             )
+            keep_extraction = True
         except DecompressionLimitExceeded as exc:
+            # A capped ledger expansion deliberately keeps completed children
+            # and records an explicit remainder; other failures own no tree.
+            keep_extraction = True
             truncated = True
             cap_kind = getattr(exc, "cap", "") or ""
-        except (UnsupportedArchive, ArchiveError) as exc:
+        except (UnsupportedArchive, ArchiveError, OSError) as exc:
             failed = str(exc)
+        finally:
+            if not keep_extraction and not rmtree_hardened(dest):
+                logger.warning("ledger: incomplete archive cleanup at %r", dest)
         row["expanded"] = not failed
         if failed:
             row["caps_hit"] = ["archive_extract_failed"]

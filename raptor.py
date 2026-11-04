@@ -382,57 +382,62 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
     the cache dir and the manifest archive-identity block — or ``None`` if
     extraction failed (caller should fail the run rather than scan the archive).
     """
-    import shutil
-    import tempfile
+    import errno
 
     from core.archive import extract_to_dir
+    from core.archive.cache import is_cached_extraction
+    from core.atomic_fs.fs_lock import artifact_lock
     from core.run.provenance import archive_snapshot
+    from core.run.scratch import scratch_dir
 
-    snap = archive_snapshot(target)
-    if snap is None:
-        return None
-    sha = snap["archive_sha256"]
-    sources_root = out_dir.parent / "_sources"
-    sources_root.mkdir(parents=True, exist_ok=True)
-    # <name>-<sha> so the dir is self-describing ("what is this?") while the sha
-    # keeps it unique/collision-free.
-    cache_name = _safe_cache_name(snap["archive_name"], sha)
-    canonical = sources_root / cache_name
+    def source_identity():
+        info = Path(target).stat()
+        return (info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
 
-    if canonical.exists():
-        print(f"[*] Reusing extracted {snap['format']} archive (cache hit {sha[:12]})")
-    else:
-        # Extract to a unique temp sibling, then atomically promote to <sha>/.
-        # Presence of <sha>/ therefore means a COMPLETE extraction, and a
-        # concurrent run racing us just loses the os.replace harmlessly.
-        # Hand-rolled (not scratch_dir, not reaper-listed): publish-by-
-        # rename ownership under the run output's _sources cache, not
-        # the system tmp — the tmp reaper only sweeps the system tmp
-        # root, so a SIGKILL residue here is operator-visible in the
-        # cache instead.
-        tmp = Path(tempfile.mkdtemp(dir=sources_root, prefix=".extract-"))
-        try:
-            stats = extract_to_dir(target, tmp)
-        except Exception as e:  # noqa: BLE001
-            # Broad on purpose: extraction runs on attacker-controlled input,
-            # so ANY failure (ArchiveError, an unforeseen OSError/ValueError, or
-            # a MemoryError from an oversized archive) must fail the run
-            # gracefully — never crash raptor with a traceback.
-            shutil.rmtree(tmp, ignore_errors=True)
-            print(f"✗ archive extraction failed for {target}: {e}", file=sys.stderr)
+    try:
+        original = source_identity()
+        snap = archive_snapshot(target)
+        if snap is None:
             return None
-        try:
-            os.replace(tmp, canonical)
-        except OSError:
-            shutil.rmtree(tmp, ignore_errors=True)  # lost the race; canonical is there
-        # Hostile/unsafe members (zip-slip paths, links, specials the
-        # safety filter rejected) must not vanish silently — the
-        # operator is scanning a semi-trusted input and a nonzero drop
-        # count is signal about it.
-        dropped = stats.get("dropped", 0)
-        drop_note = f" ({dropped} unsafe members dropped)" if dropped else ""
-        print(f"[*] Unpacked {stats['format']} archive: {stats['files']} "
-              f"files{drop_note} (cache {sha[:12]})")
+        sha = snap["archive_sha256"]
+        sources_root = out_dir.parent / "_sources"
+        sources_root.mkdir(parents=True, exist_ok=True)
+        cache_name = _safe_cache_name(snap["archive_name"], sha)
+        canonical = sources_root / cache_name
+        # One shared lock bounds sidecar count and prevents duplicate expanded
+        # trees when concurrent runs acquire the same archive.
+        with artifact_lock(sources_root / ".archive-cache", required=True,
+                           subject="archive source cache"):
+            if is_cached_extraction(canonical):
+                if source_identity() != original:
+                    raise ValueError("archive changed while resolving its cache")
+                print(f"[*] Reusing extracted {snap['format']} archive (cache hit {sha[:12]})")
+            else:
+                if os.path.lexists(canonical):
+                    raise ValueError("archive cache slot is not a real directory")
+                # A complete extraction alone is promoted. The scratch context
+                # also removes restricted partial output on cancellation.
+                with scratch_dir(".extract-", dir=sources_root) as tmp:
+                    stats = extract_to_dir(target, tmp)
+                    if source_identity() != original:
+                        raise ValueError("archive changed during extraction")
+                    try:
+                        os.replace(tmp, canonical)
+                    except OSError as exc:
+                        # Compatibility with a publisher predating the writer
+                        # lock: only a real collision with a published tree is
+                        # a successful race. Disk/permission errors must fail.
+                        if (exc.errno not in (errno.EEXIST, errno.ENOTEMPTY)
+                                or not is_cached_extraction(canonical)):
+                            raise
+                dropped = stats.get("dropped", 0)
+                drop_note = f" ({dropped} unsafe members dropped)" if dropped else ""
+                print(f"[*] Unpacked {stats['format']} archive: {stats['files']} "
+                      f"files{drop_note} (cache {sha[:12]})")
+    except Exception as exc:  # noqa: BLE001 — refuse failed acquisition
+        print(f"✗ archive extraction failed for {target}: {exc}", file=sys.stderr)
+        return None
 
     # Acquisition stamp only — {source, archive_sha256, archive_name, format}.
     # The extracted tree's content-equivalence id is the coverage store's to

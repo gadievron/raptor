@@ -9,6 +9,7 @@ are ever created — no symlinks or device nodes — so symlink-escape attacks a
 impossible by construction.
 """
 
+import errno
 import logging
 import tarfile
 from pathlib import Path
@@ -35,6 +36,14 @@ from .detect import detect_format
 from .errors import ArchiveError, DecompressionLimitExceeded, UnsupportedArchive
 
 logger = logging.getLogger(__name__)
+
+# Invalid member names and conflicting archive paths can be skipped. Resource
+# and filesystem failures (ENOSPC/EDQUOT/EIO/EACCES, etc.) must abort so callers
+# never publish truncated output as a complete, reusable source cache.
+_MEMBER_PATH_ERRORS = frozenset({
+    errno.EINVAL, errno.ENAMETOOLONG, errno.EILSEQ,
+    errno.EEXIST, errno.ENOTDIR, errno.EISDIR,
+})
 
 DEFAULT_MAX_TOTAL_BYTES = 2 << 30  # 2 GiB summed across all extracted members
 DEFAULT_MAX_FILES = DEFAULT_MAX_ENTRIES
@@ -94,6 +103,22 @@ def _count_reason(reasons: dict[str, int], reason: str, n: int = 1) -> None:
     reasons[reason] = reasons.get(reason, 0) + n
 
 
+def _write_member_bytes(target: Path, data: bytes) -> bool:
+    """Skip invalid paths, but propagate every write/close failure."""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(target, "wb")
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, OSError) and exc.errno not in _MEMBER_PATH_ERRORS:
+            raise
+        logger.warning("core.archive: skipping unwritable member %r (%s)",
+                       target, exc)
+        return False
+    with stream:
+        stream.write(data)
+    return True
+
+
 def _write_members(members: dict[str, bytes], dest: Path,
                    max_total: int, max_files: int) -> dict[str, Any]:
     if len(members) > max_files:
@@ -112,15 +137,7 @@ def _write_members(members: dict[str, bytes], dest: Path,
             logger.warning("core.archive: dropping out-of-tree member %r", name)
             _count_reason(reasons, "out_of_tree")
             continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as fh:
-                fh.write(data)
-        except (OSError, ValueError) as e:
-            # Never let one pathological member (an OS-unwritable name that
-            # slipped the safety gate, a disk error) crash extraction of
-            # attacker-controlled input — skip it and carry on.
-            logger.warning("core.archive: skipping unwritable member %r (%s)", name, e)
+        if not _write_member_bytes(target, data):
             _count_reason(reasons, "unwritable")
             continue
         written += 1
@@ -160,15 +177,7 @@ class _DiskSink:
             logger.warning("core.archive: dropping out-of-tree member %r", name)
             _count_reason(self.dropped_reasons, "out_of_tree")
             return
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as fh:
-                fh.write(data)
-        except (OSError, ValueError) as e:
-            # Same tolerance as _write_members: one pathological member
-            # must not crash extraction of attacker-controlled input.
-            logger.warning(
-                "core.archive: skipping unwritable member %r (%s)", name, e)
+        if not _write_member_bytes(target, data):
             _count_reason(self.dropped_reasons, "unwritable")
             return
         self.written += 1
@@ -216,7 +225,8 @@ def extract_to_dir(path, dest, *,
     ``DecompressionLimitExceeded`` / ``ArchiveError`` on unsafe or corrupt
     input — a corrupt or truncated tar OR zip REFUSES instead of returning
     an empty "success" summary that downstream consumers would treat as a
-    complete extraction.
+    complete extraction. Filesystem resource and write/close failures propagate
+    as OSError; only invalid member names/path conflicts are dropped.
     """
     src = Path(path)
     dest = Path(dest)

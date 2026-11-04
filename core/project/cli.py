@@ -246,7 +246,7 @@ def _detect_archive_target_type(archive: Path):
     best-effort posture as :func:`_detect_target_type` — any failure
     collapses to None and create proceeds without a tuning block.
     """
-    import shutil
+    from core.atomic_fs import rmtree_hardened
     try:
         from packages.describe.cli import resolve_archive_target
         resolved = resolve_archive_target(archive, sys.stderr)
@@ -266,7 +266,7 @@ def _detect_archive_target_type(archive: Path):
             return load(tree)
         finally:
             if tmp_root is not None:
-                shutil.rmtree(tmp_root, ignore_errors=True)
+                rmtree_hardened(tmp_root)
     except Exception:  # noqa: BLE001
         return None
 
