@@ -36,6 +36,7 @@ def _runtime_unavailable_reason(compiler: str) -> str | None:
         env = RaptorConfig.get_safe_env()
         env["TMPDIR"] = str(root)
         env["ASAN_OPTIONS"] = "detect_leaks=0:symbolize=0:abort_on_error=0"
+        stage = "compile"
         try:
             built = subprocess.run(
                 [compiler, "-fsanitize=address", "-x", "c++", "-", "-o", str(binary)],
@@ -44,9 +45,12 @@ def _runtime_unavailable_reason(compiler: str) -> str | None:
             )
             if built.returncode:
                 return f"clean ASAN probe did not compile (exit {built.returncode})"
+            stage = "startup"
             ran = subprocess.run([str(binary)], timeout=5, env=env, cwd=os.sep,
                                  capture_output=True, text=True)
         except subprocess.TimeoutExpired:
+            if stage == "compile":
+                return "clean ASAN probe compilation timed out"
             return "clean ASAN probe timed out before successful completion"
         except OSError as exc:
             return f"clean ASAN probe unavailable ({type(exc).__name__})"
@@ -68,4 +72,11 @@ def require_asan_runtime() -> None:
         pytest.skip("ASAN runtime prerequisite: no C++ compiler")
     reason = _runtime_unavailable_reason(compiler)
     if reason is not None:
-        pytest.skip("ASAN runtime prerequisite: " + reason)
+        from core.build.toolchain import macos_sanitizer_timeout_hint
+
+        message = f"ASAN runtime prerequisite: {reason} (compiler: {compiler})"
+        if reason.startswith(("clean ASAN probe timed out", "clean ASAN probe did not complete normally")):
+            hint = macos_sanitizer_timeout_hint(["address"])
+            if hint:
+                message += ". " + hint
+        pytest.skip(message)

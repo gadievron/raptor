@@ -334,3 +334,24 @@ def has_libasan() -> bool:
         return result.returncode == 0
     except Exception:  # noqa: BLE001
         return False
+
+
+def macos_sanitizer_timeout_hint(sanitizers: list[str] | None) -> str | None:
+    """Advice for a possible startup hang, never an execution diagnosis.
+
+    Do not probe or change toolchains here: the timed-out program may have
+    looped after startup, and its outcome must stay unknown.
+    """
+    import sys
+
+    if sys.platform != "darwin" or not ({"address", "thread"} & set(sanitizers or ())):
+        return None
+    return (
+        "An older selected Xcode sanitizer runtime can hang before main() on macOS. "
+        "Check xcode-select -p and xcrun clang++ --version; use a fixed toolchain "
+        "(Apple documents Xcode 26.4 or later). Newer Command Line Tools can be "
+        "installed while an older Xcode remains selected. RAPTOR sanitizes "
+        "DEVELOPER_DIR, so setting that variable alone may not select the new tools. "
+        "See docs/developers.md#addresssanitizer-on-macos. "
+        "This is a possible cause, not proof of a runtime failure."
+    )
