@@ -351,6 +351,8 @@ def _parse_kext_message(
     because name and path are both attacker-influenced and there is
     no way to tell which arm anchored on the real PID field.
     """
+    if not isinstance(msg, str):
+        return None
     lazy_m = _LOG_LINE_RE.search(msg)
     if not lazy_m:
         return None
@@ -362,6 +364,17 @@ def _parse_kext_message(
     if greedy_groups == lazy_groups:
         return lazy_groups, None
     return lazy_groups, greedy_groups
+
+
+
+def _decode_log_entry(line: str) -> dict | None:
+    """Decode one log line without letting malformed input end capture."""
+    try:
+        entry = json.loads(line)
+    except (ValueError, RecursionError):
+        # ValueError includes JSONDecodeError and oversized integers.
+        return None
+    return entry if isinstance(entry, dict) else None
 
 
 def parse_log_entry(entry: dict, *,
@@ -386,6 +399,8 @@ def parse_log_entry(entry: dict, *,
     state, never from the JSONL itself, so the target cannot
     forge a record that survives parser validation.
     """
+    if not isinstance(entry, dict):
+        return None
     if entry.get("senderImagePath") != SANDBOX_KEXT_SENDER:
         return None
     msg = entry.get("eventMessage", "")
@@ -393,6 +408,13 @@ def parse_log_entry(entry: dict, *,
     if parsed is None:
         return None
     (process_name, pid, verdict, action, path), greedy = parsed
+    try:
+        target_pid = int(pid)
+        alternate_pid = int(greedy[1]) if greedy is not None else None
+    except ValueError:
+        # Python limits decimal integer conversions. A malformed PID
+        # must not terminate the reader and discard all later events.
+        return None
     record = {
         "ts": entry.get("timestamp") or _now_iso(),
         "cmd": f"<sandbox audit: {action} {path}>",
@@ -401,7 +423,7 @@ def parse_log_entry(entry: dict, *,
         "verdict": verdict,           # allow | deny — present here, absent in Linux records
         "syscall": action,            # field name matches Linux for compatibility
         "path": path,
-        "target_pid": int(pid),
+        "target_pid": target_pid,
         "process_name": process_name,
     }
     if greedy is not None:
@@ -418,7 +440,7 @@ def parse_log_entry(entry: dict, *,
         record["parse_ambiguous"] = True
         record["alt_parse"] = {
             "process_name": g_name,
-            "target_pid": int(g_pid),
+            "target_pid": alternate_pid,
             "verdict": g_verdict,
             "syscall": g_action,
             "path": g_path,
@@ -1056,9 +1078,8 @@ class LogStreamer:
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
+                entry = _decode_log_entry(line)
+                if entry is None:
                     continue
                 msg = entry.get("eventMessage", "")
                 parsed = _parse_kext_message(msg)
@@ -1170,9 +1191,8 @@ class LogStreamer:
                 line = raw_line.strip()
                 if not line:
                     continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
+                entry = _decode_log_entry(line)
+                if entry is None:
                     continue
                 if entry.get("senderImagePath") == SANDBOX_KEXT_SENDER:
                     self._kext_lines_seen += 1
