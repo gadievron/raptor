@@ -121,6 +121,20 @@ MACOS_BASE_MACH_SERVICES = (
     "com.apple.dyld.closured",
 )
 
+# Host brokers can exercise authority outside this sandbox. Debugging or
+# browser compatibility must not grant process-launch, credential, preference
+# or host-monitoring channels. Keep this floor even in observe/audit mode.
+MACOS_BLOCKED_BROKER_SERVICES = (
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.SecurityServer",
+    "com.apple.securityd.xpc",
+    "com.apple.cfprefsd.daemon",
+    "com.apple.cfprefsd.agent",
+    "com.apple.FSEvents",
+    "com.apple.system.notification_center",
+)
+
 # The strict profile's mach allowlist is the SAME base list: strict is
 # the fail-closed profile and must never be weaker than full. (An
 # earlier revision kept a wider "headroom" list here that retained
@@ -152,22 +166,12 @@ def _mach_lookup_restricted(
     audit_mode: bool = False,
     profile_name: str | None = None,
 ) -> bool:
-    """True when build_profile() kwargs would emit a mach-lookup deny.
+    """Every generated Seatbelt policy includes the broker-denial floor.
 
-    Mirrors the two code paths in build_profile() that emit
-    ``(deny mach-lookup ...)``: the hardened-introspection baseline
-    and the strict-legacy fallback.
+    The kwargs remain for callers shared with the broader profile hardening
+    logic. Explicit --sandbox none does not invoke the Seatbelt backend.
     """
-    if audit_mode:
-        return False
-    if seccomp_profile in _SECCOMP_PROFILES_HARDEN_INTROSPECTION:
-        return True
-    if (profile_name == "strict"
-            and seccomp_profile not in (None, "none")
-            and seccomp_profile not in
-            _SECCOMP_PROFILES_HARDEN_INTROSPECTION):
-        return True
-    return False
+    return True
 
 
 def file_trust_anchor_env(
@@ -1153,5 +1157,20 @@ def build_profile(*,
         # untouched (listening is unrestricted by design).
         parts.append("(deny network-outbound (remote tcp \"*:*\"))")
         parts.extend(f"(allow network-outbound (remote tcp \"*:{int(port)}\"))" for port in allowed_tcp_ports)
+
+    # A filesystem/network sandbox is bypassable through privileged host
+    # brokers even when debugger primitives legitimately remain available.
+    # Append these hard denials AFTER audit's observe-only allows: auditing
+    # must not temporarily grant a broker escape, just as Linux audit keeps
+    # keyring/bpf/ptrace escape primitives blocked.
+    broker_names = " ".join(
+        f"(global-name {_quote_sbpl(name)})"
+        for name in MACOS_BLOCKED_BROKER_SERVICES
+    )
+    for operation in ("mach-lookup", "mach-register"):
+        parts.append(f"(deny {operation} (require-any {broker_names}))")
+    parts.append("(deny appleevent-send)")
+    parts.append("(deny user-preference-write)")
+    parts.append("(deny darwin-notification-post)")
 
     return "\n".join(parts) + "\n"
