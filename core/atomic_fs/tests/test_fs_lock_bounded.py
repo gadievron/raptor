@@ -54,10 +54,12 @@ def _spawn_holder(
         [sys.executable, str(script), str(lock_path), str(hold_s)],
         stdout=subprocess.PIPE, text=True,
     )
-    assert proc.stdout is not None
-    line = proc.stdout.readline().strip()
-    assert line == "held", f"holder failed to take the lock: {line!r}"
-    return proc
+    from core.testing.processes import cleanup_on_startup_error
+    with cleanup_on_startup_error(proc):
+        assert proc.stdout is not None
+        line = proc.stdout.readline().strip()
+        assert line == "held", f"holder failed to take the lock: {line!r}"
+        return proc
 
 
 def _flock_is_free(lock_path: Path) -> bool:

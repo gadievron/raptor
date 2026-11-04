@@ -793,9 +793,11 @@ class TestSessionEndLivenessProof(unittest.TestCase):
              "import time; print('ready', flush=True); time.sleep(300)"],
             stdout=subprocess.PIPE, text=True,
         )
-        assert proc.stdout is not None
-        proc.stdout.readline()
-        return proc
+        from core.testing.processes import cleanup_on_startup_error
+        with cleanup_on_startup_error(proc):
+            assert proc.stdout is not None
+            assert proc.stdout.readline().strip() == "ready"
+            return proc
 
     @staticmethod
     def _reap_stub(proc: subprocess.Popen) -> None:

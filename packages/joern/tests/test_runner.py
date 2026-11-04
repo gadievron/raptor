@@ -1499,13 +1499,15 @@ class TestStallKillAddressesTheGroup:
             stdout=sp.PIPE, text=True,
             start_new_session=True,  # as the build Popen now spawns
         )
-        assert proc.stdout is not None
-        grandchild = int(proc.stdout.readline())
-        # (pid, starttime) names this process INCARNATION. The anchor
-        # read cannot race the kill: the grandchild's 300s sleep pins
-        # it alive here, before the monitor exists. None only without
-        # procfs, where the identity check below degrades away.
-        return proc, grandchild, _proc_starttime(grandchild)
+        from core.testing.processes import cleanup_on_startup_error
+        with cleanup_on_startup_error(proc, process_group=True):
+            assert proc.stdout is not None
+            grandchild = int(proc.stdout.readline())
+            # (pid, starttime) names this process INCARNATION. The anchor
+            # read cannot race the kill: the grandchild's 300s sleep pins
+            # it alive here, before the monitor exists. None only without
+            # procfs, where the identity check below degrades away.
+            return proc, grandchild, _proc_starttime(grandchild)
 
     @staticmethod
     def _gone(pid: int, starttime: int | None) -> bool:

@@ -6,7 +6,7 @@ import signal
 
 
 @contextmanager
-def reap_on_exit(process, *, process_group=False):
+def reap_on_exit(process, *, process_group=False, wait_timeout=5):
     """Reap a child and close its streams on every exit path.
 
     process_group requires a private group created with start_new_session=True.
@@ -24,9 +24,20 @@ def reap_on_exit(process, *, process_group=False):
                     pass
             elif not process_group and process.poll() is None:
                 process.kill()
-            process.wait(timeout=5)
+            process.wait(timeout=wait_timeout)
         finally:
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     with suppress(OSError):
                         stream.close()
+
+
+@contextmanager
+def cleanup_on_startup_error(process, *, process_group=False):
+    """Own startup failures; transfer a ready child to the caller on success."""
+    try:
+        yield process
+    except BaseException:
+        with reap_on_exit(process, process_group=process_group):
+            pass
+        raise
