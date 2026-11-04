@@ -30,7 +30,7 @@ def inputs(tmp_path):
     native = {"schema": {"version": "16.1.11"}, "source": {"type": "image", "name": "example/image", "version": sha(manifest), "metadata": {"manifestDigest": sha(manifest), "imageID": sha(config),
               "manifest": base64.b64encode(manifest).decode(), "config": base64.b64encode(config).decode()}},
               "descriptor": {"configuration": {"search": {"scope": "squashed"}}},
-              "artifacts": [{"id": "package", "name": "example", "version": "1", "type": "npm", "licenses": [{"value": "MIT"}]}]}
+              "files": [{"location": {"path": "/usr/bin/known"}}], "artifacts": [{"id": "package", "name": "example", "version": "1", "type": "npm", "licenses": [{"value": "MIT"}]}]}
     raw = json.dumps(native).encode()
     provenance = {"inputs": [{"sha256": hashlib.sha256(raw).hexdigest()}], "packages": [{"id": "package", "name": "example", "gaps": []}],
                   "notice_evidence": {"subject": subject(native)[0], "packages": [{"id": "package", "status": "notice_candidate_captured", "files": [{"path": "/LICENSE", "catalogue_layer_diff_id": "layer", "sha256": "c" * 64, "content_kind": "notice_candidate"}], "gaps": []}]}}
@@ -138,3 +138,75 @@ def test_inventory_budget_refusal_is_reported_as_unknown(tmp_path, monkeypatch):
     report = tool.collect(tmp_path, digest)
     assert report.status == "unavailable" and report.metrics is None
     assert tool.annotations(report)[0].startswith("::warning")
+
+
+def test_uncatalogued_executables_warn_without_inventing_package_license_gaps(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    native["files"] = [{"location": {"path": "/usr/local/bin/uv", "layerID": "layer"},
+                        "unknowns": ["unknowns-labeler: no package identified in executable file"]},
+                       {"location": {"path": "/usr/bin/known"}}]
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.status == "complete_for_catalogued_packages"
+    assert report.metrics.unidentified_executables == 1
+    assert report.metrics.notice_gap_packages == 0
+    assert report.inventory_candidates[0]["path"] == "/usr/local/bin/uv"
+    assert "::warning" in tool.annotations(report)[0]
+    assert "/usr/local/bin/uv" in tool.markdown(report)
+
+
+def test_missing_executable_inventory_is_unknown(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    del native["files"]
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.unidentified_executables is None
+    assert report.inventory_errors
+    assert "unknown" in tool.markdown(report)
+    assert "::warning" in tool.annotations(report)[0]
+
+
+@pytest.mark.parametrize("status,retain_text", [("unavailable", False), ("release_notice_candidates_captured", True),
+                                               ("release_notice_candidates_captured", False)])
+def test_native_collection_receipts_require_captured_text(tmp_path, status, retain_text):
+    _, provenance, digest = inputs(tmp_path)
+    text = b"upstream release notice"
+    text_sha = hashlib.sha256(text).hexdigest()
+    receipt = {"name": "uv", "version": "0.7.22", "status": status,
+               "files": ([{"file": "LICENSE.txt", "sha256": text_sha}] if status != "unavailable" else [])}
+    raw = json.dumps(receipt).encode()
+    receipt_sha = hashlib.sha256(raw).hexdigest()
+    directory = tmp_path / "prepared/notices/sha256"
+    directory.mkdir(parents=True)
+    (directory / receipt_sha).write_bytes(raw)
+    prefix = "/usr/share/doc/raptor-native-notices/uv/"
+    evidence = [{"path": prefix + "NOTICE-PROVENANCE.json", "sha256": receipt_sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"}]
+    if retain_text:
+        (directory / text_sha).write_bytes(text)
+        evidence.append({"path": prefix + "LICENSE.txt", "sha256": text_sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"})
+    provenance["notice_evidence"]["unassociated_files"] = evidence
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    if status == "release_notice_candidates_captured" and not retain_text:
+        assert report.inventory_errors and not report.native_notice_collections
+    else:
+        assert report.native_notice_collections == [receipt]
+        assert bool(tool.annotations(report)) == (status == "unavailable")
+
+
+def test_empty_file_inventory_does_not_report_zero_unidentified_executables(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    native["files"] = []
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.unidentified_executables is None
+    assert report.inventory_errors and tool.annotations(report)

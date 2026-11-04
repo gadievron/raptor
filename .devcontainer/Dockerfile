@@ -211,6 +211,10 @@ RUN python3 /usr/local/libexec/use-system-node.py
 COPY .devcontainer/prune-windows-helpers.py /usr/local/libexec/prune-windows-helpers.py
 RUN python3 /usr/local/libexec/prune-windows-helpers.py
 
+# Retain version-matched release notices for tools outside package metadata.
+COPY .devcontainer/collect-native-notices.py /usr/local/libexec/collect-native-notices.py
+RUN python3 /usr/local/libexec/collect-native-notices.py
+
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
 # ============================================================================

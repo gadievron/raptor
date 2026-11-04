@@ -30,6 +30,7 @@ class Metrics:
     captured_notice_files: int
     source_gap_packages: int
     source_assessed_packages: int = 0
+    unidentified_executables: int | None = None
 
 
 @dataclass
@@ -50,6 +51,9 @@ class Report:
     metrics: Metrics | None = None
     issues: list[Issue] = field(default_factory=list)
     source_gaps: list[dict] = field(default_factory=list)
+    inventory_candidates: list[dict] = field(default_factory=list)
+    inventory_errors: list[str] = field(default_factory=list)
+    native_notice_collections: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=lambda: list(LIMITATIONS))
 
@@ -88,6 +92,7 @@ def _records(rows, identifiers, *, complete=True):
 
 def collect(audit, image_digest):
     """Accept only complete evidence bound to the exact inventory and image."""
+    from core.security.capped_read import read_capped
     from core.oci.evidence import subject
     from core.oci.license_declarations import catalogue_declaration_missing
     report = Report(image_digest)
@@ -132,12 +137,70 @@ def collect(audit, image_digest):
         report.source_gaps = [sources[key] for key in sorted(sources) if sources[key]["gaps"]]
         report.metrics = Metrics(len(artifacts), sum(item.missing_declaration for item in report.issues),
                                  sum(bool(item.notice_gaps) for item in report.issues), len(files), len(report.source_gaps), len(sources))
+        evidence_files = list(notices.get("unassociated_files", []))
+        for record in records.values():
+            evidence_files.extend(record["files"])
+        seen_receipts = set()
+        for evidence in evidence_files:
+            path = evidence["path"]
+            if (not path.startswith("/usr/share/doc/raptor-native-notices/")
+                    or not path.endswith("/NOTICE-PROVENANCE.json") or path in seen_receipts):
+                continue
+            seen_receipts.add(path)
+            try:
+                digest = evidence["sha256"]
+                if not re.fullmatch(r"[a-f0-9]{64}", digest):
+                    raise ValueError("invalid native notice receipt digest")
+                receipt, actual = _document(audit / "prepared/notices/sha256" / digest)
+                if actual != digest:
+                    raise ValueError("native notice receipt hash mismatch")
+                if receipt.get("status") not in {"unavailable", "release_notice_candidates_captured"}:
+                    raise ValueError("invalid native notice collection status")
+                if receipt["status"] == "release_notice_candidates_captured":
+                    if not receipt.get("files"):
+                        raise ValueError("native notice collection has no files")
+                    captured = {(item["path"], item["sha256"]) for item in evidence_files}
+                    parent = path.rsplit("/", 1)[0]
+                    if any((parent + "/" + item["file"], item["sha256"]) not in captured
+                           for item in receipt["files"]):
+                        raise ValueError("native release notice file missing from capture")
+                    for item in receipt["files"]:
+                        sha = item["sha256"]
+                        if not re.fullmatch(r"[a-f0-9]{64}", sha):
+                            raise ValueError("invalid native release notice digest")
+                        text = read_capped(audit / "prepared/notices/sha256" / sha,
+                                           512 * 1024, raise_on_refusal=True)
+                        if hashlib.sha256(text).hexdigest() != sha:
+                            raise ValueError("native release notice hash mismatch")
+                report.native_notice_collections.append(receipt)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                report.inventory_errors.append("Native notice receipt unavailable: " + str(exc))
+        indexed_files = native.get("files")
+        if not isinstance(indexed_files, list) or not indexed_files:
+            report.inventory_errors.append("Executable inventory unavailable; completeness is unknown.")
+        else:
+            candidates = {}
+            for entry in indexed_files:
+                if not isinstance(entry, dict) or not isinstance(entry.get("unknowns", []), list):
+                    raise ValueError("invalid executable inventory entry")
+                if any(isinstance(reason, str) and "no package identified" in reason
+                       for reason in entry.get("unknowns", [])):
+                    path = entry["location"]["path"]
+                    if not isinstance(path, str) or not path.startswith("/"):
+                        raise ValueError("invalid executable inventory path")
+                    candidates[path] = {"path": path, "layer_id": entry["location"].get("layerID"),
+                                        "reasons": entry["unknowns"]}
+            report.inventory_candidates = [candidates[path] for path in sorted(candidates)]
+            report.metrics.unidentified_executables = len(candidates)
         report.status = "gaps" if report.issues else "complete_for_catalogued_packages"
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
         # Partial results must never look like a clean or complete audit.
         report.metrics = None
         report.issues = []
         report.source_gaps = []
+        report.inventory_candidates = []
+        report.inventory_errors = []
+        report.native_notice_collections = []
         report.errors = [str(exc)]
     return report
 
@@ -158,13 +221,27 @@ def markdown(report):
                   f"| Packages with notice evidence gaps | {metrics.notice_gap_packages} |",
                   f"| Retained notice/text files | {metrics.captured_notice_files} |",
                   f"| Source/build packages explicitly assessed | {metrics.source_assessed_packages} |",
-                  f"| Recorded source/build warnings | {metrics.source_gap_packages} |", ""]
+                  f"| Recorded source/build warnings | {metrics.source_gap_packages} |",
+                  f"| Executables without scanner package identification | {metrics.unidentified_executables if metrics.unidentified_executables is not None else 'unknown'} |", ""]
         if report.issues:
             lines += ["| Package | Missing evidence |", "| --- | --- |"]
             for issue in report.issues:
                 details = (["license declaration"] if issue.missing_declaration else []) + issue.notice_gaps
                 lines.append(f"| {_cell(issue.name)}@{_cell(issue.version)} | {_cell('; '.join(details))} |")
             lines.append("")
+    if report.native_notice_collections:
+        lines += ["### Native tool release notices", "", "| Tool | Version | Collection |", "| --- | --- | --- |"]
+        for receipt in report.native_notice_collections:
+            lines.append("| " + _cell(receipt.get("name", "unknown")) + " | " +
+                         _cell(receipt.get("version", "unknown")) + " | " + _cell(receipt["status"]) + " |")
+        lines += ["", "Release texts do not establish bundled dependency completeness or exact build-source correspondence.", ""]
+    if report.inventory_candidates:
+        lines += ["### Executable inventory candidates", "",
+                  "These files need ownership checks; they are not necessarily separate packages or missing licenses.", "",
+                  "| Path |", "| --- |"]
+        lines.extend("| " + _cell(row["path"]) + " |" for row in report.inventory_candidates[:20])
+        lines += ["", "The JSON report contains the complete candidate list.", ""]
+    lines.extend("- " + _cell(error) for error in report.inventory_errors)
     lines += ["Download the **container-sbom** artifact for `license-report.json`, this report, paired SBOMs,",
               "provenance, original inventories, and the collected license and notice files.", ""]
     lines.extend("- " + text for text in report.limitations)
@@ -178,10 +255,22 @@ def _command(value):
 def annotations(report):
     if report.metrics is None:
         return ["::warning title=Container license audit unavailable::" + _command("; ".join(report.errors))]
+    inventory = []
+    if report.inventory_candidates:
+        inventory.append("::warning title=Container executable inventory::" +
+                         str(len(report.inventory_candidates)) +
+                         " executable file(s) lack scanner package identification; ownership and bundled notices need checking. See container-sbom/license-report.json.")
+    failed_collections = sum(row["status"] == "unavailable" for row in report.native_notice_collections)
+    if failed_collections:
+        inventory.append("::warning title=Native tool release notices::" + str(failed_collections) +
+                         " native tool notice collection(s) unavailable. See the report and retained provenance.")
+    inventory.extend("::warning title=Container executable inventory::" + _command(error)
+                     for error in report.inventory_errors)
     if not report.issues:
-        return []
+        return inventory[:10]
     messages = [f"::warning title=Container license evidence::{len(report.issues)} package(s) have evidence gaps. See the job summary and container-sbom artifact."]
-    for issue in report.issues[:9]:
+    messages = inventory + messages
+    for issue in report.issues[:max(0, 10 - len(messages))]:
         gaps = (["missing license declaration"] if issue.missing_declaration else []) + issue.notice_gaps
         message = f"{issue.name}@{issue.version}: " + "; ".join(gaps)
         messages.append("::warning title=Container license evidence::" + _command(message[:1500]))
