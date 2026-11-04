@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.processes import reap_on_exit
+
 # core/sandbox/tests/test_coordinator_isolation.py
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
@@ -201,22 +203,23 @@ def _run_probe_via_coordinator(probe_code: str, *, timeout_s: float = 5.0):
     p = subprocess.Popen(
         [sys.executable, str(COORDINATOR)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env,
+        stderr=subprocess.PIPE, env=env, start_new_session=True,
     )
-    out, _err = p.communicate(
-        json.dumps(request).encode(), timeout=timeout_s + 10.0,
-    )
-    resp = json.loads(out.decode())
-    if resp.get("error"):
-        pytest.fail(
-            f"coordinator error: {resp['error']}; stderr={_err.decode()[:200]}"
+    with reap_on_exit(p, process_group=True):
+        out, _err = p.communicate(
+            json.dumps(request).encode(), timeout=timeout_s + 10.0,
         )
-    t = resp["target"]
-    return (
-        t.get("returncode"),
-        base64.b64decode(t["stdout_b64"]).decode("utf-8", "replace"),
-        base64.b64decode(t["stderr_b64"]).decode("utf-8", "replace"),
-    )
+        resp = json.loads(out.decode())
+        if resp.get("error"):
+            pytest.fail(
+                f"coordinator error: {resp['error']}; stderr={_err.decode()[:200]}"
+            )
+        t = resp["target"]
+        return (
+            t.get("returncode"),
+            base64.b64decode(t["stdout_b64"]).decode("utf-8", "replace"),
+            base64.b64decode(t["stderr_b64"]).decode("utf-8", "replace"),
+        )
 
 
 # ----------------------------------------------------------------------
@@ -451,10 +454,11 @@ def _drive_coordinator(payload: bytes) -> dict:
     p = subprocess.Popen(
         [sys.executable, str(COORDINATOR)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env,
+        stderr=subprocess.PIPE, env=env, start_new_session=True,
     )
-    out, _err = p.communicate(payload, timeout=10)
-    return json.loads(out.decode())
+    with reap_on_exit(p, process_group=True):
+        out, _err = p.communicate(payload, timeout=10)
+        return json.loads(out.decode())
 
 
 def test_malformed_json_request_returns_structured_error(coordinator_available):
