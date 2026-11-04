@@ -27,6 +27,8 @@ import pytest
 
 pytestmark = pytest.mark.linux_native
 
+from core.testing.pipes import fork_with_pipes
+
 from packages.joern import netns_forwarder as nf
 from packages.joern import server as server_mod
 
@@ -243,9 +245,8 @@ def test_waiter_forwards_every_contract_signal(signame):
 def test_arm_timeout_is_actually_bounded(restore_signal_handlers):
     """A waiter that never arms must be refused within the configured
     budget, not whenever it happens to die on its own."""
-    arm_r, arm_w = os.pipe()
-    gone_r, gone_w = os.pipe()
-    pid = os.fork()
+    pid, pipes = fork_with_pipes(2)
+    (arm_r, arm_w), (gone_r, gone_w) = pipes
     if pid == 0:  # never arms; exits on its own well past the budget
         time.sleep(20)
         os._exit(0)
@@ -282,9 +283,8 @@ def test_supervisor_never_forwards_to_a_reaped_pid(
 ):
     """Once the ns-init is reaped its pid is recyclable; the forward
     handler must be a no-op from then on."""
-    arm_r, arm_w = os.pipe()
-    gone_r, gone_w = os.pipe()
-    pid = os.fork()
+    pid, pipes = fork_with_pipes(2)
+    (arm_r, arm_w), (gone_r, gone_w) = pipes
     if pid == 0:
         os.write(arm_w, b"A")
         os._exit(0)
