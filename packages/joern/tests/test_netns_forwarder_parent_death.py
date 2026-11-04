@@ -15,8 +15,8 @@ Two layers, mirroring test_netns_forwarder.py:
   real process tree (namespace-independent): a parent spawns a
   supervisor standing in for the forwarder's main(); the test SIGKILLs
   the parent and asserts the reap-vs-keep direction within a bounded
-  window. Every process is test-spawned, in its own session, and
-  reaped in ``finally``.
+  window. Each test-spawned tree occupies one private session, so failed
+  setup can terminate it even before the supervisor publishes its PID.
 """
 
 from __future__ import annotations
@@ -231,8 +231,9 @@ _SUPERVISOR_CODE = (
 
 _PARENT_CODE = (
     "import os, subprocess, sys, time\n"
-    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]],\n"
-    "                 start_new_session=True)\n"
+    # The outer Popen owns the private session; retain all fixture descendants
+    # in that group so startup failures do not require a published PID list.
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
     "time.sleep(300)\n"
 )
 
@@ -259,26 +260,76 @@ class TestOrphanReap:
              child_body],
             env=env, start_new_session=True,
         )
-        _wait_for(ready.exists, 30.0, "supervised tree to come up")
-        sup_pid, wrapped_pid = (
-            int(x) for x in ready.read_text().split()
-        )
+        try:
+            _wait_for(ready.exists, 30.0, "supervised tree to come up")
+            sup_pid, wrapped_pid = (
+                int(x) for x in ready.read_text().split()
+            )
+        except BaseException:
+            self._reap_all(parent)
+            raise
         return parent, sup_pid, wrapped_pid
 
     @staticmethod
-    def _reap_all(parent, *pids):
-        for pid in (parent.pid, *pids):
-            if pid is None:
-                continue
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except OSError:
-                pass
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        parent.poll()
+    def _reap_all(parent):
+        try:
+            os.killpg(parent.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        parent.wait(timeout=10)
+
+    @pytest.mark.parametrize("fault", ["before-ready", "ready-wait", "invalid-pids"])
+    def test_failed_setup_reclaims_owned_processes(self, tmp_path, monkeypatch, fault):
+        from types import SimpleNamespace
+
+        started = []
+        owned_pids = []
+        real_popen = subprocess.Popen
+        real_wait_for = _wait_for
+
+        def start(command, **options):
+            if fault == "before-ready":
+                # No unreported descendants in this injected failure case.
+                command = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+            process = real_popen(command, **options)
+            started.append(process)
+            return process
+
+        def fail_readiness(predicate, timeout_s, what):
+            if fault == "before-ready":
+                raise RuntimeError("owned readiness failure")
+            real_wait_for(predicate, timeout_s, what)
+            ready = tmp_path / "ready"
+            owned_pids.extend(int(value) for value in ready.read_text().split())
+            if fault == "ready-wait":
+                raise RuntimeError("owned readiness failure")
+            ready.write_text("invalid PID data")
+
+        module = sys.modules[__name__]
+        try:
+            with monkeypatch.context() as patcher:
+                patcher.setattr(module, "subprocess", SimpleNamespace(Popen=start))
+                patcher.setattr(module, "_wait_for", fail_readiness)
+                error = ValueError if fault == "invalid-pids" else RuntimeError
+                match = "invalid literal" if fault == "invalid-pids" else "owned readiness failure"
+                with pytest.raises(error, match=match):
+                    self._launch(tmp_path, _COOPERATIVE_CHILD)
+            assert len(started) == 1
+            assert started[0].poll() is not None, "failed setup left its launcher running"
+            real_wait_for(lambda: all(not _pid_alive(pid) for pid in owned_pids),
+                          3, "failed setup descendants to exit")
+        finally:
+            # Keep the regression test itself contained if setup cleanup breaks.
+            for pid in owned_pids:
+                try:
+                    if _pid_alive(pid):
+                        os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for process in started:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
 
     @pytest.mark.parametrize(
         "child_body",
@@ -296,7 +347,7 @@ class TestOrphanReap:
             _wait_for(lambda: not _pid_alive(wrapped_pid), 20.0,
                       "orphaned idle wrapped child to exit")
         finally:
-            self._reap_all(parent, sup_pid, wrapped_pid)
+            self._reap_all(parent)
 
     def test_orphaned_but_active_server_survives_until_idle(
         self, tmp_path,
@@ -328,4 +379,4 @@ class TestOrphanReap:
             _wait_for(lambda: not _pid_alive(wrapped_pid), 20.0,
                       "idle-expired wrapped child to exit")
         finally:
-            self._reap_all(parent, sup_pid, wrapped_pid)
+            self._reap_all(parent)
