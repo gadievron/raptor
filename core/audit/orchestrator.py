@@ -33525,7 +33525,7 @@ def _persist_findings(
     final unconditional re-persist converges the records on the
     verdict-refined value.
     """
-    from .findings import stamp_function_attribution
+    from .findings import _AttributionItemsMemo, stamp_function_attribution
     from .gaps import load_checklist
     from .tree_class import classify_tree_class
 
@@ -33536,6 +33536,7 @@ def _persist_findings(
     # journal/coverage layers keep the AS-REVIEWED name, only the
     # export row is corrected.
     checklist = load_checklist(config.out_dir) if config.out_dir else {}
+    attribution_items = _AttributionItemsMemo(checklist)
 
     findings_dicts = []
     # Snapshot: the incremental-promotion tick calls this mid-loop
@@ -33583,8 +33584,11 @@ def _persist_findings(
             finding["provisional"] = True
         stamp_function_attribution(
             finding, checklist, target_path=config.target_path,
+            _items_memo=attribution_items,
         )
         findings_dicts.append(finding)
+
+    del attribution_items  # Normalised items are no longer needed during export.
 
     if not findings_dicts and not (
         config.out_dir and (config.out_dir / "findings.json").exists()
