@@ -3707,30 +3707,23 @@ def _extract_type_definition_uncached(
     """Extract a struct/typedef/enum definition from file content."""
     lines = split_lines(content)  # \n model: shared with the extractors' coordinates
 
-    # Per-line patterns (no DOTALL needed).
-    line_patterns = [
-        re.compile(
-            rf'^\s*(?:typedef\s+)?struct\s+{re.escape(type_name)}\s*\{{',
-        ),
-        # (?=\S) pins the whitespace run to end at the tail (same
-        # language — the dot-star absorbed any remainder), killing
-        # the run-vs-dot-star split that was quadratic here.
-        re.compile(
-            rf'^\s*typedef\s+(?=\S).*\b{re.escape(type_name)}\s*;',
-        ),
-        re.compile(
-            rf'^\s*(?:typedef\s+)?enum\s+{re.escape(type_name)}\s*\{{',
-        ),
-    ]
+    # One search per line; preserve the alternatives and their order.
+    # No DOTALL: the multiline typedef fallback remains separate below.
+    # (?=\S) pins the typedef whitespace run to the tail, avoiding the
+    # quadratic whitespace-vs-dot-star split of an unguarded pattern.
+    line_pattern = re.compile(
+        rf'(?:^\s*(?:typedef\s+)?struct\s+{re.escape(type_name)}\s*\{{|'
+        rf'^\s*typedef\s+(?=\S).*\b{re.escape(type_name)}\s*;|'
+        rf'^\s*(?:typedef\s+)?enum\s+{re.escape(type_name)}\s*\{{)',
+    )
 
     for i, line in enumerate(lines):
-        for pat in line_patterns:
-            if pat.search(line):
-                end = _find_closing_brace(lines, i)
-                snippet = "\n".join(lines[i:end + 1])
-                if len(snippet) > 800:
-                    snippet = snippet[:800] + "\n  /* ... truncated */"
-                return {"line": i + 1, "source": snippet}
+        if line_pattern.search(line):
+            end = _find_closing_brace(lines, i)
+            snippet = "\n".join(lines[i:end + 1])
+            if len(snippet) > 800:
+                snippet = snippet[:800] + "\n  /* ... truncated */"
+            return {"line": i + 1, "source": snippet}
 
     # Multi-line typedef: ``typedef struct { ... } Name;``
     # Must be applied against the full content block so the DOTALL
