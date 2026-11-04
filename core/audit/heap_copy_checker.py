@@ -152,7 +152,7 @@ def _try_parse_int(s: str) -> int | None:
 
 def _find_line_number(source: str, match_start: int) -> int:
     """Convert a character offset to a 1-based line number."""
-    return source[:match_start].count('\n') + 1
+    return source.count('\n', 0, match_start) + 1
 
 
 def _is_bounds_checked(

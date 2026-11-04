@@ -278,7 +278,7 @@ def extract_functions_from_source(source: str) -> list:
     for m in _FUNC_DEF_RE.finditer(source):
         name = m.group("name")
         indent = len(m.group("indent"))
-        start_line = source[:m.start()].count("\n") + 1
+        start_line = source.count("\n", 0, m.start()) + 1
 
         body_start_idx = start_line - 1
         end_idx = body_start_idx + 1

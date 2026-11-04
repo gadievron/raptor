@@ -209,7 +209,7 @@ def _detect_optional_not_checked(
             if broad_check:
                 continue
 
-            match_line = start_line + body[:m.start()].count("\n")
+            match_line = start_line + body.count("\n", 0, m.start())
             results.append(FailOpenPattern(
                 file=file_path,
                 function=name,
@@ -277,7 +277,7 @@ def _extract_c_functions(source: str, file_path: str = "file.c") -> list[tuple[s
     funcs = []
     for m in _C_FUNC_RE.finditer(source):
         name = m.group(1)
-        start_line = source[:m.start()].count("\n") + 1
+        start_line = source.count("\n", 0, m.start()) + 1
         brace_start = source.index("{", m.start())
         depth = 1
         i = brace_start + 1
@@ -370,7 +370,7 @@ def _detect_truncation_not_signaled(
 
         # Use the line of the first cap-break as the finding location
         first_cap = cap_matches[0]
-        match_line = start_line + body[:first_cap.start()].count("\n")
+        match_line = start_line + body.count("\n", 0, first_cap.start())
 
         results.append(FailOpenPattern(
             file=file_path,
@@ -567,7 +567,7 @@ def _detect_consumer_fail_open(
             line = 0
             start_line = _function_start_line(source, caller_name)
             if empty_check:
-                line = start_line + caller_body[:empty_check.start()].count("\n")
+                line = start_line + caller_body.count("\n", 0, empty_check.start())
 
             results.append(FailOpenPattern(
                 file=caller_file,
