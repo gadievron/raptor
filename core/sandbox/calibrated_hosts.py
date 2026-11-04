@@ -32,7 +32,6 @@ egress proxy enforces deny-by-default regardless.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import subprocess
@@ -40,6 +39,7 @@ import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
+from core.json import dumps_canonical
 from core.sandbox.errors import SandboxSetupError
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def _memo_identity(bin_path: str, env_keys: tuple[str, ...]) -> tuple:
     # Keep credentials out of memo keys: retain only a digest of the
     # declared values, not the environment values themselves.
     values = [(key, os.environ.get(key, "")) for key in sorted(set(env_keys))]
-    signature = hashlib.sha256(json.dumps(values, ensure_ascii=True).encode("ascii")).hexdigest()
+    signature = hashlib.sha256(dumps_canonical(values).encode("ascii")).hexdigest()
     return binary, signature
 
 

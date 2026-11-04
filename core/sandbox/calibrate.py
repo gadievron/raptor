@@ -59,7 +59,7 @@ from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
 from core.hash import sha256_file as _sha256_file
-from core.json import dumps_artifact
+from core.json import dumps_artifact, dumps_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -206,8 +206,7 @@ def _fingerprint(bin_sha: str, env_sig: str,
     h.update(b"\0")
     h.update(env_sig.encode("ascii"))
     h.update(b"\0")
-    h.update(json.dumps(list(probe_args), ensure_ascii=True,
-                        separators=(",", ":")).encode("ascii"))
+    h.update(dumps_canonical(list(probe_args)).encode("ascii"))
     return h.hexdigest()
 
 
