@@ -292,12 +292,17 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         for block_start, body in _iter_enum_bodies(text_joined):
             block_line = _original_line(block_start)
             block_depth = cond_depth.get(block_line, 0)
+            # Enumerator offsets advance: count only the intervening range.
+            enum_line = block_line
+            enum_offset = 0
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
                 ename = ev.group(1).strip()
                 evalue = _parse_enumerator_value(body, ev.end())
                 if ename in _SKIP_IDENTS_C:
                     continue
-                enum_line = block_line + body.count("\n", 0, ev.start())
+                offset = ev.start()
+                enum_line += body.count("\n", enum_offset, offset)
+                enum_offset = offset
                 defs.setdefault(ename, []).append(
                     _RawDefinition(ename, "", evalue, rel, enum_line, block_depth)
                 )
