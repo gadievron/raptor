@@ -235,14 +235,19 @@ class TestFileLevelSarifIsNotCoverage:
             finals.append((final.status, exported))
         assert finals == [("dark", 1), ("dark", 1)]
 
-    def test_control_probative_dispatch_still_resolves_clean(self, tmp_path):
-        """The coverage oracle is the dispatch record: a semgrep run
-        that looked and refuted for THIS function still resolves the
-        claim clean (the fix removes the alias, not the refutation)."""
+    def test_control_matching_refutation_still_resolves_clean(self, tmp_path):
+        """An explicit refutation of this claim still resolves clean."""
+        from core.audit.verification_results import ToolChainResult
+
         tgt, out, cache = self._unrelated_hit(tmp_path)
         config = OrchestratorConfig(target_path=tgt, out_dir=out)
         outcome = _php_claim()
         outcome.tools_dispatched = {"semgrep"}
+        results = ToolChainResult(file=outcome.file, function=outcome.function,
+                                  line_start=outcome.line, hypothesis=outcome.hypothesis)
+        results.observe("semgrep", "refuted", "query-bound", "claimed query path excluded")
+        assert orch._retain_claim_refutation(outcome, results, config,
+                                             hypothesis=outcome.hypothesis, phase="test")
         final, exported = _resolve(
             _g2_demoted(outcome), config, cache, _PHP_CK,
             {"joern": False, "semgrep": True},
