@@ -20390,16 +20390,14 @@ def _hypothesis_to_tool_chain(
             keyed_mc = mechanical_check_to_semgrep_keyed(hypothesis)
             if keyed_mc:
                 mc_pattern, mc_keyword = keyed_mc
-                # keyword travels with the pattern: mechanical-check
-                # patterns are presence-level shapes, so the sweep must
-                # run them with the identifier-consistency and
-                # negative-control caps armed (a keyword-less entry
-                # disables both and a bare presence match stamped
-                # promotion-grade evidence on clean code).
+                # These shapes establish presence, not the missing
+                # guard or error obligation. A missing/failed negative
+                # control must never upgrade them to confirmation.
                 chain.append({
                     "type": "semgrep",
                     "config": {
                         "pattern": mc_pattern, "keyword": mc_keyword,
+                        "presence_only": True,
                     },
                 })
                 seen_types.add("semgrep")
@@ -22302,6 +22300,7 @@ def _run_tool_chain(
                 # their scanned silence is inconclusive, never refuted
                 # (a presence regex cannot refute a class).
                 rule_keyword = tool_cfg.get("keyword") or ""
+                presence_only = bool(tool_cfg.get("presence_only"))
                 _sg_line_end = _checklist_line_end(
                     config, file_path, function_name,
                 ) or (line_start + 50 if line_start else 0)
@@ -22320,6 +22319,7 @@ def _run_tool_chain(
                             "line_end": _sg_line_end,
                             "hypothesis": _memo_hash_text(_sg_hypothesis),
                             "keyword": rule_keyword,
+                            "presence_only": presence_only,
                             # The hint changes the executed command
                             # (--scan-unknown-extensions), so it joins
                             # the memo key.
@@ -22334,6 +22334,7 @@ def _run_tool_chain(
                             line_end=_sg_line_end,
                             hypothesis=_sg_hypothesis,
                             rule_keyword=rule_keyword,
+                            presence_only=presence_only,
                             language=_probed_language,
                         ),
                     )
