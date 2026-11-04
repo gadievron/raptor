@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from . import state
@@ -246,26 +247,36 @@ def _cleanup_probe_child(pid: int, label: str, *, pidfd: int | None = None) -> N
             logger.warning("%s probe: child cleanup wait failed: %s", label, exc)
 
 
-def _wait_for_probe_child(pid: int, label: str) -> int | None:
-    """Wait for a private probe that creates no descendants; clean up on failure."""
+def _wait_for_probe_child(pid: int, label: str, *,
+                          before_wait: Callable[[float], None] | None = None) -> int | None:
+    """Wait for a private probe that creates no descendants; clean up on failure.
+
+    An optional parent action receives the same deadline before exit
+    collection, so verdict reads share the child's lifetime budget.
+    """
     if pid <= 1:
         return None
     owned = True
+    waiting_for_exit = False
     pidfd = None
     try:
+        deadline = time.monotonic() + _PROBE_CHILD_TIMEOUT_S
         if hasattr(signal, "pidfd_send_signal"):
             try:
                 pidfd = os.pidfd_open(pid)
             except (AttributeError, OSError):
                 pass
-        status = _poll_probe_child_exit(pid, time.monotonic() + _PROBE_CHILD_TIMEOUT_S)
+        if before_wait is not None:
+            before_wait(deadline)
+        waiting_for_exit = True
+        status = _poll_probe_child_exit(pid, deadline)
         owned = False
         return status
     except TimeoutError:
         logger.warning("%s capability probe timed out", label)
         return None
     except OSError as exc:
-        if isinstance(exc, ChildProcessError) or exc.errno == errno.ECHILD:
+        if waiting_for_exit and (isinstance(exc, ChildProcessError) or exc.errno == errno.ECHILD):
             owned = False
         logger.debug("%s capability probe wait failed: %s", label, exc)
         return None
