@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.config import RaptorConfig
 from core.git import clone_repository
 from core.hash import sha256_bytes, sha256_fileobj, sha256_tree
-from core.json import load_json, save_json
+from core.json import load_json, loads, save_json
 from core.source import open_regular_gated, read_bytes_gated
 from core.logging import get_logger
 from core.run.output import unique_run_suffix
@@ -2615,109 +2616,102 @@ def _graduated_findings_to_sarif(
     )
 
 
-def _sarif_has_findings(sarif_path: Path) -> bool:
-    """Return True iff the SARIF file contains at least one result.
+def _sarif_has_findings(sarif_path: Path) -> bool | None:
+    """True/False for readable report results; None when cleanup cannot know.
 
-    Failures (missing file, unparseable JSON) return False — callers treat
-    "unknown" the same as "empty" because the goal is opportunistic cleanup.
+    A malformed, missing, unsafe, or oversized report is not evidence of
+    zero findings. Refuse links and non-regular files on the opened fd.
     """
-    data = load_json(sarif_path, max_bytes=_MAX_TOOL_JSON_BYTES)
-    if not isinstance(data, dict):
-        return False
-    return any(run_obj.get("results") for run_obj in data.get("runs", []) or [])
+    try:
+        data = loads(read_bytes_gated(
+            sarif_path, _MAX_TOOL_JSON_BYTES, follow_symlinks=False,
+        ))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (not isinstance(data, dict)
+            or data.get("version") not in ("2.1.0", "2.0.0")
+            or not isinstance(data.get("runs"), list)):
+        return None
+    found = False
+    for run in data["runs"]:
+        if not isinstance(run, dict):
+            return None
+        results = run.get("results", [])
+        if not isinstance(results, list) or any(not isinstance(r, dict) for r in results):
+            return None
+        found = found or bool(results)
+    return found
 
 
-def cleanup_per_pack_artifacts(out_dir: Path) -> int:
-    """Remove redundant per-pack semgrep files after combined.sarif is written.
+def _pack_exit_code(path: Path) -> int | None:
+    """Read the tiny exit marker with the same bounds for cleanup/provenance."""
+    try:
+        return int(read_bytes_gated(path, 64, follow_symlinks=False).strip())
+    except (OSError, ValueError):
+        return None
 
-    Per-pack files (semgrep_<suffix>.{exit,json,sarif,stderr.log}) are
-    intermediate: combined.sarif is the canonical post-merge artefact, and
-    scan_metrics.json captures the per-run accounting. Keep the minimum
-    needed for post-mortem of failed packs.
 
-    Cleanup rules (per pack):
-      - Always remove: .exit, .json, empty .stderr.log
-      - On exit in (0, 1): also remove .sarif (semgrep returns 1 on findings)
-      - On exit>=2: keep .exit, keep non-empty .stderr.log, keep .sarif if
-        it has findings; delete the .sarif if it is empty/zero-results
-        (still redundant — combined.sarif holds those results too)
+def cleanup_per_pack_artifacts(out_dir: Path, *, merged_inputs=None) -> int:
+    """Remove redundant Semgrep intermediates after a readable merge exists.
 
-    Strict glob (semgrep_*.{exit,json,sarif,stderr.log}) and os.unlink
-    only — never follow symlinks or recurse.
-
-    Returns the number of files removed.
+    When supplied, merged_inputs limits cleanup to reports from this merge.
+    Unknown reports or exit markers retain all their evidence. Successful
+    packs drop JSON/SARIF/exit; failed packs retain exit and SARIF findings.
+    Nonempty stderr always survives. Never recurse or follow symlinks.
     """
+    if _sarif_has_findings(out_dir / "combined.sarif") is None:
+        return 0
+    allowed = (None if merged_inputs is None else
+               {Path(path).absolute() for path in merged_inputs})
+    suffixes = set()
+    try:
+        for ext in (".exit", ".json", ".sarif", ".stderr.log"):
+            for path in out_dir.glob(f"semgrep_*{ext}"):
+                name = path.name[len("semgrep_"):-len(ext)]
+                if name:
+                    suffixes.add(name)
+    except OSError:
+        return 0
+
     removed = 0
-    # Group by suffix using a strict glob set.
-    suffixes: set = set()
-    for ext in (".exit", ".json", ".sarif", ".stderr.log"):
-        for p in out_dir.glob(f"semgrep_*{ext}"):
-            # glob does not follow symlinks for matching, but the resolved
-            # entry might still be one — defend with is_symlink check.
-            if p.is_symlink() or not p.is_file():
-                continue
-            name = p.name[len("semgrep_"):-len(ext)]
-            if name:
-                suffixes.add(name)
 
-    for suffix in suffixes:
-        exit_file = out_dir / f"semgrep_{suffix}.exit"
-        json_file = out_dir / f"semgrep_{suffix}.json"
-        sarif_file = out_dir / f"semgrep_{suffix}.sarif"
-        stderr_file = out_dir / f"semgrep_{suffix}.stderr.log"
-
-        # Read exit code BEFORE any deletion.
-        exit_code: int | None
+    def remove(path, *, empty_only=False):
+        nonlocal removed
         try:
-            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
-        except Exception:  # noqa: BLE001
-            exit_code = None
-
-        success = exit_code in (0, 1)
-
-        # Always delete: .json (intermediate machine output)
-        for victim in (json_file,):
-            try:
-                if victim.is_file() and not victim.is_symlink():
-                    os.unlink(victim)
-                    removed += 1
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                logger.debug("cleanup: could not remove %s: %s", victim, e)
-
-        # Empty stderr — always delete
-        try:
-            if (stderr_file.is_file() and not stderr_file.is_symlink()
-                    and stderr_file.stat().st_size == 0):
-                os.unlink(stderr_file)
-                removed += 1
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                return False
+            if empty_only and info.st_size:
+                return True
+            path.unlink()
+            removed += 1
         except FileNotFoundError:
-            pass
-        except OSError as e:
-            logger.debug("cleanup: could not stat/remove %s: %s", stderr_file, e)
+            return True
+        except OSError as exc:
+            logger.debug("cleanup: could not remove %s: %s", path, exc)
+            return False
+        return True
 
-        if success:
-            # On success, .exit and .sarif are both redundant (combined.sarif
-            # is canonical and metrics record the success).
-            for victim in (exit_file, sarif_file):
-                try:
-                    if victim.is_file() and not victim.is_symlink():
-                        os.unlink(victim)
-                        removed += 1
-                except FileNotFoundError:
-                    pass
-                except OSError as e:
-                    logger.debug("cleanup: could not remove %s: %s", victim, e)
-        # Failed pack: keep .exit. Keep .sarif only if it has findings;
-        # otherwise it is redundant noise (an empty {"runs":[]} stub).
-        elif sarif_file.is_file() and not sarif_file.is_symlink():  # noqa: SIM102
-            if not _sarif_has_findings(sarif_file):
-                try:
-                    os.unlink(sarif_file)
-                    removed += 1
-                except OSError as e:
-                    logger.debug("cleanup: could not remove %s: %s", sarif_file, e)
+    for suffix in sorted(suffixes):
+        exit_file = out_dir / f"semgrep_{suffix}.exit"
+        sarif_file = out_dir / f"semgrep_{suffix}.sarif"
+        if allowed is not None and sarif_file.absolute() not in allowed:
+            continue
+        has_findings = _sarif_has_findings(sarif_file)
+        exit_code = _pack_exit_code(exit_file)
+        if has_findings is None or exit_code is None:
+            continue
+        if not remove(out_dir / f"semgrep_{suffix}.json"):
+            continue
+        if not remove(out_dir / f"semgrep_{suffix}.stderr.log", empty_only=True):
+            continue
+        if exit_code in (0, 1):
+            # Keep the success marker until large intermediates are gone,
+            # otherwise a failed unlink makes future cleanup unknowable.
+            if remove(sarif_file):
+                remove(exit_file)
+        elif has_findings is False:
+            remove(sarif_file)
 
     if removed:
         logger.info("Cleaned up %s redundant per-pack scan files in %s", removed, out_dir)
@@ -2779,10 +2773,8 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
     # accurate when we can see the SARIF.
     if tool == "semgrep":
         exit_file = out_dir / f"{stem}.exit"
-        try:
-            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            exit_code = -1
+        parsed_exit = _pack_exit_code(exit_file)
+        exit_code = parsed_exit if parsed_exit is not None else -1
     else:
         exit_code = 0
 
@@ -2828,6 +2820,35 @@ def _compose_verification_manifest(
         "combined_sarif": combined,
         "packs": packs,
     }
+
+
+def _finalize_scan_artifacts(
+    sarif_inputs, merged: Path, out_dir: Path, *, merge_completed: bool,
+) -> None:
+    """Commit provenance before reclaiming this merge's redundant inputs."""
+    provenance_ok = False
+    try:
+        verification = _compose_verification_manifest(sarif_inputs, merged, out_dir)
+        provenance_ok = True
+    except Exception as exc:  # noqa: BLE001 — preserve originals on a hash failure
+        logger.debug("verification manifest compose failed (non-fatal): %s", exc)
+        verification = {
+            "schema_version": 1,
+            "combined_sarif": {"path": merged.name, "sha256": "", "size_bytes": 0},
+            "packs": [],
+        }
+    if not merge_completed:
+        # An older combined.sarif may survive a failed replacement. It is
+        # not the canonical report for THIS scan, even when it parses.
+        verification["combined_sarif"] = {
+            "path": merged.name, "sha256": "", "size_bytes": 0,
+        }
+    save_json(out_dir / "verification.json", verification)
+    if merge_completed and provenance_ok:
+        try:
+            cleanup_per_pack_artifacts(out_dir, merged_inputs=sarif_inputs)
+        except Exception as exc:  # noqa: BLE001 — reclaim remains best-effort
+            logger.debug("Per-pack cleanup failed (non-fatal): %s", exc)
 
 
 def _validate_policy_groups(
@@ -3503,6 +3524,7 @@ def main() -> None:
             + config_resolved_sarifs + source_wrapper_sarifs
         )
         merged = out_dir / "combined.sarif"
+        merge_completed = False
         exclude_globs = args.exclude_dir
         excluded_count = 0
         nosemgrep_count = 0
@@ -3532,6 +3554,7 @@ def main() -> None:
                     merged_data, str(repo_path),
                 )
                 save_json(merged, merged_data, stream=True)
+                merge_completed = True
                 logger.info("Merged SARIF created: %s", merged)
             except Exception as e:  # noqa: BLE001
                 logger.warning("SARIF merge failed, using individual files: %s", e)
@@ -3559,7 +3582,7 @@ def main() -> None:
                     filter_enforced_from_sarif,
                     run_postpass,
                 )
-                merged_exists = merged.exists()
+                merged_exists = merge_completed
                 postpass_inputs = (
                     [merged] if merged_exists else list(sarif_inputs)
                 )
@@ -3607,7 +3630,7 @@ def main() -> None:
         _enforced_removed = int(
             (sanitizer_cut_postpass_stats or {}).get("enforced_removed") or 0
         )
-        if (excluded_count or _enforced_removed) and merged.exists():
+        if (excluded_count or _enforced_removed) and merge_completed:
             # The combined SARIF reflects --exclude-dir filtering and/or
             # sanitizer-cut enforcement drops; metrics must read it, not
             # the unfiltered per-tool forensic SARIFs.
@@ -3770,31 +3793,12 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             logger.debug("Analysis-gap summary failed (non-fatal): %s", e)
 
-        # Provenance manifest. MUST be composed BEFORE cleanup runs,
-        # because cleanup deletes most of the per-pack SARIFs we hash.
-        try:
-            verification = _compose_verification_manifest(
-                sarif_inputs, merged, out_dir,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.debug("verification manifest compose failed (non-fatal): %s", e)
-            verification = {
-                "schema_version": 1,
-                "combined_sarif": {"path": merged.name, "sha256": "", "size_bytes": 0},
-                "packs": [],
-            }
-
-        # Per-pack file cleanup. Runs AFTER combined.sarif and
-        # scan_metrics.json are finalised. The merged SARIF is canonical;
-        # per-pack semgrep_*.{exit,json,sarif,stderr.log} files are
-        # intermediate. Keep only what's useful for post-mortem of failed
-        # packs (exit code + non-empty stderr + sarif-with-findings).
-        try:
-            cleanup_per_pack_artifacts(out_dir)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Per-pack cleanup failed (non-fatal): %s", e)
-
-        save_json(out_dir / "verification.json", verification)
+        # Persist provenance before deleting any intermediate. A failed
+        # merge must keep its per-tool fallback, even if an older combined
+        # report still exists at the output path.
+        _finalize_scan_artifacts(
+            sarif_inputs, merged, out_dir, merge_completed=merge_completed,
+        )
 
         duration = time.time() - start_time
         logger.info("Total scan duration: %.2fs", duration)
