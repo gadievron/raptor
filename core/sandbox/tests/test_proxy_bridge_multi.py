@@ -128,17 +128,25 @@ class TestRunBridges:
         path_dead = str(short_sock_dir / "dead.sock")   # never bound
         path_live = str(short_sock_dir / "live.sock")
         srv = _unix_echo_server(path_live, b"L:")
-        port_dead, port_live = _free_port(), _free_port()
+        ready = threading.Event()
+        bound = []
+
+        def on_ready(bridges):
+            bound.extend(bridges)
+            ready.set()
+
         death_r, death_w = os.pipe()
         t = threading.Thread(
             target=_run_bridges,
-            args=(((port_dead, path_dead), (port_live, path_live)),
-                  death_r),
+            args=(((0, path_dead), (0, path_live)), death_r),
+            kwargs={"ready_cb": on_ready},
             daemon=True,
         )
         t.start()
         try:
-            _wait_listening(port_live)
+            assert ready.wait(5), "bridge listeners did not become ready"
+            (port_dead, _), (port_live, _) = bound
+            assert port_dead != port_live
             # Dead upstream: connection is accepted then immediately
             # closed — the client reads EOF, no hang.
             with socket.create_connection(
