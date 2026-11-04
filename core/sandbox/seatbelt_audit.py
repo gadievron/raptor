@@ -1490,13 +1490,21 @@ class LogStreamer:
                 self._proc.terminate()
             try:
                 self._proc.wait(timeout=drain_timeout)
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                if isinstance(exc, OSError):
+                    logger.warning(
+                        "seatbelt audit: producer wait failed; forcing shutdown",
+                        exc_info=True,
+                    )
                 with contextlib.suppress(OSError):
                     self._proc.kill()
                 try:
                     self._proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
+                except (subprocess.TimeoutExpired, OSError):
+                    logger.warning(
+                        "seatbelt audit: producer could not be reaped after kill",
+                        exc_info=True,
+                    )
             # Drain the reader to EOF before the summary fires (the
             # append lock makes the summary the last write only for
             # appends that RACE it — records the reader hasn't parsed
