@@ -360,3 +360,73 @@ class TestScoperIsolation:
         assert res.outcome == "confirmed"
         assert res.function_name == ""
         assert res.matches == [{"line": 80, "file": "src/a.c"}]
+
+
+def test_vocab_memo_hits_create_no_additional_rule_files(tmp_path, monkeypatch):
+    from engine.coccinelle import vocab_renderer as renderer
+
+    _write_tree(tmp_path)
+    case = TestVocabRenderedMemo()
+    rule = case._rule(tmp_path)
+    calls = _stub_runner(monkeypatch, match_lines=[2])
+    cfg = _Cfg(tmp_path)
+    vocab = case._vocab("custom_free")
+    _dispatch(cfg, rule, function_name="first", line_start=1, domain_vocab=vocab)
+
+    def forbidden(*a, **kw):
+        raise AssertionError("memo hit must not materialize a rendered rule")
+
+    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", forbidden)
+    assert _dispatch(cfg, rule, function_name="first", line_start=1, domain_vocab=vocab)
+    assert _dispatch(cfg, rule, function_name="later", line_start=100, domain_vocab=vocab) == []
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failures", [1, 2])
+def test_cold_materialization_failure_keeps_unmemoized_render_retry(tmp_path, monkeypatch, failures):
+    from engine.coccinelle import vocab_renderer as renderer
+
+    _write_tree(tmp_path)
+    case = TestVocabRenderedMemo()
+    rule = case._rule(tmp_path)
+    calls = _stub_runner(monkeypatch, match_lines=[2])
+    cfg = _Cfg(tmp_path)
+    create = renderer.tempfile.NamedTemporaryFile
+    attempts = []
+
+    def fail_first(*a, **kw):
+        attempts.append(1)
+        if len(attempts) <= failures:
+            raise OSError("temporary write failure")
+        return create(*a, **kw)
+
+    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", fail_first)
+    assert _dispatch(cfg, rule, function_name="f", line_start=1, domain_vocab=case._vocab("custom_free"))
+    assert len(attempts) == 2
+    assert ("custom_free" in calls[0]["rule_text"]) == (failures == 1)
+    assert not cfg.sweep_memo._entries
+
+
+def test_vocab_checkpoint_replay_needs_no_temporary_rule(tmp_path, monkeypatch):
+    from core.audit.sweep_checkpoint import reset_checkpoint_registry
+    from engine.coccinelle import vocab_renderer as renderer
+
+    _write_tree(tmp_path)
+    case = TestVocabRenderedMemo()
+    rule = case._rule(tmp_path)
+    calls = _stub_runner(monkeypatch, match_lines=[2])
+    cfg = _Cfg(tmp_path)
+    cfg.out_dir = tmp_path / "run"
+    cfg.out_dir.mkdir()
+    vocab = case._vocab("custom_free")
+    assert _dispatch(cfg, rule, function_name="f", line_start=1, domain_vocab=vocab)
+    reset_checkpoint_registry()
+    resumed = _Cfg(tmp_path)
+    resumed.out_dir = cfg.out_dir
+
+    def forbidden(*a, **kw):
+        raise AssertionError("checkpoint replay must not materialize a rule")
+
+    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", forbidden)
+    assert _dispatch(resumed, rule, function_name="f", line_start=1, domain_vocab=vocab)
+    assert len(calls) == 1
