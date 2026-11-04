@@ -43,6 +43,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.pipes import fork_with_pipes
+
 from packages.joern import netns_forwarder as nf
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "netns_forwarder.py"
@@ -165,9 +167,8 @@ class TestSuperviseNsInit:
     def test_unarmed_waiter_fails_closed(self, restore_signal_handlers):
         """A waiter that dies before the arm byte must fail the boot
         with the distinct unarmed exit code — never proceed."""
-        arm_r, arm_w = os.pipe()
-        gone_r, gone_w = os.pipe()
-        pid = os.fork()
+        pid, pipes = fork_with_pipes(2)
+        (arm_r, arm_w), (gone_r, gone_w) = pipes
         if pid == 0:
             os._exit(0)  # dies without ever arming
         os.close(arm_w)
@@ -183,9 +184,8 @@ class TestSuperviseNsInit:
     def test_arm_timeout_fails_closed(self, restore_signal_handlers):
         """A waiter that never arms within the budget is killed and
         the boot refused."""
-        arm_r, arm_w = os.pipe()
-        gone_r, gone_w = os.pipe()
-        pid = os.fork()
+        pid, pipes = fork_with_pipes(2)
+        (arm_r, arm_w), (gone_r, gone_w) = pipes
         if pid == 0:  # never writes the arm byte
             time.sleep(60)
             os._exit(0)
@@ -207,10 +207,8 @@ class TestSuperviseNsInit:
     ):
         """After the arm byte the achieved tier is reported and the
         waiter's exit status is mirrored."""
-        arm_r, arm_w = os.pipe()
-        gone_r, gone_w = os.pipe()
-        ready_r, ready_w = os.pipe()
-        pid = os.fork()
+        pid, pipes = fork_with_pipes(3)
+        (arm_r, arm_w), (gone_r, gone_w), (ready_r, ready_w) = pipes
         if pid == 0:
             os.write(arm_w, b"A")
             os._exit(7)
@@ -228,9 +226,8 @@ class TestSuperviseNsInit:
     def test_signalled_waiter_mirrored_as_128_plus_signum(
         self, restore_signal_handlers,
     ):
-        arm_r, arm_w = os.pipe()
-        gone_r, gone_w = os.pipe()
-        pid = os.fork()
+        pid, pipes = fork_with_pipes(2)
+        (arm_r, arm_w), (gone_r, gone_w) = pipes
         if pid == 0:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
             os.write(arm_w, b"A")
@@ -248,10 +245,8 @@ class TestSuperviseNsInit:
     def test_no_tier_report_before_arm(self, restore_signal_handlers):
         """The tier report may only follow the arm byte: an unarmed
         death leaves the ready fd silent (misstamp direction)."""
-        arm_r, arm_w = os.pipe()
-        gone_r, gone_w = os.pipe()
-        ready_r, ready_w = os.pipe()
-        pid = os.fork()
+        pid, pipes = fork_with_pipes(3)
+        (arm_r, arm_w), (gone_r, gone_w), (ready_r, ready_w) = pipes
         if pid == 0:
             os._exit(3)  # dies unarmed
         os.close(arm_w)
