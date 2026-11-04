@@ -2065,8 +2065,8 @@ class EgressProxy:
         Thread-safe: schedules server creation on the proxy's event
         loop and blocks until it is ready.
         """
-        if self._loop is None or not self._loop.is_running():
-            msg = "proxy event loop not running"
+        if self._stopping or self._loop is None or not self._loop.is_running():
+            msg = "proxy event loop is stopping or not running"
             raise RuntimeError(msg)
 
         import os as _os
@@ -2075,6 +2075,8 @@ class EgressProxy:
                      allowed_hosts=_normalise_lane_hosts(allowed_hosts),
                      allowed_ports=_normalise_lane_ports(allowed_ports))
         async def _bind():
+            if self._stopping:
+                raise RuntimeError("proxy is stopping")
             old_umask = _os.umask(0o077)
             try:
                 srv = await asyncio.start_unix_server(
@@ -2083,6 +2085,9 @@ class EgressProxy:
                 )
             finally:
                 _os.umask(old_umask)
+            if self._stopping:
+                srv.close()
+                raise RuntimeError("proxy stopped during listener creation")
             with self._unix_lock:
                 self._unix_servers[path] = srv
             with self._lanes_lock:
@@ -2110,8 +2115,8 @@ class EgressProxy:
         that as "no lane" and fail CLOSED (audit leniency unavailable,
         enforcement intact).
         """
-        if self._loop is None or not self._loop.is_running():
-            msg = "proxy event loop not running"
+        if self._stopping or self._loop is None or not self._loop.is_running():
+            msg = "proxy event loop is stopping or not running"
             raise RuntimeError(msg)
 
         lane = _Lane(label=label,
@@ -2119,10 +2124,15 @@ class EgressProxy:
                      allowed_ports=_normalise_lane_ports(allowed_ports))
 
         async def _bind():
+            if self._stopping:
+                raise RuntimeError("proxy is stopping")
             srv = await asyncio.start_server(
                 lambda r, w: self._handle_unix_client(r, w, lane=lane),
                 host="127.0.0.1", port=0,
             )
+            if self._stopping:
+                srv.close()
+                raise RuntimeError("proxy stopped during listener creation")
             port = srv.sockets[0].getsockname()[1]
             with self._lanes_lock:
                 self._tcp_lanes[port] = lane
@@ -3355,9 +3365,23 @@ class EgressProxy:
                 self._startup_task.cancel()
                 with contextlib.suppress(RuntimeError, OSError, asyncio.CancelledError):
                     self._loop.run_until_complete(self._startup_task)
-            for task in list(self._client_tasks):
+            self._stopping = True
+            for task in set(self._client_tasks) | set(self._unix_tasks):
                 task.cancel()
             self._client_tasks.clear()
+            self._unix_tasks.clear()
+            # Loop exit can bypass public stop()/unbind calls. Closing
+            # the loop itself does not close listening server sockets.
+            servers = set()
+            if self._server is not None:
+                servers.add(self._server)
+            with self._unix_lock:
+                servers.update(self._unix_servers.values())
+            with self._lanes_lock:
+                servers.update(self._tcp_lane_servers.values())
+            for server in servers:
+                with contextlib.suppress(RuntimeError, OSError):
+                    server.close()
             if self._heartbeat_task is not None:
                 self._heartbeat_task.cancel()
                 # Retire the cancelled task on the still-open loop so
@@ -3368,7 +3392,6 @@ class EgressProxy:
                                          asyncio.CancelledError):
                     self._loop.run_until_complete(self._heartbeat_task)  # type: ignore[union-attr]
             if self._server is not None and self._loop is not None:
-                self._server.close()
                 # run_until_complete on a loop that crashed or was
                 # stopped above raises RuntimeError; socket teardown
                 # can surface OSError.
