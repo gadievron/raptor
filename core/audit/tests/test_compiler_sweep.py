@@ -72,7 +72,7 @@ def sandbox_spy(monkeypatch):
         calls.append({"cmd": cmd, **kwargs})
         fwd = {
             k: kwargs[k]
-            for k in ("capture_output", "text", "timeout", "cwd")
+            for k in ("capture_output", "text", "timeout", "cwd", "stdout", "stderr")
             if k in kwargs
         }
         try:
@@ -3526,7 +3526,7 @@ def test_aliasing_warning_cannot_supply_evidence(rule):
     "if (0) return *(int*)&value; return 0;",
     "int *p=(int*)&value; return *p;",
 ])
-def test_aliasing_safe_and_unsafe_warnings_remain_inconclusive(tmp_path, sandbox_spy, body):
+def test_aliasing_warning_needs_an_independent_access_proof(tmp_path, sandbox_spy, body):
     target = tmp_path / "repo"
     target.mkdir()
     source = "void *f(float value) { " + body + " }\n" if body.startswith("return (") else "int f(float value) { " + body + " }\n"
@@ -3536,6 +3536,83 @@ def test_aliasing_safe_and_unsafe_warnings_remain_inconclusive(tmp_path, sandbox
         line_start=1, line_end=1, cwe="CWE-843",
         hypothesis="incompatible access",
     )
-    assert result.outcome == "inconclusive"
+    expected = "confirmed" if "return *p" in body and HAVE_CLANG else "inconclusive"
+    assert result.outcome == expected
     assert result.matches
+    if expected == "confirmed":
+        assert is_tool_evidence(result.rule_id)
+        assert result.details["aliasing_proofs"][0]["object"] == "value"
+    else:
+        assert result.details["candidate_only"]
+
+
+@needs_gcc
+@needs_clang
+def test_aliasing_proof_cannot_confirm_another_identifier(tmp_path, sandbox_spy):
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "a.c").write_text("int f(float value) { int other=1; return *(int*)&value; }\n")
+    result = run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+        line_start=1, line_end=1, cwe="CWE-843", hypothesis="type punning of `other`")
+    assert result.outcome == "inconclusive"
     assert result.details["candidate_only"]
+
+
+@needs_gcc
+def test_aliasing_no_clang_retains_candidate(tmp_path, sandbox_spy, monkeypatch):
+    monkeypatch.setattr(compiler_sweep, "_clang_path", lambda: None)
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "a.c").write_text("int f(float value) { return *(int*)&value; }\n")
+    result = run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+        line_start=1, line_end=1, cwe="CWE-843", hypothesis="incompatible access")
+    assert result.outcome == "inconclusive" and result.matches
+    assert result.details["corroboration_limitations"]
+
+
+@needs_gcc
+@needs_clang
+def test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs(tmp_path, sandbox_spy):
+    from core.audit.run_memo import BoundedMemo
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "a.c").write_text("int f(float value) { return *(int*)&value; }\n"
+                              "int g(float other) { int *p=(int*)&other; return *p; }\n")
+    memo = BoundedMemo(8)
+    def sweep(fn, line):
+        return run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name=fn,
+            line_start=line, line_end=line, cwe="CWE-843", hypothesis="incompatible access", tu_cache=memo)
+    first = sweep("f", 1)
+    assert first.outcome == "confirmed"
+    first.details["aliasing_proofs"][0]["object"] = "poisoned"
+    second = sweep("g", 2)
+    assert second.outcome == "confirmed" and second.matches[0]["line"] == 2
+    assert sweep("f", 1).details["aliasing_proofs"][0]["object"] == "value"
+    assert len([c for c in sandbox_spy if "-ast-dump=json" in c["cmd"]]) == 1
+
+
+@needs_gcc
+@needs_clang
+def test_incomplete_aliasing_attempt_is_not_memoized(tmp_path, sandbox_spy, monkeypatch):
+    from core.audit.run_memo import BoundedMemo
+    from core.detectors import scalar_aliasing
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "a.c").write_text("int f(float value) { return *(int*)&value; }\n")
+    attempts = []
+    def transient(*a, **kw):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return scalar_aliasing.AliasingResult(proofs=[{"unvalidated": "partial"}], limitations=["transient timeout"])
+        return scalar_aliasing.AliasingResult(complete=True, proofs=[{
+            "file": "a.c", "line": 1, "candidate_line": 1, "function": "f", "identifiers": ["value"],
+            "object": "value", "declared_type": "float", "access_type": "int"}])
+    monkeypatch.setattr(scalar_aliasing, "corroborate_aliasing", transient)
+    memo = BoundedMemo(8)
+    def sweep():
+        return run_compiler_analyzer_sweep(target_path=target, file_path="a.c", function_name="f",
+            line_start=1, line_end=1, cwe="CWE-843", hypothesis="incompatible access", tu_cache=memo)
+    assert sweep().outcome == "inconclusive"
+    assert sweep().outcome == "confirmed"
+    assert sweep().outcome == "confirmed"
+    assert len(attempts) == 2

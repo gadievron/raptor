@@ -69,7 +69,7 @@ class PreparedViews:
             return sys.getsizeof(value) + (sum(size(v) for v in value) if isinstance(value, tuple) else 0)
         # Include the key and immutable map/text, overcounting repeated strings
         # rather than underestimating a map's much larger Python representation.
-        cost = 512 + size(key) + size((view.file_path, view.text, view.line_map, view.tool))
+        cost = 512 + size(key) + size((view.file_path, view.text, view.line_map, view.tool, view.source_files))
         if cost > 2 * 1024 * 1024:
             return False
         with self._lock:

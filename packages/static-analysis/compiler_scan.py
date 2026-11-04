@@ -729,6 +729,48 @@ def scan_target(
     elif stack_seeds:
         budget.mark_exhausted()
 
+    # Raw warnings remain candidates unless the shared scalar-access proof
+    # succeeds. One AST per affected TU, never one subprocess per warning.
+    from core.detectors.scalar_aliasing import corroborate_aliasing, RULE_ID as ALIASING_RULE_ID
+    alias_tus = [rel for rel in tus if rel in per_tu and per_tu[rel].ok
+                 and per_tu[rel].compiler == "gcc" and per_tu[rel].review_candidates
+                 and Path(rel).suffix == ".c"]
+    if alias_tus:
+        gcc, clang = _gcc_analyzer(), _clang_path()
+        def analyze_aliasing(rel):
+            return corroborate_aliasing(
+                target_path, rel, per_tu[rel].review_candidates,
+                gcc=gcc[0] if gcc else None, clang=clang, sandbox_run=sandbox_run,
+                budget=budget, setup=setup, include_dirs_memo=include_dirs_memo,
+                scratch_root=scratch_root,
+                preprocessor=(gcc[0], "-fanalyzer", *_union_flags("gcc_flags"), "-E", "-x", "c") if gcc else None,
+            )
+        attempted = 0
+        for rel, future in bounded_futures(alias_tus[:25], analyze_aliasing, workers=1, budget=budget):
+            attempted += 1
+            try:
+                extra_aliasing = future.result()
+                result.detector_limitations.extend({"tu": rel, "detector": "scalar_aliasing", "reason": reason}
+                                                   for reason in extra_aliasing.limitations)
+                promoted = set()
+                for proof in extra_aliasing.proofs if extra_aliasing.complete else ():
+                    diagnostic = {"rule_id": ALIASING_RULE_ID, "file": proof["file"], "line": proof["line"],
+                                  "message": f"{proof['object']} has declared type {proof['declared_type']} "
+                                             f"but is accessed through {proof['access_type']}",
+                                  "cwe": "CWE-843", "compiler": "gcc+clang-ast", "tu": rel,
+                                  "corroborated_by": ["gcc", "clang-ast"], "preprocessed_by": "gcc",
+                                  "aliasing_proof": proof}
+                    per_tu[rel].diagnostics.append(diagnostic)
+                    promoted.add((proof["file"], proof["candidate_line"]))
+                per_tu[rel].review_candidates = [c for c in per_tu[rel].review_candidates
+                    if (c["file"], c["line"]) not in promoted]
+            except Exception as exc:
+                result.detector_limitations.append({"tu": rel, "detector": "scalar_aliasing",
+                    "reason": f"scalar aliasing corroboration failed: {type(exc).__name__}"})
+        if attempted < len(alias_tus):
+            result.detector_limitations.append({"tu": "", "detector": "scalar_aliasing",
+                "reason": f"scalar aliasing cap or analysis budget left {len(alias_tus) - attempted} TU(s) unresolved"})
+
     result.budget_exhausted = budget.exhausted
     if result.budget_exhausted:
         result.detector_limitations.append({
@@ -813,6 +855,8 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
             res_props["cwe"] = cwe
         if f.get("corroborated_by"):
             res_props["corroborated_by"] = f["corroborated_by"]
+        if f.get("aliasing_proof"):
+            res_props["aliasing_proof"] = f["aliasing_proof"]
         if f.get("preprocessed_by"):
             res_props["preprocessed_by"] = f["preprocessed_by"]
         sarif_results.append(emit.result(
