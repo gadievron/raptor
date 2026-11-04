@@ -181,24 +181,30 @@ def _argparse_accepted(*args: str, timeout: float = 3.0) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def test_no_args_exits_zero():
+@pytest.fixture(scope="module")
+def dispatcher_help(_child_isolation):
+    """Capture the real dispatcher once for its independent help assertions."""
+    return _run_raptor()
+
+
+def test_no_args_exits_zero(dispatcher_help):
     """``raptor.py`` with no arguments prints help and exits 0."""
-    r = _run_raptor()
+    r = dispatcher_help
     assert r.returncode == 0
 
 
-def test_help_lists_available_modes():
+def test_help_lists_available_modes(dispatcher_help):
     """No-args help output mentions ``Available Modes``."""
-    r = _run_raptor()
+    r = dispatcher_help
     assert "Available Modes" in (r.stdout + r.stderr)
 
 
 @pytest.mark.parametrize(
     "mode", ["scan", "binary", "fuzz", "web", "agentic", "codeql", "analyze"]
 )
-def test_help_lists_each_mode(mode: str):
+def test_help_lists_each_mode(mode: str, dispatcher_help):
     """Each documented mode appears somewhere in the help output."""
-    r = _run_raptor()
+    r = dispatcher_help
     assert mode in (r.stdout + r.stderr)
 
 
