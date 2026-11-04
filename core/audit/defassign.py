@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -395,10 +396,10 @@ def resolve_include_closure(
     resolved: list[Path] = []
     unresolved: list[str] = []
     seen: set[Path] = set()
-    queue: list[Path] = [anchor]
+    queue: deque[Path] = deque([anchor])
     total_bytes = 0
     while queue:
-        path = queue.pop(0)
+        path = queue.popleft()
         if path in seen:
             continue
         seen.add(path)

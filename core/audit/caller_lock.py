@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -565,10 +566,10 @@ def _tu_function_bodies(
     # quoted include paths as string literals); body extraction runs
     # on each header's sanitized view.
     seen_files: set[Path] = set()
-    frontier: list[tuple[Path, int]] = [(Path(def_path), 0)]
+    frontier: deque[tuple[Path, int]] = deque([(Path(def_path), 0)])
     poisoned: set[str] = set()
     while frontier and len(seen_files) < _TU_INCLUDE_MAX_FILES:
-        cur_path, depth = frontier.pop(0)
+        cur_path, depth = frontier.popleft()
         if depth >= _TU_INCLUDE_DEPTH:
             continue
         got_cur = read_text_capped(cur_path, _MAX_FILE_BYTES)
