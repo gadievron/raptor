@@ -25,6 +25,7 @@ import pytest
 
 from core.sandbox import check_mount_available
 from core.sandbox._spawn import mount_ns_available, run_sandboxed
+from core.sandbox.errors import SandboxSetupError
 from core.sandbox.tests.capability import requires_landlock, requires_userns
 
 
@@ -68,7 +69,7 @@ class TestSeccompUnixAllowancePlumbing:
             "core.sandbox._spawn._make_seccomp_preexec", spy)
         try:
             run_sandboxed(["true"], **_spawn_kwargs(tmp_path, **over))
-        except Exception:  # noqa: BLE001, S110 — host-specific setup failures are fine
+        except (Exception, SandboxSetupError):  # noqa: BLE001, S110 — decision captured before host setup
             pass
         return captured
 

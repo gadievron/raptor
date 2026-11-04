@@ -1,4 +1,8 @@
 {
+  "redos-census": {
+    "note": "Pure stdlib default-tier census; every check must execute. Observed zero skips in the full CI-script validation.",
+    "skips": 0
+  },
   "replay-eval": {
     "note": "1 = the lane's module-level skip on runners without the local replay-case corpus; a maintainer runner with cases present records its own count",
     "skips": 1

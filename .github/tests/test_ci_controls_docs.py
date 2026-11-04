@@ -119,6 +119,11 @@ def test_daily_sweep_covers_every_repo_invariant_detector() -> None:
     sweep_scripts = _live_detector_scripts(
         _read(".github/workflows/miswiring-scan.yml"),
     )
+    # Per-run artifact checks cannot be replayed against the repository
+    # in a daily source sweep. Their report wiring has its own tests.
+    artifact_checks = {".github/scripts/check_skip_budget.py"}
+    lint_scripts -= artifact_checks
+    sweep_scripts -= artifact_checks
     assert lint_scripts, "repo-invariants step extraction went vacuous"
     missing = sorted(lint_scripts - sweep_scripts)
     extra = sorted(sweep_scripts - lint_scripts)

@@ -26,6 +26,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+import pytest
+
 # parents[2] = .github/tests → .github → repo root. Anchor to this
 # file, not $RAPTOR_DIR, so the test inspects its own worktree.
 REPO = Path(__file__).resolve().parents[2]
@@ -79,48 +81,39 @@ class TestStaticBound(unittest.TestCase):
         )
 
 
-class TestBehaviouralBound(unittest.TestCase):
-    def test_extracted_loops_terminate_on_symlink_cycle(self):
-        import tempfile
+def _loop_cases():
+    cases = []
+    for script in _scripts():
+        text = script.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for i, j, var in _loops(text):
+            # Include the original counter initialization verbatim.
+            start = i
+            while start > 0 and "_symhops=0" in lines[start - 1]:
+                start -= 1
+            snippet = "\n".join(lines[start:j + 1])
+            harness = f'set -uo pipefail\n{var}="$1"\n{snippet}\necho "RESOLVED"\n'
+            origin = f"{script.relative_to(REPO)}:{i + 1}"
+            cases.append(pytest.param(origin, harness, id=origin))
+    assert cases, "symlink-loop inventory went empty; review the extraction boundary"
+    return cases
 
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            (tmp / "link1").symlink_to("link2")
-            (tmp / "link2").symlink_to("link1")
-            cycle = tmp / "link1"
 
-            for script in _scripts():
-                text = script.read_text(encoding="utf-8")
-                lines = text.splitlines()
-                for i, j, var in _loops(text):
-                    # Include the _symhops=0 init immediately above the
-                    # loop when present.
-                    start = i
-                    while start > 0 and "_symhops=0" in lines[start - 1]:
-                        start -= 1
-                    snippet = "\n".join(lines[start : j + 1])
-                    harness = (
-                        "set -uo pipefail\n"
-                        f'{var}="$1"\n'
-                        f"{snippet}\n"
-                        'echo "RESOLVED"\n'
-                    )
-                    with self.subTest(script=str(script), loop_line=i + 1):
-                        proc = subprocess.run(
-                            ["bash", "-c", harness, "harness", str(cycle)],
-                            capture_output=True,
-                            text=True,
-                            timeout=30,
-                            cwd=td,
-                            check=False,
-                        )
-                        self.assertNotEqual(
-                            proc.returncode,
-                            0,
-                            f"{script}: loop resolved a symlink cycle "
-                            f"without erroring: {proc.stdout!r}",
-                        )
-                        self.assertIn("hop limit", proc.stderr)
+class TestBehaviouralBound:
+    @pytest.mark.parametrize("origin,harness", _loop_cases())
+    def test_extracted_loops_terminate_on_symlink_cycle(self, tmp_path, origin, harness):
+        # Each real launcher loop is an independent boundary check, rather
+        # than accumulating all of their subprocess work in one test phase.
+        (tmp_path / "link1").symlink_to("link2")
+        (tmp_path / "link2").symlink_to("link1")
+        proc = subprocess.run(
+            ["bash", "-c", harness, "harness", str(tmp_path / "link1")],
+            capture_output=True, text=True, timeout=30, cwd=tmp_path, check=False,
+        )
+        assert proc.returncode != 0, (
+            f"{origin}: loop resolved a symlink cycle without erroring: {proc.stdout!r}"
+        )
+        assert "hop limit" in proc.stderr
 
 
 if __name__ == "__main__":

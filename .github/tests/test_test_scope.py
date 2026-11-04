@@ -479,6 +479,23 @@ class TestDispatchFailsOpen:
     toward FULL dispatch on any file it cannot map — never toward
     zero — while mappable shapes stay scoped."""
 
+    def test_worker_planner_edit_runs_its_consuming_tiers(self, tmp_path):
+        targets = [
+            "core/sandbox/tests/test_one.py",
+            "packages/exploit_feasibility/tests/test_one.py",
+            ".github/tests/test_one.py",
+        ]
+        for target in targets:
+            path = tmp_path / target
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("def test_one(): pass\n")
+        result = compute_tier_dispatch(
+            [".github/scripts/pytest_workers.py"], tmp_path,
+        )
+        assert _active(result) == ["ci_lint", "exploit_feasibility", "sandbox"]
+        assert result["sandbox"]["files"] == [Path(targets[0])]
+        assert result["exploit_feasibility"]["files"] == [Path(targets[1])]
+
     def test_plain_edit_stays_scoped(self, mini_repo):
         # Control: an in-place edit of the same module dispatches its
         # test without falling to full dispatch.

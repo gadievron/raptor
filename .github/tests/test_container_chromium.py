@@ -75,4 +75,6 @@ def test_nightly_provisions_browser_sdk_and_native_runtime():
     assert "cache-key-prefix: venv-grammars-web" in slow_job
     assert "uv-export-extra-args: --extra grammars --extra web" in slow_job
     install = slow_job.index("python -m playwright install --with-deps chromium")
-    assert install < slow_job.index("python -m pytest -m slow")
+    slow_command = re.search(r"(?m)^\s+python -m pytest\b[^\n]*\s-m slow\b", slow_job)
+    assert slow_command is not None
+    assert install < slow_command.start()
