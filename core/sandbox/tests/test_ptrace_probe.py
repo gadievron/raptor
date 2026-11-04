@@ -282,7 +282,7 @@ class TestFinalWaitpidCleanup:
     def test_final_waitpid_error_reaps_child(self, monkeypatch):
         calls = []
 
-        def fake_waitpid(pid, options):
+        def fake_waitpid(pid, options, *, deadline=None):
             calls.append(options)
             if len(calls) == 1:
                 return (pid, _STOPPED)   # child stopped as expected
@@ -296,7 +296,7 @@ class TestFinalWaitpidCleanup:
 
     def test_first_waitpid_error_still_reaps(self, monkeypatch):
         # Guard for the sibling failure paths.
-        def fake_waitpid(pid, options):
+        def fake_waitpid(pid, options, *, deadline=None):
             raise OSError("simulated first-waitpid failure")
 
         result, reaped = _run_probe_with(monkeypatch, fake_waitpid)
@@ -306,7 +306,7 @@ class TestFinalWaitpidCleanup:
     def test_happy_path_no_reap(self, monkeypatch):
         calls = []
 
-        def fake_waitpid(pid, options):
+        def fake_waitpid(pid, options, *, deadline=None):
             calls.append(options)
             if len(calls) == 1:
                 return (pid, _STOPPED)

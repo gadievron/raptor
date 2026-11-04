@@ -48,25 +48,30 @@ proxy thread or any other coroutine context. In RAPTOR's lifecycle
 the probe runs at startup before any sandbox is constructed, so this
 constraint is satisfied automatically.
 
-**No waitpid timeout.** The probe blocks indefinitely if the child
-fails to stop or exit. In practice this completes in microseconds —
-the child's TRACEME + self-SIGSTOP path is short and synchronous.
-On a wedged system that can't schedule the probe child within seconds,
-the broader sandbox setup is going to have problems anyway. Add a
-SIGALRM-based timeout if this ever bites in the field.
+**Bounded parent waits.** Stop and exit share one monotonic deadline.
+On failure or cancellation the parent kills its unreaped probe child
+and waits within a separate cleanup budget. A cleanup timeout is logged
+rather than indefinitely blocking sandbox startup. No process-global
+signal timer or signal handler is installed.
 """
 
 from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import errno
 import logging
 import os
 import signal
+import time
 
 from . import state
 
 logger = logging.getLogger(__name__)
+
+_PROBE_TIMEOUT_S = 5.0
+_REAP_TIMEOUT_S = 5.0
+_WAIT_POLL_S = 0.01
 
 # ptrace request constants (see <sys/ptrace.h>)
 _PTRACE_TRACEME = 0
@@ -126,9 +131,8 @@ def check_ptrace_available() -> bool:
         if state._ptrace_available_cache is not None:
             return state._ptrace_available_cache
 
-        # Fail-closed wrapper: _run_probe is documented to never raise,
-        # but a future change (ctypes signature drift, kernel API
-        # change) could violate that. The sandbox-setup path must NOT
+        # Fail-closed wrapper for unexpected probe errors (ctypes
+        # signature drift, kernel API changes). Sandbox setup must NOT
         # crash on probe failure — degrade to "ptrace unavailable" and
         # continue, matching the rest of the sandbox's fail-closed
         # degradation pattern.
@@ -160,8 +164,8 @@ def _run_probe() -> bool:
     """Fork a sentinel child and verify PTRACE_TRACEME + PTRACE_CONT work.
 
     Separated from check_ptrace_available so the cache layer can be
-    tested without forking. This function never raises — failures
-    return False.
+    tested without forking. Expected OS failures return False;
+    cancellation propagates after child cleanup.
     """
     libc = _get_libc()
     if libc is None:
@@ -212,56 +216,52 @@ def _run_probe() -> bool:
             # If we get here, the parent successfully resumed us. Exit clean.
             os._exit(0)
         except BaseException:  # noqa: BLE001 — catch SystemExit too in child
-            os.write(2, b"sandbox: ptrace probe child unexpected exception\n")
-            os._exit(1)
+            try:
+                os.write(2, b"sandbox: ptrace probe child unexpected exception\n")
+            finally:
+                os._exit(1)
 
-    # Parent: wait for the child to stop, attempt PTRACE_CONT, then reap.
+    # Parent owns the child until a terminal wait status (or ECHILD)
+    # proves it was reaped. Keep cleanup in finally so cancellation and
+    # unexpected ctypes failures cannot strand a stopped child.
+    child_owned = True
+    deadline = time.monotonic() + _PROBE_TIMEOUT_S
     try:
-        _wpid, status = _waitpid_eintr_safe(pid, os.WUNTRACED)
-    except OSError as e:
-        logger.debug("ptrace probe: waitpid failed: %s", e)
-        # Best-effort cleanup; the child may be a zombie.
-        _try_kill_and_reap(pid)
-        return False
+        _, status = _waitpid_eintr_safe(pid, os.WUNTRACED, deadline=deadline)
+        if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+            child_owned = False
+        if not os.WIFSTOPPED(status):
+            logger.debug("ptrace probe: child did not stop (status=%#x)", status)
+            return False
 
-    if not os.WIFSTOPPED(status):
-        # Child didn't stop — TRACEME was rejected (child exited 1) or
-        # the child died for some other reason. Either way, ptrace isn't
-        # working as expected.
-        logger.debug("ptrace probe: child did not stop (status=%#x)", status)
-        _try_kill_and_reap(pid)
-        return False
+        ctypes.set_errno(0)
+        rc = libc.ptrace(_PTRACE_CONT, pid, None, None)
+        err = ctypes.get_errno()
+        if rc != 0:
+            logger.debug("ptrace probe: PTRACE_CONT failed (errno=%d)", err)
+            return False
 
-    # Attempt to continue the traced child. If ptrace is restricted,
-    # this returns -1 with EPERM/EACCES.
-    ctypes.set_errno(0)
-    rc = libc.ptrace(_PTRACE_CONT, pid, None, None)
-    err = ctypes.get_errno()
-    if rc != 0:
-        logger.debug("ptrace probe: PTRACE_CONT failed (errno=%d)", err)
-        _try_kill_and_reap(pid)
+        _, exit_status = _waitpid_eintr_safe(pid, 0, deadline=deadline)
+        if os.WIFEXITED(exit_status) or os.WIFSIGNALED(exit_status):
+            child_owned = False
+        if not os.WIFEXITED(exit_status) or os.WEXITSTATUS(exit_status) != 0:
+            logger.debug(
+                "ptrace probe: child exited abnormally (status=%#x)", exit_status,
+            )
+            return False
+        return True
+    except OSError as exc:
+        if isinstance(exc, ChildProcessError) or exc.errno == errno.ECHILD:
+            child_owned = False
+        logger.debug("ptrace probe: child wait failed: %s", exc)
         return False
-
-    # Reap the child. If everything worked, the child resumed from SIGSTOP
-    # and exited 0.
-    try:
-        _, exit_status = _waitpid_eintr_safe(pid, 0)
-    except OSError as e:
-        logger.debug("ptrace probe: final waitpid failed: %s", e)
-        # Same cleanup as the earlier failure paths — without it a
-        # final-waitpid error leaks the resumed child unreaped
-        # (zombie until process exit). ECHILD is swallowed inside.
-        _try_kill_and_reap(pid)
-        return False
-    if not os.WIFEXITED(exit_status) or os.WEXITSTATUS(exit_status) != 0:
-        logger.debug(
-            "ptrace probe: child exited abnormally (status=%#x)", exit_status
-        )
-        return False
-    return True
+    finally:
+        if child_owned:
+            _try_kill_and_reap(pid)
 
 
-def _waitpid_eintr_safe(pid: int, options: int) -> tuple:
+def _waitpid_eintr_safe(pid: int, options: int, *,
+                       deadline: float | None = None) -> tuple:
     """Loop on EINTR — `os.waitpid` raises InterruptedError when
     interrupted by an unrelated signal (e.g. another child's SIGCHLD,
     SIGALRM from a timer). Treating that as "ptrace unavailable" would
@@ -272,13 +272,25 @@ def _waitpid_eintr_safe(pid: int, options: int) -> tuple:
     raises an exception (e.g. signal.signal(SIGTERM, lambda *a: ...)).
     The retry covers that case. Harmless overhead in the common case.
 
-    Other OSErrors (ECHILD, EINVAL) propagate to the caller.
+    Other OSErrors (ECHILD, EINVAL) propagate to the caller. A deadline
+    selects nonblocking polling and bounds both ordinary waits and EINTR
+    retries without changing process-global signal handlers.
     """
     while True:
         try:
-            return os.waitpid(pid, options)
+            result = os.waitpid(
+                pid, options if deadline is None else options | os.WNOHANG,
+            )
         except InterruptedError:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("ptrace probe child wait exceeded its deadline") from None
             continue
+        if deadline is None or result[0] != 0:
+            return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("ptrace probe child wait exceeded its deadline")
+        time.sleep(min(_WAIT_POLL_S, remaining))
 
 
 def _try_kill_and_reap(pid: int) -> None:
@@ -292,23 +304,11 @@ def _try_kill_and_reap(pid: int) -> None:
     doesn't silently leave a zombie (same EINTR concern as the main
     probe waitpid calls).
 
-    Uses pidfd to close the PID-reuse window. Pre-fix the kill+wait
-    sequence had a race:
-
-      1. probe child exits naturally
-      2. another process spawns, kernel allocates the same PID
-      3. our `os.kill(pid, SIGKILL)` lands on the unrelated
-         new process
-
-    The window is microseconds wide on a typical host but real —
-    PID-wraparound on a busy machine completes in seconds and
-    probe paths run repeatedly. `pidfd_open(pid)` (Linux 5.3+)
-    refers to the process by FD, then `pidfd_send_signal(fd, SIG)`
-    delivers via fd — both refuse silently if the original
-    process exited (no PID-reuse hazard). Fall back to the
-    PID-based kill on older kernels (pidfd_open returns ENOSYS
-    pre-5.3, or AttributeError if Python is older than 3.9 which
-    added `os.pidfd_open`).
+    The caller must still own an unreaped child. Never call this after
+    a terminal wait status or ECHILD: opening a pidfd after ownership
+    was lost cannot establish the original child's identity. A pidfd
+    stabilizes signal delivery during cleanup where supported; older
+    kernels use the still-owned child PID.
     """
     pidfd = None
     try:
@@ -341,6 +341,16 @@ def _try_kill_and_reap(pid: int) -> None:
             pass
 
     try:
-        _waitpid_eintr_safe(pid, 0)
+        deadline = time.monotonic() + _REAP_TIMEOUT_S
+        while True:
+            _, status = _waitpid_eintr_safe(pid, 0, deadline=deadline)
+            if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("ptrace probe cleanup exceeded its deadline")
+    except TimeoutError:
+        logger.warning(
+            "ptrace probe: child %d did not reap within the cleanup budget", pid,
+        )
     except (OSError, ChildProcessError):
         pass
