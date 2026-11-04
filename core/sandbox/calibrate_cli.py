@@ -206,8 +206,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             )
             return _SOFTWARE_EX
         env_sig = cal._env_signature(env_keys)
-        fp = cal._fingerprint(bin_sha, env_sig)
-        cached_profile = cal._load_from_cache(fp)
+        cached_profile = cal._load_matching_cache(bin_sha, env_sig, probe_args)
         if cached_profile is None:
             sys.stderr.write(
                 f"raptor-sandbox-calibrate: no cached profile for "
@@ -234,10 +233,9 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         except OSError:
             bin_sha = None  # type: ignore[assignment]
         env_sig = cal._env_signature(env_keys)
-        fp = (cal._fingerprint(bin_sha, env_sig)
-              if bin_sha is not None else None)
         before = (
-            cal._load_from_cache(fp) if (fp and not args.force) else None
+            cal._load_matching_cache(bin_sha, env_sig, probe_args)
+            if bin_sha is not None and not args.force else None
         )
         profile = cal.load_or_calibrate(
             bin_path, probe_args=probe_args,
