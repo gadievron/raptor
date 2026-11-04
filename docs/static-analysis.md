@@ -582,3 +582,18 @@ independent corroboration and are excluded from normal findings and automatic
 finding analysis. The scan summary reports their count. In `/audit`, these
 warnings alone produce an inconclusive result, even when they match the hypothesis.
 A clean run does not refute an aliasing hypothesis.
+
+When GCC and Clang are available, compiler scanning also checks a limited class
+of C aliasing candidates against Clang's parsed types. Direct loads, stores,
+and local pointer aliases can become findings when they access a known local
+scalar through an incompatible builtin scalar type on a straight-line path.
+The report identifies the object and both types under Raptor's strict-aliasing
+compiler model; project build flags are not inferred. Harmless casts alone do
+not qualify. `/audit` uses the same check for matching CWE-843 hypotheses.
+
+Calls, conditional paths, unknown pointer origins, typedefs, compiler-specific
+aliasing exceptions, and C++ remain outside this check. Their warnings stay in
+the review report. Missing tools, unsupported Clang output, timeouts, and
+analysis limits also preserve the candidates; silence never proves them safe.
+The extra parsing runs once per candidate-bearing C translation unit, up to
+25 units per scan, within the shared compiler analysis budget.

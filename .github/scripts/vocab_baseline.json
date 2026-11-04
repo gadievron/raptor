@@ -3168,6 +3168,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "packages/static-analysis/compiler_scan.py::diagnostic": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Compiler finding output schema, including scalar aliasing proof and compiler provenance fields. Fixed record field names, not a learned target/API vocabulary."
+  },
   "packages/static-analysis/scanner.py::_SEMGREP_LANG_ALIASES": {
     "count": 11,
     "kind": "literal"

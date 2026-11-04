@@ -87,7 +87,7 @@ def sandbox_spy(monkeypatch):
         calls.append({"cmd": cmd, **kwargs})
         fwd = {
             k: kwargs[k]
-            for k in ("capture_output", "text", "timeout", "cwd")
+            for k in ("capture_output", "text", "timeout", "cwd", "stdout", "stderr")
             if k in kwargs
         }
         return subprocess.run(cmd, check=False, **fwd)
@@ -1364,3 +1364,59 @@ def test_review_candidates_deduplicate_across_translation_units(tmp_path, monkey
     result = _cs.scan_target(tmp_path)
     assert len(result.review_candidates) == 1
     assert not result.findings
+
+
+@needs_analyzer
+def test_native_aliasing_pipeline_separates_proof_from_candidates(tmp_path, sandbox_spy):
+    if not compiler_sweep._gcc_analyzer() or not compiler_sweep._clang_path():
+        pytest.skip("GCC and Clang required for scalar aliasing corroboration")
+    (tmp_path / "a.c").write_text(
+        "int direct(float value) { return *(int*)&value; }\n"
+        "int indirect(float value) { int *p=(int*)&value; return *p; }\n"
+        "int unused(float value) { int *p=(int*)&value; return 0; }\n"
+        "int dead(float value) { if (0) return *(int*)&value; return 0; }\n")
+    result = _cs.scan_target(tmp_path)
+    proofs = [f for f in result.findings if f["rule_id"] == "raptor.compiler.incompatible-scalar-access"]
+    assert {f["line"] for f in proofs} == {1, 2}
+    assert {c["line"] for c in result.review_candidates} == {3, 4}
+    sarif = _cs.to_sarif(result)
+    assert all(r["ruleId"] != "-Wstrict-aliasing" for r in sarif["runs"][0]["results"])
+    assert all(f["aliasing_proof"]["object"] == "value" for f in proofs)
+    ast_calls = [call for call in sandbox_spy if "-ast-dump=json" in call["cmd"]]
+    assert len(ast_calls) == 1
+    assert ast_calls[0]["block_network"]
+    assert ast_calls[0]["limits"]["max_file_mb"] == 8
+
+
+def test_aliasing_tu_cap_retains_every_unresolved_warning(tmp_path, monkeypatch):
+    from core.detectors import scalar_aliasing
+    _fake_toolchain(monkeypatch)
+    for i in range(26): (tmp_path / f"f{i}.c").write_text("int a;\n")
+    def analyze(target, rel, **kw):
+        return _cs.TuDiagnostics(rel, ok=True, compiler="gcc", review_candidates=[{
+            "file": rel, "line": 1, "rule_id": "-Wstrict-aliasing", "message": "candidate",
+            "cwe": "CWE-843", "compiler": "gcc", "tu": rel}])
+    monkeypatch.setattr(_cs, "analyze_tu", analyze)
+    calls = []
+    def corroborate(*a, **kw):
+        calls.append(a[1])
+        return scalar_aliasing.AliasingResult(complete=True)
+    monkeypatch.setattr(scalar_aliasing, "corroborate_aliasing", corroborate)
+    result = _cs.scan_target(tmp_path)
+    assert len(calls) == 25 and len(result.review_candidates) == 26
+    assert not result.findings
+    assert any("1 TU(s) unresolved" in item["reason"] for item in result.detector_limitations)
+
+
+def test_incomplete_aliasing_cannot_promote_partial_proofs(tmp_path, monkeypatch):
+    from core.detectors import scalar_aliasing
+    _fake_toolchain(monkeypatch)
+    (tmp_path / "a.c").write_text("int a;\n")
+    candidate = {"file": "a.c", "line": 1, "rule_id": "-Wstrict-aliasing", "message": "candidate",
+                 "cwe": "CWE-843", "compiler": "gcc", "tu": "a.c"}
+    monkeypatch.setattr(_cs, "analyze_tu", lambda *a, **kw: _cs.TuDiagnostics(
+        "a.c", ok=True, compiler="gcc", review_candidates=[candidate]))
+    monkeypatch.setattr(scalar_aliasing, "corroborate_aliasing", lambda *a, **kw:
+        scalar_aliasing.AliasingResult(proofs=[{"unvalidated": "partial"}], limitations=["interrupted"]))
+    result = _cs.scan_target(tmp_path)
+    assert not result.findings and result.review_candidates == [candidate]

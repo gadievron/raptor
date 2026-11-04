@@ -200,6 +200,14 @@ def _reset_tu_cache() -> None:
     _include_dirs_memo.clear()
 
 
+class _AliasingIncomplete(Exception):
+    """Carry a failed attempt past the memo without storing a transient result."""
+
+    def __init__(self, record: dict[str, Any]):
+        self.record = record
+        super().__init__("scalar aliasing analysis incomplete")
+
+
 class _AnalyzerSignalKilled(Exception):
     """The analyzer subprocess died to a signal (negative returncode).
 
@@ -1989,8 +1997,9 @@ def run_compiler_analyzer_sweep(
         # invocation failures, and signal kills (negative returncode)
         # are transient and must stay retryable.
         _cache = tu_cache if tu_cache is not None else _tu_cache
+        analysis_key = _tu_cache_key(cmd, full_path)
         record, _cached = _cache.get_or_compute(
-            _tu_cache_key(cmd, full_path), _run_tu_analysis,
+            analysis_key, _run_tu_analysis,
         )
     except subprocess.TimeoutExpired:
         return _error(
@@ -2081,6 +2090,51 @@ def run_compiler_analyzer_sweep(
             for d in attributed
         ]
         if not spec.positive_evidence:
+            from core.detectors.budget import WorkBudget
+            from core.detectors.scalar_aliasing import corroborate_aliasing, RULE_ID as ALIASING_RULE_ID
+            alias_key = None
+            if analysis_key is not None and clang is not None:
+                try:
+                    st = os.stat(clang)
+                    alias_key = ("scalar_aliasing_v1", analysis_key, file_path, clang, st.st_size, st.st_mtime_ns)
+                except OSError:
+                    pass  # An unpinnable compiler must run uncached.
+            def compute_aliasing():
+                # Cache the whole TU, not the first hypothesis's range or names.
+                candidates = [{"file": file_path, "line": d["line"]} for d in diags
+                              if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)
+                              and _same_file(d["file"], full_path)]
+                analysis = corroborate_aliasing(
+                    target_path, file_path, candidates,
+                    gcc=gcc[0] if gcc else None, clang=clang, sandbox_run=sandbox_run,
+                    budget=WorkBudget(30), include_dirs_memo=include_dirs_memo,
+                    scratch_root=str(out_dir) if out_dir else None,
+                )
+                value = {"proofs": analysis.proofs if analysis.complete else [], "limitations": analysis.limitations}
+                if not analysis.complete:
+                    raise _AliasingIncomplete(value)
+                return value
+            try:
+                alias_record, _alias_cached = _cache.get_or_compute(alias_key, compute_aliasing)
+            except _AliasingIncomplete as exc:
+                alias_record = exc.record
+            # Callers may mutate their evidence; never return the memo's objects.
+            alias_record = copy.deepcopy(alias_record)
+            proofs = [p for p in alias_record["proofs"] if p["function"] == function_name
+                      and _same_file(str(target_path / p["file"]), full_path)
+                      and _in_range(p["line"], line_start, line_end)
+                      and (not identifiers or set(identifiers).intersection(p["identifiers"]))]
+            if proofs:
+                details["aliasing_proofs"] = proofs
+                return SweepResult(
+                    tool="compiler", file_path=file_path, function_name=function_name,
+                    outcome="confirmed", rule_id=f"compiler:{ALIASING_RULE_ID}",
+                    matches=[{"file": p["file"], "line": p["line"], "rule_id": ALIASING_RULE_ID,
+                              "message": f"incompatible scalar access to {p['object']}",
+                              "aliasing_proof": p} for p in proofs],
+                    raw_output=raw, details=details,
+                )
+            details["corroboration_limitations"] = alias_record["limitations"]
             details["candidate_only"] = True
             details["reason"] = "heuristic compiler diagnostic requires independent corroboration"
         return SweepResult(

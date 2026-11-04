@@ -111,6 +111,7 @@ class ExpandedView:
     line_map: tuple = ()
     tool: str = ""
     errors: list = field(default_factory=list)
+    source_files: tuple[str, ...] = ()  # target marker paths; >64 entries means provenance is over budget
 
     def lines(self) -> list:
         return self.text.split("\n") if self.text else []  # line-model: cpp-emitted text is \n-model (the lexer consumes \r\n)
@@ -376,7 +377,7 @@ class _OriginResolver:
 
 
 def _parse_linemarked_output(
-    output: str, target_root: Path, workdir: Path,
+    output: str, target_root: Path, workdir: Path, *, source_files: set[str] | None = None,
 ) -> tuple:
     """Split preprocessor output into (text, line_map).
 
@@ -394,6 +395,8 @@ def _parse_linemarked_output(
         if m:
             cur_line = int(m.group(1))
             cur_file = resolver.resolve(_unescape_marker_path(m.group(2)))
+            if source_files is not None and cur_file is not None and len(source_files) <= 64:
+                source_files.add(cur_file)
             continue
         out_lines.append(raw)
         if cur_file is not None and cur_line > 0:
@@ -602,13 +605,15 @@ def expand_translation_unit(
                 tool=Path(pre[0]).name,
             )
 
-        text, line_map = _parse_linemarked_output(output, target_path, workdir)
+        source_files: set[str] = set()
+        text, line_map = _parse_linemarked_output(output, target_path, workdir, source_files=source_files)
         view = ExpandedView(
             ok=True,
             file_path=file_path,
             text=text,
             line_map=line_map,
             tool=Path(pre[0]).name,
+            source_files=tuple(sorted(source_files)),
         )
         if view_cache is not None and key is not None:
             view_cache.put(key, view)
