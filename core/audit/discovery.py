@@ -1089,9 +1089,17 @@ def _parse_sm_findings(
         lines = [ln for ln in lines if not ln.startswith("```")]
         text = "\n".join(lines)
 
+    _primary_file = (
+        sorted({s.file for s in bundle.handler_sites})[0]
+        if bundle.handler_sites else ""
+    )
+    _sm_fid = (
+        f"{_primary_file}:{bundle.field_name}"
+        if _primary_file else bundle.field_name
+    )
     result = DiscoveryResult(
         source="state_machine",
-        seam_or_field=bundle.field_name,
+        seam_or_field=_sm_fid,
     )
 
     try:
@@ -2486,7 +2494,10 @@ def write_discovery_weaknesses(
         now_iso,
     )
 
-    callee_file, callee_func = callee_fid.rsplit(":", 1)
+    if ":" in callee_fid:
+        callee_file, callee_func = callee_fid.rsplit(":", 1)
+    else:
+        callee_file, callee_func = "", callee_fid
 
     entry = ReviewJournalEntry(
         ts=now_iso(),
