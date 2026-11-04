@@ -55,9 +55,8 @@ def _wait_listening(port: int, timeout: float = 5.0) -> None:
 
 
 def _roundtrip(port: int, payload: bytes) -> bytes:
-    # No half-close: the relay tears the whole pair down on EOF from
-    # either side (correct for its HTTP consumers), so a SHUT_WR here
-    # would race the reply. Read until the SERVER closes.
+    # This helper reads until the server finishes its reply.
+    # Request-side half-close is covered by test_proxy_bridge_halfclose.
     with socket.create_connection(("127.0.0.1", port), timeout=5) as c:
         c.settimeout(5)
         c.sendall(payload)

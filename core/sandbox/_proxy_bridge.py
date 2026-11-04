@@ -164,11 +164,12 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
     # fd -> monotonic instant of the pair's last byte movement in
     # either direction (both fds of a pair carry the same value).
     last_activity: dict[int, float] = {}
-    # fds whose pair must close once their pending buffer drains: the
-    # SOURCE side hit EOF with bytes still owed to this fd. Preserves
-    # the old synchronous semantics where an EOF was only processed
-    # after every previously read byte had been written through.
-    closing = set()
+    # Track EOF independently in each direction. A source's EOF is
+    # forwarded as SHUT_WR only after its destination queue drains;
+    # the reverse direction stays usable until its own EOF.
+    read_eof = set()
+    write_eof = set()
+    shutdown_pending = set()
 
     def _close_pair(fd) -> None:
         for f in (pairs.pop(fd, None), fd):
@@ -178,11 +179,30 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
             pending.pop(f, None)
             stall_since.pop(f, None)
             last_activity.pop(f, None)
-            closing.discard(f)
+            read_eof.discard(f)
+            write_eof.discard(f)
+            shutdown_pending.discard(f)
             try:
                 os.close(f)
             except OSError:
                 pass
+
+    def _finish_write(fd):
+        # Wrap without taking ownership of the relay descriptor.
+        try:
+            sock = socket.socket(fileno=fd)
+            try:
+                sock.shutdown(socket.SHUT_WR)
+            finally:
+                sock.detach()
+        except OSError:
+            _close_pair(fd)
+            return
+        shutdown_pending.discard(fd)
+        write_eof.add(fd)
+        partner = pairs.get(fd)
+        if partner in write_eof:
+            _close_pair(fd)
 
     def _mark_activity(fd):
         now = time.monotonic()
@@ -210,8 +230,8 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
             read_fds.extend(listeners)
             for fd in pairs:
                 partner = pairs[fd]
-                if fd in closing or partner in closing:
-                    continue  # draining a dying pair; no more reads
+                if fd in read_eof:
+                    continue  # this source finished; reverse reads continue
                 if len(pending.get(partner, b"")) >= _MAX_PENDING_BYTES:
                     continue  # backpressure: partner's buffer is full
                 read_fds.append(fd)
@@ -257,10 +277,8 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                     stall_since[fd] = time.monotonic()
                 else:
                     stall_since.pop(fd, None)
-                    if fd in closing:
-                        # Last owed byte delivered after the source's
-                        # EOF — now the pair can go.
-                        _close_pair(fd)
+                    if fd in shutdown_pending:
+                        _finish_write(fd)
 
             accept_ready = []
             for fd in readable:
@@ -296,14 +314,12 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                     _close_pair(fd)
                     continue
                 if not data:
-                    # EOF. If bytes are still owed to the partner,
-                    # keep the pair draining (bounded by the stall
-                    # and idle sweeps); otherwise tear down now.
+                    read_eof.add(fd)
                     if pending.get(partner):
-                        closing.add(partner)
+                        shutdown_pending.add(partner)
                         stall_since.setdefault(partner, time.monotonic())
                     else:
-                        _close_pair(fd)
+                        _finish_write(partner)
                     continue
                 buf = pending[partner]
                 if not buf:
