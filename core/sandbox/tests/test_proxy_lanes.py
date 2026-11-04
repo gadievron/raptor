@@ -51,9 +51,9 @@ def _connect_tcp(port: int, target: str, timeout: float = 5.0) -> int:
 
 def _connect_unix(path: str, target: str, timeout: float = 5.0) -> int:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    s.connect(path)
     try:
+        s.settimeout(timeout)
+        s.connect(path)
         return _drive_connect(s, target)
     finally:
         s.close()

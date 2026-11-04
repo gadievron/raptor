@@ -122,20 +122,23 @@ def _serve_echo_forever() -> "tuple[int, Callable[[], None]]":
 def _open_tunnel(proxy_port: int, backend_port: int,
                  expect: bytes = b" 200 ") -> socket.socket:
     """CONNECT through the proxy; assert the response status."""
-    s = socket.create_connection(("127.0.0.1", proxy_port),
-                                 timeout=_DEADLINE)
-    s.settimeout(_DEADLINE)
-    s.sendall(
-        f"CONNECT 127.0.0.1:{backend_port} HTTP/1.1\r\n"
-        f"Host: 127.0.0.1:{backend_port}\r\n\r\n".encode("ascii"))
-    buf = b""
-    while b"\r\n\r\n" not in buf:
-        chunk = s.recv(4096)
-        assert chunk, f"proxy closed during CONNECT handshake: {buf!r}"
-        buf += chunk
-    status = buf.split(b"\r\n", 1)[0]
-    assert expect in status, f"unexpected CONNECT status: {status!r}"
-    return s
+    with contextlib.ExitStack() as cleanup:
+        s = socket.create_connection(("127.0.0.1", proxy_port),
+                                     timeout=_DEADLINE)
+        cleanup.callback(s.close)
+        s.settimeout(_DEADLINE)
+        s.sendall(
+            f"CONNECT 127.0.0.1:{backend_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{backend_port}\r\n\r\n".encode("ascii"))
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            assert chunk, f"proxy closed during CONNECT handshake: {buf!r}"
+            buf += chunk
+        status = buf.split(b"\r\n", 1)[0]
+        assert expect in status, f"unexpected CONNECT status: {status!r}"
+        cleanup.pop_all()
+        return s
 
 
 def _send_raw(proxy_port: int, payload: bytes) -> bytes:
