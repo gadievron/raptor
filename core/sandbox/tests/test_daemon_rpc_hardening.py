@@ -74,16 +74,23 @@ class _PipeDaemon:
 
     def __init__(self) -> None:
         in_r, in_w = os.pipe()
-        out_r, out_w = os.pipe()
-        os.set_inheritable(in_r, True)
-        os.set_inheritable(out_w, True)
-        self.daemon_fd_numbers = (in_r, out_w)
-        self.proc = subprocess.Popen(
-            [sys.executable, "-S", str(_DAEMON_PATH),
-             "--rpc-in-fd", str(in_r), "--rpc-out-fd", str(out_w)],
-            pass_fds=(in_r, out_w),
-            stderr=subprocess.DEVNULL,
-        )
+        owned = [in_r, in_w]
+        try:
+            out_r, out_w = os.pipe()
+            owned.extend((out_r, out_w))
+            os.set_inheritable(in_r, True)
+            os.set_inheritable(out_w, True)
+            self.daemon_fd_numbers = (in_r, out_w)
+            self.proc = subprocess.Popen(
+                [sys.executable, "-S", str(_DAEMON_PATH),
+                 "--rpc-in-fd", str(in_r), "--rpc-out-fd", str(out_w)],
+                pass_fds=(in_r, out_w),
+                stderr=subprocess.DEVNULL,
+            )
+        except BaseException:
+            for fd in owned:
+                os.close(fd)
+            raise
         os.close(in_r)
         os.close(out_w)
         self.write_fd = in_w
@@ -101,6 +108,54 @@ class _PipeDaemon:
                 pass
         self.proc.kill()
         self.proc.wait(timeout=10)
+
+
+@pytest.mark.parametrize("fault", ["second-pipe", "inheritance", "spawn"])
+def test_pipe_daemon_failed_setup_closes_pipes(monkeypatch, fault):
+    from types import SimpleNamespace
+
+    allocated = []
+    real_pipe = os.pipe
+    real_inherit = os.set_inheritable
+
+    def pipe():
+        if fault == "second-pipe" and allocated:
+            raise OSError("injected pipe failure")
+        pair = real_pipe()
+        allocated.extend(pair)
+        return pair
+
+    def inherit(fd, value):
+        if fault == "inheritance":
+            raise OSError("injected inheritance failure")
+        real_inherit(fd, value)
+
+    def spawn(*args, **kwargs):
+        raise OSError("injected spawn failure")
+
+    module = sys.modules[__name__]
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(module, "os", SimpleNamespace(
+                pipe=pipe, set_inheritable=inherit, close=os.close,
+            ))
+            patcher.setattr(module, "subprocess", SimpleNamespace(
+                Popen=spawn, DEVNULL=subprocess.DEVNULL,
+            ))
+            with pytest.raises(OSError, match="injected .* failure"):
+                _PipeDaemon()
+        assert len(allocated) == (2 if fault == "second-pipe" else 4)
+        for fd in allocated:
+            with pytest.raises(OSError) as error:
+                os.fstat(fd)
+            assert error.value.errno == errno.EBADF
+    finally:
+        # Contain the regression itself when constructor cleanup is broken.
+        for fd in allocated:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 @pytest.fixture
