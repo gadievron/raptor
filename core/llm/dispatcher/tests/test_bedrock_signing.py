@@ -21,10 +21,10 @@ credential-scrub guarantee.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 import re
-import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -37,6 +37,8 @@ from core.llm.dispatcher.auth import (
     seed_from_config,
 )
 from core.llm.dispatcher.server import LLMDispatcher, _TOKEN_HEADER
+
+from packages.web.tests.http_server import start_http_server
 
 try:
     import botocore  # noqa: F401
@@ -101,21 +103,12 @@ class _CaptureHandler(BaseHTTPRequestHandler):
 def upstream():
     """A captive HTTP server the bedrock rule forwards to. Yields
     ``(endpoint_url, get_captured)``."""
-    server = HTTPServer(("127.0.0.1", 0), _CaptureHandler)
-    try:
+    with ExitStack() as cleanup:
+        server = HTTPServer(("127.0.0.1", 0), _CaptureHandler)
         server.captured = None  # type: ignore[attr-defined]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        start_http_server(server, cleanup.callback)
         host, port = server.server_address
-    except BaseException:
-        server.server_close()
-        raise
-    try:
         yield f"http://{host}:{port}", lambda: server.captured  # type: ignore[attr-defined]
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 def _bedrock_store(endpoint: str) -> CredentialStore:

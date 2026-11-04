@@ -13,10 +13,10 @@ loopback fixture cannot work by design.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import shutil
 import subprocess
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,8 @@ from typing import Any
 import pytest
 
 from packages.web.ffuf import FfufConfig, FfufRunner
+
+from packages.web.tests.http_server import start_http_server
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffuf") is None, reason="ffuf binary not on PATH"
@@ -94,19 +96,10 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 @pytest.fixture()
 def fixture_server():
     _RecordingHandler.records = []
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
-    try:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-    except BaseException:
-        server.server_close()
-        raise
-    try:
+    with ExitStack() as cleanup:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+        start_http_server(server, cleanup.callback)
         yield f"http://127.0.0.1:{server.server_port}", _RecordingHandler.records
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @pytest.fixture()
