@@ -1159,7 +1159,11 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                     continue
                 _parse_jsonl_line(line, out)
                 if len(out) >= _MAX_EVENTS_PARSED:
-                    over_bound = True
+                    # Reaching a cap is not evidence that input was lost.
+                    # Look ahead only when this chunk has no remaining bytes.
+                    over_bound = True  # conservative if the lookahead errors
+                    over_bound = (total > _MAX_EVENTS_STREAM_BYTES
+                                  or start < len(carry) or bool(os.read(fd, 1)))
                     return out, over_bound
             carry = carry[start:]
             if len(carry) > _MAX_EVENT_LINE_BYTES:
@@ -1168,7 +1172,10 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                 carry = b""
                 skipping_oversize_line = True
             if total >= _MAX_EVENTS_STREAM_BYTES:
-                over_bound = True
+                over_bound = True  # conservative if the lookahead errors
+                over_bound = total > _MAX_EVENTS_STREAM_BYTES or bool(os.read(fd, 1))
+                if not over_bound and carry and not skipping_oversize_line:
+                    _parse_jsonl_line(carry, out)
                 return out, over_bound
         if carry and not skipping_oversize_line:
             _parse_jsonl_line(carry, out)
