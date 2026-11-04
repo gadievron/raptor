@@ -1632,6 +1632,11 @@ class TestCompilerSurfaceFences:
             calls, "run_compiler_analyzer_sweep_guarded",
         ) == {"_guarded_compiler_sweep"}
         assert _callers_of(calls, "_guarded_compiler_sweep") == {
+            "test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs",
+            "test_aliasing_no_clang_retains_candidate",
+            "test_aliasing_proof_cannot_confirm_another_identifier",
+            "test_aliasing_warning_needs_an_independent_access_proof",
+            "test_incomplete_aliasing_attempt_is_not_memoized",
             "_sweep",
             "test_sandbox_used_with_network_deny",
             "test_non_c_file_inconclusive",
