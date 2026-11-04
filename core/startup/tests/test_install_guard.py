@@ -458,7 +458,10 @@ g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
 parent = os.getpid()
 if os.fork() == 0:
     g._bytecode_worker(parent)
-    pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))
+    ready = pathlib.Path(sys.argv[2])
+    pending = ready.with_suffix('.tmp')
+    pending.write_text(str(os.getpid()))
+    pending.replace(ready)  # Publish only after the complete PID is closed.
 time.sleep(60)
 """
     parent = subprocess.Popen([sys.executable, '-I', '-c', code, str(GUARD), str(ready)])
