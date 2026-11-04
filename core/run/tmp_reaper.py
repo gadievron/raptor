@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import errno
 import logging
+import math
 import os
 import socket
 import stat
@@ -599,6 +600,9 @@ def _max_age_seconds() -> float | None:
     if raw:
         try:
             hours = float(raw)
+            if not math.isfinite(hours) or (
+                    hours > 0 and not math.isfinite(hours * 3600.0)):
+                raise ValueError("non-finite temp retention")
         except ValueError:
             logger.debug("ignoring non-numeric %s=%r", _MAX_AGE_ENV, raw)
             hours = _DEFAULT_MAX_AGE_H
@@ -855,6 +859,10 @@ def _reap(now: float | None) -> list[Path]:
         import time
 
         now = time.time()
+    # NaN makes every age comparison false; an infinite clock can make
+    # every entry look old. Neither is permission to delete anything.
+    if not math.isfinite(now):
+        return []
     euid = os.geteuid()
     reaped: list[Path] = []
 
@@ -1201,6 +1209,9 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
     if raw:
         try:
             days = float(raw)
+            if not math.isfinite(days) or (
+                    days > 0 and not math.isfinite(days * 86400.0)):
+                raise ValueError("non-finite run retention")
         except ValueError:
             logger.debug("ignoring non-numeric %s=%r", _RUN_MAX_AGE_ENV, raw)
             days = _DEFAULT_RUN_AGE_D
@@ -1219,6 +1230,10 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
         import time
 
         now = time.time()
+    # NaN makes every age comparison false; an infinite clock can make
+    # every entry look old. Neither is permission to delete anything.
+    if not math.isfinite(now):
+        return []
     euid = os.geteuid()
     reaped: list[Path] = []
     live_cwds: set[str] | None = None
@@ -1356,6 +1371,9 @@ def _reap_logs(now: float | None) -> list[Path]:
         return []  # opt-in only — never delete audit data by default
     try:
         days = float(raw)
+        if not math.isfinite(days) or (
+                days > 0 and not math.isfinite(days * 86400.0)):
+            raise ValueError("non-finite log retention")
     except ValueError:
         logger.debug("ignoring non-numeric %s=%r", _LOG_MAX_AGE_ENV, raw)
         return []
@@ -1372,6 +1390,10 @@ def _reap_logs(now: float | None) -> list[Path]:
         import time
 
         now = time.time()
+    # NaN makes every age comparison false; an infinite clock can make
+    # every entry look old. Neither is permission to delete anything.
+    if not math.isfinite(now):
+        return []
     euid = os.geteuid()
     reaped: list[Path] = []
     for path in log_dir.glob("raptor_*.jsonl"):

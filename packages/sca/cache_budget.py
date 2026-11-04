@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import re
 import stat
@@ -198,20 +199,41 @@ def prune_cache(
     The dry run uses the same selection but leaves all data untouched.
     Results count logical bytes; actual freed blocks can differ.
     """
+    # Validate before locking or touching the root, including empty caches.
+    # NaN defeats comparison-based guards, infinity silently disables size
+    # pruning, and a finite day count can overflow when scaled to seconds.
+    clock = time.time() if now is None else now
+    for name, value, scale in (
+        ('max_age_days', max_age_days, 86400.0),
+        ('stress_max_age_days', stress_max_age_days, 86400.0),
+        ('max_bytes', max_bytes, 1),
+        ('stress_max_bytes', stress_max_bytes, 1),
+        ('now', clock, 1),
+    ):
+        if value is None:
+            if name in {'max_bytes', 'stress_max_bytes'}:
+                continue
+            raise ValueError(f'{name} must be finite')
+        try:
+            finite = math.isfinite(value) and math.isfinite(value * scale)
+        except (OverflowError, TypeError):
+            finite = False
+        if not finite:
+            raise ValueError(f'{name} must be finite')
     result = EvictionResult()
-    if not root.exists():
-        return result
     if max_age_days <= 0 or stress_max_age_days <= 0:
         raise ValueError('cache retention must be positive')
     if any(n is not None and n < 0 for n in (max_bytes, stress_max_bytes)):
         raise ValueError('cache budgets must be nonnegative')
+    if not root.exists():
+        return result
     with _lock(root) as locked:
         if not locked:
             result.busy = True
             return result
         return _prune_locked(root, result, max_age_days, max_bytes,
                              stress_max_bytes, stress_max_age_days, dry_run,
-                             time.time() if now is None else now)
+                             clock)
 
 
 def _prune_locked(

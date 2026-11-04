@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import stat
 import tempfile
@@ -162,6 +163,8 @@ def sweep_dead_owner_dirs(
     raises — a sweep failure must never block a component boot.
     """
     try:
+        if not math.isfinite(legacy_max_age_s):
+            return []
         return _sweep(prefix, exclude, legacy_max_age_s)
     except Exception:  # noqa: BLE001 — best-effort by contract
         logger.debug("dead-owner sweep for %r aborted", prefix,
