@@ -96,6 +96,15 @@ def sandbox_spy(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _baseline_compiler_channel_only(monkeypatch):
+    """These legacy contracts cover the ordinary pass; composition has its own suite."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(_cs, "run_memcpy_overlap", lambda *a, **kw: SimpleNamespace(
+        value=SimpleNamespace(diagnostics={}, limitations=[]),
+    ))
+
+
 # ---------------------------------------------------------------------
 # TU enumeration — inventory exclusion reuse
 # ---------------------------------------------------------------------

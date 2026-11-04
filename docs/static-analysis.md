@@ -379,6 +379,25 @@ Coccinelle rules have no inline suppression mechanism. Unwanted
 findings can be excluded via `--exclude-dir` globs.
 
 
+### Overlapping memory copies
+
+With `--compiler-scan`, C files containing written `memcpy` calls also receive
+an overlap check when Semgrep and a GCC analyzer supporting
+`-Wanalyzer-overlapping-buffers` (GCC 14 or newer) are available. Candidate
+matches select files; only compiler overlap warnings become findings.
+
+The check adds at most one compiler invocation per selected translation unit,
+plus one capability probe per scan. It shares the TU cap and worker limit and
+runs only after the ordinary compiler analysis succeeds. Its compiler settings
+preserve copy calls for analysis; the ordinary pass also runs to retain other
+warnings. C++ files, macro-only call sites and unresolved compiler paths are
+outside this additional check's coverage.
+
+Unavailable tools, failed candidate scans and failed supplemental compiles are
+reported as coverage limitations. Existing compiler findings are retained.
+No overlap warning means no finding from this check; it does not establish that
+the file is safe.
+
 ### Compiler-scan coverage limitations
 
 `--compiler-scan` treats analyzer silence on a TU as evidence only

@@ -1,0 +1,7 @@
+# Internal candidates only. These matches are never security findings.
+rules:
+  - id: raptor.internal.memcpy-candidate
+    languages: [c]
+    pattern: memcpy(...)
+    message: Candidate for compiler overlap analysis
+    severity: INFO
