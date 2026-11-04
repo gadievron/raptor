@@ -9,6 +9,7 @@ before an LLM starts reading target code.
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -34,6 +35,18 @@ if TYPE_CHECKING:
     from core.security.prompt_envelope import UntrustedBlock
 
 logger = logging.getLogger(__name__)
+
+# No process/run-wide project cache: only one prompt's graph/model pair
+# shares a successful selection. ContextVar keeps threads/nested renders apart.
+@dataclass
+class _PromptProjectResolution:
+    projects: dict[tuple[Path, str, str | None], Any] = field(default_factory=dict)
+    active: bool = True
+
+
+_prompt_project_resolution: ContextVar[_PromptProjectResolution | None] = ContextVar(
+    "threat_model_prompt_project_resolution", default=None,
+)
 
 SCHEMA_VERSION = 2
 # Range of schema versions ``from_dict`` will accept. Anything
@@ -1139,6 +1152,18 @@ def threat_model_prompt_block(target: Path) -> str:
     attacker-influenced symbol names in auto-derived models
     cannot forge envelope tags.
     """
+    scope = _PromptProjectResolution()
+    token = _prompt_project_resolution.set(scope)
+    try:
+        return _render_threat_model_prompt_block(target)
+    finally:
+        # Copied/inherited contexts must not retain a live cache after return.
+        scope.active = False
+        scope.projects.clear()
+        _prompt_project_resolution.reset(token)
+
+
+def _render_threat_model_prompt_block(target: Path) -> str:
     # The block's boundary tag comes from the prompt-envelope
     # registry (BLOCK_BOUNDARY_TAG_NAMES): minting through the shared
     # constant keeps this tag inside neutralize_tag_forgery's derived
@@ -1501,10 +1526,24 @@ def _project_for_target(target: Path) -> Any | None:
     mgr = ProjectManager()
     project = None
     governed = False
+    resolution_failed = False
+    scope = _prompt_project_resolution.get()
+    if scope is not None and not scope.active:
+        scope = None
+    cache_key = None
     try:
         from core.project.trust import _context_project_name
         from core.run.pin import get_process_project
-        if get_process_project() is not None:
+        pin = get_process_project()
+        if scope is not None:
+            # CWD and pin changes must not reuse a previous selection.
+            try:
+                cache_key = (target, os.getcwd(), pin)
+                if cache_key in scope.projects:
+                    return scope.projects[cache_key]
+            except Exception:  # Cache failures never change the owner rule.
+                cache_key = None
+        if pin is not None:
             governed = True
             name = _context_project_name()
             candidate = mgr.load(name) if name else None
@@ -1512,6 +1551,7 @@ def _project_for_target(target: Path) -> Any | None:
                 project = candidate
     except Exception:  # noqa: BLE001 — fall to the legacy scan
         governed = False
+        resolution_failed = True
     if not governed:
         project = mgr.find_project_for_target(str(target))
         if project is None:
@@ -1519,6 +1559,11 @@ def _project_for_target(target: Path) -> Any | None:
             candidate = mgr.load(active) if active else None
             if candidate and _same_path(candidate.target, target):
                 project = candidate
+    if scope is not None and scope.active and cache_key is not None and not resolution_failed:
+        try:
+            scope.projects[cache_key] = project
+        except Exception:  # Memo admission is advisory, never a new failure.
+            pass
     return project
 
 
