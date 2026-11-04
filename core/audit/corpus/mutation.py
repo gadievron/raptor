@@ -44,10 +44,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from core.atomic_fs import write_text_atomically
 
 if TYPE_CHECKING:
     from .label import FunctionLabel
@@ -494,16 +494,9 @@ def apply_labels_to_tree(
             errors.append(f"{label.function_id}: unreadable: {exc}")
             continue
         try:
-            fd, tmp_name = tempfile.mkstemp(
-                dir=str(target.parent), prefix=".mutant-",
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(mutated)
-                os.replace(tmp_name, target)
-            except BaseException:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
+            # Preserve executable bits on fixture scripts; mkstemp's 0600
+            # replacement silently stripped them from mutated run trees.
+            write_text_atomically(target, mutated, tmp_prefix=".mutant-")
         except OSError as exc:
             errors.append(f"{label.function_id}: write failed: {exc}")
             continue

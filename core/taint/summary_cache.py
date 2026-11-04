@@ -26,12 +26,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 from collections.abc import Iterable
 
+from core.atomic_fs import write_text_atomically
 from core.json import dumps_canonical
 from core.source.gated import read_text_gated
 from core.taint.learned_intake import LearnedIntake
@@ -368,19 +367,7 @@ class SummaryCache:
                 f"file every load would refuse"
             )
             raise ValueError(msg)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(blob)
-            os.replace(tmp_name, target)
-        except BaseException:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+        write_text_atomically(target, blob, mode=0o600)
 
     def load(self, path: str | Path) -> int:
         """Merge entries from a persisted cache file; returns how many

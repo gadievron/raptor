@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from core.atomic_fs import write_text_atomically
 from core.json import load_json
 from core.logging import get_logger
 
@@ -715,15 +716,4 @@ def rebase_gateway_fingerprints(scan_dir: Path, new_base_url: str) -> int:
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    import tempfile
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    write_text_atomically(path, json.dumps(data, indent=2), mode=0o600)
