@@ -1078,7 +1078,7 @@ def _load_json(path: Path) -> dict | None:
         return None
     try:
         loaded = json.loads(data.decode("utf-8", errors="replace"))
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return None
     return loaded if isinstance(loaded, dict) else None
 
@@ -1169,7 +1169,10 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
     except OSError:
         return out, over_bound
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _parse_jsonl_line(line: bytes, out: list[dict]) -> None:
@@ -1178,7 +1181,7 @@ def _parse_jsonl_line(line: bytes, out: list[dict]) -> None:
         return
     try:
         record = json.loads(line.decode("utf-8", errors="replace"))
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return
     if isinstance(record, dict):
         out.append(record)
