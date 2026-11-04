@@ -119,3 +119,48 @@ def test_large_type_excerpt_is_bounded_and_marks_truncation(tmp_path, monkeypatc
     result = _resolve_types(tmp_path, "reader.go", {"class_name": "Record"}, "")
     assert len(result[0]["source"]) <= 100
     assert "truncated" in result[0]["source"]
+
+
+def test_full_context_keeps_receiver_contract_and_strategy_item_together(tmp_path, monkeypatch):
+    from core.audit.context import assemble_context
+    import core.audit.strategy as strategy
+
+    source = (
+        "package p\n"
+        "type InputRecord struct { Seen bool // Seen describes input presence.\n}\n"
+        "type CheckedRecord struct { Seen bool // Seen describes processing success.\n}\n"
+        "func (r *InputRecord) Decode(v any) error { return consume(v) }\n"
+        "func (r *CheckedRecord) Decode(v any) error { return consume(v) }\n"
+    )
+    (tmp_path / "records.go").write_text(source)
+    items = []
+    for line, text in enumerate(source.splitlines(), 1):
+        if not text.startswith("func"):
+            continue
+        owner = "InputRecord" if "*InputRecord" in text else "CheckedRecord"
+        items.append({
+            "name": "Decode", "kind": "function", "line_start": line, "line_end": line,
+            "signature": text.split("{")[0],
+            "metadata": {"class_name": owner, "parameters": [["r", "*" + owner], ["v", "any"]]},
+        })
+    inventory = {"files": [{"path": "records.go", "language": "go", "items": items}]}
+    selected = []
+
+    def capture(item, *args, **kwargs):
+        selected.append(item["metadata"]["class_name"])
+        return []
+
+    monkeypatch.setattr(strategy, "strategies_from_item", capture)
+    for item in reversed(items):
+        owner = item["metadata"]["class_name"]
+        context = assemble_context(
+            target_path=tmp_path, file_path="records.go", function_name="Decode",
+            line_start=item["line_start"], line_end=item["line_end"],
+            checklist=inventory, inventory=inventory,
+        )
+        assert context["metadata"]["class_name"] == owner
+        assert [d["name"] for d in context["type_definitions"]] == [owner]
+        contract = context["type_definitions"][0]["source"]
+        assert ("input presence" in contract) == (owner == "InputRecord")
+        assert ("processing success" in contract) == (owner == "CheckedRecord")
+        assert selected[-1] == owner

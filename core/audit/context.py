@@ -448,7 +448,7 @@ def assemble_context(
     strategies = None
     try:
         from .strategy import strategies_from_item
-        item = _find_checklist_item(checklist, file_path, function_name)
+        item = _find_checklist_item(checklist, file_path, function_name, line_start)
         if item:
             from .strategy import learned_vocab
             strategies = strategies_from_item(
@@ -3325,31 +3325,14 @@ def _extract_metadata(
     The source span disambiguates overloads and receiver methods. Without
     a span, only an unambiguous name may supply metadata.
     """
-    if not checklist:
+    item = _find_checklist_item(checklist, file_path, function_name, line_start)
+    if item is None:
         return {}
-
-    for file_info in checklist.get("files", []):
-        if file_info.get("path") != file_path:
-            continue
-        items = file_info.get("items", file_info.get("functions", []))
-        candidates = []
-        for item in items:
-            name = item.get("name")
-            owner = (item.get("metadata") or {}).get("class_name")
-            if function_name not in (name, f"{owner}.{name}" if owner else name):
-                continue
-            if line_start and item.get("line_start") != line_start:
-                continue
-            candidates.append(item)
-        if len(candidates) != 1:
-            return {}
-        item = candidates[0]
-        result = {}
-        if item.get("signature"):
-            result["signature"] = item["signature"]
-        result.update(item.get("metadata") or {})
-        return result
-    return {}
+    result = {}
+    if item.get("signature"):
+        result["signature"] = item["signature"]
+    result.update(item.get("metadata") or {})
+    return result
 
 
 def _build_caller_contract_digest(
@@ -4695,16 +4678,24 @@ def _find_checklist_item(
     checklist: dict[str, Any] | None,
     file_path: str,
     function_name: str,
+    line_start: int = 0,
 ) -> dict[str, Any] | None:
-    """Find a checklist item by file + function name."""
+    """Resolve an exact source occurrence or an unambiguous name."""
     if not checklist:
         return None
     for file_info in checklist.get("files", []):
         if file_info.get("path") != file_path:
             continue
+        candidates = []
         for item in file_info.get("items", file_info.get("functions", [])):
-            if item.get("name") == function_name:
-                return item
+            name = item.get("name")
+            owner = (item.get("metadata") or {}).get("class_name")
+            if function_name not in (name, f"{owner}.{name}" if owner else name):
+                continue
+            if line_start and item.get("line_start") != line_start:
+                continue
+            candidates.append(item)
+        return candidates[0] if len(candidates) == 1 else None
     return None
 
 
