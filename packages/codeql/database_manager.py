@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
 from typing import TypedDict
 
 # Path setup for direct CLI invocation. `os.environ["RAPTOR_DIR"]`
@@ -29,6 +30,7 @@ from typing import TypedDict
 if __name__ == "__main__":
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.atomic_fs import rmtree_hardened
 from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
 from core.git import get_safe_git_env
@@ -1130,7 +1132,7 @@ class DatabaseManager:
             try:
                 if entry.stat().st_mtime < entry_cutoff:
                     if entry.is_dir():
-                        shutil.rmtree(entry, ignore_errors=True)
+                        rmtree_hardened(entry)
                     else:
                         entry.unlink(missing_ok=True)
             except OSError:
@@ -1603,7 +1605,7 @@ class DatabaseManager:
 
         # Cleanup any prior leftover staging from this same process (e.g.,
         # from a previous crashed run with the same PID after PID reuse).
-        shutil.rmtree(staging_path, ignore_errors=True)
+        rmtree_hardened(staging_path)
 
         # Build the codeql command — point at staging, not canonical, so
         # readers of canonical never see a partial DB.
@@ -1917,7 +1919,7 @@ class DatabaseManager:
                 _failed = staging_path.parent / (
                     f".staging-failed-{language}"
                 )
-                shutil.rmtree(_failed, ignore_errors=True)
+                rmtree_hardened(_failed)
                 try:
                     staging_path.rename(_failed)
                     logger.error(
@@ -1925,7 +1927,7 @@ class DatabaseManager:
                         "(auto-cleaned after 1h)", _failed,
                     )
                 except OSError:
-                    shutil.rmtree(staging_path, ignore_errors=True)
+                    rmtree_hardened(staging_path)
                 final_path = None
                 did_promote = False
                 used_cached = False
@@ -1993,7 +1995,7 @@ class DatabaseManager:
                             logger.info(
                                 "✓ Database promoted by sibling; using cached %s", canonical_path
                             )
-                            shutil.rmtree(staging_path, ignore_errors=True)
+                            rmtree_hardened(staging_path)
                             used_cached = True
                         else:
                             # Sibling's canonical is broken. Best-effort:
@@ -2196,7 +2198,7 @@ class DatabaseManager:
             # reached the assignment (early exception before final_path set).
             _final = locals().get('final_path')
             if staging_path.exists() and _final != staging_path:
-                shutil.rmtree(staging_path, ignore_errors=True)
+                rmtree_hardened(staging_path)
 
     def create_databases_parallel(
         self,
@@ -2420,7 +2422,8 @@ class DatabaseManager:
                             continue
                         if db_path.exists():
                             if not dry_run:
-                                shutil.rmtree(db_path)
+                                if not rmtree_hardened(db_path):
+                                    raise OSError(f"could not remove database {db_path}")
                                 metadata_file.unlink()
                                 logger.info("Deleted old database: %s", db_path)
                             else:

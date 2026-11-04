@@ -14,6 +14,8 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 from typing import Optional
 
 from .detect import get_project_name
@@ -191,7 +193,7 @@ class GhidraSession:
                 except Exception:  # noqa: BLE001 — teardown best-effort
                     pass
                 self._project = None
-            shutil.rmtree(work_dir, ignore_errors=True)
+            rmtree_hardened(work_dir)
             raise
 
         from core.security.log_sanitisation import sanitise_for_terminal
@@ -355,7 +357,7 @@ class GhidraSession:
 
         if self._work_dir is not None:
             try:
-                shutil.rmtree(self._work_dir, ignore_errors=True)
+                rmtree_hardened(self._work_dir)
             except Exception:
                 pass
             self._work_dir = None

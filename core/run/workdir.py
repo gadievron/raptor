@@ -41,11 +41,12 @@ import atexit
 import logging
 import os
 import re
-import shutil
 import stat
 import tempfile
 import threading
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def _sweep_dead_sessions(root: Path) -> None:
             continue      # EPERM etc.: someone lives there; skip
         else:
             continue      # alive; skip
-        shutil.rmtree(entry.path, ignore_errors=True)
+        rmtree_hardened(entry.path)
 
 
 def _create_session_dir() -> Path | None:
@@ -169,7 +170,7 @@ def _create_session_dir() -> Path | None:
         except OSError as exc:
             logger.debug("workdir: cannot create %s (%s)", candidate, exc)
             return None
-        atexit.register(shutil.rmtree, str(candidate), ignore_errors=True)
+        atexit.register(rmtree_hardened, candidate)
         return candidate
     return None
 

@@ -29,11 +29,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import stat
 import tempfile
 import time
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 # Import-light (stdlib-only at module level) — shares the reaper's
 # in-use probes so both sweeps judge liveness the same way.
@@ -246,7 +247,7 @@ def _sweep(
                 "validation and delete; skipping this sweep", path,
             )
             continue
-        shutil.rmtree(path, ignore_errors=True)
+        rmtree_hardened(path)
         if not path.exists():
             removed.append(path)
 

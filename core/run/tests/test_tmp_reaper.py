@@ -5,6 +5,7 @@ All tests point the reaper at a private tmp_path via a monkeypatched
 """
 
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -1473,7 +1474,7 @@ class TestUnverifiableOwnerDirs:
         import core.run.tmp_reaper as reaper_mod
         d = self._dir(tmp_path, 1, age_s=25 * 3600)
         monkeypatch.setattr(
-            reaper_mod.shutil, "rmtree", lambda *a, **kw: None)
+            shutil, "rmtree", lambda *a, **kw: None)
         with caplog.at_level(_logging.INFO, logger="core.run.tmp_reaper"):
             got = reaper_mod.reap_dead_pid_dirs(
                 tmp_path, "raptor-pytest-", pid_suffix=True)
@@ -1554,7 +1555,7 @@ class TestMidSweepVanish:
                 real_rmtree(target)  # another actor wins the race
             return real_rmtree(path, *args, **kwargs)
 
-        monkeypatch.setattr(reaper_mod.shutil, "rmtree", racing_rmtree)
+        monkeypatch.setattr(shutil, "rmtree", racing_rmtree)
         got = reaper_mod.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True)
         assert got == [target, sibling]  # newest-first delete order

@@ -40,11 +40,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import shutil
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -307,7 +308,7 @@ def scratch_dir(
             keepalive_unregister(path)
         # keep=True transfers ownership only after successful setup.
         if not keep or not ready:
-            shutil.rmtree(path, ignore_errors=True)
+            rmtree_hardened(path)
 
 
 def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:

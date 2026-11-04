@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from core.atomic_fs import open_exclusive_artifact
+from core.atomic_fs import open_exclusive_artifact, rmtree_hardened
 from core.sandbox import check_child_unix_sockets_available
 from core.source import open_regular
 
@@ -536,7 +536,7 @@ class GhidraServer:
                     )
         finally:
             if self._work_dir is not None and not self._thread_alive():
-                shutil.rmtree(self._work_dir, ignore_errors=True)
+                rmtree_hardened(self._work_dir)
                 # Consistent object protocol: a stopped server is
                 # stopped — restart()/start() see the nulled state
                 # instead of booting against a deleted dir.

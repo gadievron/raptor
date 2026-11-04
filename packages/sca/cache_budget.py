@@ -11,12 +11,13 @@ import contextlib
 import logging
 import os
 import re
-import shutil
 import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+
+from core.atomic_fs import rmtree_hardened
 
 from core.atomic_fs.fs_lock import validate_lock_fd
 
@@ -235,7 +236,8 @@ def _prune_locked(
                        if p != root.parent):
                     raise OSError('symlink in cache path')
                 if unit.directory:
-                    shutil.rmtree(unit.path)
+                    if not rmtree_hardened(unit.path):
+                        raise OSError(f'could not remove cache directory {unit.path}')
                 else:
                     unit.path.unlink()
         except OSError:
