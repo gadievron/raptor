@@ -1081,7 +1081,9 @@ def run_rules_batched(
     aliases). Individual execution preserves attribution in that case.
     Rules with lifecycle scripts (initialize/finalize), or ambiguous
     lexical structure, execute individually to isolate their interpreter
-    state. The remaining rules can still batch.
+    state. The remaining rules can still batch. A failed/timed-out batch
+    retries its accepted rules individually with the original timeout/options;
+    incomplete batch matches never stand in for those per-rule results.
     """
     rules = [Path(r).resolve() for r in rules if Path(r).exists()]
     if not rules:
@@ -1321,30 +1323,18 @@ def run_rules_batched(
                 exc.stderr.decode("utf-8", errors="replace")
                 if exc.stderr else ""
             )
-            all_matches = _dedup_matches(
-                _parse_results(partial_stdout, "batch", nonce=nonce)
-                + _parse_results(partial_stderr, "batch", nonce=nonce),
-            )
-            forged = _warn_forged_markers(
+            # Keep the forgery warning from the abandoned batch, but do
+            # not adopt its incomplete matches or examined-file claims.
+            _warn_forged_markers(
                 partial_stdout, partial_stderr,
                 nonce=nonce, rule_name="batch", target=target,
             )
-            by_rule = _demux_batch_matches(
-                all_matches, rule_stems, alias_of,
+            logger.warning(
+                "Coccinelle batch timed out after %ss — retrying %d "
+                "accepted rules individually with the same per-rule timeout",
+                timeout, len(batched_rules),
             )
-            batch_elapsed = int((time.monotonic() - start) * 1000)
-            out = {
-                s: SpatchResult(
-                    rule=s, matches=by_rule.get(s, []),
-                    errors=[f"Batch timeout after {timeout}s"],
-                    # Same rationale as run_rule's timeout leg: the
-                    # slowest invocations must not report as 0 ms.
-                    elapsed_ms=batch_elapsed,
-                    returncode=-1,
-                    forged_markers=forged,
-                )
-                for s in rule_stems
-            }
+            out = _individual_results(batched_rules)
             out.update(refused)
             return out
         except OSError as e:
@@ -1389,15 +1379,19 @@ def run_rules_batched(
                 f"spatch exited with code {proc.returncode}"
                 + (f": {stderr_tail}" if stderr_tail else "")
             )
-        if proc.returncode == 0:
-            batch_examined = _collect_files_examined(
-                target, {m.file for m in all_matches},
-                no_includes=no_includes,
+        if proc.returncode != 0 or errors:
+            logger.warning(
+                "Coccinelle batch failed (exit %s) — retrying %d "
+                "accepted rules individually to preserve per-rule results",
+                proc.returncode, len(batched_rules),
             )
-        else:
-            # Died mid-tree: nothing beyond the actual matches is
-            # verified (same stance as run_rule and the timeout path).
-            batch_examined = sorted({m.file for m in all_matches})
+            out = _individual_results(batched_rules)
+            out.update(refused)
+            return out
+        batch_examined = _collect_files_examined(
+            target, {m.file for m in all_matches},
+            no_includes=no_includes,
+        )
         out = {
             s: SpatchResult(
                 rule=s, rule_path=str(r),
