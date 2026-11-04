@@ -2701,7 +2701,10 @@ class TestRealExecutionRust:
                 "use_path": "", "setup_lines": [],
             },
         )
-        r = execute_witness(spec, tmp_path)
+        # This slow integration leg pins crash classification, not the
+        # production deadline. Allow sandbox startup and crash teardown
+        # more time on loaded nightly runners.
+        r = execute_witness(spec, tmp_path, timeout_s=30)
         assert r.verdict == "confirmed", (
             f"expected confirmed; got {r.verdict}: {r.match_detail}"
         )
