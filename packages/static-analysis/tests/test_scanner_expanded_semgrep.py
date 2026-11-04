@@ -353,3 +353,18 @@ def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, caps
     paths = _scanner.run_expanded_semgrep_stage(repo, out, [str(rule)], [])
     assert len(json.loads(Path(paths[0]).read_text())["runs"][0]["results"]) == 1
     assert "pack(s) failed" not in capsys.readouterr().err
+
+
+def test_expanded_stage_forwards_run_setup(tmp_path, monkeypatch):
+    from core.detectors.setup import AnalysisSetup
+    repo = _c_repo(tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir()
+    setup = AnalysisSetup()
+    seen = []
+    def build(target, scratch, **kwargs):
+        seen.append(kwargs['setup'])
+        return FakeCorpus(root=Path(scratch))
+    monkeypatch.setattr(es, 'build_expanded_corpus', build)
+    assert _scanner.run_expanded_semgrep_stage(repo, out, [], [], setup=setup) == []
+    assert len(seen) == 1 and seen[0] is setup

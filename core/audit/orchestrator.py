@@ -34,6 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, NoReturn, TYPE_CHECKING
 
+from core.detectors.setup import AnalysisSetup
 from core.analysis.reach_audit import bind_joern_context, submit_with_joern
 from core.analysis.reachability_gates import (
     GUARD_UNAVAILABLE,
@@ -1190,6 +1191,7 @@ class OrchestratorConfig:
     include_dirs_memo: "BoundedMemo" = field(
         default_factory=_default_tu_cache, repr=False,
     )
+    analysis_setup: AnalysisSetup | None = field(default=None, repr=False)
     # Run-scoped joern channel health gate: consecutive dispatch
     # failures trip it, dispatch sites then skip joern steps instead
     # of dialing a dead/restarting server for the rest of the run.
@@ -1235,6 +1237,13 @@ class OrchestratorConfig:
     prep_profile: PrepProfile = field(
         default_factory=PrepProfile, repr=False, compare=False, kw_only=True,
     )
+
+    def __post_init__(self) -> None:
+        # Adopt the existing memo; keep constructor compatibility and one cache.
+        if self.analysis_setup is None:
+            self.analysis_setup = AnalysisSetup(include_dirs_memo=self.include_dirs_memo)
+        else:
+            self.include_dirs_memo = self.analysis_setup.include_dirs_memo
 
 
 @dataclass
@@ -23809,7 +23818,7 @@ def _run_tool_chain(
                         # back to the module defaults).
                         tu_cache=getattr(config, "tu_cache", None),
                         include_dirs_memo=getattr(
-                            config, "include_dirs_memo", None,
+                            getattr(config, "analysis_setup", config), "include_dirs_memo", None,
                         ),
                     ),
                 )

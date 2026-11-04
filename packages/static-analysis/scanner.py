@@ -24,6 +24,10 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.detectors.setup import AnalysisSetup
 
 # Python path safety: the only permitted sys.path addition is the
 # launcher-pinned RAPTOR_DIR (hard lookup — a KeyError here means the
@@ -1982,6 +1986,7 @@ def run_compiler_scan_stage(
     repo_path: Path,
     out_dir: Path,
     max_tus: int | None = None,
+    setup: "AnalysisSetup | None" = None,
 ) -> list[str]:
     """Run the compiler-analyzer scan channel and emit ``compiler.sarif``.
 
@@ -2003,7 +2008,9 @@ def run_compiler_scan_stage(
         return []
 
     cs = _load_compiler_scan()
-    kwargs = {} if max_tus is None else {"max_tus": max_tus}
+    kwargs: dict[str, Any] = {} if max_tus is None else {"max_tus": max_tus}
+    if setup is not None:
+        kwargs["setup"] = setup
     result = cs.scan_target(repo_path, out_dir=out_dir, **kwargs)
 
     if not result.ok:
@@ -2040,6 +2047,7 @@ def run_expanded_semgrep_stage(
     baseline_packs: list[tuple[str, str]],
     extra_configs: list[str] | None = None,
     max_tus: int | None = None,
+    setup: "AnalysisSetup | None" = None,
 ) -> list[str]:
     """Re-run the loaded semgrep ruleset over fidelity-3 expanded views.
 
@@ -2079,7 +2087,9 @@ def run_expanded_semgrep_stage(
 
     scratch = Path(tempfile.mkdtemp(prefix="expanded_semgrep_", dir=str(out_dir)))
     try:
-        kwargs = {} if max_tus is None else {"max_tus": max_tus}
+        kwargs: dict[str, Any] = {} if max_tus is None else {"max_tus": max_tus}
+        if setup is not None:
+            kwargs["setup"] = setup
         corpus = es.build_expanded_corpus(
             repo_path, scratch, out_dir=out_dir, **kwargs,
         )
@@ -3452,10 +3462,13 @@ def main() -> None:
         # compiler_sweep, opposite direction — per-TU gcc -fanalyzer /
         # clang --analyze diagnostics become scan findings. --no wins
         # over --on, mirroring the codeql flag pair.
+        from core.detectors.setup import AnalysisSetup
+        analysis_setup = AnalysisSetup()
         compiler_sarifs = []
         if args.compiler_scan and not args.no_compiler_scan:
             compiler_sarifs = run_compiler_scan_stage(
                 repo_path, out_dir, max_tus=args.compiler_scan_max_tus,
+                setup=analysis_setup,
             )
 
         # Expanded-view semgrep stage (opt-in). Re-runs the resolved
@@ -3467,6 +3480,7 @@ def main() -> None:
             expanded_sarifs = run_expanded_semgrep_stage(
                 repo_path, out_dir, rules_dirs, list(resolved_baseline),
                 extra_configs=args.extra_config,
+                setup=analysis_setup,
             )
 
         # Graduated synthesized rules (default-on, opt-out). Every
