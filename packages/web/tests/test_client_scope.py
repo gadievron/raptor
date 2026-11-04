@@ -45,8 +45,12 @@ def _server(status=200, headers=None, body=b"ok", handler_class=None):
         },
     )
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except BaseException:
+        server.server_close()
+        raise
     try:
         yield server, handler
     finally:

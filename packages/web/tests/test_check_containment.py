@@ -47,8 +47,12 @@ class _StubClient:
 @contextmanager
 def _listener(handler_class):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except BaseException:
+        server.server_close()
+        raise
     try:
         host, port = server.server_address
         yield f"http://{host}:{port}"

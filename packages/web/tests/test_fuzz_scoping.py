@@ -102,8 +102,12 @@ def _fake_target():
     server = http.server.ThreadingHTTPServer(
         ("127.0.0.1", 0), _ParamTargetHandler,
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except BaseException:
+        server.server_close()
+        raise
     try:
         host, port = server.server_address
         yield f"http://{host}:{port}"
@@ -115,23 +119,28 @@ def _fake_target():
 
 class TestParamScopedFuzzing:
 
-    def test_parameters_fuzzed_only_where_discovered(self, tmp_path: Path):
+    def test_parameters_fuzzed_only_where_discovered(self, tmp_path: Path, monkeypatch):
         pytest.importorskip("requests")
         pytest.importorskip("bs4")
         from packages.web.scanner import WebScanner
+        from packages.web.discovery import DiscoveryResult
 
         with _fake_target() as base_url:
-            scanner = WebScanner(
+            with WebScanner(
                 base_url, llm=None, out_dir=tmp_path,
                 max_depth=2, max_pages=10,
                 block_private_ips=False,
-                rate_limit=0,  # loopback fixture; politeness is real-target manners
-            )
-            recording = _RecordingFuzzer()
-            scanner.fuzzer = recording
-            scanner.scan()
-            crawler = scanner.crawler
-            scanner.close()
+                rate_limit=0,
+            ) as scanner:
+                # Keep the real crawl-to-fuzz routing; separate discovery and
+                # passive checks would issue unrelated requests to this fixture.
+                monkeypatch.setattr(scanner, "_phase_discovery",
+                                    lambda: DiscoveryResult(urls=[base_url]))
+                monkeypatch.setattr(scanner, "_phase_passive_checks", lambda *_: [])
+                recording = _RecordingFuzzer()
+                scanner.fuzzer = recording
+                scanner.scan()
+                crawler = scanner.crawler
 
         # The crawler recorded each param at its discovery URL.
         assert set(crawler.parameter_urls) == {"first", "second"}
@@ -154,10 +163,9 @@ class TestParamScopedFuzzing:
         from packages.web.crawler import WebCrawler
 
         with _fake_target() as base_url:
-            client = WebClient(base_url, block_private_ips=False, rate_limit=0)
-            crawler = WebCrawler(client, max_depth=2, max_pages=10)
-            results = crawler.crawl(base_url)
-            client.close()
+            with WebClient(base_url, block_private_ips=False, rate_limit=0) as client:
+                crawler = WebCrawler(client, max_depth=2, max_pages=10)
+                results = crawler.crawl(base_url)
 
         assert set(results["parameter_urls"]) == {"first", "second"}
         assert results["parameter_urls"]["first"] == [

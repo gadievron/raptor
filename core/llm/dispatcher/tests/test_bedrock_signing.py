@@ -102,15 +102,20 @@ def upstream():
     """A captive HTTP server the bedrock rule forwards to. Yields
     ``(endpoint_url, get_captured)``."""
     server = HTTPServer(("127.0.0.1", 0), _CaptureHandler)
-    server.captured = None  # type: ignore[attr-defined]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address
+    try:
+        server.captured = None  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+    except BaseException:
+        server.server_close()
+        raise
     try:
         yield f"http://{host}:{port}", lambda: server.captured  # type: ignore[attr-defined]
     finally:
         server.shutdown()
         server.server_close()
+        thread.join(timeout=2)
 
 
 def _bedrock_store(endpoint: str) -> CredentialStore:
