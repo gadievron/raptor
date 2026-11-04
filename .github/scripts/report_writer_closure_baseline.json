@@ -532,9 +532,6 @@
     "packages/cve_env/cve_env/agent/refusals.py::append_events::unsanitised_llm_value::_render_event": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
-    "packages/describe/cli.py::_resolve_archive::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
     "packages/exploit_feasibility/analyzer.py::FeasibilityReport.summary::unsanitised_llm_value::line": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
@@ -737,9 +734,6 @@
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::_run_with_lifecycle::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
-    "raptor.py::_unpack_archive_target::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::mode_binary::unsanitised_exception_text::exc": {

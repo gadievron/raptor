@@ -237,7 +237,10 @@ def _resolve_archive(
         transferred = True
         return result
     except Exception as exc:  # noqa: BLE001 — refuse failed acquisition
-        stderr.write(f"✗ archive extraction failed for {raw_path}: {exc}\n")
+        from core.security.log_sanitisation import sanitise_for_terminal
+        stderr.write(sanitise_for_terminal(
+            f"✗ archive extraction failed for {raw_path}: {exc}", max_len=1000,
+        ) + "\n")
         return None
     finally:
         # The caller only owns a successfully resolved result. Cancellation,
