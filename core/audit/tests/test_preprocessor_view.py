@@ -673,3 +673,27 @@ def test_preprocessor_deadline_exhausted_during_preparation_does_not_launch(tmp_
     view = expand_translation_unit(target_path=target, file_path='input.c', timeout=1,
                                    preprocessor=('/pinned/gcc', '-E', '-x', 'c'))
     assert not view.ok and 'budget exhausted' in view.errors[0]
+
+
+@needs_cpp
+def test_shared_include_memo_does_not_share_preprocessor_macro_context(tmp_path, sandbox_spy, monkeypatch):
+    from core.audit import compiler_sweep
+    from core.audit.run_memo import BoundedMemo
+    (tmp_path / 'include').mkdir()
+    (tmp_path / 'include' / 'value.h').write_text('int value = VALUE;\n')
+    (tmp_path / 'a.c').write_text('#include "value.h"\n')
+    walks = []
+    derive = compiler_sweep._derive_include_dirs
+    def count(target, directory):
+        walks.append((target, directory))
+        return derive(target, directory)
+    monkeypatch.setattr(compiler_sweep, '_derive_include_dirs', count)
+    memo = BoundedMemo(2)
+    one = _expand_tu_guarded(target_path=tmp_path, file_path='a.c',
+                             macro_config=['-DVALUE=1'], include_dirs_memo=memo)
+    two = _expand_tu_guarded(target_path=tmp_path, file_path='a.c',
+                             macro_config=['-DVALUE=2'], include_dirs_memo=memo)
+    assert one.ok and two.ok
+    assert 'int value = 1;' in one.text and 'int value = 2;' in two.text
+    assert one.line_map == two.line_map
+    assert len(walks) == 1 and memo.hit_count == 1

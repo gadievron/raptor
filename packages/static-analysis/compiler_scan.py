@@ -75,6 +75,7 @@ from core.audit.compiler_sweep import (
     _clang_path,
     _closure_suppression_witness,
     _derive_include_dirs,
+    _cached_include_dirs,
     _gcc_analyzer,
     _id_matches,
     _parse_analyzer_output,
@@ -83,6 +84,7 @@ from core.audit.compiler_sweep import (
     _resolve_bounded,
     _VetLimitExceeded,
 )
+from core.audit.run_memo import BoundedMemo
 from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
@@ -339,6 +341,7 @@ def analyze_tu(
     *,
     sandbox_run,
     scratch_root: str | None = None,
+    include_dirs_memo: BoundedMemo[list[str]] | None = None,
 ) -> TuDiagnostics:
     """Run the compiler analyzer over one TU; return kept diagnostics.
 
@@ -363,9 +366,10 @@ def analyze_tu(
                    "(need gcc >= 10 with -fanalyzer, or clang)",
         )
 
-    include_flags = [
-        f"-I{d}" for d in _derive_include_dirs(target_path, full_path.parent)
-    ]
+    include_dirs = (_derive_include_dirs(target_path, full_path.parent)
+                    if include_dirs_memo is None else
+                    _cached_include_dirs(target_path, full_path.parent, include_dirs_memo))
+    include_flags = [f"-I{d}" for d in include_dirs]
 
     if gcc is not None:
         gcc_path, mode = gcc
@@ -559,6 +563,9 @@ def scan_target(
     if scratch_root:
         os.makedirs(scratch_root, exist_ok=True)
 
+    # Shared only within this scan: a later run must discover header-directory
+    # changes. Bound entries and collapse concurrent lookups of the same TU dir.
+    include_dirs_memo: BoundedMemo[list[str]] = BoundedMemo(64)
     seen: set[tuple[str, str, int]] = set()
     workers = max(1, min(max_workers, len(tus)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -566,6 +573,7 @@ def scan_target(
             pool.submit(
                 analyze_tu, target_path, rel,
                 sandbox_run=sandbox_run, scratch_root=scratch_root,
+                include_dirs_memo=include_dirs_memo,
             ): rel
             for rel in tus
         }
@@ -589,7 +597,8 @@ def scan_target(
             assert gcc is not None
             gcc_path, mode = gcc
             full = target_path / rel
-            includes = [f"-I{d}" for d in _derive_include_dirs(target_path, full.parent)]
+            includes = [f"-I{d}" for d in _cached_include_dirs(
+                target_path, full.parent, include_dirs_memo)]
             return CompilerRequest(
                 command=(gcc_path, "-fanalyzer", OVERLAP_ID, "-fno-builtin-memcpy",
                          f"-fdiagnostics-format={mode}", *includes,
@@ -606,6 +615,7 @@ def scan_target(
             extra = run_memcpy_overlap(
                 target_path, eligible, request_for=overlap_request if gcc else None,
                 sandbox_run=sandbox_run, max_workers=workers,
+                include_dirs_memo=include_dirs_memo,
             ).value
             result.detector_limitations.extend({
                 "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
@@ -655,6 +665,7 @@ def scan_target(
             return expand_translation_unit(
                 target_path=target_path, file_path=tu, out_dir=scratch,
                 preprocessor=(gcc[0], "-fanalyzer", *_union_flags("gcc_flags"), "-E", "-x", "c"),
+                include_dirs_memo=include_dirs_memo,
             )
 
         def stack_request(tu, source):

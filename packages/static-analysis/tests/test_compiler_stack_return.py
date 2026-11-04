@@ -70,6 +70,13 @@ int *safe_heap(void) { return malloc(sizeof(int)); }
 void bad_uaf(int *value) { free(value); *value=1; }
 '''
     (repo / 'cases [*].c').write_text(source)
+    walks = []
+    derive = compiler_sweep._derive_include_dirs
+    def include_dirs(target, directory):
+        walks.append((target, directory))
+        return derive(target, directory)
+    monkeypatch.setattr(compiler_sweep, '_derive_include_dirs', include_dirs)
+    monkeypatch.setattr(cs, '_derive_include_dirs', include_dirs)
     calls = []
     def run(cmd, **kw):
         calls.append((cmd, kw))
@@ -95,6 +102,7 @@ void bad_uaf(int *value) { free(value); *value=1; }
     assert clang_calls[0][1]['target'] != str(repo)  # analyzes the frozen source view
     assert all(kw['block_network'] for _, kw in calls)
     assert all(not Path(kw['output']).exists() for _, kw in calls)
+    assert walks == [(repo, repo)]  # baseline and stack snapshot share discovery
 
 
 def test_stack_rule_metadata_does_not_reclassify_unrelated_clang_stack_escapes():
