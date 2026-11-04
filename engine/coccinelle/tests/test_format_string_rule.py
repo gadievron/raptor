@@ -52,6 +52,7 @@ def _run_rule(
         ["spatch", "--sp-file", str(rule), str(src), "--no-show-diff"],
         capture_output=True, text=True, timeout=120,
     )
+    assert proc.returncode == 0, proc.stderr
     results = []
     for stream in (proc.stdout, proc.stderr):
         for line in stream.splitlines():
@@ -478,3 +479,42 @@ class TestKnownResiduals:
             }
         """)
         assert len(results) == 1
+
+
+@pytest.mark.parametrize("names,prefix", [
+    ("printf vprintf wprintf warn warnx".split(), ""),
+    ("fprintf vfprintf sprintf vsprintf dprintf syslog vsyslog err errx "
+     "asprintf vasprintf".split(), "out, "),
+    ("snprintf vsnprintf".split(), "out, 128, "),
+])
+def test_inline_format_shapes_across_every_callee(tmp_path, names, prefix):
+    # Exercise every literal callee alternative with the same expression
+    # shapes. Similar names must not become additional callees.
+    safe = [
+        '"ok %d"', 'gettext("ok %d")',
+        'dgettext("domain", "ok %d")',
+        'dcgettext("domain", "ok %d", 1)',
+        'ngettext("ok %d", "oks %d", n)', '_("ok %d")',
+        'n ? "ok %d" : "other %d"',
+        '(n ? "ok %d" : "other %d")',
+    ]
+    unsafe = [
+        "user", "gettext(user)", 'n ? user : "ok %d"',
+        'n ? "ok %d" : user',
+        'n ? gettext("ok %d") : "other %d"',
+    ]
+    lines = []
+    expected = []
+    for name in names:
+        for index, expr in enumerate(safe + unsafe):
+            lines.append(f"void case_{name}_{index}(char *user, void *out, int n) {{")
+            lines.append(f"    {name}({prefix}{expr}, n);")
+            if expr in unsafe:
+                expected.append(len(lines))
+            lines.append("}")
+        lines.append(f"void other_{name}(char *user, void *out, int n) {{")
+        lines.append(f"    other_{name}({prefix}user, n);")
+        lines.append("}")
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert sorted(r["line"] for r in results) == expected
+    assert all(r["rule"] == "format_string" for r in results)
