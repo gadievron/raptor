@@ -606,3 +606,44 @@ def test_nvm_missing_cache_keeps_warning(nvm_source_case, tmp_path):
     native, _, _, _ = nvm_source_case
     checks = mod.verify_nvm_cache(native, tmp_path / "absent.json")
     assert checks[native["artifacts"][0]["id"]]["status"] == "unverified"
+
+
+def test_playwright_source_proof_preserves_its_scope_and_original_inventory():
+    native, cdx, spdx = documents("python", "playwright", "1.60.0", {"index": "https://pypi.org/simple"})
+    proof = {"status": "verified_source_payload", "sdk_url": "https://github.com/microsoft/playwright-python/tree/" + "a" * 40,
+             "driver_url": "https://github.com/microsoft/playwright/tree/" + "b" * 40,
+             "files": [{"path": "/site/playwright/__init__.py", "sha256": "c" * 64}],
+             "limitations": ["not a wheel build attestation"]}
+    originals = deepcopy((native, cdx, spdx))
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks={native["artifacts"][0]["id"]: proof})
+    record = report["packages"][0]
+    assert record["gaps"] == []
+    assert record["source_check"] == proof
+    assert [source["status"] for source in record["sources"]] == ["verified_interpreted_source_payload", "verified_slsa_driver_payload"]
+    assert (native, cdx, spdx) == originals
+    assert c["components"][0]["purl"] == cdx["components"][0]["purl"]
+    assert s["packages"][1]["licenseDeclared"] == "NOASSERTION"
+
+
+def test_failed_playwright_verification_retains_source_warning():
+    native, cdx, spdx = documents("python", "playwright", "1.60.0", {"index": "https://pypi.org/simple"})
+    proof = {"status": "unverified", "gap": "Playwright source check failed"}
+    report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks={native["artifacts"][0]["id"]: proof})[2]
+    assert "Playwright source check failed" in report["packages"][0]["gaps"]
+    assert report["packages"][0]["sources"][0]["status"] == "candidate_build_correspondence_unverified"
+
+
+def test_authenticated_nodesource_binary_keeps_build_gap_and_vendor_identity():
+    version = "24.21.0-1nodesource1"
+    native, cdx, spdx = documents("deb", "nodejs", version,
+        {"maintainer": "NodeSource Support <support@nodesource.com>", "architecture": "amd64"}, "pkg:deb/debian/nodejs@" + version)
+    proof = {"status": "verified_publisher_release_binary", "source": {"type": "distribution",
+        "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0.tar.xz", "status": "publisher_signed_source_reference",
+        "hashes": [{"alg": "SHA-256", "content": "c" * 64}]}, "limitations": ["not a binary-to-source build attestation"]}
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks={native["artifacts"][0]["id"]: proof})
+    record = report["packages"][0]
+    assert len(record["gaps"]) == 1 and "not attested" in record["gaps"][0]
+    assert record["source_check"] == proof
+    assert record["sources"][0] == proof["source"]
+    assert c["components"][0]["purl"].startswith("pkg:deb/nodesource/nodejs@")
+    assert s["packages"][1]["licenseDeclared"] == "NOASSERTION"

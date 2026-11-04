@@ -360,6 +360,18 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
                     "installed source revision is not established by package.json version",
                     "upstream tag/commit is a source candidate; correspondence to installed artifact is unverified",
                     "no source candidate is recorded for this package version"}]
+            elif check.get("status") == "verified_source_payload" and (artifact.get("type"), artifact.get("name")) == ("python", "playwright"):
+                record["sources"] = [
+                    {"type": "vcs", "url": check["sdk_url"], "status": "verified_interpreted_source_payload"},
+                    {"type": "vcs", "url": check["driver_url"], "status": "verified_slsa_driver_payload"}]
+                record["gaps"] = [gap for gap in record["gaps"] if gap not in {
+                    "upstream tag/commit is a source candidate; correspondence to installed artifact is unverified",
+                    "no source candidate is recorded for this package version"}]
+            elif check.get("status") == "verified_publisher_release_binary" and record.get("origin") == "https://deb.nodesource.com":
+                record["sources"].append(deepcopy(check["source"]))
+                record["gaps"] = [gap for gap in record["gaps"] if gap !=
+                                  "exact vendor source and build correspondence unavailable; do not use Debian source"]
+                record["gaps"].append("official release binary authenticated; exact binary-to-source build correspondence is not attested")
             elif check.get("gap"):
                 record["gaps"].append(check["gap"])
         if record is None:
@@ -634,6 +646,12 @@ def main() -> None:
                         help="download NVM source responses to this cache and exit")
     parser.add_argument("--upstream-source-cache", type=Path,
                         help="verify NVM sources offline using retained upstream responses")
+    parser.add_argument("--playwright-source-evidence", type=Path,
+                        help="replay retained Playwright source evidence and driver signature offline")
+    parser.add_argument("--node-release-evidence", type=Path,
+                        help="authenticate NodeSource node against retained publisher-signed releases")
+    parser.add_argument("--sigstore-verifier", type=Path,
+                        help="build-only Sigstore CLI used to verify retained driver attestations")
     parser.add_argument("--verify-upstream-sources", action="store_true",
                         help="compare NVM installed runtime SHA-256 with upstream source (network; warnings on failure)")
     parser.add_argument("--out", type=Path, required=True)
@@ -703,7 +721,28 @@ def main() -> None:
         source_checks = verify_nvm_cache(native, args.upstream_source_cache)
     elif args.verify_upstream_sources:
         source_checks = verify_nvm_source(native)
+    # Release the large file index before a child replays source evidence.
     native = _provenance_view(native)
+    assessments = [
+        (args.playwright_source_evidence, "check_playwright_source.py", "playwright-source-check.json", "python", "playwright",
+         ["--sigstore", str(args.sigstore_verifier)] if args.sigstore_verifier else []),
+        (args.node_release_evidence, "check_node_release.py", "node-release-check.json", "deb", "nodejs", [])]
+    for evidence, script, output, kind, name, extra in assessments:
+        if evidence is None or (name == "playwright" and not args.sigstore_verifier):
+            continue
+        source_checks = source_checks or {}
+        check_path = args.out.parent / output
+        try:
+            subprocess.run([sys.executable, str(ROOT / ".github/scripts" / script),
+                            "--syft", str(args.syft), "--evidence", str(evidence),
+                            "--out", str(check_path), *extra], check=True, timeout=120)
+            checks, _ = read_document(check_path)
+            source_checks.update(checks)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            for artifact in native.get("artifacts", []):
+                if (artifact.get("type"), artifact.get("name")) == (kind, name):
+                    source_checks[artifact["id"]] = {
+                        "status": "unverified", "gap": "offline publisher/source verifier unavailable"}
     cdx, digests[1] = read_document(args.cyclonedx)
     spdx, digests[2] = read_document(args.spdx)
     prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock, notice_summary, _copy_inputs=False, source_checks=source_checks)

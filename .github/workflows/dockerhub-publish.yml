@@ -43,6 +43,9 @@ on:
       - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
       - '.github/scripts/dockerhub_scope.py'
+      - '.github/scripts/prepare_sbom.py'
+      - '.github/scripts/check_playwright_source.py'
+      - '.github/scripts/check_node_release.py'
       - '.github/actions/enable-userns/**'
   schedule:
     # Refresh mutable base images and apt packages, even without source changes.
@@ -249,6 +252,27 @@ jobs:
               --fetch-upstream-sources /audit/nvm-source-cache.json; then
             echo "::warning::NVM source download unavailable; offline reporting will retain its provenance warning."
           fi
+          if ! sudo buildah run --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            "$audit_container" -- bash -euc '
+              npm install --prefix /opt/raptor-sbom-sigstore --ignore-scripts \
+                --no-audit --no-fund @sigstore/cli@0.10.3 > /dev/null
+              python3 .github/scripts/check_playwright_source.py \
+                --syft /audit/syft.json --evidence /audit/playwright-sources \
+                --sigstore /opt/raptor-sbom-sigstore/node_modules/.bin/sigstore \
+                --download --out /audit/playwright-source-download.json
+            '; then
+            echo "::warning::Playwright source download unavailable; its provenance warning will remain."
+          fi
+          if ! sudo buildah run --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            "$audit_container" -- python3 .github/scripts/check_node_release.py \
+              --syft /audit/syft.json --evidence /audit/node-release \
+              --download --out /audit/node-release-download.json; then
+            echo "::warning::Node release download unavailable; its provenance warning will remain."
+          fi
           sudo buildah run --network none --cap-drop ALL --user 0 \
             --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
             --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
@@ -261,6 +285,9 @@ jobs:
                 --syft /audit/syft.json --cyclonedx /audit/raw.cdx.json \
                 --spdx /audit/raw.spdx.json --notice-evidence /audit/capture \
                 --owner-oci-layout /image --upstream-source-cache /audit/nvm-source-cache.json \
+                --playwright-source-evidence /audit/playwright-sources \
+                --node-release-evidence /audit/node-release \
+                --sigstore-verifier /opt/raptor-sbom-sigstore/node_modules/.bin/sigstore \
                 --out /audit/prepared
             '
 
