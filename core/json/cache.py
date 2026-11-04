@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from collections import OrderedDict
@@ -708,6 +709,10 @@ class JsonCache:
         written_raw = data["written_at"]
         try:
             written_at = float(written_raw)
+            # Numeric strings and overflowing exponent literals bypass the
+            # JSON parser's parse_constant guard. Validate after coercion.
+            if not math.isfinite(written_at):
+                raise ValueError("non-finite cache timestamp")
         except (OverflowError, ValueError, TypeError) as e:
             msg = f"non-numeric written_at: {written_raw!r}"
             raise ValueError(msg) from e

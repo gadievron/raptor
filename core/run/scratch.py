@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import tempfile
 import threading
@@ -96,8 +97,11 @@ def _inode_ceiling_advisory(path: Path) -> None:
     if raw:
         try:
             threshold = float(raw)
+            if not math.isfinite(threshold):
+                raise ValueError("non-finite inode threshold")
         except ValueError:
-            logger.debug("ignoring non-numeric %s=%r", _INODE_PCT_ENV, raw)
+            threshold = _DEFAULT_INODE_SOFT_PCT
+            logger.debug("ignoring invalid %s=%r", _INODE_PCT_ENV, raw)
     if threshold <= 0:
         return
     try:

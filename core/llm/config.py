@@ -10,6 +10,7 @@ Availability detection (SDK flags, Ollama, Claude Code) lives in detection.py.
 """
 
 import contextlib
+import math
 import os
 import threading as _threading
 from dataclasses import dataclass, field, fields
@@ -1721,6 +1722,8 @@ def _default_cache_ttl() -> float | None:
         return None
     try:
         val = float(raw)
+        if not math.isfinite(val):
+            raise ValueError("non-finite cache TTL")
     except ValueError:
         return 86_400.0
     return val if val > 0 else None
