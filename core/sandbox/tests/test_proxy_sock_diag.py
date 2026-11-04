@@ -36,6 +36,7 @@ containers sometimes do; the fallback tests still run there.
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 import os
 import socket
 import sys
@@ -57,19 +58,16 @@ def loopback_pair():
     """A connected v4 loopback pair; yields the SERVER-side socket
     (whose peername/sockname identify the client's socket — the
     direction the proxy queries)."""
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    cli = None
-    conn = None
-    try:
+    with ExitStack() as cleanup:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cleanup.callback(srv.close)
         srv.bind(("127.0.0.1", 0))
         srv.listen(1)
         cli = socket.create_connection(srv.getsockname(), timeout=5.0)
+        cleanup.callback(cli.close)
         conn, _ = srv.accept()
+        cleanup.callback(conn.close)
         yield conn
-    finally:
-        for s in (conn, cli, srv):
-            if s is not None:
-                s.close()
 
 
 def _sock_diag_skip_reason() -> "str | None":
@@ -95,24 +93,22 @@ class TestSockDiagPrimitive:
         reason = _sock_diag_skip_reason()
         if reason:
             pytest.skip(reason)
-        srv = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        cli = None
-        conn = None
-        try:
-            srv.bind(("::1", 0))
-            srv.listen(1)
-            cli = socket.create_connection(
-                ("::1", srv.getsockname()[1]), timeout=5.0)
-            conn, _ = srv.accept()
-            uid = proxy_mod._sock_diag_peer_uid(
-                conn.getpeername()[:2], conn.getsockname()[:2])
-            assert uid == os.geteuid()
-        except OSError as exc:
-            pytest.skip(f"IPv6 loopback unavailable: {exc}")
-        finally:
-            for s in (conn, cli, srv):
-                if s is not None:
-                    s.close()
+        with ExitStack() as cleanup:
+            srv = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            cleanup.callback(srv.close)
+            try:
+                srv.bind(("::1", 0))
+                srv.listen(1)
+                cli = socket.create_connection(
+                    ("::1", srv.getsockname()[1]), timeout=5.0)
+                cleanup.callback(cli.close)
+                conn, _ = srv.accept()
+                cleanup.callback(conn.close)
+                uid = proxy_mod._sock_diag_peer_uid(
+                    conn.getpeername()[:2], conn.getsockname()[:2])
+                assert uid == os.geteuid()
+            except OSError as exc:
+                pytest.skip(f"IPv6 loopback unavailable: {exc}")
 
     def test_unknown_tuple_is_a_clean_miss(self):
         reason = _sock_diag_skip_reason()
