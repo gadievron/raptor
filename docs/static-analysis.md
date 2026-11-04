@@ -597,3 +597,16 @@ the review report. Missing tools, unsupported Clang output, timeouts, and
 analysis limits also preserve the candidates; silence never proves them safe.
 The extra parsing runs once per candidate-bearing C translation unit, up to
 25 units per scan, within the shared compiler analysis budget.
+
+### Compiler diagnostic paths
+
+When GCC reports the calls and branches leading to a warning, compiler scan
+retains those paths in its SARIF output and supplies them as context during
+finding review. `/audit` also retains them in compiler sweep receipts.
+Distinct paths to the same reported location are kept with that finding.
+
+These are the compiler's control-flow assumptions, not taint traces or proof
+that a path is feasible in the application. Caller contracts still need
+review. Paths are limited to the target tree and bounded in count, size and
+retained memory. If a path is malformed, outside scope or over a limit, the
+warning remains and its metadata records why path context was omitted.

@@ -13,9 +13,10 @@ import re
 import stat as stat_mod
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+from core.detectors.compiler_paths import PathBudget, PATH_KIND, attach_paths
 from core.config import RaptorConfig
 from core.json import load_json, loads
 from core.logging import get_logger
@@ -840,6 +841,7 @@ def parse_sarif_findings(
         return []
 
     findings: list[dict[str, Any]] = []
+    compiler_path_budget = PathBudget()
 
     runs = data.get("runs") or []
     # Debug: parsing internals — this fires for every SARIF file every
@@ -1000,7 +1002,18 @@ def parse_sarif_findings(
 
             # Extract dataflow path if present
             code_flows = result.get("codeFlows") or []
-            dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
+            properties = _as_dict(result.get("properties"))
+            is_compiler_path = properties.get("code_flow_kind") == PATH_KIND or (tool_name == "compiler" and bool(code_flows))
+            compiler_evidence: dict[str, Any] = {}
+            if is_compiler_path:
+                bounded: dict[str, Any] = {}
+                locate = (lambda uri: None if _uri_escapes_root(quote(uri, safe="/"), source_root) else uri) if source_root is not None else None
+                attach_paths(bounded, {"code_flows": code_flows,
+                                      "compiler_path_notes": properties.get("compiler_path_notes")}, locate)
+                compiler_evidence = bounded
+                dataflow_path = None  # Control-flow assumptions are not taint source/sink evidence.
+            else:
+                dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
             rule_meta = rules_by_id.get(rule_id or "", {})
 
@@ -1020,6 +1033,12 @@ def parse_sarif_findings(
                     escape_nonprintable(str(rule_id)),
                 )
                 continue
+
+            if is_compiler_path:
+                retained: dict[str, Any] = {}
+                compiler_path_budget.retain(retained, compiler_evidence.get("code_flows", []),
+                                             compiler_evidence.get("compiler_path_notes", []))
+                compiler_evidence = retained
 
             message_text = _as_dict(result.get("message")).get("text")
             if not isinstance(message_text, str):
@@ -1051,6 +1070,7 @@ def parse_sarif_findings(
                     # Dataflow information
                     "has_dataflow": dataflow_path is not None,
                     "dataflow_path": dataflow_path,
+                    **({"compiler_evidence": compiler_evidence} if is_compiler_path else {}),
                 }
             )
 

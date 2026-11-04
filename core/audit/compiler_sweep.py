@@ -43,12 +43,15 @@ import tempfile
 import threading
 import time
 from array import array
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.source import open_regular, read_text_capped
 from core.source.lines import split_lines
 from typing import Any
+
+from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths
 
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
@@ -1706,6 +1709,7 @@ def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         return []
     diags = []
+    path_budget = PathBudget()
     for d in data:
         if not isinstance(d, dict):
             continue
@@ -1718,6 +1722,8 @@ def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
             "file": caret.get("file", "") or "",
             "message": d.get("message", "") or "",
         })
+        paths, notes = json_paths(d.get("path"))
+        path_budget.retain(diags[-1], paths, notes)
     return diags
 
 
@@ -1726,6 +1732,7 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
     diags = []
+    path_budget = PathBudget()
     for run in data.get("runs", []):
         for result in run.get("results", []):
             locs = result.get("locations") or [{}]
@@ -1738,6 +1745,8 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
                 "file": phys.get("artifactLocation", {}).get("uri", "") or "",
                 "message": (result.get("message", {}) or {}).get("text", "") or "",
             })
+            paths, notes = normalize_paths(result.get("codeFlows"))
+            path_budget.retain(diags[-1], paths, notes)
     return diags
 
 
@@ -2089,6 +2098,19 @@ def run_compiler_analyzer_sweep(
             }
             for d in attributed
         ]
+        @lru_cache(maxsize=256)
+        def locate_event(name):
+            if not isinstance(name, str) or not name or name.startswith("<"):
+                return None
+            path = Path(name)
+            if not path.is_absolute():
+                path = full_path.parent / path
+            try:
+                return _resolve_bounded(path).relative_to(_resolve_bounded(target_path)).as_posix()
+            except (OSError, ValueError, RuntimeError, _VetLimitExceeded):
+                return None
+        for match, diagnostic in zip(matches, attributed):
+            attach_paths(match, diagnostic, locate_event)
         if not spec.positive_evidence:
             from core.detectors.budget import WorkBudget
             from core.detectors.scalar_aliasing import corroborate_aliasing, RULE_ID as ALIASING_RULE_ID

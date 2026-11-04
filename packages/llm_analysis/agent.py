@@ -741,6 +741,13 @@ class VulnerabilityContext:
             "has_patch": self.patch_code is not None,
         }
 
+        if isinstance(self.finding.get("compiler_evidence"), dict):
+            from core.detectors.compiler_paths import attach_paths
+            evidence: dict[str, Any] = {}
+            attach_paths(evidence, self.finding["compiler_evidence"])
+            if evidence:
+                result["compiler_evidence"] = evidence
+
         # Explicit analysis-failure marker. ``error`` is the canonical
         # field (``derive_status`` keys on it); the enum status is
         # stamped too so on-disk readers get the positive marker
@@ -1506,6 +1513,7 @@ class AutonomousSecurityAgentV2:
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
+            compiler_evidence=vuln.finding.get("compiler_evidence"),
             metadata=meta,
             repo_path=str(vuln.repo_path),
             cwe_id=vuln.cwe_id,
@@ -1959,6 +1967,7 @@ class AutonomousSecurityAgentV2:
                 dataflow_source=vuln.dataflow_source,
                 dataflow_sink=vuln.dataflow_sink,
                 dataflow_steps=vuln.dataflow_steps,
+                compiler_evidence=vuln.finding.get("compiler_evidence"),
                 metadata=meta,
                 repo_path=str(vuln.repo_path),
                 cwe_id=vuln.cwe_id,
@@ -2224,6 +2233,7 @@ class AutonomousSecurityAgentV2:
                     dataflow_source=vuln.dataflow_source,
                     dataflow_sink=vuln.dataflow_sink,
                     dataflow_steps=vuln.dataflow_steps,
+                    compiler_evidence=vuln.finding.get("compiler_evidence"),
                     metadata=meta,
                     repo_path=str(vuln.repo_path),
                     cwe_id=vuln.cwe_id,
