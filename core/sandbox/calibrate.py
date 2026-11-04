@@ -198,14 +198,16 @@ def _env_signature(env_keys: Iterable[str]) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def _fingerprint(bin_sha: str, env_sig: str) -> str:
-    """Cache key = sha256(binary content || env signature). Combines
-    both so a binary used with different relevant env produces
-    distinct profiles."""
+def _fingerprint(bin_sha: str, env_sig: str,
+                 probe_args: Iterable[str] = ("--version",)) -> str:
+    """Cache identity includes binary content, environment, and argv."""
     h = hashlib.sha256()
     h.update(bin_sha.encode("ascii"))
     h.update(b"\0")
     h.update(env_sig.encode("ascii"))
+    h.update(b"\0")
+    h.update(json.dumps(list(probe_args), ensure_ascii=True,
+                        separators=(",", ":")).encode("ascii"))
     return h.hexdigest()
 
 
@@ -409,6 +411,10 @@ def calibrate_binary(
         RuntimeError if observe-mode failed to engage (no nonce
         produced — usually missing libseccomp / ptrace).
     """
+    # These inputs are reused for identity, probe environment, and
+    # execution. Materialise one-shot iterables before any consumer.
+    probe_args = tuple(probe_args)
+    env_keys = tuple(env_keys)
     bin_real = Path(bin_path).resolve()
     if not bin_real.exists():
         msg = f"calibrate_binary: {bin_path!r} does not exist"
@@ -416,7 +422,7 @@ def calibrate_binary(
 
     bin_sha = _sha256_file(bin_real)
     env_sig = _env_signature(env_keys)
-    fp = _fingerprint(bin_sha, env_sig)
+    fp = _fingerprint(bin_sha, env_sig, probe_args)
 
     profile, rc = _spawn_probe(
         bin_real, list(probe_args), timeout=timeout,
@@ -451,6 +457,25 @@ def calibrate_binary(
     return profile
 
 
+def _load_matching_cache(bin_sha: str, env_sig: str,
+                         probe_args: Iterable[str]) -> SandboxProfile | None:
+    """Read current or legacy keys only when all measured inputs match."""
+    args = list(probe_args)
+    current = _fingerprint(bin_sha, env_sig, args)
+    # Old keys omitted argv. Their records still carry argv and env
+    # metadata, so exact matches remain usable without another probe.
+    legacy = hashlib.sha256((bin_sha + "\0" + env_sig).encode("ascii")).hexdigest()
+    for fingerprint in (current, legacy):
+        cached = _load_from_cache(fingerprint)
+        if (cached is not None
+                and cached.binary_sha256 == bin_sha
+                and cached.env_signature == env_sig
+                and cached.probe_args == args
+                and cached.cache_version == _CACHE_VERSION):
+            return cached
+    return None
+
+
 def load_or_calibrate(
     bin_path,
     probe_args: Iterable[str] = ("--version",),
@@ -462,17 +487,22 @@ def load_or_calibrate(
     """Return cached profile if fresh; calibrate otherwise.
 
     Cache freshness:
-      * cache file exists for the (binary_sha256, env_signature)
-        fingerprint, AND
+      * cache file exists for the (binary_sha256, env_signature,
+        probe_args) fingerprint, AND
       * the stored binary_sha256 still matches the current binary
         (defends against the cache surviving a binary update with
         the SAME path), AND
+      * stored environment and probe arguments match this request, AND
       * cache_version matches the current schema.
 
     `force=True` skips the freshness check and re-runs the probe.
     Useful after operator-side config changes that aren't covered
     by env_keys (e.g. ``~/.config/...``).
     """
+    # These inputs are reused for identity, probe environment, and
+    # execution. Materialise one-shot iterables before any consumer.
+    probe_args = tuple(probe_args)
+    env_keys = tuple(env_keys)
     bin_real = Path(bin_path).resolve()
     if not bin_real.exists():
         msg = f"load_or_calibrate: {bin_path!r} does not exist"
@@ -481,16 +511,8 @@ def load_or_calibrate(
     if not force:
         bin_sha = _sha256_file(bin_real)
         env_sig = _env_signature(env_keys)
-        fp = _fingerprint(bin_sha, env_sig)
-        cached = _load_from_cache(fp)
-        # Re-verify the on-disk binary still matches. The fingerprint
-        # already includes the sha; this check catches the (rare)
-        # case where the cache file was truncated/corrupted to a sha
-        # that happens to look right but content drifted. Stale cache
-        # falls through and recalibrates.
-        if (cached is not None
-                and cached.binary_sha256 == bin_sha
-                and cached.cache_version == _CACHE_VERSION):
+        cached = _load_matching_cache(bin_sha, env_sig, probe_args)
+        if cached is not None:
             return cached
 
     return calibrate_binary(

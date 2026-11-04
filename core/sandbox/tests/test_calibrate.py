@@ -491,7 +491,7 @@ class TestCalibrateBinaryE2E:
 
         # Cache file lands at the right fingerprint path.
         fp = cal._fingerprint(
-            prof.binary_sha256, prof.env_signature,
+            prof.binary_sha256, prof.env_signature, prof.probe_args,
         )
         assert (cache_dir / f"{fp}.json").exists()
 

@@ -11,11 +11,12 @@ stampede protection. This module owns that layer once.
 
 Semantics (pinned by test_proxy_hosts_ladder_closure):
 
-* Memoised per-process, keyed ``(bin_path, env_keys, probe_args)``
-  — two tools sharing one binary with different env-key sets (or
-  probe variants) never serve each other's profile.
+* Memoised per-process by ``(bin_path, env_keys, probe_args)``, with
+  binary metadata and declared environment values checked on every
+  lookup. Updates replace the slot instead of accumulating generations.
 * Stampede-safe: concurrent first-callers for one key wait on the
-  single in-flight calibration instead of racing N probes.
+  single in-flight calibration instead of racing N probes. Waiters
+  use their own timeout and fall back without cancelling the owner.
 * Fail-soft: calibration is advisory. Import failure, probe
   failure, or timeout memoise None; the caller's static layers
   carry the policy.
@@ -30,10 +31,14 @@ egress proxy enforces deny-by-default regardless.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import subprocess
 import threading
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 
 from core.sandbox.errors import SandboxSetupError
 
@@ -42,7 +47,27 @@ logger = logging.getLogger(__name__)
 
 _CACHE: dict[tuple[str, tuple[str, ...], tuple[str, ...]], object] = {}
 _CACHE_LOCK = threading.Lock()
-_MISSING = object()  # sentinel distinct from None (a valid cached result)
+
+
+@dataclass
+class _CacheEntry:
+    identity: tuple
+    ready: threading.Event = field(default_factory=threading.Event)
+    result: object = None
+
+
+def _memo_identity(bin_path: str, env_keys: tuple[str, ...]) -> tuple:
+    """Cheap freshness guard; the disk loader still verifies content hashes."""
+    try:
+        st = os.stat(bin_path)
+        binary = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    except OSError:
+        binary = None
+    # Keep credentials out of memo keys: retain only a digest of the
+    # declared values, not the environment values themselves.
+    values = [(key, os.environ.get(key, "")) for key in sorted(set(env_keys))]
+    signature = hashlib.sha256(json.dumps(values, ensure_ascii=True).encode("ascii")).hexdigest()
+    return binary, signature
 
 
 def calibrated_profile(
@@ -69,6 +94,7 @@ def calibrated_profile(
     if not bin_path:
         return None
     key = (bin_path, tuple(env_keys), tuple(probe_args))
+    identity = _memo_identity(bin_path, key[1])
 
     # Check the memo under the lock. On a miss, plant an Event so
     # concurrent threads wait for the single in-flight calibration
@@ -79,23 +105,27 @@ def calibrated_profile(
     # later caller for this key in waiter.wait() for the process
     # lifetime.
     result = None
-    sentinel: threading.Event | None = None
+    sentinel: _CacheEntry | None = None
     try:
         with _CACHE_LOCK:
-            cached = _CACHE.get(key, _MISSING)
-            if isinstance(cached, threading.Event):
+            cached = _CACHE.get(key)
+            if isinstance(cached, _CacheEntry) and cached.identity == identity:
+                if cached.ready.is_set():
+                    return cached.result
                 waiter = cached
-            elif cached is not _MISSING:
-                return cached
             else:
                 waiter = None
-                sentinel = threading.Event()
+                sentinel = _CacheEntry(identity)
                 _CACHE[key] = sentinel
 
         if waiter is not None:
-            waiter.wait()
-            with _CACHE_LOCK:
-                return _CACHE.get(key)
+            if not waiter.ready.wait(timeout=max(timeout, 0)):
+                logger.debug(
+                    "%s: calibration of %s still pending; using static policy",
+                    tag, bin_path,
+                )
+                return None
+            return waiter.result
 
         # We own the calibration slot.
         try:
@@ -138,11 +168,19 @@ def calibrated_profile(
                 "falling back to static policy", tag, bin_path, exc,
             )
             result = None
+        if result is not None and _memo_identity(bin_path, key[1]) != identity:
+            # The measured inputs changed while calibration was running.
+            # Do not bind that result to the earlier snapshot or overwrite
+            # a newer caller's slot; let a later stable call retry.
+            result = None
+            with _CACHE_LOCK:
+                if _CACHE.get(key) is sentinel:
+                    del _CACHE[key]
     finally:
         if sentinel is not None:
             with _CACHE_LOCK:
-                _CACHE[key] = result
-            sentinel.set()
+                sentinel.result = result
+            sentinel.ready.set()
     return result
 
 
@@ -158,6 +196,6 @@ def hosts_from_profile(profile) -> list[str] | None:
 
 def reset_cache_for_tests() -> None:
     """Clear the per-process memo (all sites). Test-only —
-    production never invalidates manually; the on-disk cache is
-    sha-keyed and re-loads on binary self-update."""
+    production refreshes automatically when binary metadata or declared
+    environment values change; the disk cache verifies content hashes."""
     _CACHE.clear()
