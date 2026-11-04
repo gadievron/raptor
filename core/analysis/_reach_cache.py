@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -725,7 +726,13 @@ def _cache_entries() -> list:
     entries: list = []
     cache_root = _cache_dir()
     for suffix in (_CACHE_SUFFIX, *_LEGACY_SUFFIXES):
-        entries.extend(cache_root.glob(f"*{suffix}"))
+        for path in cache_root.glob(f"*{suffix}"):
+            try:
+                mode = path.lstat().st_mode
+            except OSError:
+                continue
+            if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+                entries.append(path)
     return entries
 
 
@@ -749,13 +756,18 @@ def _evict_oldest() -> None:
         except OSError:
             return 0.0
 
-    entries.sort(key=_entry_mtime)
-    to_remove = len(entries) - _MAX_CACHE_ENTRIES
-    for p in entries[:to_remove]:
+    entries.sort(key=lambda path: (_entry_mtime(path), path.name))
+    remaining = len(entries)
+    for path in entries:
+        if remaining <= _MAX_CACHE_ENTRIES:
+            break
         try:
-            p.unlink()
+            path.unlink()
+        except FileNotFoundError:
+            pass  # A concurrent remover already freed this slot.
         except OSError:
-            pass
+            continue
+        remaining -= 1
 
 
 def clear_cache() -> int:

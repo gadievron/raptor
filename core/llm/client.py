@@ -18,6 +18,7 @@ import json
 import logging as _logging
 import math
 import re
+import stat
 import sys
 import threading
 import time
@@ -28,7 +29,7 @@ from typing import Any
 from core.hash import sha256_string
 from core.logging import get_logger
 
-from .config import LLMConfig, ModelConfig
+from .config import DEFAULT_CACHE_MAX_ENTRIES, LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 from .response_validation import SchemaUnknownFieldError, unknown_response_fields
 
@@ -2475,32 +2476,37 @@ class LLMClient:
         across the namespace as a whole — operators reason about a
         single budget, not two."""
         cap = self.config.cache_max_entries
-        if not cap:
+        if cap is None or cap == 0:
             return
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+            cap = DEFAULT_CACHE_MAX_ENTRIES
         try:
             entries = list(self.config.cache_dir.glob("*.json"))
         except OSError:
             return
-        if len(entries) <= cap:
-            return
-        # Stat each file once. A file may disappear between glob and
-        # stat (concurrent eviction in another process); treat missing
-        # as already-gone.
+        # Only files and links belong to this flat cache. lstat keeps a
+        # dangling link from corrupting the count or borrowing its target's
+        # mtime; unrelated directories/FIFOs must not consume file quota.
         with_mtime: list[tuple[float, Path]] = []
-        for p in entries:
+        for path in entries:
             try:
-                with_mtime.append((p.stat().st_mtime, p))
+                info = path.lstat()
             except OSError:
                 continue
-        with_mtime.sort(key=lambda pair: pair[0])
-        drop = len(with_mtime) - cap
-        for _, victim in with_mtime[:drop]:
+            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                with_mtime.append((info.st_mtime, path))
+        with_mtime.sort(key=lambda pair: (pair[0], pair[1].name))
+        remaining = len(with_mtime)
+        for _, victim in with_mtime:
+            if remaining <= cap:
+                break
             try:
                 victim.unlink()
+            except FileNotFoundError:
+                pass  # A concurrent remover already freed this slot.
             except OSError:
-                # Lost a race with another process — that's fine, our
-                # only job is to bring count down, and that's happening.
-                continue
+                continue  # Try later candidates instead of abandoning quota.
+            remaining -= 1
 
     # Bump when schema-to-Pydantic conversion changes behaviour so
     # cached results validated under old rules are not replayed.

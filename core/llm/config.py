@@ -1706,6 +1706,9 @@ def _shared_prefix_len(a: str, b: str) -> int:
     return n
 
 
+DEFAULT_CACHE_MAX_ENTRIES = 10_000
+
+
 def _default_cache_ttl() -> float | None:
     """Default LLM-cache TTL: 24h, env-overridable.
 
@@ -1806,12 +1809,13 @@ class LLMConfig:
     cache_ttl_seconds: float | None = field(default_factory=_default_cache_ttl)
     # Cap cache size by number of entries. After each successful save
     # the oldest files (by mtime) are evicted until at or under this
-    # cap. None = no eviction (cache grows unboundedly — the pre-cap
+    # cap. None or 0 = no eviction (cache grows unboundedly — the pre-cap
     # default; out/llm_cache accumulated for the life of the install).
     # The directory-walk per save is O(N); the 10k default sits at the
     # documented comfort limit of that walk, beyond which a real cache
-    # backend would be more appropriate.
-    cache_max_entries: int | None = 10_000
+    # backend would be more appropriate. Invalid limits use the bounded
+    # default instead of crashing cache writes or deleting every entry.
+    cache_max_entries: int | None = DEFAULT_CACHE_MAX_ENTRIES
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
     # Non-dollar resource governor. The dollar cap above is inert for
