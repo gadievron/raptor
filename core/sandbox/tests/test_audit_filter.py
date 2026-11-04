@@ -1347,6 +1347,7 @@ class TestFilterDispatchSeccomp:
         assert budget.total_records == 1
 
 
+@pytest.mark.linux_native
 @requires_landlock
 class TestEndToEndAuditVsAuditVerbose:
     """Real run: same workload under `audit` and `audit-verbose`,
