@@ -2,10 +2,11 @@
 
 import os
 import re
-import shutil
 import time
 from pathlib import Path
 from typing import Any
+
+from core.atomic_fs import rmtree_hardened
 
 
 def _run_dir_size(d: Path) -> int:
@@ -265,7 +266,8 @@ def execute_clean(plan: dict[str, Any],
                 skipped.append(name)
             continue
         try:
-            shutil.rmtree(d)
+            if not rmtree_hardened(d):
+                raise OSError(f"could not remove run directory {d}")
         except FileNotFoundError:
             pass
 

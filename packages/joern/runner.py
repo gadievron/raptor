@@ -16,7 +16,6 @@ import re
 import signal
 import stat
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +23,8 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 from core.analysis._joern_lines import (
     FLOW_RECORD_CHUNK_CHARS,
@@ -1163,7 +1164,7 @@ def _run_query_admitted(
     try:
         frozen = FrozenGraph.copy(cpg.path, directory=query_dir, expected=cpg.content_digest)
     except (OSError, ValueError) as error:
-        shutil.rmtree(query_dir, ignore_errors=True)
+        rmtree_hardened(query_dir)
         return JoernResult(query=query, errors=[f"cannot pin query graph: {error}"])
 
     # joern's CLI flag surface drifts across releases: `--script-content`
@@ -1179,7 +1180,7 @@ def _run_query_admitted(
     try:
         wrapper_path.write_text(wrapper)
     except OSError as e:
-        shutil.rmtree(query_dir, ignore_errors=True)
+        rmtree_hardened(query_dir)
         return JoernResult(query=query, errors=[f"cannot write query script: {e}"])
 
     # Point the driver JVM's java.io.tmpdir at the per-query dir (a
@@ -1245,7 +1246,7 @@ def _run_query_admitted(
     except OSError as e:
         return JoernResult(query=query, errors=[str(e)])
     finally:
-        shutil.rmtree(query_dir, ignore_errors=True)
+        rmtree_hardened(query_dir)
 
     elapsed = int((time.monotonic() - start) * 1000)
 
@@ -1824,11 +1825,15 @@ def _prune_cpg_slot_pool(
             return 0.0
 
     slots.sort(key=_mtime, reverse=True)
-    for stale in slots[_CPG_SCOPED_SLOTS_KEEP:]:
-        if stale.name == active_slot:
-            continue
-        shutil.rmtree(stale, ignore_errors=True)
-        logger.info("pruned stale keyed CPG cache slot %s", stale)
+    active_present = any(slot.name == active_slot for slot in slots)
+    other_slots = [slot for slot in slots if slot.name != active_slot]
+    # The active slot consumes one place even when its preserved build
+    # mtime sorts behind other slots. Skipping it only at deletion time
+    # retained keep+1 graphs and could leave another multi-GiB copy.
+    quota = max(0, _CPG_SCOPED_SLOTS_KEEP - int(active_present))
+    for stale in other_slots[quota:]:
+        if rmtree_hardened(stale):
+            logger.info("pruned stale keyed CPG cache slot %s", stale)
 
 
 # In-progress build scratch under the cache dir (SAME filesystem as
@@ -1862,8 +1867,7 @@ def _sweep_stale_cpg_build_dirs(cache_dir: Path) -> None:
             age = now - d.stat().st_mtime
         except OSError:
             continue
-        if age > _CPG_BUILD_DIR_MAX_AGE_S:
-            shutil.rmtree(d, ignore_errors=True)
+        if age > _CPG_BUILD_DIR_MAX_AGE_S and rmtree_hardened(d):
             logger.info("removed stale CPG build scratch %s", d)
 
 
@@ -2337,7 +2341,7 @@ def build_cpg_cached(
             )
         finally:
             if not keep:
-                shutil.rmtree(build_dir, ignore_errors=True)
+                rmtree_hardened(build_dir)
 
 
 def cleanup_cpg(cpg: JoernCPG) -> None:
@@ -2364,7 +2368,7 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
         # rmtree only a real directory we own the layout of — never
         # follow a symlink planted at that name.
         if workspace.is_dir() and not workspace.is_symlink():
-            shutil.rmtree(workspace, ignore_errors=True)
+            rmtree_hardened(workspace)
         now = time.time()
         for stray in parent.glob("raptor-query-*"):
             if not stray.is_dir() or stray.is_symlink():
@@ -2374,7 +2378,7 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
             except OSError:
                 continue
             if age > _CPG_BUILD_DIR_MAX_AGE_S:
-                shutil.rmtree(stray, ignore_errors=True)
+                rmtree_hardened(stray)
         try:
             parent.rmdir()
         except OSError:

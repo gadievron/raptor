@@ -489,8 +489,9 @@ def rmtree_hardened(path: str | Path) -> bool:
     write grant, which makes a plain ``rmtree(ignore_errors=True)``
     fail silently — the scratch dirs then accumulate without bound
     (or, worse, the caller logs "removed" over a tree that is still
-    there). Restore traversal permissions top-down first (chmod each
-    subdirectory before descending into it), then remove.
+    there). Try ordinary removal first so normal trees need no chmod
+    walk. If residue remains, restore traversal permissions top-down
+    (chmod each subdirectory before descending into it), then retry.
 
     Symlink discipline: ``os.walk(followlinks=False)`` still LISTS a
     symlink-to-directory in dirnames (it just doesn't descend), and
@@ -510,6 +511,9 @@ def rmtree_hardened(path: str | Path) -> bool:
     p = str(path)
     if os.path.islink(p):
         return False
+    shutil.rmtree(p, ignore_errors=True)
+    if not os.path.lexists(p):
+        return True
     try:
         os.chmod(p, 0o700)
     except OSError:

@@ -69,12 +69,13 @@ from __future__ import annotations
 import errno
 import logging
 import os
-import shutil
 import socket
 import stat
 import sys
 import tempfile
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 logger = logging.getLogger(__name__)
 
@@ -899,7 +900,7 @@ def _reap(now: float | None) -> list[Path]:
                 "and delete; skipping this sweep", path,
             )
             continue
-        shutil.rmtree(path, ignore_errors=True)
+        rmtree_hardened(path)
         if not path.exists():
             reaped.append(path)
 
@@ -1129,7 +1130,7 @@ def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int, *,
                 "validation and delete; skipping this sweep", path,
             )
             continue
-        shutil.rmtree(path, ignore_errors=True)
+        rmtree_hardened(path)
         if not path.exists():
             reaped.append(path)
         else:
@@ -1282,7 +1283,7 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
                 "and delete; skipping this sweep", d,
             )
             continue
-        shutil.rmtree(d, ignore_errors=True)
+        rmtree_hardened(d)
         if not d.exists():
             reaped.append(d)
     if reaped:

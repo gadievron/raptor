@@ -57,6 +57,8 @@ import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 from typing import Any
 
 import yaml
@@ -192,7 +194,7 @@ def rewrite_for_localhost(
     """Copy ``compose_file``'s parent dir to a tmpdir + rewrite ports to 127.0.0.1:0.
 
     Returns ``(rewritten_compose_path, staging_dir)``. The staging_dir
-    MUST be cleaned up by the caller (``shutil.rmtree``) after ``down_stack``.
+    MUST be cleaned up by the caller (``cleanup_staging``) after ``down_stack``.
 
     Relative build contexts + volume mounts resolve against the tmpdir
     copy, so upstream files are never mutated. Host port 0 lets Docker
@@ -295,7 +297,7 @@ def cleanup_staging(staging: str | Path) -> None:
     the rewrite's own failure paths use it too.
     """
     keepalive_unregister(staging)
-    shutil.rmtree(staging, ignore_errors=True)
+    rmtree_hardened(staging)
 
 
 def _prune_escaping_symlinks(staging: Path) -> int:
@@ -681,7 +683,7 @@ def _resolver_scratch_home() -> Path:
         (scratch / ".docker").mkdir(mode=0o700)
         return scratch
     except BaseException:
-        shutil.rmtree(scratch, ignore_errors=True)
+        rmtree_hardened(scratch)
         raise
 
 
@@ -847,7 +849,7 @@ def _resolve_effective_model(compose_file: Path) -> dict[str, Any]:
             scratch_home=scratch_home,
         )
     finally:
-        shutil.rmtree(scratch_home, ignore_errors=True)
+        rmtree_hardened(scratch_home)
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
