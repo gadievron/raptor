@@ -58,8 +58,10 @@ The companion daemon script lives at ``core/sandbox/_daemon.py``
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import logging
+import math
 import os
 import select
 import shutil
@@ -152,6 +154,17 @@ def _resolve_daemon_script() -> Path:
 
 class HostRPCError(RuntimeError):
     """RPC channel failure or daemon-reported error."""
+
+
+def _decode_response(body: bytes, *, source: str) -> dict:
+    """Keep malformed replies on the channel-error and cleanup path."""
+    try:
+        response = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise HostRPCError(f"{source} response parse failed: {exc}") from exc
+    if not isinstance(response, dict):
+        raise HostRPCError(f"{source} response must contain a JSON object")
+    return response
 
 
 class SandboxHost:
@@ -345,8 +358,8 @@ class SandboxHost:
         # already dead, the close RPC below then fails fast with
         # EPIPE instead of waiting out its timeout.
         self._release_daemon_fds()
-        # _rpc wraps channel failures in HostRPCError; a malformed
-        # reply from a dying daemon surfaces as ValueError (json).
+        # Channel failures and malformed replies must not interrupt
+        # release of this handle's descriptors and worker ownership.
         with contextlib.suppress(HostRPCError, ValueError):
             self._rpc({"cmd": "close"}, timeout=5.0)
         for fd in (self._write_fd, self._read_fd):
@@ -476,6 +489,8 @@ class SandboxHost:
         try:
             while view:
                 n = os.write(self._write_fd, view)
+                if n <= 0:
+                    raise OSError(errno.EIO, "RPC frame write made no progress")
                 view = view[n:]
         except OSError as e:
             msg = f"write to daemon failed: {e}"
@@ -497,21 +512,22 @@ class SandboxHost:
         except (OSError, HostRPCError) as e:
             msg = f"body read failed: {e}"
             raise HostRPCError(msg) from e
-        return json.loads(body.decode("utf-8"))
+        return _decode_response(body, source="daemon")
 
     def _read_exact(self, n: int, deadline: float) -> bytes:
         # bytearray accumulator: bounded reply frames can run to
         # hundreds of MiB (see _MAX_REPLY_FRAME_BYTES) and repeated
         # bytes concatenation is quadratic at that size.
         buf = bytearray()
+        poller = select.poll()
+        poller.register(self._read_fd, select.POLLIN)
         while len(buf) < n:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 msg = f"read timeout at {len(buf)}/{n}"
                 raise HostRPCError(msg)
-            r, _, _ = select.select([self._read_fd], [], [], remaining)
-            if not r:
-                msg = f"read select timeout at {len(buf)}/{n}"
+            if not poller.poll(math.ceil(remaining * 1000)):
+                msg = f"read poll timeout at {len(buf)}/{n}"
                 raise HostRPCError(msg)
             chunk = os.read(self._read_fd, n - len(buf))
             if not chunk:
@@ -614,17 +630,17 @@ def one_shot_call(
         msg = f"one-shot response too short: {len(r.stdout)} bytes"
         raise HostRPCError(msg)
     (length,) = struct.unpack("!I", r.stdout[:4])
+    if length > _MAX_REPLY_FRAME_BYTES:
+        raise HostRPCError(f"one-shot daemon frame too large: {length}")
     if length > len(r.stdout) - 4:
         msg = (
             f"one-shot response truncated: header={length} "
             f"body_bytes={len(r.stdout) - 4}"
         )
         raise HostRPCError(msg)
-    try:
-        response = json.loads(r.stdout[4:4 + length].decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        msg = f"one-shot response parse failed: {e}"
-        raise HostRPCError(msg) from e
+    if length != len(r.stdout) - 4:
+        raise HostRPCError("trailing bytes after one-shot response frame")
+    response = _decode_response(r.stdout[4:], source="one-shot")
     if response.get("rid") != rid:
         raise HostRPCError(
             f"one-shot reply not bound to request: expected rid={rid} "
