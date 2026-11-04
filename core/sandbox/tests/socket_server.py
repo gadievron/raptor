@@ -37,11 +37,20 @@ class SocketServer:
             if self._stop.is_set():
                 conn.close()
                 return
-            thread = threading.Thread(target=self._serve, args=(conn,), daemon=True)
-            with self._lock:
-                self._clients.add(conn)
-                self._threads.append(thread)
-            thread.start()
+            thread = None
+            try:
+                thread = threading.Thread(target=self._serve, args=(conn,), daemon=True)
+                with self._lock:
+                    self._clients.add(conn)
+                    self._threads.append(thread)
+                thread.start()
+            except BaseException:
+                conn.close()
+                with self._lock:
+                    self._clients.discard(conn)
+                    if thread in self._threads:
+                        self._threads.remove(thread)
+                raise
 
     def _serve(self, conn):
         try:
