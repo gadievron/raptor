@@ -37,7 +37,6 @@ involved and every protocol deviation is scripted.
 from __future__ import annotations
 
 import json
-import os
 import resource
 import socket
 import subprocess
@@ -64,6 +63,8 @@ from core.sandbox._request_head import (
     ParseRefusal,
     parse_connect_request_line,
 )
+
+from core.testing.sockets import socket_worker_setup
 
 # ---------------------------------------------------------------------------
 # corpus: normal + hostile request lines (raw bytes, CRLF already
@@ -218,13 +219,12 @@ class _FakeWorker:
                  **_kwargs: object) -> None:
         # The manager closes its child_sock handle right after Popen
         # returns — keep our own duplicate of the fd.
-        self._sock = socket.socket(fileno=os.dup(pass_fds[0]))
-        self._ready = ready
-        self._responder = responder
-        self._dead = threading.Event()
-        self.pid = -1  # never signalled: kill() is socket teardown here
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
+        with socket_worker_setup(pass_fds[0]) as (self._sock, start_worker):
+            self._ready = ready
+            self._responder = responder
+            self._dead = threading.Event()
+            self.pid = -1  # never signalled: kill() is socket teardown here
+            self._thread = start_worker(self._serve)
 
     def _serve(self) -> None:
         try:

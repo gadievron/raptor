@@ -36,7 +36,6 @@ therefore run hermetically on runners lacking the capability).
 from __future__ import annotations
 
 import json
-import os
 import resource
 import socket
 import subprocess
@@ -57,6 +56,8 @@ from core.llm.dispatcher._usage_scan_child import (
     REQ_META,
 )
 from core.security.log_sanitisation import sanitise_for_terminal
+
+from core.testing.sockets import socket_worker_setup
 
 # ---------------------------------------------------------------------------
 # corpus: (head, tail, truncated, content_type) — normal + hostile
@@ -189,13 +190,12 @@ class _FakeWorker:
                  **_kwargs: object) -> None:
         # The manager closes its child_sock handle right after Popen
         # returns — keep our own duplicate of the fd.
-        self._sock = socket.socket(fileno=os.dup(pass_fds[0]))
-        self._ready = ready
-        self._responder = responder
-        self._dead = threading.Event()
-        self.pid = -1  # never signalled: kill() is socket teardown here
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
+        with socket_worker_setup(pass_fds[0]) as (self._sock, start_worker):
+            self._ready = ready
+            self._responder = responder
+            self._dead = threading.Event()
+            self.pid = -1  # never signalled: kill() is socket teardown here
+            self._thread = start_worker(self._serve)
 
     def _serve(self) -> None:
         try:
@@ -211,20 +211,22 @@ class _FakeWorker:
         except OSError:
             pass
         finally:
-            self.kill()
+            self._sock.close()
+            self._dead.set()
 
     def poll(self) -> "int | None":
         return 0 if self._dead.is_set() else None
 
     def kill(self) -> None:
-        self._dead.set()
         try:
-            self._sock.close()
+            self._sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
 
     def wait(self, timeout: "float | None" = None) -> int:
         self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise subprocess.TimeoutExpired("fake usage worker", timeout)
         return 0
 
 
@@ -1036,12 +1038,11 @@ class _TricklingWorker:
 
     def __init__(self, argv: list, *, pass_fds: tuple, gap_s: float,
                  **_kwargs: object) -> None:
-        self._sock = socket.socket(fileno=os.dup(pass_fds[0]))
-        self._gap_s = gap_s
-        self._dead = threading.Event()
-        self.pid = -1  # never signalled: kill() is socket teardown here
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
+        with socket_worker_setup(pass_fds[0]) as (self._sock, start_worker):
+            self._gap_s = gap_s
+            self._dead = threading.Event()
+            self.pid = -1  # never signalled: kill() is socket teardown here
+            self._thread = start_worker(self._serve)
 
     def _serve(self) -> None:
         payload = json.dumps(_READY_OK).encode("utf-8")
@@ -1057,15 +1058,15 @@ class _TricklingWorker:
         except OSError:
             pass
         finally:
-            self.kill()
+            self._sock.close()
+            self._dead.set()
 
     def poll(self) -> "int | None":
         return 0 if self._dead.is_set() else None
 
     def kill(self) -> None:
-        self._dead.set()
         try:
-            self._sock.close()
+            self._sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
 
