@@ -618,6 +618,7 @@ class LogStreamer:
         self._run_dir = Path(run_dir)
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
+        self._reader_failed = False
         self._stopped = threading.Event()
         self._stop_lock = threading.Lock()
         self._stop_complete = False
@@ -1261,6 +1262,7 @@ class LogStreamer:
                 self._kext_lines_parsed += 1
                 self._filter_and_append(record)
         except Exception:
+            self._reader_failed = True
             # WARNING (F070 W21 promote): a dead reader thread means
             # ALL subsequent audit records for this run are lost. The
             # operator MUST see this — same rationale as the L447
@@ -1520,13 +1522,14 @@ class LogStreamer:
             # still gets killed by interpreter shutdown.
             if self._reader is not None and self._reader.is_alive():
                 self._reader.join(timeout=3.0)
-        reader_drained = self._reader is None or not self._reader.is_alive()
+        reader_exited = self._reader is None or not self._reader.is_alive()
+        reader_drained = reader_exited and not self._reader_failed
         if not reader_drained:
             logger.warning(
                 "seatbelt audit: reader did not drain before shutdown; "
                 "audit capture is incomplete",
             )
-        elif self._proc is not None and self._proc.stdout is not None:
+        if reader_exited and self._proc is not None and self._proc.stdout is not None:
             close_stdout = getattr(self._proc.stdout, "close", None)
             if close_stdout is not None:
                 with contextlib.suppress(OSError):
@@ -1593,6 +1596,8 @@ class LogStreamer:
                     # Parse-ratio surface for operators reading the JSONL
                     # (extra keys tolerated by consumers per contract).
                     summary["reader_drained"] = reader_drained
+                    if self._reader_failed:
+                        summary["reader_failed"] = True
                     summary["kext_lines_seen"] = seen
                     summary["kext_lines_parsed"] = parsed
                     # Scope-gate diagnostic: how many records were
