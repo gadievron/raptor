@@ -86,17 +86,18 @@ if sys.platform == 'linux':
 
 
 @pytest.mark.parametrize('waived', [False, True])
-def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch, waived, record_property):
+def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch, waived, record_testsuite_property):
     pytest.importorskip('playwright.sync_api', reason='optional Playwright dependency is not installed')
     from packages.web._browser_sandbox import macos_nested_seatbelt_available
     if sys.platform == 'darwin' and not waived and not macos_nested_seatbelt_available():
         from packages.web.browser import BrowserEngine
-        with pytest.raises(RuntimeError, match='macOS refuses nested Seatbelt'):
+        with pytest.raises(RuntimeError, match='Chromium cannot initialise its inner sandbox'):
             with BrowserEngine('http://127.0.0.1'):
                 pytest.fail('required inner sandbox was silently waived')
-        record_property('chromium_inner_policy', 'required-refused-nesting-unavailable')
+        record_testsuite_property('chromium_inner_policy_required', 'required-refused-nesting-unavailable')
         return
-    record_property('chromium_inner_policy', 'explicit-waiver' if waived else 'required-enabled')
+    record_testsuite_property('chromium_inner_policy_waived' if waived else 'chromium_inner_policy_required',
+                              'explicit-waiver' if waived else 'required-enabled')
     from packages.web.browser import BrowserEngine
     public = tmp_path/'public'
     public.mkdir()
