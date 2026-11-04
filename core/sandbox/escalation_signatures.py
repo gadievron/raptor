@@ -136,6 +136,11 @@ def decode_syscall_args(syscall_name: str, args) -> dict:
     record into named fields. Returns {} for other syscalls, missing
     args, or non-int values (a forged/truncated record must not
     raise out of a tracer or triage hot path)."""
+    # Only positional register sequences are meaningful. JSON objects and
+    # strings also have lengths, but indexing them can raise or manufacture
+    # arguments from unrelated fields/characters.
+    if not isinstance(args, (list, tuple)):
+        return {}
     try:
         # Tracer args are raw 64-bit registers, but the kernel reads
         # socket()'s family and ioctl()'s cmd as 32-bit — the same
@@ -154,7 +159,7 @@ def decode_syscall_args(syscall_name: str, args) -> dict:
         if syscall_name == "ioctl" and len(args) >= 2:
             cmd = int(args[1]) & 0xFFFFFFFF
             return {"ioctl_cmd": IOCTL_CMD_NAMES.get(cmd, hex(cmd))}
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         pass
     return {}
 
