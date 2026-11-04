@@ -66,7 +66,7 @@ _REPO_ROOT = os.environ["RAPTOR_DIR"]
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+from core.detectors.compiler_families import compiler_diagnostic_is_candidate, diagnostic_cwe
 from core.detectors.compiler_paths import attach_paths, PATH_KIND, PathBudget
 
 from core.audit.compiler_sweep import (
@@ -79,7 +79,6 @@ from core.audit.compiler_sweep import (
     _derive_include_dirs,
     _cached_include_dirs,
     _gcc_analyzer,
-    _id_matches,
     _parse_analyzer_output,
     _suppression_witness,
     _witness_kind,
@@ -144,17 +143,9 @@ def _union_flags(attr: str) -> list[str]:
     return seen
 
 
-def _cwe_for_diag_id(diag_id: str) -> str | None:
-    """Map a diagnostic id to a CWE via compiler_sweep's family map.
-
-    First matching family wins (dict order).  Shared out-of-bounds ids
-    map to the first OOB family key — the tag marks the family, not a
-    precise sub-classification.
-    """
-    for cwe, spec in COMPILER_CWE_MAP.items():
-        if _id_matches(diag_id, spec.gcc_ids + spec.clang_ids):
-            return cwe
-    return None
+def _cwe_for_diag_id(diag_id: str, message: str = "", reported=None) -> str | None:
+    """Prefer compiler taxonomy metadata, then unambiguous family semantics."""
+    return diagnostic_cwe(diag_id, message, reported)
 
 
 def _keep_diag_id(diag_id: str) -> bool:
@@ -338,7 +329,7 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
             "file": rel,
             "line": line,
             "message": d.get("message", ""),
-            "cwe": _cwe_for_diag_id(diag_id),
+            "cwe": _cwe_for_diag_id(diag_id, d.get("message", ""), d.get("cwe")),
             "compiler": compiler_name,
             "tu": rel_path,
         })
@@ -820,7 +811,14 @@ def scan_target(
             # dedup on (rule, file, line).
             key = (diag["rule_id"], diag["file"], diag["line"])
             if key in seen:
-                attach_paths(seen[key], diag)
+                previous = seen[key]
+                if previous.get("cwe") != diag.get("cwe"):
+                    observed = set(previous.get("compiler_reported_cwes", []))
+                    observed.update(cwe for cwe in (previous.get("cwe"), diag.get("cwe")) if cwe)
+                    previous["cwe"] = None  # No arbitrary winner for a merged diagnostic point.
+                    if observed:
+                        previous["compiler_reported_cwes"] = sorted(observed)
+                attach_paths(previous, diag)
                 continue
             seen[key] = diag
             result.findings.append(diag)
@@ -844,13 +842,17 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
     rule_index = emit.RuleIndex()
     sarif_results: list[dict[str, Any]] = []
 
+    rule_cwes: dict[str, set[str | None]] = {}
+    for finding in result.findings:
+        rule_cwes.setdefault(finding["rule_id"], set()).add(finding.get("cwe"))
+
     for f in result.findings:
         rule_id = f["rule_id"]
         if compiler_diagnostic_is_candidate(rule_id):
             continue
         cwe = f.get("cwe")
         props: dict[str, Any] = {}
-        if cwe:
+        if cwe and rule_cwes[rule_id] == {cwe}:
             props["cwe"] = cwe
             props["tags"] = [f"external/cwe/{cwe.lower()}"]
         rule_index.add(emit.minimal_rule(
@@ -865,6 +867,8 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
         }
         if cwe:
             res_props["cwe"] = cwe
+        if f.get("compiler_reported_cwes"):
+            res_props["compiler_reported_cwes"] = f["compiler_reported_cwes"]
         if f.get("corroborated_by"):
             res_props["corroborated_by"] = f["corroborated_by"]
         if f.get("aliasing_proof"):

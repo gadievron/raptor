@@ -1065,7 +1065,7 @@ def parse_sarif_findings(
                     "endLine": _coerce_line(region.get("endLine")),
                     "snippet": snippet,
                     "level": level,
-                    "cwe_id": rule_meta.get("cwe_id"),
+                    "cwe_id": _extract_cwe_from_rule(result) or rule_meta.get("cwe_id"),
                     "tool": tool_name,
                     # Dataflow information
                     "has_dataflow": dataflow_path is not None,

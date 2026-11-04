@@ -246,7 +246,7 @@ def test_cwe_mapping_reuses_family_map():
     # Parameterised gcc option form matches too (see _id_matches).
     assert _cs._cwe_for_diag_id("-Wstringop-overflow=") is not None
     # clang checker-group prefix matching.
-    assert _cs._cwe_for_diag_id("unix.Malloc") in ("CWE-416", "CWE-415", "CWE-401")
+    assert _cs._cwe_for_diag_id("unix.Malloc") is None
     assert _cs._cwe_for_diag_id("-Wanalyzer-file-leak") is None
 
 
@@ -1462,3 +1462,66 @@ def test_scan_path_budget_omits_context_without_losing_the_warning(tmp_path, mon
     assert result.ok and len(result.findings) == 1
     assert not result.findings[0].get("code_flows")
     assert result.findings[0]["compiler_path_notes"]
+
+
+@pytest.mark.parametrize("fixture, expected", [
+    ("uaf.c", "CWE-416"), ("double_free.c", "CWE-415"), ("malloc_leak.c", "CWE-401"), ("leak.cpp", "CWE-401"),
+])
+@needs_analyzer
+def test_native_shared_clang_checker_classifies_message(tmp_path, monkeypatch, sandbox_spy, fixture, expected):
+    import shutil
+    from core.audit.tests._live_transport import run_compiler_analyzer_sweep_guarded
+    if not _cs._clang_path():
+        pytest.skip("Clang required")
+    monkeypatch.setattr(compiler_sweep, "_gcc_analyzer", lambda: None)
+    if fixture.endswith(".cpp"):
+        (tmp_path / fixture).write_text("void f() { int *p = new int(1); *p = 2; }\n")
+    else:
+        shutil.copyfile(Path(_REPO_ROOT) / "core/audit/tests/fixtures/compiler_sweep" / fixture, tmp_path / fixture)
+    receipt = run_compiler_analyzer_sweep_guarded(gcc_probed=False, target_path=tmp_path, file_path=fixture,
+        function_name="fixture", cwe=expected, hypothesis="memory issue", line_start=1, line_end=500)
+    assert receipt.outcome == "confirmed"
+    raw = [{"id": match["rule_id"], "file": str(tmp_path / fixture), "line": match["line"],
+            "kind": "warning", "message": match["message"]} for match in receipt.matches]
+    matches = _cs._scan_diagnostics(raw, tmp_path, tmp_path / fixture, "clang", fixture)
+    assert matches and {d["cwe"] for d in matches} == {expected}
+
+
+def test_result_specific_cwes_survive_one_shared_sarif_rule(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+    findings = [{"rule_id": "-Wanalyzer-out-of-bounds", "file": "a.c", "line": line,
+                 "message": "out of bounds", "cwe": cwe, "compiler": "gcc", "tu": "a.c"}
+                for line, cwe in ((1, "CWE-126"), (2, "CWE-787"), (3, None))]
+    sarif = _cs.to_sarif(_cs.CompilerScanResult(ok=True, findings=findings))
+    rule = sarif["runs"][0]["tool"]["driver"]["rules"][0]
+    assert not rule.get("properties", {}).get("cwe")
+    path = tmp_path / "compiler.sarif"
+    path.write_text(json.dumps(sarif))
+    assert [f["cwe_id"] for f in parse_sarif_findings(path)] == ["CWE-126", "CWE-787", None]
+
+
+def test_result_cwe_overrides_a_broader_rule_default(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+    finding = {"rule_id": "-Wanalyzer-out-of-bounds", "file": "a.c", "line": 1,
+               "message": "out of bounds read", "cwe": "CWE-126", "compiler": "gcc", "tu": "a.c"}
+    sarif = _cs.to_sarif(_cs.CompilerScanResult(ok=True, findings=[finding]))
+    sarif["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["cwe"] = "CWE-119"
+    path = tmp_path / "compiler.sarif"
+    path.write_text(json.dumps(sarif))
+    assert parse_sarif_findings(path)[0]["cwe_id"] == "CWE-126"
+
+
+def test_conflicting_merged_cwes_do_not_choose_one_by_order(tmp_path, monkeypatch):
+    _fake_toolchain(monkeypatch)
+    for file in ("a.c", "b.c"): (tmp_path / file).write_text("int a;\n")
+    def analyze(target, rel, **kw):
+        return _cs.TuDiagnostics(rel, ok=True, compiler="gcc", diagnostics=[{
+            "rule_id": "-Wanalyzer-out-of-bounds", "file": "common.h", "line": 1,
+            "message": "out of bounds", "cwe": "CWE-126" if rel == "a.c" else "CWE-787",
+            "compiler": "gcc", "tu": rel}])
+    monkeypatch.setattr(_cs, "analyze_tu", analyze)
+    result = _cs.scan_target(tmp_path)
+    assert len(result.findings) == 1 and result.findings[0]["cwe"] is None
+    assert result.findings[0]["compiler_reported_cwes"] == ["CWE-126", "CWE-787"]
