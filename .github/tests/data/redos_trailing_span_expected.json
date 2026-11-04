@@ -323,16 +323,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/context.py\u001f^\\s*typedef\\s+(?=\\S).*\\bX\\s*;": {
-   "digests": [
-    "48e419ee75a4"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/context.py\u001f_PATTERN_HEADING_RE": {
    "digests": [
     "3bb0d6daae3f"
