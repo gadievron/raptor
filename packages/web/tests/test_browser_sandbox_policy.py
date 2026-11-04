@@ -292,3 +292,17 @@ def test_explicit_mac_inner_waiver_does_not_probe_or_waive_outer_policy(monkeypa
     monkeypatch.setattr(probes, 'check_seatbelt_available', lambda: False)
     with pytest.raises(RuntimeError, match='requires usable Seatbelt'):
         boundary._require_browser_containment()
+
+
+@pytest.mark.parametrize('waived', [False, True])
+def test_native_browser_case_skips_missing_optional_playwright_before_setup(monkeypatch, waived):
+    import importlib.util
+    monkeypatch.setitem(sys.modules, 'playwright', None)
+    monkeypatch.setitem(sys.modules, 'playwright.sync_api', None)
+    path = Path(__file__).with_name('test_browser_sandbox_native.py')
+    spec = importlib.util.spec_from_file_location('owned_optional_browser_case', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # None setup objects ensure the skip precedes filesystem/server startup.
+    with pytest.raises(pytest.skip.Exception, match='optional Playwright dependency'):
+        module.test_real_browser_javascript_and_explicit_inner_policy(None, None, waived, None)
