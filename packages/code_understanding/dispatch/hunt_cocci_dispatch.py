@@ -44,7 +44,6 @@ import contextlib
 import logging
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -485,13 +484,11 @@ def cocci_hunt_dispatch(
     # text to its own tempfile when needed (fixed by the
     # runner-fix PR).
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", suffix=".cocci", delete=False,
-    ) as fh:
-        fh.write(rule_text)
-        rule_path = Path(fh.name)
+    from core.run.scratch import write_temp_text
 
+    rule_path = None
     try:
+        rule_path = write_temp_text(rule_text, prefix="tmp", suffix=".cocci")
         result: SpatchResult = spatch_run_rule(
             target=Path(repo_path),
             rule=rule_path,
@@ -505,10 +502,12 @@ def cocci_hunt_dispatch(
         )}]
     finally:
         try:
-            rule_path.unlink()
+            if rule_path is not None:
+                rule_path.unlink(missing_ok=True)
         except OSError:
             pass
-        _scratch_stack.close()
+        finally:
+            _scratch_stack.close()
 
     if not result.ok:
         err = "; ".join(result.errors)[:500] if result.errors else (

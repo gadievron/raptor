@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["keepalive_register", "keepalive_unregister", "scratch_dir"]
+__all__ = ["keepalive_register", "keepalive_unregister", "scratch_dir", "write_temp_text"]
 
 #: Keepalive refresh period. Must sit well below the reaper's age
 #: floor (default 24 h; operators can shrink it via
@@ -289,18 +289,15 @@ def scratch_dir(
         from core.startup.wsl import warn_tmpdir_windows_interop
         warn_tmpdir_windows_interop()
     path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-    if parent is None:
-        # Keepalive for the reaper-swept shape: a live-but-quiet
-        # session must never age past the sweep's floor. Run-output
-        # scratch (dir=...) is never swept, so it is not tracked.
-        keepalive_register(path)
-        # System-tmp lanes are the growth surface a live session adds
-        # between reap cycles — one cheap statvfs per lane keeps the
-        # operator ahead of tmpfs inode exhaustion (advisory only).
-        _inode_ceiling_advisory(path)
-    if env is not None:
-        env["TMPDIR"] = str(path)
+    ready = False
     try:
+        if parent is None:
+            # Protect the allocation even if keepalive/advisory setup fails.
+            keepalive_register(path)
+            _inode_ceiling_advisory(path)
+        if env is not None:
+            env["TMPDIR"] = str(path)
+        ready = True
         yield path
     finally:
         if parent is None:
@@ -308,5 +305,29 @@ def scratch_dir(
             # a keep=True dir ages out normally once its owner stops
             # using it, same contract as other --keep survivors.
             keepalive_unregister(path)
-        if not keep:
+        # keep=True transfers ownership only after successful setup.
+        if not keep or not ready:
             shutil.rmtree(path, ignore_errors=True)
+
+
+def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
+    """Write a closed UTF-8 temporary file and transfer ownership to the caller.
+
+    Remove partial files on write or close failure, including interruption.
+    Successful callers must unlink the returned path after use. This is
+    disposable tool input, so it needs no durable atomic-write/fsync protocol.
+    """
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix=prefix, suffix=suffix,
+            delete=False,
+        ) as stream:
+            path = Path(stream.name)
+            stream.write(text)
+        return path
+    except BaseException:
+        if path is not None:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+        raise

@@ -1579,7 +1579,7 @@ def _relanguage_rule_config(
     shape (stock rule pack, unexpected YAML) — the caller then skips
     the control check rather than scanning vacuously.
     """
-    import tempfile
+    from core.run.scratch import write_temp_text
 
     try:
         path = Path(rule_config)
@@ -1594,11 +1594,7 @@ def _relanguage_rule_config(
     rewritten = text.replace(
         needle, f"languages: [{fixture_lang}]", 1,
     )
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".yaml", delete=False, encoding="utf-8",
-    ) as fh:
-        fh.write(rewritten)
-        return fh.name
+    return str(write_temp_text(rewritten, prefix="tmp", suffix=".yaml"))
 
 
 def _negative_control_batch_plan(

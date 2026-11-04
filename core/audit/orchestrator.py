@@ -20236,16 +20236,24 @@ def _write_decompilation_tmpfile(
             function_name,
         )
         return None
+    import shutil
+
+    tmp_dir = None
+    handed_out = False
     try:
         normalised = _normalise_r2_decompilation(decompilation)
         tmp_dir = Path(tempfile.mkdtemp(prefix="raptor_decomp_"))
         (tmp_dir / f"{function_name}.c").write_text(
             normalised, encoding="utf-8",
         )
+        handed_out = True
         return tmp_dir
     except OSError:
         logger.debug("failed to write decompilation tmpfile", exc_info=True)
         return None
+    finally:
+        if tmp_dir is not None and not handed_out:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _effective_cwe(
@@ -21395,15 +21403,12 @@ def _pattern_rule_file(pattern: str, file_path: str) -> str | None:
         f"    languages: [{lang}]\n"
         "    severity: WARNING\n"
     )
+    from core.run.scratch import write_temp_text
+
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="audit_sweep_", suffix=".yaml", text=True,
-        )
-        with os.fdopen(fd, "w") as fh:
-            fh.write(rule_yaml)
+        return str(write_temp_text(rule_yaml, prefix="audit_sweep_", suffix=".yaml"))
     except OSError:
         return None
-    return tmp_name
 
 
 # CWEs already reported as having no dispatch entry (log once per run,
