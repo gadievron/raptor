@@ -212,24 +212,20 @@ def rewrite_for_localhost(
     # bind-mounts from this dir while nothing refreshes its top-level
     # mtime, so the owner keeps it fresh until teardown.
     staging = Path(tempfile.mkdtemp(prefix="raptor-compose-"))
-    keepalive_register(staging)
     try:
+        keepalive_register(staging)
         # symlinks=True preserves links AS links — symlinks=False would
         # DEREFERENCE them, copying arbitrary host files (~/.aws/credentials,
         # /etc/shadow) into the staging dir where they become build-context /
         # bind-mount content shipped into a hostile stack.
         shutil.copytree(source_dir, staging, dirs_exist_ok=True, symlinks=True)
-    except OSError:
-        cleanup_staging(staging)
-        raise
-    pruned = _prune_escaping_symlinks(staging)
-    if pruned:
-        logger.warning(
-            "compose staging: pruned %d symlink(s) escaping the staging dir",
-            pruned,
-        )
-    staged_compose = staging / compose_file.name
-    try:
+        pruned = _prune_escaping_symlinks(staging)
+        if pruned:
+            logger.warning(
+                "compose staging: pruned %d symlink(s) escaping the staging dir",
+                pruned,
+            )
+        staged_compose = staging / compose_file.name
         _rewrite_ports_in_place(staged_compose, labels=labels,
                                 allow_devices=allow_devices)
     except BaseException:
@@ -681,8 +677,12 @@ def _resolver_scratch_home() -> Path:
     cleanup (``shutil.rmtree`` after resolution).
     """
     scratch = Path(tempfile.mkdtemp(prefix="raptor-resolver-home-"))
-    (scratch / ".docker").mkdir(mode=0o700)
-    return scratch
+    try:
+        (scratch / ".docker").mkdir(mode=0o700)
+        return scratch
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
 
 
 def _resolver_env(scratch_home: Path) -> dict[str, str]:

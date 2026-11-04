@@ -158,9 +158,8 @@ class GhidraServer:
         self._work_dir = Path(
             tempfile.mkdtemp(prefix="raptor-ghidra-server-")
         )
-        work_gpr = prepare_working_copy(self.gpr_path, self._work_dir)
-        self._work_gpr = work_gpr
         try:
+            self._work_gpr = prepare_working_copy(self.gpr_path, self._work_dir)
             self._boot()
         except BaseException:
             # First-boot failure tears down (a raising __enter__

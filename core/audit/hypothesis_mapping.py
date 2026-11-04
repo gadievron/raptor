@@ -7,9 +7,7 @@ consistency-check.  Pure functions — no orchestrator state.
 
 from __future__ import annotations
 
-import os
 import re
-import tempfile
 from pathlib import Path
 
 # P10 web families — unsafe-shape patterns shared across their keyword
@@ -259,13 +257,11 @@ def hypothesis_to_semgrep_rule_keyed(
         f"    severity: WARNING\n"
     )
 
+    from core.run.scratch import write_temp_text
+
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="audit_sweep_", suffix=".yaml", text=True,
-        )
-        with os.fdopen(fd, "w") as fh:
-            fh.write(rule_yaml)
-        return tmp_name, matched_keyword
+        path = write_temp_text(rule_yaml, prefix="audit_sweep_", suffix=".yaml")
+        return str(path), matched_keyword
     except OSError:
         return None
 

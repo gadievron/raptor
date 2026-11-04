@@ -315,9 +315,13 @@ def export_rootfs(
             )
         return ExportOutcome(ok=True, config=config, extras=extras)
     finally:
-        run_cli(["docker", "rm", "-f", cid], timeout=30)
-        if tar_path is not None:
-            try:
-                tar_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        try:
+            run_cli(["docker", "rm", "-f", cid], timeout=30)
+        finally:
+            # The image tar can be several GiB; daemon cleanup failure must
+            # not prevent independent host-file cleanup.
+            if tar_path is not None:
+                try:
+                    tar_path.unlink(missing_ok=True)
+                except OSError:
+                    pass

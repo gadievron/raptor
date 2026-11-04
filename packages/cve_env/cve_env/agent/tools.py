@@ -324,14 +324,18 @@ def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str
         # session is gone.
         ctx = tempfile.mkdtemp(prefix="cve-env-dfgbuild-")
         auto_tmpdir = True
-    result = _docker_build.docker_build(
-        context_dir=ctx,
-        image_tag=str(args.get("image_tag") or ""),
-        dockerfile_text=str(payload.get("dockerfile_text") or ""),
-        cve_id=_CURRENT_CVE_ID,  # label image for per-CVE cleanup
-    )
-    if auto_tmpdir and not result.ok:
-        shutil.rmtree(ctx, ignore_errors=True)
+    build_ok = False
+    try:
+        result = _docker_build.docker_build(
+            context_dir=ctx,
+            image_tag=str(args.get("image_tag") or ""),
+            dockerfile_text=str(payload.get("dockerfile_text") or ""),
+            cve_id=_CURRENT_CVE_ID,  # label image for per-CVE cleanup
+        )
+        build_ok = result.ok
+    finally:
+        if auto_tmpdir and not build_ok:
+            shutil.rmtree(ctx, ignore_errors=True)
     fused = dict(payload)
     fused["context_dir"] = ctx
     fused["build"] = {
