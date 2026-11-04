@@ -1,6 +1,8 @@
 """Bounded parser exchanges and predictable handling of worker failures."""
 
+from contextlib import ExitStack
 import fcntl
+import os
 import json
 import resource
 import socket
@@ -155,10 +157,18 @@ def test_high_descriptor_worker_still_parses(monkeypatch):
         if soft != resource.RLIM_INFINITY and soft <= 2048:
             resource.setrlimit(resource.RLIMIT_NOFILE, (2049, hard))
         high_fd = fcntl.fcntl(jail._sock.fileno(), fcntl.F_DUPFD, 2048)
-        high_sock = socket.socket(fileno=high_fd)
-        high_sock.settimeout(jail_mod._ROUNDTRIP_TIMEOUT_S)
-        jail._sock.close()
-        jail._sock = high_sock
+        try:
+            high_sock = socket.socket(fileno=high_fd)
+        except BaseException:
+            os.close(high_fd)
+            raise
+        with ExitStack() as handoff:
+            handoff.callback(high_sock.close)
+            high_sock.settimeout(jail_mod._ROUNDTRIP_TIMEOUT_S)
+            old_sock = jail._sock
+            jail._sock = high_sock
+            old_sock.close()
+            handoff.pop_all()
         assert jail.parse(b"CONNECT example.com:443 HTTP/1.1") == ParsedRequestLine(
             host="example.com", port=443,
         )

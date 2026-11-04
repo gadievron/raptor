@@ -16,6 +16,8 @@
   unsandboxed parent, contra the pinned-resolver doctrine.
 """
 
+from contextlib import ExitStack
+import fcntl
 import os
 import shutil
 import stat
@@ -152,21 +154,21 @@ class TestHighFdSweep(unittest.TestCase):
         want = 5000  # above the sandbox's default 4096 NOFILE cap
         if hard != resource.RLIM_INFINITY and hard <= want:
             self.skipTest("hard NOFILE limit too low to stage the fd")
-        raised = False
-        if soft <= want:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (want + 16, hard))
-            raised = True
-        try:
+        with ExitStack() as cleanup:
+            if soft != resource.RLIM_INFINITY and soft <= want:
+                cleanup.callback(resource.setrlimit, resource.RLIMIT_NOFILE, (soft, hard))
+                admitted = want + 64 if hard == resource.RLIM_INFINITY else min(want + 64, hard)
+                resource.setrlimit(resource.RLIMIT_NOFILE, (admitted, hard))
             r_end, w_end = os.pipe()
-            os.dup2(r_end, want, inheritable=True)
-            os.close(r_end)
-            self.addCleanup(os.close, w_end)
-            self.addCleanup(lambda: os.close(want)
-                            if os.path.exists(f"/proc/self/fd/{want}")
-                            else None)
+            cleanup.callback(os.close, r_end)
+            cleanup.callback(os.close, w_end)
+            # Allocate an unused slot rather than replacing a live fd at want.
+            want = fcntl.fcntl(r_end, fcntl.F_DUPFD, want)
+            cleanup.callback(os.close, want)
+            os.set_inheritable(want, True)
             from core.sandbox._spawn import run_sandboxed
             out = tempfile.mkdtemp(prefix="raptor-hifd-")
-            self.addCleanup(shutil.rmtree, out, True)
+            cleanup.callback(shutil.rmtree, out, True)
             prog = textwrap.dedent(f"""
                 import os
                 try:
@@ -194,10 +196,6 @@ class TestHighFdSweep(unittest.TestCase):
                 f"soft limit) survived into the sandboxed child: "
                 f"{r.stdout!r}"
             ))
-        finally:
-            if raised:
-                import resource as _res
-                _res.setrlimit(_res.RLIMIT_NOFILE, (soft, hard))
 
 
 class TestPinnedHelperResolution(unittest.TestCase):

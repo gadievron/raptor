@@ -13,6 +13,8 @@ grandchild sweep uses) so every actually-open fd is closed.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+import fcntl
 import os
 import resource
 import sys
@@ -44,13 +46,14 @@ def test_high_noncloexec_fd_does_not_survive_into_the_target(tmp_path):
         pytest.skip(f"parent NOFILE soft limit {soft} too low to "
                     f"plant fd {_PLANT_FD}")
 
-    # A non-CLOEXEC fd above the limit the child will lower NOFILE
-    # to. dup2 targets are inheritable (non-CLOEXEC) by default —
-    # the exact shape of a descriptor leaked by a C extension.
-    src = os.open(str(tmp_path / "planted"), os.O_CREAT | os.O_RDWR)
-    try:
-        os.dup2(src, _PLANT_FD)
-        os.close(src)
+    # Allocate an unused non-CLOEXEC fd above the child's lowered limit;
+    # never overwrite a descriptor another fixture or caller already owns.
+    with ExitStack() as cleanup:
+        src = os.open(str(tmp_path / "planted"), os.O_CREAT | os.O_RDWR)
+        cleanup.callback(os.close, src)
+        planted = fcntl.fcntl(src, fcntl.F_DUPFD, _PLANT_FD)
+        cleanup.callback(os.close, planted)
+        os.set_inheritable(planted, True)
 
         def _lower_nofile() -> None:
             resource.setrlimit(resource.RLIMIT_NOFILE,
@@ -59,7 +62,7 @@ def test_high_noncloexec_fd_does_not_survive_into_the_target(tmp_path):
         probe = (
             "import os\n"
             "try:\n"
-            f"    os.fstat({_PLANT_FD})\n"
+            f"    os.fstat({planted})\n"
             "    print('FD-LEAKED')\n"
             "except OSError:\n"
             "    print('FD-CLOSED')\n"
@@ -71,15 +74,10 @@ def test_high_noncloexec_fd_does_not_survive_into_the_target(tmp_path):
             env={"PATH": "/usr/bin:/bin"},
             capture_output=True, text=True, timeout=60,
         )
-    finally:
-        try:
-            os.close(_PLANT_FD)
-        except OSError:
-            pass
 
     assert result.returncode == 0, result.stderr
     assert "FD-CLOSED" in result.stdout, (
-        f"planted fd {_PLANT_FD} (above the lowered NOFILE soft "
+        f"planted fd {planted} (above the lowered NOFILE soft "
         f"limit {_LOWERED_SOFT}) leaked into the audited target:\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
     )
