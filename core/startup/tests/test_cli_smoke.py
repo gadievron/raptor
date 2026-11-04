@@ -391,6 +391,7 @@ _HELP_MARKER = {
 }
 
 
+@pytest.mark.slow  # Full cold interpreter + source inventory + mode imports.
 @pytest.mark.parametrize("mode", sorted(_HELP_MARKER))
 @pytest.mark.parametrize("help_flag", ["--help", "-h"])
 def test_mode_help_is_side_effect_free(mode: str, help_flag: str):
@@ -417,6 +418,7 @@ def test_mode_help_is_side_effect_free(mode: str, help_flag: str):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # Genuine cold dependency graph; preserve the complete import.
 @pytest.mark.parametrize(
     "module",
     ["raptor", "raptor_agentic", "raptor_fuzzing", "raptor_codeql"],
