@@ -422,7 +422,13 @@ def parse_fd_path(path: str) -> int | None:
     for prefix in ("/proc/self/fd/", "/dev/fd/"):
         if path.startswith(prefix):
             tail = path[len(prefix):]
-            if tail.isdigit():
-                return int(tail)
+            # fd_path emits ASCII decimal digits only. isdigit() also
+            # accepts characters such as superscripts that int() rejects.
+            if tail.isascii() and tail.isdecimal():
+                try:
+                    return int(tail)
+                except ValueError:
+                    # Python bounds decimal conversion of oversized strings.
+                    return None
             return None
     return None
