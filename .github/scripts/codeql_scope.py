@@ -130,7 +130,7 @@ def _get_str_literal(node: ast.expr) -> str | None:
     return None
 
 
-def _extract_dynamic_imports(tree: ast.Module) -> list[str]:
+def _extract_dynamic_imports(nodes: list[ast.AST]) -> list[str]:
     """Find importlib.import_module("x") and __import__("x") calls.
 
     Handles both ``importlib.import_module("x")`` (attribute form)
@@ -138,7 +138,7 @@ def _extract_dynamic_imports(tree: ast.Module) -> list[str]:
     import_module`` (bare-name form).
     """
     bare_names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if (isinstance(node, ast.ImportFrom)
                 and node.module == "importlib"
                 and node.level == 0):
@@ -147,7 +147,7 @@ def _extract_dynamic_imports(tree: ast.Module) -> list[str]:
                     bare_names.add(alias.asname or alias.name)
 
     modules: list[str] = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call) or not node.args:
             continue
         func = node.func
@@ -202,7 +202,7 @@ _MODULE_PATH_RE = __import__("re").compile(
 )
 
 
-def _extract_parametrize_modules(tree: ast.Module) -> list[str]:
+def _extract_parametrize_modules(nodes: list[ast.AST]) -> list[str]:
     """Find project-internal module paths in string constants.
 
     Catches the pattern where a test parametrizes over module path
@@ -215,7 +215,7 @@ def _extract_parametrize_modules(tree: ast.Module) -> list[str]:
     (no spaces, colons, format specifiers, etc.).
     """
     modules: list[str] = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Constant):
             continue
         if not isinstance(node.value, str):
@@ -275,7 +275,12 @@ def extract_imports(
     modules: list[str] = []
     own_package = ".".join(path.parts[:-1]) if len(path.parts) > 1 else ""
 
-    for node in ast.walk(tree):
+    # These passes need the same breadth-first order. Materialize it once
+    # per file instead of repeatedly expanding every AST node's children.
+    # Keep the alias-discovery pass before call matching: an import alias
+    # may appear later in traversal order than a call that refers to it.
+    nodes = list(ast.walk(tree))
+    for node in nodes:
         if (literal_references is not None and isinstance(node, ast.Constant)
                 and isinstance(node.value, str) and node.value in literal_references):
             literal_references[node.value].add(path)
@@ -306,14 +311,14 @@ def extract_imports(
                     modules.extend(f"{base}.{alias.name}" for alias in node.names if alias.name != "*")
 
     # Dynamic imports: importlib.import_module("x") / __import__("x").
-    modules.extend(_extract_dynamic_imports(tree))
+    modules.extend(_extract_dynamic_imports(nodes))
 
     # PEP 562 lazy-export dicts in __init__.py files.
     if path.name == "__init__.py":
         modules.extend(_extract_lazy_export_dicts(tree))
 
     # Project-internal module paths in string constants (parametrize etc.).
-    modules.extend(_extract_parametrize_modules(tree))
+    modules.extend(_extract_parametrize_modules(nodes))
 
     # Only keep imports that point into our scan roots or at a
     # repo-root entry module. Filtering to SCAN_ROOTS alone erased
