@@ -22,7 +22,6 @@ import json
 import logging
 import os
 import stat
-import tempfile
 import time
 import uuid
 from collections.abc import Iterator
@@ -30,6 +29,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_fs import write_text_atomically
 from core.atomic_fs.fs_lock import artifact_lock
 from .resource_lifetime import Lifetime, discard, held
 
@@ -245,16 +245,12 @@ def _read_rows(path: Path, *, required=False) -> list[dict]:
 
 
 def _write_rows(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".heap-ledger-")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump({"version": 1, "rows": rows}, fh)
-        os.replace(tmp, path)
-    except OSError:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    # Serialize before allocating scratch; the shared writer owns the fd
+    # through every failure, including interruption and short writes.
+    write_text_atomically(
+        path, json.dumps({"version": 1, "rows": rows}),
+        tmp_prefix=".heap-ledger-", mode=0o600,
+    )
 
 
 @dataclass

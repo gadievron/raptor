@@ -55,11 +55,11 @@ import json
 import os
 import re
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Sequence
 
+from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact, load_json
 
 from .label import FunctionLabel, compute_span_sha, load_label
@@ -722,23 +722,8 @@ def stamp_labels(checks: Sequence[PinCheck]) -> list[Path]:
         if "span_sha" not in new_source:
             new_source["span_sha"] = check.current_span_sha
         raw["source"] = new_source
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(check.path.parent),
-            prefix=check.path.name + ".",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                # indent=4 matches the hand-edited label format;
-                # dumps_artifact keeps prose as raw UTF-8 rather than
-                # rewriting it into \uXXXX escapes.
-                f.write(dumps_artifact(raw, indent=4) + "\n")
-            os.replace(tmp_name, check.path)
-        except BaseException:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+        # Keep the label's permissions and UTF-8 prose across stamping.
+        write_text_atomically(check.path, dumps_artifact(raw, indent=4) + "\n")
         stamped.append(check.path)
     return stamped
 

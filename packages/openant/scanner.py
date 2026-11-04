@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.config import RaptorConfig
 from core.json import load_json
 from core.logging import get_logger
@@ -1616,19 +1617,7 @@ def _stage_llm_config(
     dest = cfg_dir / "config.json"
     # Atomic write (tempfile + rename) so a concurrent reader never
     # sees a torn file; 0600 before content lands.
-    import tempfile
-    fd, tmp_name = tempfile.mkstemp(dir=str(cfg_dir), suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(raw, fh, indent=2)
-        os.replace(tmp_name, dest)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    write_text_atomically(dest, json.dumps(raw, indent=2), mode=0o600)
     return xdg_home
 
 
