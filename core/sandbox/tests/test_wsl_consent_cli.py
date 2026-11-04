@@ -127,13 +127,14 @@ def test_revoke_works_non_tty(tmp_path):
     assert not marker.exists()
 
 
-def test_unknown_subcommand_and_usage(tmp_path):
-    r = _run(tmp_path, "bogus")
-    assert r.returncode == 1
-    assert "unknown subcommand" in r.stderr
-    r = _run(tmp_path)  # no args
-    assert r.returncode == 1
-    assert "Usage" in r.stderr
-    r = _run(tmp_path, "--help")
-    assert r.returncode == 0
-    assert "grant" in r.stdout and "revoke" in r.stdout
+@pytest.mark.parametrize("args,code,stream,texts", [
+    (("bogus",), 1, "stderr", ("unknown subcommand",)),
+    ((), 1, "stderr", ("Usage",)),
+    (("--help",), 0, "stdout", ("grant", "revoke")),
+], ids=["unknown-command", "missing-command", "help"])
+def test_unknown_subcommand_and_usage(tmp_path, args, code, stream, texts):
+    # Each invocation is an independent CLI boundary check; accumulating
+    # three interpreter startups in one phase exceeded the fast-tier budget.
+    r = _run(tmp_path, *args)
+    assert r.returncode == code
+    assert all(text in getattr(r, stream) for text in texts)

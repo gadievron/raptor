@@ -11,7 +11,8 @@ collection shape: the ``_tier.yml`` tiers (keyed ``<tier>/image`` and
 provisioning, so their counts are recorded separately), the nightly
 full-collection lanes (``nightly-default``, ``nightly-slow``,
 ``nightly-integration``), and this gate's own home suite
-(``ci-lint``). Finer granularity (per test file, per
+(``ci-lint``), and the separately owned, zero-skip ReDoS census
+(``redos-census``). Finer granularity (per test file, per
 matrix batch) was rejected: batch partitions are dynamic per run, so
 their counts are not stable keys.
 

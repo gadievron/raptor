@@ -54,11 +54,13 @@ from codeql_scope import (
 TIERS: dict[str, dict] = {
     "sandbox": {
         "test_dirs": ["core/sandbox/tests"],
+        "extra_triggers": [".github/scripts/pytest_workers.py"],
         "env": "sandbox",
         "env_reason": "needs Linux namespaces / macOS sandbox-exec",
     },
     "exploit_feasibility": {
         "test_dirs": ["packages/exploit_feasibility/tests"],
+        "extra_triggers": [".github/scripts/pytest_workers.py"],
         "env": "exploit_feasibility",
         "env_reason": "needs radare2, gcc, real binaries",
     },

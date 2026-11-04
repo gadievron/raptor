@@ -616,8 +616,11 @@ jobs:
           if [ "$rc" -eq 5 ]; then exit 0; fi
           exit "$rc"
 
-  # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
-  # work. Gated on sandbox-related path changes only.
+  # Sandbox tier: tests doing real namespace/mount/seccomp
+  # work. Gated on sandbox-related path changes only. Bounded xdist
+  # parallelism uses the existing runner; loadfile keeps each module
+  # and its shared fixtures/resources together. Single-file selections
+  # stay in process rather than starting an idle second worker.
   python-unit-tests-sandbox:
     needs: [pre_check, changes, deps]
     if: |
@@ -656,7 +659,8 @@ jobs:
           # in sandbox sources resolves. Bare pytest only works when
           # `core` is included in the args (e.g. `pytest core packages`).
           set -f
-          python -m pytest $SANDBOX_FILES
+          workers="$(python .github/scripts/pytest_workers.py $SANDBOX_FILES)"
+          python -m pytest -n "$workers" --dist loadfile $SANDBOX_FILES
         env:
           SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
 
@@ -670,10 +674,8 @@ jobs:
       # the Linux tmp layout fail HERE, in the cheap Linux lane,
       # instead of on the macOS runner — which keeps catching what
       # only a real Darwin kernel can: the darwin_native tests
-      # themselves. Budget: ~45s serial measured all-green over the
-      # full sandbox file list (including the gate's own nested-pytest
-      # contract tests), so it rides in this job like the
-      # slow/integration step below.
+      # themselves. This uses the same bounded worker selection as the
+      # Linux pass, including the gate's nested-pytest contract tests.
       - name: Run sandbox tests (emulated darwin platform)
         env:
           SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
@@ -682,7 +684,8 @@ jobs:
           source $VENV_PATH/bin/activate
           set -f
           rc=0
-          python -m pytest $SANDBOX_FILES || rc=$?
+          workers="$(python .github/scripts/pytest_workers.py $SANDBOX_FILES)"
+          python -m pytest -n "$workers" --dist loadfile $SANDBOX_FILES || rc=$?
           # Exit 5 = "no tests collected" — legitimate when path
           # filtering narrows SANDBOX_FILES to files that are entirely
           # *_native-marked (all deselected under emulation).
@@ -694,9 +697,8 @@ jobs:
       # markers, so before this step the tier's only CI execution was
       # nightly.yml — a PR could merge a sandbox regression that sat
       # invisible until (and unless) the next nightly was triaged.
-      # Budget: 185 tests (22 slow + 163 integration across 22 files),
-      # ~90s serial measured all-green — well inside this job's 30-min
-      # timeout, so it rides here rather than earning a separate job
+      # This uses two workers within the existing runner rather than
+      # earning a separate job
       # (and, like the job itself, also runs on force_full events:
       # merge queue, the twice-weekly cron, dispatch).
       #
@@ -721,7 +723,7 @@ jobs:
           RAPTOR_MAX_TEST_SECONDS: ""
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m "slow or integration" \
+          python -m pytest -n 2 --dist loadfile -m "slow or integration" \
             core/sandbox packages/exploit_feasibility
 
   # macOS sandbox tier: runs the same core/sandbox/tests on a real Darwin
@@ -783,7 +785,8 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           set -f
-          python -m pytest $SANDBOX_FILES -v
+          workers="$(python .github/scripts/pytest_workers.py $SANDBOX_FILES)"
+          python -m pytest -n "$workers" --dist loadfile $SANDBOX_FILES -v
 
       - name: Run native audit checks (macOS slow)
         env:
@@ -959,23 +962,25 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           set -f
-          python -m pytest $EXPLOIT_FILES
+          workers="$(python .github/scripts/pytest_workers.py $EXPLOIT_FILES)"
+          python -m pytest -n "$workers" --dist loadfile $EXPLOIT_FILES
 
       # Second invocation, mirroring the sandbox job's slow/integration
       # step for THIS package's gate: an exploit-feasibility-only PR
       # does not fire the sandbox gate, so without this step the
-      # package's slow/integration-marked tests (15 tests, ~30s serial
-      # measured all-green) would still run only in nightly.yml on such
-      # PRs. When a PR fires both gates the package subset runs in both
-      # jobs — ~30s of overlap, taken deliberately over a coverage hole.
+      # package's slow/integration-marked tests would still run only in
+      # nightly.yml on such
+      # PRs. When both gates fire, the sandbox job already runs this
+      # exact directory with the same markers, so omit the duplicate.
       # Same guard rationale as the sandbox step: blank the 10s per-test
       # guard, slow-marked tests legitimately exceed it.
       - name: Run exploit_feasibility slow/integration tier
+        if: needs.changes.outputs.sandbox != 'true'
         env:
           RAPTOR_MAX_TEST_SECONDS: ""
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m "slow or integration" packages/exploit_feasibility
+          python -m pytest -n 2 --dist loadfile -m "slow or integration" packages/exploit_feasibility
 
   # source_intel tier: Coccinelle-driven memory-corruption evidence.
   # The real-spatch E2E (test_e2e_real_spatch_* etc.) are
@@ -1099,22 +1104,47 @@ jobs:
         run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run CI filter-coverage tests
+        id: ci_tests
         # Both dirs: filter-coverage tests AND the checker-script
         # detector tests (check_vocab_lists, check_env_docs,
         # check_miswiring_detector, check_optional_dep_imports) —
-        # stdlib+pytest only, ~20s.
+        # stdlib+pytest only. The ReDoS suite has a separate owner in
+        # lint.yml on PR/push/merge events, so do not execute it twice.
         #
         # NOTE: these are the detectors' UNIT TESTS (does the detector
         # logic work), not the detectors themselves (is the repo clean).
         # The detectors run against the tree in lint.yml's
         # ``repo-invariants`` job on every PR and in the daily
         # miswiring-scan.yml sweep.
-        run: pytest .github/tests .github/scripts/tests --junitxml="$RUNNER_TEMP/ci-lint.xml"
+        run: |
+          python -m pytest .github/tests .github/scripts/tests \
+            --ignore=.github/tests/test_redos_idiom_census.py \
+            --junitxml="$RUNNER_TEMP/ci-lint.xml"
+
+      # A manual or scheduled Test Suite run does not trigger Lint.
+      # Retain the full default-tier census here on those events.
+      - name: Run ReDoS census for full-suite events
+        id: full_redos
+        if: ${{ !cancelled() && (steps.ci_tests.outcome == 'success' || steps.ci_tests.outcome == 'failure') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        env:
+          # Whole-tree invariant, matching its lint.yml owner's 120s
+          # session budget. Unit tests retain their 10s phase guard.
+          RAPTOR_MAX_TEST_SECONDS: ""
+          RAPTOR_MAX_SESSION_SECONDS: '120'
+        run: |
+          python -m pytest .github/tests/test_redos_idiom_census.py -q \
+            --junitxml="$RUNNER_TEMP/ci-lint-redos.xml"
+
+      - name: Require complete ReDoS census execution
+        if: ${{ !cancelled() && (steps.full_redos.outcome == 'success' || steps.full_redos.outcome == 'failure') }}
+        run: |
+          python3 .github/scripts/check_skip_budget.py --lane redos-census --full \
+            --junit-xml "$RUNNER_TEMP/ci-lint-redos.xml"
 
       # Self-censusing: this lane is the skip-budget gate's own home
       # suite (and its simulations skip when bash/jq vanish from the
       # runner), so it checks its own count. Fixed full collection of
-      # both dirs on every run, hence --full.
+      # both dirs except the separately owned census, hence --full.
       - name: Check skip count against the lane's recorded budget
         run: |
           python3 .github/scripts/check_skip_budget.py \

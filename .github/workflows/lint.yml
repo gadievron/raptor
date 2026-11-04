@@ -330,7 +330,18 @@ jobs:
         run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run ReDoS idiom census
-        run: python -m pytest .github/tests/test_redos_idiom_census.py -q
+        id: redos_census
+        env:
+          RAPTOR_MAX_SESSION_SECONDS: '120'
+        run: |
+          python -m pytest .github/tests/test_redos_idiom_census.py -q \
+            --junitxml="$RUNNER_TEMP/redos-census.xml"
+
+      - name: Require complete ReDoS census execution
+        if: ${{ !cancelled() && (steps.redos_census.outcome == 'success' || steps.redos_census.outcome == 'failure') }}
+        run: |
+          python3 .github/scripts/check_skip_budget.py --lane redos-census --full \
+            --junit-xml "$RUNNER_TEMP/redos-census.xml"
 
   # Aggregate gate — gives GitHub a single job name to anchor the
   # workflow result on. Without this, a run where all real jobs are

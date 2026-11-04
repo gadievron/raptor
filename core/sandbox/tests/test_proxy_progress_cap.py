@@ -248,14 +248,17 @@ def test_tunnel_with_steady_progress_survives_past_old_cap(monkeypatch):
     monkeypatch.setattr(proxy_mod, "_ip_is_blocked", lambda ip: False)
     srv, up_port, thread = _echo_upstream()
     proxy = proxy_mod.EgressProxy(
-        allowed_hosts={"127.0.0.1"}, idle_timeout=0.4, total_timeout=0.6,
+        # This case tests the absolute cap; the separate stalled-tunnel
+        # case tests idle expiry. Give scheduling stalls idle headroom.
+        allowed_hosts={"127.0.0.1"}, idle_timeout=5.0, total_timeout=0.2,
     )
     try:
         s = _connect_through(proxy, up_port)
         s.settimeout(5.0)
         try:
-            deadline = time.monotonic() + 1.5   # 2.5x the absolute cap
-            while time.monotonic() < deadline:
+            # Six round trips span more than two absolute-cap windows.
+            # A fixed count also cannot pass after just one delayed echo.
+            for _ in range(6):
                 s.sendall(b"x")
                 echoed = s.recv(16)
                 assert echoed, (

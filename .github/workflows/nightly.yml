@@ -311,7 +311,10 @@ jobs:
           # bounded PR job by the default addopts marker filter).
           # The Semgrep engine directory is owned by semgrep-regressions;
           # core/package Semgrep consumers continue to run in this job.
-          python -m pytest -m slow core packages engine .github/tests .github/scripts/tests \
+          # Keep shared module fixtures on one worker and retain seeded
+          # module ordering. Use two workers on the existing runner;
+          # no extra toolchain installs.
+          python -m pytest -n 2 --dist loadfile --no-loadscope-reorder -m slow core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py -q --durations=25 \
             --junitxml="$RUNNER_TEMP/slow.xml"
