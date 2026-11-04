@@ -222,7 +222,8 @@ is cached per compiler; an unusable runtime produces a prerequisite skip.
 Compile-only tests continue to run, and failures inside RAPTOR's sandbox remain
 test failures. This catches startup failures such as the macOS 26 deadlock
 reported in [LLVM issue 200447](https://github.com/llvm/llvm-project/issues/200447)
-without disabling ASAN tests for an entire operating-system version.
+without disabling ASAN tests for an entire operating-system version. See
+[AddressSanitizer on macOS](#addresssanitizer-on-macos) if the probe times out.
 
 `-n 4` runs four pytest-xdist worker processes; `--dist worksteal` lets
 workers share remaining tests to reduce idle time. pytest-xdist is included
@@ -260,6 +261,57 @@ status after printing the paths, without exiting your interactive shell.
 `-v` records test names as they run, `2>&1` includes stderr, and `pipefail`
 preserves a failing pipeline status. The text log remains useful if the
 process crashes; JUnit XML may be incomplete if pytest cannot finish.
+
+### AddressSanitizer on macOS
+
+A sanitizer-enabled program can hang before `main()` with an older selected
+Xcode runtime, even when newer Command Line Tools are installed. This affects
+both test fixtures and normal sanitizer-enabled exploit verification. RAPTOR
+adds toolchain advice to Mac ASAN/TSAN execution timeouts and ASAN prerequisite
+skips; a witness timeout remains `UNKNOWN`, since the program itself could also
+have looped. The advice is not evidence of a sanitizer failure.
+
+Check which tools are selected:
+
+```bash
+xcode-select -p
+xcrun --find clang++
+xcrun clang++ --version
+xcodebuild -version
+pkgutil --pkg-info=com.apple.pkg.CLTools_Executables
+```
+
+The Xcode and standalone Command Line Tools versions can differ. Apple
+[documents sanitizer startup hangs with Xcode 26.3 or older and recommends
+Xcode 26.4](https://developer.apple.com/documentation/xcode-release-notes/xcode-26_4-release-notes).
+Updating macOS or installing newer tools does not necessarily change the
+selected developer directory. A matching stack is described in
+[LLVM issue 200447](https://github.com/llvm/llvm-project/issues/200447).
+
+Finish running tests/builds before switching. If the standalone Command Line
+Tools are newer and installed at the standard location, select them with:
+
+```bash
+sudo xcode-select --switch /Library/Developer/CommandLineTools
+xcrun clang++ --version
+```
+
+This changes the developer directory for other builds too. Alternatively,
+update the selected Xcode to a fixed release. To select Xcode again later:
+
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
+
+RAPTOR sanitizes subprocess environments: `DEVELOPER_DIR` is not preserved by
+`get_safe_env()`, so an override in the parent shell can disappear before
+compilation. An interactive compiler-version check with that override alone
+does not prove the compiler used by RAPTOR changed. The prerequisite skip now
+includes its compiler path; verify the actual selected toolchain and rerun the
+ASAN tests in a fresh pytest process. The probe checks whether a clean program
+runs, rather than deciding from a compiler version string. Compile-only tests
+and sandbox failures remain separate from this prerequisite gate. RAPTOR does
+not automatically switch tools or disable requested instrumentation.
 
 ### Containing deliberate desktop crashes
 
