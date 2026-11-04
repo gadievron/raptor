@@ -2686,6 +2686,15 @@ def _java_text_block_end(
     swallow direction)."""
     n = len(source)
     j = i + 3
+    if (not escapes and type(source) is str and type(i) is int
+            and j >= 0):
+        # With no escapes, the first triple quote is always the close.
+        close = source.find('"""', j)
+        if close >= 0:
+            return close + 3
+        if on_eof is not None:
+            on_eof()
+        return n
     while j < n:
         if escapes and source[j] == "\\":
             j += 2
