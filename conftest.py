@@ -696,9 +696,10 @@ def pytest_collection_modifyitems(config, items):
     try:
         seed = int(_RANDOMISE_SEED_RAW)
     except (ValueError, TypeError):
-        seed = int.from_bytes(
-            _RANDOMISE_SEED_RAW.encode()[:8], "little"
-        ) % 2**31
+        # Random's string seeding consumes the entire value deterministically.
+        # Truncating to eight bytes discarded the iteration suffix of GitHub
+        # run-id seeds, making all three nightly iterations identical.
+        seed = _RANDOMISE_SEED_RAW
     rng = _random.Random(seed)
 
     # module path → ordered class-buckets → items.  The bucket key is

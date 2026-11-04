@@ -35,6 +35,12 @@ def _make_result(rule_id: str, uri: str | None) -> dict:
     return {"ruleId": rule_id, "locations": locations}
 
 
+def _sanitizer_line() -> int:
+    bounds = mod._sanitizer_lines("core/security/redaction.py", "redact_secrets")
+    assert bounds is not None
+    return bounds[0]
+
+
 def _make_result_with_flow(
     rule_id: str,
     sink_uri: str,
@@ -48,7 +54,7 @@ def _make_result_with_flow(
             "location": {
                 "physicalLocation": {
                     "artifactLocation": {"uri": step_uri},
-                    "region": {"startLine": 1},
+                    "region": {"startLine": _sanitizer_line() if step_uri == "core/security/redaction.py" else 1},
                 },
                 "message": {"text": step_msg},
             }
@@ -272,8 +278,8 @@ class SanitizerFPTests(unittest.TestCase):
         """CodeQL flow steps inside redact_secrets() reference interior
         lines (e.g. ``result = _redact_with_patterns(...)``) whose
         message/snippet text doesn't contain 'redact_secrets'. The
-        matcher must still recognise the flow as passing through the
-        sanitiser file."""
+        matcher must still recognise an interior source location in the
+        reviewed sanitiser function."""
         result = _make_result_with_flow(
             "py/clear-text-logging-sensitive-data",
             "packages/llm_analysis/agent.py",
@@ -288,7 +294,7 @@ class SanitizerFPTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertIsInstance(match, mod.SanitizerFP)
 
-    def test_matches_via_related_locations(self):
+    def test_related_location_alone_does_not_prove_sanitization(self):
         result = _make_result(
             "py/clear-text-logging-sensitive-data",
             "packages/llm_analysis/agent.py",
@@ -297,14 +303,13 @@ class SanitizerFPTests(unittest.TestCase):
             {
                 "physicalLocation": {
                     "artifactLocation": {"uri": "core/security/redaction.py"},
-                    "region": {"startLine": 161},
+                    "region": {"startLine": _sanitizer_line()},
                 },
                 "message": {"text": "redact_secrets sanitises the output"},
             }
         ]
         match = mod._matches_known_fp(result)
-        self.assertIsNotNone(match)
-        self.assertIsInstance(match, mod.SanitizerFP)
+        self.assertIsNone(match)
 
     def test_matches_via_snippet(self):
         result = _make_result(
@@ -317,7 +322,7 @@ class SanitizerFPTests(unittest.TestCase):
                     "location": {
                         "physicalLocation": {
                             "artifactLocation": {"uri": "core/security/redaction.py"},
-                            "region": {"startLine": 161},
+                            "region": {"startLine": _sanitizer_line()},
                             "contextRegion": {
                                 "snippet": {"text": "sanitised = redact_secrets(raw)"},
                             },
@@ -518,5 +523,59 @@ class TableShapeTests(unittest.TestCase):
             )
 
 
-if __name__ == "__main__":
+
+
+class SuppressionPathBoundaryTests(unittest.TestCase):
+    def test_similarly_named_sinks_are_not_suppressed(self):
+        for uri in (
+            'core/sandbox/context.py.backup',
+            'libexec/raptor-audit-extra',
+            'core/sandbox/observe.py/other.py',
+        ):
+            self.assertIsNone(mod._matches_known_fp(
+                _make_result('py/clear-text-logging-sensitive-data', uri)
+            ), uri)
+
+    def test_similarly_named_sanitizers_are_not_suppressed(self):
+        for uri in (
+            'core/security/redaction.py.backup',
+            'other/core/security/redaction.py',
+        ):
+            result = _make_result_with_flow(
+                'py/clear-text-logging-sensitive-data', 'packages/web/scanner.py',
+                [(uri, 'value')],
+            )
+            self.assertIsNone(mod._matches_known_fp(result), uri)
+
+
+class SanitizerEvidenceTests(unittest.TestCase):
+    def test_other_lines_in_sanitizer_module_are_not_evidence(self):
+        result = _make_result_with_flow(
+            'py/clear-text-logging-sensitive-data', 'packages/web/scanner.py',
+            [('core/security/redaction.py', 'unsanitized value')],
+        )
+        location = result['codeFlows'][0]['threadFlows'][0]['locations'][0]['location']
+        location['physicalLocation']['region']['startLine'] = 1
+        self.assertIsNone(mod._matches_known_fp(result))
+
+    def test_one_sanitized_flow_does_not_hide_an_unsafe_flow(self):
+        safe = _make_result_with_flow(
+            'py/clear-text-logging-sensitive-data', 'packages/web/scanner.py',
+            [('core/security/redaction.py', 'redacted')],
+        )
+        unsafe = _make_result_with_flow(
+            'py/clear-text-logging-sensitive-data', 'packages/web/scanner.py',
+            [('packages/web/scanner.py', 'raw')],
+        )
+        for alternate in ('codeFlows', 'threadFlows'):
+            import copy
+            result = copy.deepcopy(safe)
+            if alternate == 'codeFlows':
+                result['codeFlows'].extend(unsafe['codeFlows'])
+            else:
+                result['codeFlows'][0]['threadFlows'].extend(unsafe['codeFlows'][0]['threadFlows'])
+            self.assertIsNone(mod._matches_known_fp(result))
+
+
+if __name__ == '__main__':
     unittest.main()

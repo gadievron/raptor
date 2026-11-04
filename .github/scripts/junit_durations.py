@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -67,6 +68,9 @@ def collect_run(
         try:
             seconds = float(tc.get("time") or 0.0)
         except ValueError:
+            dropped += 1
+            continue
+        if not math.isfinite(seconds) or seconds < 0:
             dropped += 1
             continue
         if classname:

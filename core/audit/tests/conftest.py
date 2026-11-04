@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from core.testing.tempdirs import isolated_test_dir
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -43,7 +45,7 @@ def checklist_builds(
 @pytest.fixture(autouse=True)
 def _isolated_mac_keys(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
-        "XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")),
+        "XDG_DATA_HOME", str(isolated_test_dir(tmp_path_factory, "xdg-data")),
     )
 
 
@@ -97,7 +99,7 @@ def _isolated_scorecard_sidecar(tmp_path_factory, monkeypatch):
     wins."""
     monkeypatch.setenv(
         "RAPTOR_SCORECARD_PATH",
-        str(tmp_path_factory.mktemp("scorecard") / "llm_scorecard.json"),
+        str(isolated_test_dir(tmp_path_factory, "scorecard") / "llm_scorecard.json"),
     )
 
 

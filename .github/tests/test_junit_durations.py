@@ -151,3 +151,15 @@ class TestCli:
         rc = main([str(out), str(xml), "--repo", str(mini_repo)])
         assert rc == 1
         assert not out.exists()
+
+
+@pytest.mark.parametrize('duration', ['NaN', 'inf', '-inf', '-1', 'not-a-number'])
+def test_invalid_durations_do_not_poison_valid_measurements(mini_repo, tmp_path, duration):
+    xml = _write_junit(tmp_path / 'run.xml', [
+        ('core.pkga.tests.test_mod', 'test_bad', duration),
+        ('core.pkga.tests.test_mod', 'test_good', '1.5'),
+    ])
+    per_file, per_nodeid, dropped = collect_run(xml, mini_repo)
+    assert per_file == {'core/pkga/tests/test_mod.py': 1.5}
+    assert per_nodeid == {'core/pkga/tests/test_mod.py::test_good': 1.5}
+    assert dropped == 1

@@ -78,9 +78,6 @@ permissions:
   contents: read
   packages: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build-push:
     runs-on: ubuntu-latest
@@ -168,12 +165,30 @@ jobs:
       # step. GHCR has no auto-retention, so without this the weekly
       # rebuild alone accrues ~52 dangling versions/year.
       - name: Prune superseded (untagged) image versions
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55  # was v5.0.0
-        with:
-          package-name: raptor-sandbox-matrix
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PKG: raptor-sandbox-matrix
+        run: |
+          set -euo pipefail
+          base="orgs/${OWNER}/packages/container/${PKG}"
+          gh api "${base}" >/dev/null 2>&1 \
+            || base="users/${OWNER}/packages/container/${PKG}"
+          # Enumerate before deleting so pagination cannot skip shifted rows.
+          # Keep the newest five untagged versions; tagged anchors are untouched.
+          gh api --paginate "${base}/versions?per_page=100" \
+            --jq '.[] | select(.metadata.container.tags | length == 0) | [(.id|tostring), .created_at] | @tsv' \
+            > /tmp/untagged-versions.tsv
+          sort -t$'\t' -k2,2r /tmp/untagged-versions.tsv \
+            | tail -n +6 > /tmp/prune-untagged.tsv
+          echo "== untagged retention plan (keeping newest five):"
+          cat /tmp/prune-untagged.tsv
+          while IFS=$'\t' read -r id created; do
+            # DELETE succeeds with an empty response body; do not parse JSON.
+            gh api -X DELETE "${base}/versions/${id}" \
+              || { echo "::error::failed to delete untagged version ${id} of ${PKG}"; exit 1; }
+            echo "== deleted ${id} (${created})"
+          done < /tmp/prune-untagged.tsv
 
       # Tagged-anchor retention: keep the newest 10 tagged versions.
       # Bounded both ways deliberately (churn-prone limit): pruning an

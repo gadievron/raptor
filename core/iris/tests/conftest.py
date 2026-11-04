@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import pytest
 
+from core.testing.tempdirs import isolated_test_dir
+
 
 @pytest.fixture(autouse=True)
 def _isolated_iris_store_key(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
-        "XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")),
+        "XDG_DATA_HOME", str(isolated_test_dir(tmp_path_factory, "xdg-data")),
     )

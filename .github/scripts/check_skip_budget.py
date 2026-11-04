@@ -87,9 +87,12 @@ def count_skips(junit_path: Path) -> int:
     for suite in suites:
         raw = suite.get("skipped", "0")
         try:
-            total += int(raw)
+            count = int(raw)
+            if count < 0:
+                raise ValueError("negative skip count")
+            total += count
         except ValueError as exc:
-            msg = f"non-integer skipped= attribute in {junit_path}: {raw!r}"
+            msg = f"invalid skipped= attribute (expected a non-negative integer) in {junit_path}: {raw!r}"
             raise ValueError(msg) from exc
     return total
 
@@ -128,23 +131,15 @@ def write_baseline(path: Path, lane: str, skips: int) -> None:
     A present-but-unreadable baseline REFUSES the rewrite: treating it
     as empty would erase every other lane's row in one keystroke.
     """
-    entries: dict[str, dict] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            print(
-                f"[skip-budget] refusing --write-baseline: cannot parse "
-                f"the existing baseline at {path} ({exc}); fix or remove "
-                f"it first — overwriting would erase every other lane's "
-                f"row",
-                file=sys.stderr,
-            )
-            raise SystemExit(2) from exc
-        if isinstance(loaded, dict):
-            entries = {
-                k: dict(v) for k, v in loaded.items() if isinstance(v, dict)
-            }
+    try:
+        entries = {k: dict(v) for k, v in load_baseline(path).items()}
+    except ValueError as exc:
+        print(
+            f"[skip-budget] refusing --write-baseline: {exc}; "
+            "fix or remove the existing baseline first",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
     row = {k: v for k, v in entries.get(lane, {}).items() if k != "skips"}
     entries[lane] = {**row, "skips": skips}
     path.write_text(
@@ -188,13 +183,15 @@ def main() -> int:
         return 2
     entry = baseline.get(args.lane)
 
-    if entry is not None and not isinstance(entry.get("skips"), int):
+    if entry is not None and (
+        type(entry.get("skips")) is not int or entry["skips"] < 0
+    ):
         # A recorded row without an integer count is a malformed
         # baseline, not an unrecorded lane — demoting it to the
         # NOTICE path would stop enforcement behind a typo.
         print(
             f"[skip-budget] malformed baseline row for {args.lane}: "
-            f"'skips' must be an integer (got "
+            f"'skips' must be a non-negative integer (got "
             f"{entry.get('skips')!r}) — fix {args.baseline.name}",
             file=sys.stderr,
         )

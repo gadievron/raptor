@@ -240,3 +240,31 @@ class TestWriteBaseline:
         with pytest.raises(SystemExit):
             gate.main()
         assert base.read_text(encoding="utf-8") == "{not json"
+
+
+@pytest.mark.parametrize('count', [-1, -100])
+def test_negative_xml_skip_counts_are_rejected(gate, tmp_path, count):
+    xml = _junit(tmp_path, 'bad.xml', skipped=count)
+    with pytest.raises(ValueError, match='non-negative integer'):
+        gate.count_skips(xml)
+
+
+@pytest.mark.parametrize('count', [True, False, -1])
+def test_boolean_or_negative_baseline_count_is_invalid(
+    gate, tmp_path, monkeypatch, capsys, count,
+):
+    xml = _junit(tmp_path, 'a.xml', skipped=0)
+    base = _baseline(tmp_path, {'lane-x': {'skips': count}})
+    rc, _ = _run(gate, monkeypatch, capsys, [
+        '--lane', 'lane-x', '--junit-xml', str(xml), '--baseline', str(base),
+    ])
+    assert rc == 2
+
+
+@pytest.mark.parametrize('data', [[], {'lane-x': {'skips': 2}, 'lane-y': 3}])
+def test_refresh_refuses_to_erase_misshapen_baseline(gate, tmp_path, data):
+    base = _baseline(tmp_path, data)
+    original = base.read_bytes()
+    with pytest.raises(SystemExit):
+        gate.write_baseline(base, 'lane-x', 5)
+    assert base.read_bytes() == original

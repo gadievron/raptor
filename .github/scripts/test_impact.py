@@ -57,6 +57,7 @@ from test_scope import (
     file_in_fast_tier,
     file_matches_tier,
     is_test_file,
+    script_reference_seeds,
 )
 
 _EXTRA_ROOTS = (".github",)
@@ -372,6 +373,13 @@ def main() -> int:
     changed_py |= expand_conftest(changed_py, all_py)
 
     changed_py |= init_imports(changed_py, all_py)
+
+    # Match the CI dispatcher's entry-script references as well as imports.
+    script_seeds, unmapped_scripts = script_reference_seeds(changed, all_py, repo)
+    changed_py |= script_seeds
+    if unmapped_scripts:
+        # An unreferenced executable is not evidence that no tests are needed.
+        changed_py.update(all_py)
 
     # Compute closure.
     closure = transitive_dependents(changed_py, reverse_graph)
