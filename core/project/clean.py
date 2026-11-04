@@ -2,7 +2,9 @@
 
 import os
 import re
+import stat
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +25,10 @@ def _run_dir_size(d: Path) -> int:
         for fname in files:
             fp = Path(root) / fname
             try:
-                st = fp.stat()
+                st = fp.lstat()
             except OSError:
                 continue
-            if not fp.is_symlink():
+            if stat.S_ISREG(st.st_mode):
                 size += st.st_size
     return size
 
@@ -98,6 +100,76 @@ def split_live_runs(dirs) -> tuple[list, list]:
     return rest, live
 
 
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(info.st_mode):
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _remember_delete(plan: dict[str, Any], path: Path) -> bool:
+    identity = _directory_identity(path)
+    if identity is None:
+        return False
+    plan.setdefault("_delete_meta", {})[str(path)] = identity
+    return True
+
+
+def _finish_clean(plan, candidates, deleted, sizes) -> None:
+    """Replace prospective counters with completed removals, even on error."""
+    removed = set(deleted)
+    plan["delete_dirs"] = list(deleted)
+    plan["deleted"] = [path.name for path in deleted]
+    plan["freed_bytes"] = sum(sizes.values())
+    typed = plan.get("_type_dirs", {})
+    if typed:
+        kept = []
+        for command, paths in typed.items():
+            paths = list(dict.fromkeys(Path(path) for path in paths))
+            survivors = [path for path in paths if os.path.lexists(path)]
+            victims = [path for path in paths if path in removed]
+            kept.extend(path.name for path in survivors)
+            plan["by_type"][command] = {
+                "total": len(survivors) + len(victims),
+                "keep": len(survivors), "delete": len(victims),
+                "freed_bytes": sum(sizes[path] for path in victims),
+            }
+        plan["kept"] = list(dict.fromkeys(kept))
+    else:
+        kept = list(plan.get("kept", []))
+        kept.extend(path.name for path in candidates
+                    if path not in removed and os.path.lexists(path))
+        plan["kept"] = list(dict.fromkeys(kept))
+
+
+def eligible_clean_dirs(project, keep: int=1, dedup: bool=False) -> set[Path]:
+    """Recheck policy after confirmation; failure permits no deletions.
+
+    This computes eligibility only, without rescanning run byte sizes. The
+    executor still intersects it with the confirmed paths and identities.
+    """
+    try:
+        allowed = set()
+        for dirs in project.get_run_dirs_by_type().values():
+            closed, _ = split_live_runs(dirs)
+            if dedup:
+                from core.coverage.clean import dedup_runs
+                victims, _ = dedup_runs(closed)
+            else:
+                victims = closed[max(1, keep):]
+            allowed.update(Path(path) for path in victims)
+        return allowed
+    except Exception as exc:  # noqa: BLE001 — retain data on an incomplete census
+        import logging
+        logging.getLogger(__name__).warning(
+            "clean policy revalidation failed; retaining runs (%s)",
+            type(exc).__name__)
+        return set()
+
+
 def plan_clean(project, keep: int=1) -> dict[str, Any]:
     """Plan which runs to delete. Returns stats with directory paths.
 
@@ -118,6 +190,7 @@ def plan_clean(project, keep: int=1) -> dict[str, Any]:
     }
 
     for cmd_type, dirs in groups.items():
+        stats.setdefault("_type_dirs", {})[cmd_type] = list(dirs)
         # Never plan a live run (status=running with a live worker)
         # for deletion — it counts as kept, outside the keep quota.
         dirs, live = split_live_runs(dirs)
@@ -131,6 +204,7 @@ def plan_clean(project, keep: int=1) -> dict[str, Any]:
         # newest-first) when the keep slice would otherwise empty the type.
         if not to_keep and dirs:
             to_keep, to_delete = dirs[:1], dirs[1:]
+        to_delete = [d for d in to_delete if _remember_delete(stats, d)]
         type_freed = 0
 
         for d in to_keep:
@@ -171,6 +245,7 @@ def plan_dedup(project) -> dict[str, Any]:
         "by_type": {}, "skipped_live": [],
     }
     for cmd_type, dirs in groups.items():
+        stats.setdefault("_type_dirs", {})[cmd_type] = list(dirs)
         # Never dedup away a live run (status=running with a live
         # worker) — and never let a half-written live run subsume a
         # completed sibling either.
@@ -179,7 +254,7 @@ def plan_dedup(project) -> dict[str, Any]:
             stats["skipped_live"].append(d.name)
             stats["kept"].append(d.name)
         droppable, _ = dedup_runs(dirs)
-        drop_set = set(droppable)
+        drop_set = {d for d in droppable if _remember_delete(stats, d)}
         type_freed = 0
         for d in dirs:
             if d in drop_set:
@@ -192,84 +267,94 @@ def plan_dedup(project) -> dict[str, Any]:
                 stats["kept"].append(d.name)
         stats["by_type"][cmd_type] = {
             "total": len(dirs),
-            "keep": len(dirs) - len(droppable),
-            "delete": len(droppable),
+            "keep": len(dirs) - len(drop_set),
+            "delete": len(drop_set),
             "freed_bytes": type_freed,
         }
     return stats
 
 
-def execute_clean(plan: dict[str, Any],
-                  output_path: Path | None = None) -> None:
-    """Execute a clean plan by deleting the planned directories.
+def execute_clean(
+    plan: dict[str, Any], output_path: Path | None = None, *,
+    eligible_dirs: Iterable[Path] | None = None,
+    before_delete: Callable[[Path], None] | None = None,
+) -> None:
+    """Delete confirmed directories and report only completed removals.
 
-    Per-dir containment check before delete: refuse to rmtree any
-    path that resolves outside the project's expected output area.
-    `delete_dirs` can be operator-supplied (a future
-    `--delete-dirs path1,path2,...` flag) or planner-corrupted (a
-    bug elsewhere produces a path with `..` that escapes the
-    project root). `shutil.rmtree` would happily walk anywhere
-    its argument resolved to.
-
-    ``output_path`` is the containment root — the project's output
-    directory, passed by the caller that planned against it. Pre-fix
-    the root was derived from the delete paths themselves (the
-    closest common ancestor of ``delete_dirs``' parents), which is a
-    tautology: a plan whose every path pointed at the same wrong tree
-    contained itself perfectly. The self-derived ancestor is kept
-    only as a fallback for legacy callers that don't pass a root.
+    Planner-created plans pin directory identities. An explicit containment
+    root must resolve and cannot itself be a victim. Legacy callers without
+    a root retain the common-parent fallback. Optional fresh eligibility may
+    only shrink the confirmed set; the callback snapshots an accepted run
+    immediately before removal. Identity and liveness are checked again
+    after the callback. Counters are finalized on partial failures too.
     """
-    delete_dirs = plan["delete_dirs"]
-    if not delete_dirs:
+    candidates = list(dict.fromkeys(Path(path) for path in plan["delete_dirs"]))
+    deleted: list[Path] = []
+    sizes: dict[Path, int] = {}
+    if not candidates:
+        _finish_clean(plan, candidates, deleted, sizes)
         return
-    common = None
-    if output_path is not None:
-        try:
+    try:
+        if output_path is not None:
             common = Path(output_path).resolve()
-        except OSError:
-            common = None
-    if common is None:
-        # Legacy fallback: closest common ancestor of the plan's own
-        # paths. Weaker (self-referential) but still catches a single
-        # corrupted entry escaping its siblings.
-        try:
-            roots = [Path(d).resolve().parent for d in delete_dirs]
-            common = Path(os.path.commonpath([str(r) for r in roots]))
-        except (OSError, ValueError):
-            common = None
-    for d in delete_dirs:
-        if not d.exists():
-            continue
-        try:
-            real = Path(d).resolve()
-        except OSError:
-            continue
-        if common is not None:
+        else:
+            roots = [path.resolve().parent for path in candidates]
+            common = Path(os.path.commonpath([str(root) for root in roots]))
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("execute_clean cannot resolve containment root") from exc
+    allowed = None if eligible_dirs is None else {Path(path) for path in eligible_dirs}
+
+    def skipped(key, path):
+        names = plan.setdefault(key, [])
+        if path.name not in names:
+            names.append(path.name)
+
+    def accepted(path, identity):
+        if _directory_identity(path) != identity:
+            skipped("skipped_changed", path)
+            return False
+        if run_is_live(path):
+            skipped("skipped_live", path)
+            return False
+        return True
+
+    try:
+        for path in candidates:
+            if not os.path.lexists(path):
+                continue
             try:
+                real = path.resolve()
                 real.relative_to(common)
             except ValueError:
-                # Resolved path escapes the containment root. Refuse.
-                msg = (
-                    f"execute_clean refusing to rmtree {d!r}: resolved "
-                    f"path {real!r} escapes containment root {common!r}"
-                )
-                raise RuntimeError(msg) from None
-        # Liveness re-check immediately before the delete: the plan can
-        # be arbitrarily stale by now (an unbounded operator confirm
-        # sits between plan and execute, and a planned run can be
-        # resumed — or a new one started at the same name — in that
-        # gap). A plan-time check alone rmtree'd in-flight runs.
-        if run_is_live(Path(d)):
-            skipped = plan.setdefault("skipped_live", [])
-            name = Path(d).name
-            if name not in skipped:
-                skipped.append(name)
-            continue
-        try:
-            if not rmtree_hardened(d):
-                raise OSError(f"could not remove run directory {d}")
-        except FileNotFoundError:
-            pass
+                raise RuntimeError(
+                    f"execute_clean refusing to rmtree {path!r}: "
+                    f"outside containment root {common!r}") from None
+            except (OSError, RuntimeError):
+                skipped("skipped_changed", path)
+                continue
+            if real == common:
+                raise RuntimeError("execute_clean refusing to delete containment root itself")
+            if allowed is not None and path not in allowed:
+                skipped("skipped_retained", path)
+                continue
+            identity = plan.get("_delete_meta", {}).get(str(path))
+            if identity is None:
+                identity = _directory_identity(path)
+            if identity is None or not accepted(path, identity):
+                continue
+            size = _run_dir_size(path)
+            if not accepted(path, identity):
+                continue
+            if before_delete is not None:
+                before_delete(path)
+                if not accepted(path, identity):
+                    continue
+            if not rmtree_hardened(path):
+                raise OSError(f"could not remove run directory {path}")
+            deleted.append(path)
+            sizes[path] = size
+    finally:
+        _finish_clean(plan, candidates, deleted, sizes)
 
 
 #: safe_cache_name shape: <sanitised-archive-name>-<sha256 hex>.
@@ -375,6 +460,8 @@ def plan_sources_sweep(project, delete_dirs=()) -> dict[str, Any]:
         if m.group(1) in referenced:
             stats["kept"].append(entry.name)
             continue
+        if not _remember_delete(stats, entry):
+            continue
         size = _run_dir_size(entry)
         stats["freed_bytes"] += size
         stats["delete_dirs"].append(entry)
@@ -402,6 +489,7 @@ def refresh_sources_plan(project, plan: dict[str, Any],
         "delete_dirs": [], "deleted": [],
         "kept": list(plan.get("kept", [])), "freed_bytes": 0,
         "by_type": {}, "skipped_live": [], "skipped_referenced": [],
+        "_delete_meta": dict(plan.get("_delete_meta", {})),
     }
     try:
         fresh_names = set(
@@ -411,6 +499,8 @@ def refresh_sources_plan(project, plan: dict[str, Any],
     for d in plan.get("delete_dirs", []):
         name = Path(d).name
         if name in fresh_names:
+            if str(d) not in out["_delete_meta"] and not _remember_delete(out, Path(d)):
+                continue
             out["delete_dirs"].append(d)
             out["deleted"].append(name)
             out["freed_bytes"] += _run_dir_size(Path(d))
@@ -428,7 +518,11 @@ def execute_sources_sweep(project, plan: dict[str, Any], delete_dirs=(),
     ``execute_clean`` would bypass the race protection). Returns the
     refreshed plan that was actually executed (``skipped_referenced``
     names the entries the re-vet rescued)."""
-    refreshed = refresh_sources_plan(project, plan, delete_dirs)
+    # A caller may hand us the original run-deletion plan, including runs
+    # an execution-time safety check spared. Existing runs still own their
+    # archive references regardless of what was intended at plan time.
+    gone = [path for path in delete_dirs if not os.path.lexists(path)]
+    refreshed = refresh_sources_plan(project, plan, gone)
     if refreshed["delete_dirs"]:
         execute_clean(refreshed,
                       output_path=output_path or project.output_path)
@@ -443,5 +537,6 @@ def clean_project(project, keep: int=1, dry_run: bool=False) -> dict[str, Any]:
     """
     stats = plan_clean(project, keep=keep)
     if not dry_run:
-        execute_clean(stats, output_path=project.output_path)
+        execute_clean(stats, output_path=project.output_path,
+                      eligible_dirs=eligible_clean_dirs(project, keep=keep))
     return stats
