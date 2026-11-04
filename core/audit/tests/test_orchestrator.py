@@ -325,6 +325,39 @@ def _no_native_review_tools(monkeypatch):
 class TestRunOrchestrator:
     """Review-loop contracts with fake reviews; live Joern has dedicated tests."""
 
+    @pytest.mark.parametrize("receipt", ["", "smt:check-overflow"])
+    def test_consistency_leads_reach_verification_before_final_resolution(
+        self, tmp_path, monkeypatch, receipt,
+    ):
+        target, out = _setup_target(tmp_path)
+        seen = []
+
+        def review_fn(ctx, config):
+            return ReviewOutcome(
+                file=ctx["file"], function=ctx["function"], status="clean",
+                body="The implementation is correct.", hypothesis="No defect found.",
+                hypotheses=[{"mechanism": "integer overflow in size calculation",
+                             "confidence": "medium"}],
+            )
+
+        def verify(result, *args, **kwargs):
+            seen.extend((o.status, o.hypothesis) for o in result.outcomes)
+            for outcome in result.outcomes:
+                outcome.evidence_tool = receipt
+
+        monkeypatch.setattr("core.audit.orchestrator._resweep_zero_dispatch_suspicious", verify)
+        for name in ("_promote_suspicious", "_promote_suspicious_preconditions",
+                     "_promote_clean_refuted", "_dispatch_secondary_hypotheses",
+                     "_promote_smt_clean", "_auto_synthesize_rules"):
+            monkeypatch.setattr(f"core.audit.orchestrator.{name}", lambda *a, **kw: None)
+        config = _review_contract_config(
+            target_path=target, out_dir=out, resume=False, sweep_validate_findings=True,
+        )
+        result = run_orchestrator(config, review_fn)
+        assert seen == [("suspicious", "integer overflow in size calculation")] * 2
+        assert {o.status for o in result.outcomes} == {"suspicious" if receipt else "clean"}
+        assert (result.clean, result.suspicious) == ((0, 2) if receipt else (2, 0))
+
     def test_reviews_all_gaps(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
 
