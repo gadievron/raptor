@@ -101,24 +101,33 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
 
     # listener fd -> (listener socket, unix socket path).
     listeners = {}
-    for listen_port, unix_socket_path in bridges:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # SO_REUSEADDR: without it, a connection closed within the last
-        # ~60s leaves the port in TIME_WAIT and bind fails EADDRINUSE — a
-        # bridge restarted on the same port (sandbox re-spawn, back-to-back
-        # test runs) refused to come up. REUSEADDR only permits binding
-        # over TIME_WAIT remnants, not hijacking a live listener.
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", listen_port))
-        listener.listen(128)
-        listener.setblocking(False)
-        listeners[listener.fileno()] = (listener, unix_socket_path)
+    try:
+        for listen_port, unix_socket_path in bridges:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listeners[listener.fileno()] = (listener, unix_socket_path)
+            # SO_REUSEADDR: without it, a connection closed within the last
+            # ~60s leaves the port in TIME_WAIT and bind fails EADDRINUSE — a
+            # bridge restarted on the same port (sandbox re-spawn, back-to-back
+            # test runs) refused to come up. REUSEADDR only permits binding
+            # over TIME_WAIT remnants, not hijacking a live listener.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("127.0.0.1", listen_port))
+            listener.listen(128)
+            listener.setblocking(False)
 
-    if ready_cb is not None:
-        ready_cb([
-            (sock.getsockname()[1], path)
-            for sock, path in listeners.values()
-        ])
+        if ready_cb is not None:
+            ready_cb([
+                (sock.getsockname()[1], path)
+                for sock, path in listeners.values()
+            ])
+
+    except BaseException:
+        for listener, _ in listeners.values():
+            try:
+                listener.close()
+            except OSError:
+                pass
+        raise
 
     # pairs maps every relay fd -> its partner fd.
     pairs: dict[int, int] = {}
@@ -327,7 +336,12 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                 last_activity[c_fd] = now
                 last_activity[u_fd] = now
     finally:
-        for fd in set(listeners) | set(pairs):
+        for listener, _ in listeners.values():
+            try:
+                listener.close()
+            except OSError:
+                pass
+        for fd in set(pairs):
             try:
                 os.close(fd)
             except OSError:
