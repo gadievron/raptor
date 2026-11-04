@@ -155,16 +155,41 @@ class SandboxProfile:
 
     @classmethod
     def from_json(cls, raw: str) -> SandboxProfile:
-        d = json.loads(raw)
+        try:
+            d = json.loads(raw)
+        except RecursionError as exc:
+            raise ValueError("SandboxProfile JSON is too deeply nested") from exc
         if not isinstance(d, dict):
             msg = (
                 f"SandboxProfile JSON must be an object, "
                 f"got {type(d).__name__}"
             )
             raise TypeError(msg)
-        connects = [
-            ConnectTarget(**t) for t in d.get("connect_targets", [])
-        ]
+        for name in ("binary_path", "binary_sha256", "env_signature",
+                     "captured_at"):
+            if name in d and not isinstance(d[name], str):
+                raise TypeError(f"SandboxProfile {name} must be a string")
+        for name in ("probe_args", "paths_read", "paths_written",
+                     "paths_stat", "proxy_hosts"):
+            if name in d and (
+                not isinstance(d[name], list)
+                or any(not isinstance(item, str) for item in d[name])
+            ):
+                raise TypeError(f"SandboxProfile {name} must be a list of strings")
+        if "cache_version" in d and type(d["cache_version"]) is not int:
+            raise TypeError("SandboxProfile cache_version must be an integer")
+        targets = d.get("connect_targets", [])
+        if not isinstance(targets, list):
+            raise TypeError("SandboxProfile connect_targets must be a list")
+        connects = []
+        for target in targets:
+            if not isinstance(target, dict):
+                raise TypeError("SandboxProfile connection must be an object")
+            if (not isinstance(target.get("ip"), str)
+                    or not isinstance(target.get("family"), str)
+                    or type(target.get("port")) is not int):
+                raise TypeError("SandboxProfile connection has invalid field types")
+            connects.append(ConnectTarget(**target))
         d["connect_targets"] = connects
         return cls(**d)
 
