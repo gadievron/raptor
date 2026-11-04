@@ -387,12 +387,17 @@ calls also receive an overlap check when Semgrep and a GCC analyzer supporting
 matches select files; only compiler overlap warnings become findings. Candidate
 discovery scans only the capped C files whose ordinary compiler analysis
 succeeded, rather than scanning the entire project. Large file lists are batched
-within a shared 30-second raw-scan budget. Files not selected by the direct
-rule are checked together using preprocessor-expanded views, including lowercase
-wrappers and aliases defined in headers. This fallback reuses the same compiler,
-expands at most 50 files, and retains at most 32 MiB of expanded text. It shares
-an overall 60-second candidate deadline; unavailable or unfinished views produce
-coverage limitations. Matches originating only in header bodies are excluded.
+within a shared 30-second raw-scan budget. For files not selected by the raw
+rule, the compiler expands macros and RAPTOR checks for live `memcpy` identifiers
+at original source locations, including lowercase wrappers and header-defined
+aliases. This fallback does not require Semgrep to parse expanded compiler
+extensions. Comments, quoted text and identifiers originating only in header
+bodies are excluded. An identifier selects a file for analysis; it is not itself
+a finding.
+
+The fallback expands at most 50 files and processes at most 32 MiB of expanded
+text, keeping one view at a time. It shares an overall 60-second candidate
+deadline; unavailable or unfinished views produce coverage limitations.
 
 The fallback adds one preprocessor invocation per attempted expansion. Selected
 files receive at most one supplemental analyzer invocation each, plus one

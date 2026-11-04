@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any
 import os
 import math
+import re
 from time import monotonic
 
 from core.run.scratch import scratch_dir
+from core.source.strip import blank_c_noncode
 
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
@@ -66,54 +68,67 @@ def _target_batches(paths: list[Path]) -> Iterator[tuple[Path, ...]]:
         yield tuple(batch)
 
 
+_EXPANDED_BYTE_BUDGET = 32 * 1024 * 1024
+_MEMCPY_TOKEN = re.compile(r"(?<![\w$])memcpy(?![\w$])")
+
+
 def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: float) -> bool:
-    """Batch prepared views for still-unselected TUs; return incomplete coverage."""
-    from core.audit.expanded_semgrep import build_expanded_corpus, translate_corpus_findings
+    """Select source-attributed memcpy identifiers, independent of parser versions.
+
+    This is deliberately an over-approximation, not a call or bug judgment:
+    parenthesized calls and function-pointer references also justify analyzing
+    the TU. Only successful GCC overlap diagnostics can become findings.
+    """
+    from core.audit.preprocessor_view import _AUGMENT_FILE_CAP, expand_translation_unit
 
     root = state.target.resolve()
     files = tuple(sorted(path.relative_to(root).as_posix() for path in paths
                          if path.relative_to(root).as_posix() not in state.candidates))
     if not files:
         return False
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        _limited(state, "memcpy macro candidate time budget exhausted")
-        return True
     assert state.request_for is not None
-    request = state.request_for(files[0])
-    # The baseline already used this pinned compiler successfully. Reuse it
-    # rather than discovering/probing another executable for preprocessing.
+    failed = skipped = processed_bytes = 0
     try:
-        with scratch_dir("memcpy_candidates_", dir=request.scratch_root) as scratch:
-            corpus = build_expanded_corpus(
-                root, scratch / "views", files=files, timeout=remaining / 2,
-                preprocessor=(request.command[0], "-E", "-x", "c"),
-                out_dir=scratch, max_bytes=32 * 1024 * 1024,
-            )
-            incomplete = bool(corpus.failed or corpus.skipped_budget)
-            if incomplete:
-                _limited(state, f"memcpy macro preparation incomplete: {corpus.failed} failed, "
-                         f"{corpus.skipped_budget} skipped by preparation budget")
-            if not corpus.tus:
-                return incomplete
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                _limited(state, "memcpy macro candidate time budget exhausted")
-                return True
-            prepared = PreparedInput(corpus.root, lambda findings: translate_corpus_findings(corpus, findings))
-            execution = run_semgrep_analysis(
-                detector=_CANDIDATES, prepare=lambda: nullcontext(prepared),
-                rule_config=str(_RULE), timeout=math.ceil(remaining),
-            )
-            state.candidates.update(match["file"] for match in execution.value.matches
-                                    if match["file"] in files)
-            if execution.status != "complete" or execution.value.coverage_incomplete:
-                _limited(state, "memcpy macro candidate scan was incomplete")
-                incomplete = True
-            return incomplete
+        first = state.request_for(files[0])
+        with scratch_dir("memcpy_candidates_", dir=first.scratch_root) as scratch:
+            for index, rel in enumerate(files):
+                remaining = deadline - monotonic()
+                if index >= _AUGMENT_FILE_CAP or remaining <= 0:
+                    skipped = len(files) - index
+                    break
+                request = state.request_for(rel)
+                view = expand_translation_unit(
+                    target_path=root, file_path=rel, out_dir=scratch,
+                    preprocessor=(request.command[0], "-E", "-x", "c"), timeout=remaining,
+                )
+                if not view.ok:
+                    failed += 1
+                    continue
+                if deadline - monotonic() <= 0:
+                    skipped = len(files) - index
+                    break
+                processed_bytes += len(view.text.encode("utf-8", errors="replace"))
+                if processed_bytes > _EXPANDED_BYTE_BUDGET:
+                    skipped = len(files) - index
+                    break
+                # Reuse the C comment/string blanker. Preprocessing has already
+                # removed inactive arms and spliced escaped newlines. Do not
+                # remove header declarations or reparse the translation unit:
+                # compiler extensions must not hide a later candidate token.
+                code = blank_c_noncode(view.text, allow_digit_separators=True)
+                for lineno, line in enumerate(code.split("\n"), 1):  # line-model: cpp output and its map use literal \n
+                    origin = view.origin_of(lineno)
+                    if origin is not None and origin[0] == rel and _MEMCPY_TOKEN.search(line):
+                        state.candidates.add(rel)
+                        break
+                del code, view
     except (OSError, ValueError):
-        _limited(state, "memcpy macro preparation or matching was unavailable")
+        _limited(state, "memcpy macro preparation was unavailable")
         return True
+    if failed or skipped:
+        _limited(state, f"memcpy macro preparation incomplete: {failed} failed, "
+                 f"{skipped} skipped by preparation budget")
+    return bool(failed or skipped)
 
 
 def _candidates(state: OverlapAnalysis) -> StageResult:

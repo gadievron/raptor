@@ -122,138 +122,6 @@ def test_argument_budget_counts_encoded_bytes(monkeypatch):
         list(overlap._target_batches([Path("/" + "a" * size)]))
 
 
-@pytest.fixture
-def macro_setup(tmp_path, monkeypatch):
-    from core.audit import expanded_semgrep as es, preprocessor_view as pv
-    root = tmp_path / 'repo'
-    root.mkdir()
-    for name in ('raw.c', 'macro.c', 'clean.c'):
-        (root / name).write_text('lower_wrapper();\n')
-    requests = []
-    prepared = []
-    scanned = []
-
-    def request(rel):
-        requests.append(rel)
-        return SimpleNamespace(command=('/pinned/gcc',), scratch_root=None)
-
-    def expand(**kw):
-        prepared.append(kw)
-        return pv.ExpandedView(ok=True, file_path=kw['file_path'], text='header\ncopy\n',
-                               line_map=(('copy.h', 2), (kw['file_path'], 4)))
-
-    def scan(target, config, **kw):
-        scanned.append((target, kw))
-        findings = [SimpleNamespace(file=str(target / 'macro.c'), line=line) for line in (1, 2)]
-        findings += [SimpleNamespace(file=str(target / 'clean.c'), line=1)]
-        return SimpleNamespace(findings=findings, errors=[])
-
-    monkeypatch.setattr(es, 'expand_translation_unit', expand)
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', scan)
-    state = overlap.OverlapAnalysis(root, ('raw.c', 'macro.c', 'clean.c'), request, lambda *a: None)
-    state.candidates.add('raw.c')
-    return state, prepared, scanned, es, pv
-
-
-def test_macro_candidates_are_batched_and_header_noise_dropped(macro_setup):
-    state, prepared, scanned, _, _ = macro_setup
-    paths = {state.target / rel for rel in state.files}
-    assert not overlap._expanded_candidates(state, paths, overlap.monotonic() + 30)
-    assert {kw['file_path'] for kw in prepared} == {'macro.c', 'clean.c'}
-    assert all(kw['preprocessor'][0] == '/pinned/gcc' for kw in prepared)
-    assert len(scanned) == 1 and not scanned[0][0].exists()
-    assert state.candidates == {'raw.c', 'macro.c'}
-    assert not state.diagnostics and not state.limitations
-
-
-def test_failed_macro_preparation_keeps_other_candidates(macro_setup, monkeypatch):
-    state, prepared, scanned, es, pv = macro_setup
-    original = es.expand_translation_unit
-
-    def expand(**kw):
-        if kw['file_path'] == 'clean.c':
-            return pv.ExpandedView(ok=False, file_path='clean.c', errors=['bad include'])
-        return original(**kw)
-
-    monkeypatch.setattr(es, 'expand_translation_unit', expand)
-    assert overlap._expanded_candidates(state, {state.target / rel for rel in state.files},
-                                         overlap.monotonic() + 30)
-    assert state.candidates == {'raw.c', 'macro.c'} and state.limitations
-
-
-def test_macro_budget_exhaustion_never_scans_unprepared_input(macro_setup, monkeypatch):
-    state, prepared, scanned, _, _ = macro_setup
-    now = overlap.monotonic()
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, now - 1)
-    assert not prepared and not scanned and state.candidates == {'raw.c'}
-
-
-def test_macro_semgrep_failure_retains_raw_candidates_and_cleans_scratch(macro_setup, monkeypatch):
-    state, _, scanned, _, _ = macro_setup
-
-    def fail(target, config, **kw):
-        scanned.append((target, kw))
-        return SimpleNamespace(findings=[], errors=['tool crashed'])
-
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', fail)
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, overlap.monotonic() + 30)
-    assert state.candidates == {'raw.c'} and state.limitations
-    assert not scanned[0][0].exists()
-
-
-def test_macro_preparation_cannot_start_matching_after_overall_deadline(macro_setup, monkeypatch):
-    state, prepared, scanned, es, _ = macro_setup
-    now = [0.0]
-    monkeypatch.setattr(overlap, 'monotonic', lambda: now[0])
-    build = es.build_expanded_corpus
-    roots = []
-
-    def slow(*args, **kw):
-        corpus = build(*args, **kw)
-        roots.append(corpus.root)
-        now[0] = 31
-        return corpus
-
-    monkeypatch.setattr(es, 'build_expanded_corpus', slow)
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, 30)
-    assert prepared and not scanned and state.candidates == {'raw.c'}
-    assert roots and not roots[0].exists() and state.limitations
-
-
-def test_partial_macro_matches_are_kept_without_becoming_diagnostics(macro_setup, monkeypatch):
-    state, _, scanned, _, _ = macro_setup
-    from packages.semgrep.runner import run_rule as scan
-
-    def partial(*args, **kw):
-        result = scan(*args, **kw)
-        result.errors = ['another file could not be parsed']
-        return result
-
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', partial)
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, overlap.monotonic() + 30)
-    assert state.candidates == {'raw.c', 'macro.c'} and not state.diagnostics
-    assert state.limitations and not scanned[0][0].exists()
-
-
-@pytest.mark.parametrize('metadata', [
-    {'files_failed': [{'path': 'macro.c', 'reason': 'parse error'}]},
-    {'skipped_summary': {'total': 1}},
-])
-def test_macro_parser_coverage_failures_are_reported_without_discarding_matches(macro_setup, monkeypatch, metadata):
-    from packages.semgrep.runner import run_rule as scan
-    state, _, _, _, _ = macro_setup
-
-    def partial(*args, **kw):
-        result = scan(*args, **kw)
-        for key, value in metadata.items():
-            setattr(result, key, value)
-        return result
-
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', partial)
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, overlap.monotonic() + 30)
-    assert state.candidates == {'raw.c', 'macro.c'} and state.limitations
-
-
 def test_raw_parser_coverage_failures_are_reported_but_keep_candidates(setup, monkeypatch):
     root, _, make = setup
     monkeypatch.setattr('packages.semgrep.runner.run_rule', lambda *a, **kw: SimpleNamespace(
@@ -265,13 +133,117 @@ def test_raw_parser_coverage_failures_are_reported_but_keep_candidates(setup, mo
     assert state.candidates == {'a.c'} and state.limitations
 
 
-def test_macro_scratch_failure_preserves_raw_candidates(macro_setup, monkeypatch):
-    state, prepared, scanned, _, _ = macro_setup
 
-    def unavailable(*a, **kw):
-        raise OSError('scratch unavailable')
+@pytest.fixture
+def macro_setup(tmp_path, monkeypatch):
+    from core.audit import preprocessor_view as pv
+    root = tmp_path / 'repo'
+    root.mkdir()
+    for name in ('raw.c', 'macro.c', 'clean.c'):
+        (root / name).write_text('lower_wrapper();\n')
+    prepared = []
+    snippets = {'macro.c': 'memcpy(p,b,16);', 'clean.c': 'const char *s="memcpy(p,b,16)";'}
 
-    monkeypatch.setattr(overlap, 'scratch_dir', unavailable)
-    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, overlap.monotonic() + 30)
-    assert state.candidates == {'raw.c'} and not prepared and not scanned
-    assert state.limitations
+    def expand(**kw):
+        prepared.append(kw)
+        rel = kw['file_path']
+        return pv.ExpandedView(ok=True, file_path=rel,
+                               text='typedef __typeof__(nullptr) nullptr_t;\nmemcpy(h,h+1,4);\n'+snippets[rel],
+                               line_map=(None, ('copy.h', 2), (rel, 4)))
+
+    monkeypatch.setattr(pv, 'expand_translation_unit', expand)
+    monkeypatch.setattr('packages.semgrep.runner.run_rule', lambda *a, **kw: pytest.fail('expanded tokens must not invoke Semgrep'))
+    state = overlap.OverlapAnalysis(root, ('raw.c', 'macro.c', 'clean.c'),
+        lambda rel: SimpleNamespace(command=('/pinned/gcc',), scratch_root=None), lambda *a: None)
+    state.candidates.add('raw.c')
+    return state, prepared, snippets, pv
+
+
+def test_macro_candidates_do_not_need_semgrep_parser_or_header_rewriting(macro_setup):
+    state, prepared, _, _ = macro_setup
+    assert not overlap._expanded_candidates(state, {state.target / rel for rel in state.files}, overlap.monotonic()+30)
+    assert {kw['file_path'] for kw in prepared} == {'macro.c', 'clean.c'}
+    assert all(kw['preprocessor'][0] == '/pinned/gcc' for kw in prepared)
+    assert state.candidates == {'raw.c', 'macro.c'} and not state.diagnostics
+    assert not state.limitations and not prepared[0]['out_dir'].exists()
+
+
+@pytest.mark.parametrize('source,selected', [
+    ("int n=1'000; memcpy(p,b,n);", True),
+    ("int n=0xDEAD'BEEF; memcpy(p,b,n);", True),
+    ("int n=0b1010'0101; memcpy(p,b,n);", True),
+    ("double n=.1'0e+2; memcpy(p,b,4);", True),
+    ("int c=u8'm'; memcpy(p,b,4);", True),
+    ('(memcpy)(p,b,n);', True),
+    ('copy = &memcpy;', True),
+    ('memcpy\n(p,b,n);', True),
+    ('/* memcpy(p,b,n) */ alias(p,b,n);', False),
+    ('"escaped \\\" memcpy(p,b,n)"', False),
+    ("'m' 'e' 'm' 'c' 'p' 'y'", False),
+    ('memcpy_prefix(p,b,n); prefix_memcpy(p,b,n);', False),
+    ('$memcpy(p,b,n); memcpy$(p,b,n);', False),
+])
+def test_expanded_identifier_selection_is_conservative_not_a_call_judgment(macro_setup, monkeypatch, source, selected):
+    state, _, snippets, pv = macro_setup
+    snippets['macro.c'] = source
+    # Preserve source attribution when the call spans more than one line.
+    old_expand = pv.expand_translation_unit
+    def expand(**kw):
+        view = old_expand(**kw)
+        view.line_map += ((kw['file_path'], 5),) * source.count('\n')
+        return view
+    monkeypatch.setattr(pv, "expand_translation_unit", expand)
+    assert not overlap._expanded_candidates(state, {state.target / 'macro.c'}, overlap.monotonic()+30)
+    assert ('macro.c' in state.candidates) is selected
+    assert not state.diagnostics
+
+
+def test_failed_macro_preparation_keeps_other_candidates(macro_setup, monkeypatch):
+    state, prepared, _, pv = macro_setup
+    expand = pv.expand_translation_unit
+    def fail(**kw):
+        if kw['file_path'] == 'clean.c':
+            return pv.ExpandedView(ok=False, file_path='clean.c', errors=['bad include'])
+        return expand(**kw)
+    monkeypatch.setattr(pv, 'expand_translation_unit', fail)
+    assert overlap._expanded_candidates(state, {state.target / rel for rel in state.files}, overlap.monotonic()+30)
+    assert state.candidates == {'raw.c', 'macro.c'} and state.limitations
+    assert not prepared[0]['out_dir'].exists()
+
+
+@pytest.mark.parametrize('kind', ['expired', 'during_preparation', 'bytes', 'tu_cap', 'scratch'])
+def test_macro_resource_limits_preserve_raw_candidates(macro_setup, monkeypatch, kind):
+    state, prepared, _, pv = macro_setup
+    now = [0.0]
+    monkeypatch.setattr(overlap, 'monotonic', lambda: now[0])
+    deadline = 30
+    if kind == 'expired': deadline = -1
+    if kind == 'during_preparation':
+        expand = pv.expand_translation_unit
+        def slow(**kw):
+            view = expand(**kw)
+            now[0] = 31
+            return view
+        monkeypatch.setattr(pv, 'expand_translation_unit', slow)
+    if kind == 'bytes': monkeypatch.setattr(overlap, '_EXPANDED_BYTE_BUDGET', 1)
+    if kind == 'tu_cap': monkeypatch.setattr(pv, '_AUGMENT_FILE_CAP', 0)
+    if kind == 'scratch':
+        def fail(*a, **kw): raise OSError('scratch unavailable')
+        monkeypatch.setattr(overlap, 'scratch_dir', fail)
+    assert overlap._expanded_candidates(state, {state.target / 'macro.c'}, deadline)
+    assert state.candidates == {'raw.c'} and state.limitations
+    if prepared: assert not prepared[0]['out_dir'].exists()
+
+
+@pytest.mark.parametrize('version', ['1.79.0', '', '1.177.0'])
+def test_raw_engine_failure_does_not_disable_expanded_candidates(macro_setup, monkeypatch, version):
+    state, prepared, _, _ = macro_setup
+    state.files = ('macro.c', 'clean.c')
+    state.candidates.clear()
+    monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: True)
+    monkeypatch.setattr('packages.semgrep.runner.run_rule', lambda *a, **kw: SimpleNamespace(
+        findings=[], errors=['rule or parser unsupported'], semgrep_version=version,
+    ))
+    assert overlap._candidates(state).status == 'partial'
+    assert state.candidates == {'macro.c'} and len(prepared) == 2
+    assert state.limitations and not state.diagnostics
