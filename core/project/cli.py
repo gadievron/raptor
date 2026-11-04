@@ -3533,6 +3533,7 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     from .clean import (
         execute_clean,
         execute_sources_sweep,
+        eligible_clean_dirs,
         plan_clean,
         plan_dedup,
         plan_sources_sweep,
@@ -3599,13 +3600,26 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
         print("Cancelled.")
         return
 
-    # Snapshot coverage into the durable store BEFORE deleting (preserves
-    # clean/examined coverage; flips sole-source findings to found_then_lost).
-    _apply_clean_coverage(project, plan, consequences)
+    # Revalidate retention/dedup policy after the unbounded confirm wait.
+    # Eligibility can only shrink the confirmed set, never add a new victim.
+    allowed = eligible_clean_dirs(project, keep=keep, dedup=dedup)
+    reported_live = set(plan.get("skipped_live", []))
 
-    # Execute the exact plan that was shown — no re-query. Containment
-    # anchored on the project's own output dir, not the plan's paths.
-    execute_clean(plan, output_path=project.output_path)
+    def snapshot(victim):
+        selected = {"delete_dirs": [victim]}
+        current = _classify_clean_coverage(project, selected)
+        _apply_clean_coverage(project, selected, current)
+
+    execute_clean(plan, output_path=project.output_path,
+                  eligible_dirs=allowed, before_delete=snapshot)
+    freed_mb = plan["freed_bytes"] / 1024 / 1024
+    for name in plan.get("skipped_live", []):
+        if name not in reported_live:
+            print(f"  Skipped (still running): {sanitise_for_terminal(name)}")
+    for key, reason in (("skipped_retained", "retention rechecked"),
+                        ("skipped_changed", "directory changed since plan")):
+        for name in plan.get(key, []):
+            print(f"  Skipped ({reason}): {sanitise_for_terminal(name)}")
     for name in plan["deleted"]:
         print(_red(f"  Deleted: {name}"))
     if sources_plan["deleted"]:
