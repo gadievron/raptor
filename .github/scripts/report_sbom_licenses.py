@@ -190,6 +190,13 @@ def collect(audit, image_digest):
                     raise ValueError("native notice receipt hash mismatch")
                 if receipt.get("status") not in {"unavailable", "release_notice_candidates_captured"}:
                     raise ValueError("invalid native notice collection status")
+                dependency_notices = receipt.get("dependency_notices")
+                if dependency_notices is not None:
+                    if not isinstance(dependency_notices, dict):
+                        raise ValueError("invalid native dependency notice summary")
+                    counts = [dependency_notices.get(key) for key in ("candidates", "captured", "metadata_only", "unavailable")]
+                    if any(type(value) is not int or value < 0 or value > 5000 for value in counts) or counts[0] != sum(counts[1:]):
+                        raise ValueError("inconsistent native dependency notice counts")
                 if receipt["status"] == "release_notice_candidates_captured":
                     if not receipt.get("files"):
                         raise ValueError("native notice collection has no files")
@@ -320,6 +327,17 @@ def markdown(report):
             lines.append("| " + _cell(receipt.get("name", "unknown")) + " | " +
                          _cell(receipt.get("version", "unknown")) + " | " + _cell(receipt["status"]) + " |")
         lines += ["", "Release texts do not establish bundled dependency completeness or exact build-source correspondence.", ""]
+    dependencies = [row for row in report.native_notice_collections if row.get("dependency_notices")]
+    if dependencies:
+        lines += ["### Native dependency notice candidates", "",
+                  "These are external source-lock entries, including build, development and other-platform dependencies. They are not confirmed installed components.", "",
+                  "| Tool | External entries | With original notice candidates | Metadata only | Unavailable |",
+                  "| --- | ---: | ---: | ---: | ---: |"]
+        for row in dependencies:
+            counts = row["dependency_notices"]
+            lines.append("| " + " | ".join(_cell(value) for value in (
+                row.get("name", "unknown"), counts["candidates"], counts["captured"], counts["metadata_only"], counts["unavailable"])) + " |")
+        lines += ["", "The collected source inventory records package names, versions, archive checksums, publisher license declarations and notice origins. Runtime membership and Rust standard-library completeness require separate evidence.", ""]
     if report.inventory_candidates:
         lines += ["### Unexplained executable files", "",
                   "These files need ownership checks; they are not necessarily separate packages or missing licenses.", "",
@@ -357,6 +375,13 @@ def annotations(report):
         inventory.append("::" + level + " title=Container source/build evidence::" +
                          str(len(report.source_gaps)) +
                          " assessed package(s) have source/build warnings. See Source and build evidence in the job summary and prepared/provenance.json in the container-sbom artifact.")
+    for receipt in report.native_notice_collections:
+        counts = receipt.get("dependency_notices")
+        if counts and (counts["metadata_only"] or counts["unavailable"]):
+            level = "warning" if counts["unavailable"] else "notice"
+            inventory.append("::" + level + " title=Native dependency notice candidates::" +
+                             str(counts["metadata_only"] + counts["unavailable"]) +
+                             " external source-lock candidates lack collected notice text. These are not confirmed installed components. See the source inventory in the container-sbom artifact.")
     if not report.issues:
         return inventory[:10]
     messages = [f"::warning title=Container license evidence::{len(report.issues)} package(s) have evidence gaps. See the job summary and container-sbom artifact."]

@@ -301,3 +301,14 @@ def test_source_header_scan_keeps_an_expanded_archive_budget(monkeypatch):
     monkeypatch.setattr(tool, "MAX_EXPANDED", 8)
     with pytest.raises(ValueError, match="expansion budget"):
         tool.release_notices(archive([("p/LICENSE", b"twelve bytes")]))
+
+
+def test_uv_entrypoint_enables_cargo_collection(tmp_path, monkeypatch):
+    import sys
+    calls = []
+    monkeypatch.setattr(tool, 'collect', lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(sys, 'argv', ['collect-native-notices.py', '--output', str(tmp_path)])
+    tool.main()
+    assert calls[0][0][0] == 'uv'
+    assert calls[0][1]['cargo_dependencies'] is True
+    assert all(not kwargs.get('cargo_dependencies') for _, kwargs in calls[1:])
