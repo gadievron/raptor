@@ -63,6 +63,7 @@ existing grant across a spawn boundary, never create one from nothing.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import logging
@@ -299,7 +300,12 @@ def _mint_nonce(consents_dir: Path | None = None) -> str:
         0o600,
     )
     try:
-        os.write(fd, (_nonce_digest(nonce) + "\n").encode("ascii"))
+        remaining = memoryview((_nonce_digest(nonce) + "\n").encode("ascii"))
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "consent digest write made no progress")
+            remaining = remaining[written:]
     finally:
         os.close(fd)
     return nonce
