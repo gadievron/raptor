@@ -236,47 +236,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         text_joined = text.replace("\\\n", " ")
         depth_at_line = _conditional_depth_lookup(text)
 
-        # Build a mapping from joined-text position to original line number.
-        # Each "\\\n" removed shifts subsequent positions by 1 (2-char seq
-        # replaced by 1-char " "). Walk the original text to record where
-        # each continuation was removed.
-        _cont_offsets: list[int] = []
-        _search_pos = 0
-        while True:
-            _idx = text.find("\\\n", _search_pos)
-            if _idx < 0:
-                break
-            _cont_offsets.append(_idx)
-            _search_pos = _idx + 2
-
-        # Both mappings are precomputed once per file and bisected per
-        # match. The previous per-match prefix rescan
-        # (text[:orig_pos].count("\n")) made definition mapping
-        # O(file_size × definitions) — quadratic, minutes-scale on
-        # honest 80k-define generated headers (SDK register maps,
-        # unicode tables) and trivially triggerable by a hostile
-        # repo, uninterruptible by the prepass budget which is
-        # checked before the scan, not during.
-        #
-        # The k-th removed continuation (2-char "\\\n" → 1-char " ")
-        # sits at joined-text offset `off_k - k`; the count of those
-        # at or before joined_pos is the shift back to the original
-        # offset. Original line-start offsets then give the 1-based
-        # line by bisection (in-unit exemplar: api_boundary
-        # line_starts).
-        _joined_cont_offsets = [
-            off - k for k, off in enumerate(_cont_offsets)
-        ]
-        _line_starts = [0]
-        _nl = text.find("\n")
-        while _nl >= 0:
-            _line_starts.append(_nl + 1)
-            _nl = text.find("\n", _nl + 1)
-
-        def _original_line(joined_pos: int) -> int:
-            """Map a position in text_joined to a 1-based line in text."""
-            extra = bisect.bisect_right(_joined_cont_offsets, joined_pos)  # noqa: B023 — closure used only within this file's iteration
-            return bisect.bisect_right(_line_starts, joined_pos + extra)  # noqa: B023 — closure used only within this file's iteration
+        original_line = _definition_line_lookup(text)
 
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 
@@ -288,14 +248,14 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             body = m.group(3).strip()
             if not body:
                 continue
-            line = _original_line(m.start())
+            line = original_line(m.start())
             depth = depth_at_line(line)
             defs.setdefault(name, []).append(
                 _RawDefinition(name, params, body, rel, line, depth)
             )
 
         for block_start, body in _iter_enum_bodies(text_joined):
-            block_line = _original_line(block_start)
+            block_line = original_line(block_start)
             block_depth = depth_at_line(block_line)
             # Enumerator offsets advance: count only the intervening range.
             enum_line = block_line
@@ -311,8 +271,46 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                 defs.setdefault(ename, []).append(
                     _RawDefinition(ename, "", evalue, rel, enum_line, block_depth)
                 )
+        # Release the captured text and indexes before reading another file.
+        del original_line
 
     return defs
+
+
+def _definition_line_lookup(text: str) -> Callable[[int], int]:
+    """Map joined-text offsets to original lines, indexing on demand.
+
+    Each query grows the indexes only as far as needed. Stored offsets
+    remain sorted, so later queries can visit earlier positions too.
+    All state belongs to this immutable file text, never a path cache.
+    """
+    joined_cont_offsets: list[int] = []
+    line_starts = [0]
+    next_continuation = -1
+    next_newline = -1
+    initialized = False
+
+    def lookup(joined_pos: int) -> int:
+        nonlocal initialized, next_continuation, next_newline
+        if not initialized:
+            next_continuation = text.find("\\\n")
+            next_newline = text.find("\n")
+            initialized = True
+        # The k-th removed backslash-LF pair becomes a space at off_k-k.
+        # Unknown continuation offsets must stay beyond the query.
+        while (next_continuation >= 0
+               and next_continuation - len(joined_cont_offsets) <= joined_pos):
+            joined_cont_offsets.append(next_continuation - len(joined_cont_offsets))
+            next_continuation = text.find("\\\n", next_continuation + 2)
+        extra = bisect.bisect_right(joined_cont_offsets, joined_pos)
+        original_pos = joined_pos + extra
+        # Likewise, no unindexed line start may precede original_pos.
+        while next_newline >= 0 and next_newline + 1 <= original_pos:
+            line_starts.append(next_newline + 1)
+            next_newline = text.find("\n", next_newline + 1)
+        return bisect.bisect_right(line_starts, original_pos)
+
+    return lookup
 
 
 def _compute_conditional_depths(text: str) -> dict[int, int]:
