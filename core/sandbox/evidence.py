@@ -261,7 +261,8 @@ class EvidenceFile:
 
     def write_line(self, line: str) -> bool:
         """Append one JSONL line through the held fd. Returns True on
-        success. O_APPEND keeps sub-PIPE_BUF writes atomic against
+        success, False on encoding or I/O failure. O_APPEND keeps
+        sub-PIPE_BUF writes atomic against
         concurrent appenders sharing the same file."""
         if self._closed:
             return False
@@ -282,7 +283,7 @@ class EvidenceFile:
                 )
                 return False
             return True
-        except OSError:
+        except (OSError, UnicodeError):
             logger.warning("evidence append failed for %s", self.path,
                            exc_info=True)
             return False
