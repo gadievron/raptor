@@ -1,5 +1,6 @@
 """Real local sockets and client death, with a controlled JVM substitute."""
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import socket
@@ -10,6 +11,8 @@ import threading
 import time
 
 import pytest
+
+from core.testing.processes import reap_on_exit
 
 from packages.joern import broker, prereqs
 from packages.joern.models import JoernCPG
@@ -138,9 +141,11 @@ def _lease(owner, graph):
 
 def test_two_clients_share_worker_and_releasing_creator_preserves_other(controller):
     owner, graph, workers = controller
-    first = _lease(owner, graph)
-    second = _lease(owner, graph)
-    try:
+    with ExitStack() as cleanup:
+        first = _lease(owner, graph)
+        cleanup.callback(first.close)
+        second = _lease(owner, graph)
+        cleanup.callback(second.close)
         assert len(workers) == 1
         first.close()
         assert second.query("query").ok
@@ -148,15 +153,11 @@ def test_two_clients_share_worker_and_releasing_creator_preserves_other(controll
         second.close()
         assert workers[0].stopped.wait(2)
         assert workers[0].stops == 1
-    finally:
-        first.close()
-        second.close()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="cross-process reuse requires comparable Linux confinement contexts")
 def test_killed_client_releases_only_its_lease(controller, tmp_path):
     owner, graph, workers = controller
-    remaining = _lease(owner, graph)
     program = '''
 import json, os, sys
 from pathlib import Path
@@ -175,11 +176,14 @@ print('leased', flush=True)
 sys.stdin.readline()
 os._exit(0)
 '''
-    process = subprocess.Popen([sys.executable, "-I", "-c", program,
-                                str(Path(__file__).resolve().parents[3])],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
-    try:
+    with ExitStack() as cleanup:
+        remaining = _lease(owner, graph)
+        cleanup.callback(remaining.close)
+        process = subprocess.Popen([sys.executable, "-I", "-c", program,
+                                    str(Path(__file__).resolve().parents[3])],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True)
+        cleanup.enter_context(reap_on_exit(process))
         process.stdin.write(json.dumps({"root": str(owner.root), "token": owner.token,
                                        "graph": str(graph.path), "target": str(graph.target)}) + "\n")
         process.stdin.flush()
@@ -201,20 +205,14 @@ os._exit(0)
         process.wait(timeout=3)
         assert remaining.query("query").ok
         assert len(workers) == 1 and workers[0].stops == 0
-    finally:
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=3)
-        remaining.close()
     assert workers[0].stopped.wait(2)
 
 
 def test_unauthenticated_connection_cannot_acquire_worker(controller):
     owner, graph, workers = controller
-    connection = socket.socket(socket.AF_UNIX)
-    with broker._address(owner.root) as address:
-        connection.connect(address)
-    with connection:
+    with socket.socket(socket.AF_UNIX) as connection:
+        with broker._address(owner.root) as address:
+            connection.connect(address)
         broker._send(connection, {"token": "wrong"})
         with pytest.raises(EOFError):
             broker._receive(connection, limit=8192, deadline=time.monotonic() + 1)
@@ -240,21 +238,22 @@ def test_partial_frame_has_absolute_deadline():
 
 def test_cancelled_request_leaves_other_lease_usable(controller):
     owner, graph, workers = controller
-    first = _lease(owner, graph)
-    second = _lease(owner, graph)
-    worker = workers[0]
-    worker.proceed.clear()
-    try:
-        result = first.query("query", cancel_check=lambda: True)
-        assert "cancel" in result.errors[0]
-        worker.proceed.set()
-        if not second.status()["ready"]:
-            assert second.recover()["ready"]
-        assert second.query("next query").ok
-    finally:
-        worker.proceed.set()
-        first.close()
-        second.close()
+    with ExitStack() as cleanup:
+        first = _lease(owner, graph)
+        cleanup.callback(first.close)
+        second = _lease(owner, graph)
+        cleanup.callback(second.close)
+        worker = workers[0]
+        worker.proceed.clear()
+        try:
+            result = first.query("query", cancel_check=lambda: True)
+            assert "cancel" in result.errors[0]
+            worker.proceed.set()
+            if not second.status()["ready"]:
+                assert second.recover()["ready"]
+            assert second.query("next query").ok
+        finally:
+            worker.proceed.set()
 
 
 def test_explicit_release_acknowledges_last_worker_teardown(controller):
@@ -417,29 +416,26 @@ def test_changing_peer_context_is_refused(tmp_path, monkeypatch):
 def test_peer_exit_during_context_check_does_not_read_recycled_pid_paths(tmp_path, monkeypatch):
     import os
     from unittest.mock import Mock
-    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    owner = broker.Controller(tmp_path, "token")
-    connection = Mock()
-    connection.getsockopt.return_value = struct.pack("3i", process.pid, os.geteuid(), 0)
-    original = broker._kernel_context
-    sampled = False
-    def sample(directory):
-        nonlocal sampled
-        context = original(directory)
-        if not sampled:
-            sampled = True
-            process.kill()
-            process.wait(timeout=2)
-        return context
-    monkeypatch.setattr(broker, "_kernel_context", sample)
-    try:
+    with ExitStack() as cleanup:
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        cleanup.enter_context(reap_on_exit(process))
+        owner = broker.Controller(tmp_path, "token")
+        cleanup.callback(owner.listener.close)
+        connection = Mock()
+        connection.getsockopt.return_value = struct.pack("3i", process.pid, os.geteuid(), 0)
+        original = broker._kernel_context
+        sampled = False
+        def sample(directory):
+            nonlocal sampled
+            context = original(directory)
+            if not sampled:
+                sampled = True
+                process.kill()
+                process.wait(timeout=2)
+            return context
+        monkeypatch.setattr(broker, "_kernel_context", sample)
         assert not owner._peer_allowed(connection)
         assert sampled
-    finally:
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=2)
-        owner.listener.close()
 
 
 def test_old_controller_cleanup_cannot_remove_concurrent_discovery_record(tmp_path, monkeypatch):

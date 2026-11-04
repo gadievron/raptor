@@ -196,6 +196,7 @@ def test_inventory_shards_are_evicted_as_one_unit(tmp_path):
 
 
 def test_cross_process_scan_lease(tmp_path):
+    from core.testing.processes import reap_on_exit
     import subprocess
     import sys
     path = entry(tmp_path, 'q/old.json', age=60)
@@ -210,7 +211,7 @@ with cache_session(Path(sys.argv[1]), maintain=False):
     child = subprocess.Popen([sys.executable, '-c', script, str(tmp_path)],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              text=True)
-    try:
+    with reap_on_exit(child):
         import select
         assert select.select([child.stdout], [], [], 10)[0]
         assert child.stdout.readline().strip() == 'ready'
@@ -219,11 +220,6 @@ with cache_session(Path(sys.argv[1]), maintain=False):
         child.communicate('\n', timeout=10)
         assert child.returncode == 0
         assert budget.prune_cache(tmp_path).files_removed == 1
-    finally:
-        if child.poll() is None:
-            child.kill()
-        child.wait(timeout=10)
-
 
 def test_scan_entry_point_pins_custom_root_and_preserves_offline_data(tmp_path):
     from packages.sca.pipeline import RunOptions, run_sca
