@@ -386,6 +386,9 @@ def assemble_context(
     _enrich_callers_with_call_sites(
         ctx["callers"], target_path, function_name,
     )
+    from .caller_context import enrich_caller_entries
+
+    enrich_caller_entries(ctx["callers"][:MAX_CALL_SITE_CALLERS], target_path, inventory)
     ctx["callees"] = _find_callees(
         inventory, file_path, function_name, line_start, context_map,
     )
@@ -804,6 +807,12 @@ def _defend_assembled_context(ctx: dict[str, Any], file_path: str,
         if source:
             ctx["source"] = defend_repo_text(ctx, source, location=loc)
         for c in ctx.get("callers") or []:
+            if isinstance(c, dict) and c.get("caller_entry"):
+                c["caller_entry"] = defend_repo_text(
+                    ctx, c["caller_entry"],
+                    location=f"{c.get('file', '?')} (caller entry of "
+                             f"{function_name})",
+                )
             if isinstance(c, dict) and c.get("call_site"):
                 c["call_site"] = defend_repo_text(
                     ctx, c["call_site"],
@@ -1452,6 +1461,9 @@ def format_context_for_prompt(
                 max_length=512,
             )
             cp.append(f"- `{ident}` (line {line})")
+            if c.get("caller_entry"):
+                cp.append("Caller signature and initial setup:")
+                cp.append(_fenced(c["caller_entry"]))
             if c.get("call_site"):
                 cp.append(_fenced(c["call_site"]))
         sections.append(PromptSection("callers", "\n".join(cp), 1))
