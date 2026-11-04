@@ -700,10 +700,10 @@
     {
       "source": "packages/web/_browser_sandbox.py",
       "entrypoints": [],
-      "discovery": "Private Playwright transport delegates Node/browser confinement to the browser driver wrapper. The nesting capability probe runs only fixed trusted sandbox-exec/true commands, without target input.",
+      "discovery": "Private Playwright transport delegates Node/browser confinement to the browser driver wrapper. The compatibility probe renders only an owned blank page through that same confined wrapper, with both sandbox layers required.",
       "contracts": [
         "packages/web/tests/test_browser_sandbox_policy.py::test_launcher_restores_environment_and_keeps_controls_outside_work",
-        "packages/web/tests/test_browser_sandbox_policy.py::test_nested_seatbelt_probe_uses_only_trusted_true_and_minimal_environment",
+        "packages/web/tests/test_browser_sandbox_policy.py::test_nested_seatbelt_probe_uses_real_confined_browser_without_waiver",
         "packages/web/tests/test_browser_sandbox_policy.py::test_required_mac_inner_policy_tracks_kernel_nesting_capability"
       ]
     },

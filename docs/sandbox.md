@@ -1535,20 +1535,22 @@ modes against the installed Debian browser with a read-only source mount.
 
 ### Chromium sandbox nesting on macOS
 
-RAPTOR probes whether macOS can apply a second inherited Seatbelt profile
-before starting a browser with its inner sandbox required. The probe runs only
-`/usr/bin/true` under two minimal allow-default profiles; it grants no browser
-permissions. A failed probe refuses default browser startup with an actionable
-message. Other web checks can continue with the browser coverage gap recorded.
+RAPTOR probes whether the selected Chromium can initialise its GPU/renderer
+sandbox under the actual outer Seatbelt policy before visiting a target. The
+probe renders a disposable blank page, captures a frame and evaluates a constant
+expression with both sandbox layers enabled. It uses no proxy, account state or target request.
+Permissive `sandbox-exec` nesting alone does not prove this compatibility. A
+failed probe refuses default browser startup with an actionable message. Other web checks can continue with the browser coverage gap recorded.
 
-On a host that cannot establish nested profiles, the operator must explicitly
+On a host where this two-layer browser probe fails, the operator must explicitly
 select `--allow-unsandboxed-chromium` to use browser checks under RAPTOR's outer
 Seatbelt confinement. There is no automatic retry or default waiver. Linux
-retains its existing two-layer path. A successful nesting probe is only a
-prerequisite: the actual browser still has to start and pass its policy checks.
+retains its existing two-layer path. The result is cached per process. The actual
+browser must still start and pass its policy checks; there is no automatic fallback if it later fails.
 
 Native macOS acceptance records required-mode refusal when nesting is unavailable
 and exercises DOM/XSS/origin behavior with the waiver explicitly selected in the
 test fixture. This validates the available outer-only mode, not two-layer macOS
 compatibility. The required-mode test reports that distinction in its JUnit
-properties. The native boundary probe remains required in either case.
+suite properties (compatible with xUnit2). The native boundary probe remains
+required in either case.

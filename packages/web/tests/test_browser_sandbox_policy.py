@@ -233,40 +233,84 @@ def test_live_browser_suite_does_not_launch_during_collection(monkeypatch):
     spec.loader.exec_module(module)
 
 
-@pytest.mark.parametrize('returncode', [0, 71])
-def test_nested_seatbelt_probe_uses_only_trusted_true_and_minimal_environment(monkeypatch, returncode):
-    from types import SimpleNamespace
+@pytest.mark.parametrize('render_result,frame,available', [(2, b'\x89PNG\r\n\x1a\n', True),
+                                                               (None, b'\x89PNG\r\n\x1a\n', False),
+                                                               (2, b'invalid frame', False)])
+def test_nested_seatbelt_probe_uses_real_confined_browser_without_waiver(monkeypatch, render_result, frame, available):
+    from unittest.mock import MagicMock
+    from packages.web import browser
     seen = []
-    def run(command, **options):
-        seen.append(command)
-        assert command == ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)',
-                           '/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)', '/usr/bin/true']
-        assert options['env'] == {'PATH': os.defpath, 'LC_ALL': 'C'}
-        assert options['timeout'] == 5 and options['check'] is False
-        return subprocess.CompletedProcess(command, returncode)
-    monkeypatch.setattr(boundary, 'subprocess', SimpleNamespace(
-        run=run, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE, TimeoutExpired=subprocess.TimeoutExpired))
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+    engine._launch_kwargs = {}
+    page = engine._context.new_page.return_value
+    page.evaluate.return_value = render_result
+    page.screenshot.return_value = frame
+    def factory(origin, **options):
+        assert boundary._INNER_PROBE_STATE.active is True
+        assert origin == 'http://127.0.0.1:1'
+        assert options == {'allow_unsandboxed_chromium': False}
+        seen.append(origin)
+        return engine
+    monkeypatch.setattr(browser, 'BrowserEngine', factory)
     boundary.macos_nested_seatbelt_available.cache_clear()
     try:
-        assert boundary.macos_nested_seatbelt_available() is (returncode == 0)
-        assert boundary.macos_nested_seatbelt_available() is (returncode == 0)
+        assert boundary.macos_nested_seatbelt_available() is available
+        assert boundary.macos_nested_seatbelt_available() is available
         assert len(seen) == 1
+        assert engine._proxy_settings() is None
+        assert engine._launch_kwargs == {'timeout': 10_000}
+        assert engine._timeout_ms == 5_000
+        page.set_content.assert_called_once_with('<html><body>Browser sandbox probe</body></html>', timeout=5_000)
+        page.screenshot.assert_called_once_with(timeout=5_000)
+        page.evaluate.assert_called_once_with('1 + 1')
+        page.close.assert_called_once()
+        engine.__exit__.assert_called_once()
+        assert boundary._INNER_PROBE_STATE.active is False
     finally:
         boundary.macos_nested_seatbelt_available.cache_clear()
 
 
 @pytest.mark.parametrize('error', [PermissionError('owned'), subprocess.TimeoutExpired('owned', 5)])
 def test_nested_seatbelt_probe_refuses_errors_and_timeouts(monkeypatch, error):
-    from types import SimpleNamespace
-    def run(*args, **kwargs):
-        raise error
-    monkeypatch.setattr(boundary, 'subprocess', SimpleNamespace(
-        run=run, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE, TimeoutExpired=subprocess.TimeoutExpired))
+    from unittest.mock import MagicMock
+    from packages.web import browser
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+    engine._launch_kwargs = {}
+    engine._context.new_page.side_effect = error
+    monkeypatch.setattr(browser, 'BrowserEngine', lambda *args, **kwargs: engine)
     boundary.macos_nested_seatbelt_available.cache_clear()
     try:
         assert boundary.macos_nested_seatbelt_available() is False
+        assert boundary._INNER_PROBE_STATE.active is False
+        engine.__exit__.assert_called_once()
     finally:
         boundary.macos_nested_seatbelt_available.cache_clear()
+
+
+def test_mac_probe_recursion_guard_is_thread_local_and_retains_outer_check(monkeypatch):
+    from types import SimpleNamespace
+    from core.sandbox import probes
+    import threading
+    monkeypatch.setattr(boundary, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(probes, 'check_seatbelt_available', lambda: True)
+    monkeypatch.setattr(boundary, 'macos_nested_seatbelt_available', lambda: False)
+    monkeypatch.setattr(boundary._INNER_PROBE_STATE, 'active', True, raising=False)
+    boundary.require_inner_sandbox_compatibility(True)
+    refused = []
+    def other_thread():
+        try:
+            boundary.require_inner_sandbox_compatibility(True)
+        except RuntimeError:
+            refused.append(True)
+    thread = threading.Thread(target=other_thread)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive() and refused == [True]
+    monkeypatch.setattr(probes, 'check_seatbelt_available', lambda: False)
+    with pytest.raises(RuntimeError, match='requires usable Seatbelt'):
+        boundary.require_inner_sandbox_compatibility(True)
 
 
 @pytest.mark.parametrize('available', [False, True])

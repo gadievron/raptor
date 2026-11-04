@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -17,26 +16,38 @@ from core.atomic_fs import write_new_text
 _ENV_LOCK = threading.RLock()
 # Enabled only by owned native-test fixtures; never inherit operator DEBUG.
 _DRIVER_DIAGNOSTICS = False
+_INNER_PROBE_STATE = threading.local()
 
 
 @lru_cache(maxsize=1)
 def macos_nested_seatbelt_available():
-    """Probe applying a second inherited profile, without launching a browser.
+    """Prove that this Chromium can render under the actual outer policy.
 
-    Even allow-default profiles can be refused by the platform. This probes
-    kernel capability, not permission to relax the actual browser policy.
+    Permissive sandbox-exec nesting is not sufficient: Chromium's GPU and
+    renderer profiles can still fail to initialise. Use a fresh blank page,
+    no proxy or target request, and keep both sandbox layers enabled.
     """
-    profile = '(version 1)(allow default)'
-    command = ['/usr/bin/sandbox-exec', '-p', profile,
-               '/usr/bin/sandbox-exec', '-p', profile, '/usr/bin/true']
+    from packages.web.browser import BrowserEngine
+    previous = getattr(_INNER_PROBE_STATE, 'active', False)
+    _INNER_PROBE_STATE.active = True
     try:
-        result = subprocess.run(command, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                env={'PATH': os.defpath, 'LC_ALL': 'C'},
-                                timeout=5, check=False)
-    except (OSError, subprocess.TimeoutExpired):
+        engine = BrowserEngine('http://127.0.0.1:1', allow_unsandboxed_chromium=False)
+        engine._proxy_settings = lambda: None
+        engine._launch_kwargs['timeout'] = 10_000
+        engine._timeout_ms = 5_000
+        with engine:
+            page = engine._context.new_page()
+            try:
+                page.set_content('<html><body>Browser sandbox probe</body></html>', timeout=5_000)
+                frame = page.screenshot(timeout=5_000)
+                return (page.evaluate('1 + 1') == 2 and isinstance(frame, bytes)
+                        and frame.startswith(b'\x89PNG\r\n\x1a\n'))
+            finally:
+                page.close()
+    except Exception:
         return False
-    return result.returncode == 0
+    finally:
+        _INNER_PROBE_STATE.active = previous
 
 
 def require_inner_sandbox_compatibility(enabled):
@@ -44,10 +55,14 @@ def require_inner_sandbox_compatibility(enabled):
         from core.sandbox.probes import check_seatbelt_available
         if not check_seatbelt_available():
             raise RuntimeError('Browser containment requires usable Seatbelt')
+        # Avoid recursion only in this thread's owned smoke test. The
+        # actual driver confinement and Chromium sandbox stay enabled.
+        if getattr(_INNER_PROBE_STATE, 'active', False):
+            return
         if not macos_nested_seatbelt_available():
             raise RuntimeError(
-                'macOS refuses nested Seatbelt profiles, so Chromium cannot '
-                'enable its inner sandbox inside RAPTOR containment. '
+                'Chromium cannot initialise its inner sandbox under RAPTOR Seatbelt '
+                'containment on this macOS host. '
                 'Use --allow-unsandboxed-chromium to explicitly waive only '
                 'the inner layer; RAPTOR outer confinement remains required.')
 
