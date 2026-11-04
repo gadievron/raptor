@@ -1071,7 +1071,9 @@ def run_rules_batched(
     between the batched and per-rule lanes.
 
     Returns a dict keyed by rule stem name → SpatchResult.
-    Falls back to per-rule run_rule when only one rule is given.
+    Falls back to per-rule run_rule when only one rule is given or
+    accepted rules have colliding result IDs (including file-stem
+    aliases). Individual execution preserves attribution in that case.
     """
     rules = [Path(r).resolve() for r in rules if Path(r).exists()]
     if not rules:
@@ -1103,6 +1105,7 @@ def run_rules_batched(
     batched_rules = []
     refused: dict[str, SpatchResult] = {}
     alias_of: dict[str, str] = {}
+    colliding_ids: set[str] = set()
     for r in rules:
         # Same per-rule size cap as run_rule (_RULE_MAX_BYTES) — the
         # batched loop is the OTHER read path the OOM defence must
@@ -1171,18 +1174,40 @@ def run_rules_batched(
         # double_close.cocci's second leg emits double_fclose).
         # Pre-fix the demux keyed on stems only and silently dropped
         # every alias emission — 100% of some rules' output.
-        for emitted in _emitted_rule_ids(text):
+        # File stems are routing aliases too: a literal emitted ID
+        # must not steal another file's implicit stem attribution.
+        for emitted in _emitted_rule_ids(text) | {r.stem}:
             prior = alias_of.setdefault(emitted, r.stem)
             if prior != r.stem:
-                logger.warning(
-                    "batched rules %s and %s both emit rule id %r — "
-                    "matches will be attributed to %s",
-                    prior, r.stem, emitted, prior,
-                )
-        alias_of.setdefault(r.stem, r.stem)
+                colliding_ids.add(emitted)
 
     if not rule_stems:
         return refused
+
+    if colliding_ids:
+        # A nonce proves that a batch emitted the record, not WHICH
+        # rule emitted it. Once IDs overlap, demultiplexing cannot
+        # recover ownership. Preserve each rule's own matches/errors
+        # with isolated runs; never combine this ambiguous batch.
+        logger.warning(
+            "Coccinelle batch has colliding result IDs %r — running "
+            "accepted rules individually to preserve attribution",
+            sorted(colliding_ids),
+        )
+        out = {
+            r.stem: run_rule(
+                target, r,
+                include_dirs=include_dirs,
+                no_includes=no_includes,
+                timeout=timeout,
+                env=env, defines=defines,
+                subprocess_runner=subprocess_runner,
+                allow_scripting=allow_scripting,
+            )
+            for r in batched_rules
+        }
+        out.update(refused)
+        return out
 
     # Same per-invocation evidence nonce as run_rule (see _make_nonce):
     # one nonce covers the whole batch invocation.
