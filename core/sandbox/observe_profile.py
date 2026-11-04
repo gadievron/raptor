@@ -48,6 +48,7 @@ markers both lack ``syscall`` and would over-classify if included.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -55,6 +56,8 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.security.capped_read import CappedReadRefused, read_capped
 
 from .evidence import evidence_write_path as _evidence_write_path
 from .evidence import resolve_read_path as _resolve_evidence_path
@@ -466,51 +469,27 @@ def _iter_records(path: Path) -> Iterable[dict]:
       ``_MAX_RECORD_BYTES`` per line (oversized lines are skipped
       like malformed ones).
     """
-    import os as _os
-    import stat as _stat_mod
     try:
-        fd = _os.open(str(path), _os.O_RDONLY | _os.O_NOFOLLOW
-                      | _os.O_NONBLOCK | _os.O_CLOEXEC)
-    except OSError:
-        # Includes ELOOP (symlink rejected), ENOENT (no log because
-        # audit didn't engage), ENXIO. All → empty profile.
-        return
-    try:
-        st = _os.fstat(fd)
-        if not _stat_mod.S_ISREG(st.st_mode):
+        data = read_capped(path, _MAX_OBSERVE_BYTES, raise_on_refusal=True)
+    except CappedReadRefused as exc:
+        if exc.reason == "not_regular":
             logger.warning(
                 "observe log %s is not a regular file "
                 "(mode=%o) — planted object? Refusing to parse.",
-                path, st.st_mode)
-            return
-        if st.st_size > _MAX_OBSERVE_BYTES:
+                path, exc.st_mode)
+        else:
             logger.warning(
-                "observe log %s is %d bytes (> %d cap) — oversized "
-                "planted artifact? Refusing to parse.",
-                path, st.st_size, _MAX_OBSERVE_BYTES)
-            return
-        chunks = []
-        remaining = _MAX_OBSERVE_BYTES
-        while remaining > 0:
-            try:
-                chunk = _os.read(fd, min(remaining, 1 << 20))
-            except OSError:
-                return
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        data = b"".join(chunks)
+                "observe log %s exceeds the %d byte cap — "
+                "refusing to parse oversized or growing artifact.",
+                path, _MAX_OBSERVE_BYTES)
+        return
     except OSError:
         return
-    finally:
-        try:
-            _os.close(fd)
-        except OSError:
-            pass
-    for raw in data.split(b"\n"):
-        if len(raw) > _MAX_RECORD_BYTES:
-            # Oversized single record — treat like a malformed line.
+    # Iterate without allocating a list proportional to the number of
+    # newlines. The per-record limit excludes its newline terminator.
+    for raw in io.BytesIO(data):
+        size = len(raw) - int(raw.endswith(b"\n"))
+        if size > _MAX_RECORD_BYTES:
             continue
         line = raw.strip()
         if not line:
