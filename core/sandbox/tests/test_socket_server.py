@@ -101,3 +101,57 @@ def test_failed_startup_closes_listener(listener, monkeypatch, fault):
         with pytest.raises(RuntimeError, match="injected .* failure"):
             SocketServer(listener, lambda conn: None)
     assert listener.fileno() == -1, "failed startup left its listener open"
+
+
+@pytest.mark.parametrize("fault", ["construction", "start"])
+def test_failed_handler_start_releases_connection(listener, monkeypatch, fault):
+    from types import SimpleNamespace
+    from core.sandbox.tests import socket_server
+
+    finished = threading.Event()
+    errors = []
+    connections = []
+    real_thread = threading.Thread
+
+    class StartFailure(real_thread):
+        def start(self):
+            raise RuntimeError("injected handler start failure")
+
+    def thread(*args, **kwargs):
+        if "args" not in kwargs:
+            return real_thread(*args, **kwargs)  # The real accept loop.
+        connections.append(kwargs["args"][0])
+        if fault == "construction":
+            raise RuntimeError("injected handler construction failure")
+        return StartFailure(*args, **kwargs)
+
+    class ObservedServer(SocketServer):
+        def _accept(self):
+            try:
+                super()._accept()
+            except RuntimeError as error:
+                errors.append(str(error))
+            finally:
+                finished.set()
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(socket_server, "threading", SimpleNamespace(
+            Event=threading.Event, Lock=threading.Lock, Thread=thread,
+        ))
+        server = ObservedServer(listener, lambda conn: None)
+        try:
+            with _connect(listener):
+                assert finished.wait(5), "accept loop did not report injected failure"
+                assert errors == [f"injected handler {fault} failure"]
+                assert len(connections) == 1
+                assert connections[0].fileno() == -1, "failed handler left its socket open"
+                assert not server._clients
+                assert not server._threads, "unstarted handler remained registered"
+                server.close()
+                _assert_stopped(server)
+        finally:
+            # Independent cleanup keeps the regression contained on an unfixed tree.
+            for conn in connections:
+                conn.close()
+            listener.close()
+            server._accept_thread.join(timeout=5)
