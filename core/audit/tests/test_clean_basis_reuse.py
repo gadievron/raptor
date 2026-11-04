@@ -834,37 +834,42 @@ class TestOriginReadBackIsLinear:
         assert len(reads) == 2
 
     @pytest.mark.slow
-    def test_read_back_adds_bounded_fold_time(self, tmp_path, monkeypatch):
-        """End to end, folding thousands of slimmed stubs with the read-back on
-        must stay within a small constant factor of folding with it off. This
-        catches a return to per-stub journal reads, which once made the fold
-        many times slower."""
-        # End-to-end cost: the same fold over 2,000 index stubs with the
-        # read-back on vs stubbed out. The quadratic read-back measured
-        # ~5x the baseline here (45 s vs 3.5 s at 12,000 rows); linear
-        # stays within a small constant factor.
-        import time
+    def test_large_fold_reads_and_indexes_each_origin_once(self, tmp_path, monkeypatch):
+        """A large fold must do linear origin-readback work regardless of I/O speed."""
+        import core.coverage.journal as journal_mod
 
-        import core.audit.gaps as gaps_mod
+        count = 2000
+        project, run, checklist = self._project(tmp_path, count)
+        assert load_index(project)["app.php:f0"].body == ""  # slimmed stubs
+        origin = run.resolve()
+        real = journal_mod.load_entries
+        loads = 0
+        indexed = 0
 
-        project, _, checklist = self._project(tmp_path, 2000)
+        def counting(out_dir, *args, **kwargs):
+            nonlocal loads
+            if Path(out_dir).resolve() != origin:
+                return real(out_dir, *args, **kwargs)
+            loads += 1
+            assert loads == 1, "origin journal reloaded within one fold"
+            rows = real(out_dir, *args, **kwargs)
 
-        def fold():
-            t0 = time.perf_counter()
-            sink: dict = {}
-            compute_gaps(checklist, [], project_dir=project,
-                         reuse_sink=sink, reuse_stats={})
-            assert len(sink) == 2000
-            return time.perf_counter() - t0
+            def counted_rows():
+                nonlocal indexed
+                for row in rows:
+                    indexed += 1
+                    assert indexed <= count, "origin rows indexed more than once"
+                    yield row
 
-        fold()  # warm the process caches both runs share
-        with_read_back = fold()
-        with monkeypatch.context() as m:
-            m.setattr(gaps_mod, "_origin_run_body",
-                      lambda entry, origin_cache=None: "")
-            baseline = fold()
-        assert with_read_back < 2.5 * baseline + 0.25, (
-            with_read_back, baseline)
+            return counted_rows()
+
+        monkeypatch.setattr(journal_mod, "load_entries", counting)
+        sink: dict = {}
+        compute_gaps(checklist, [], project_dir=project,
+                     reuse_sink=sink, reuse_stats={})
+        assert len(sink) == count
+        assert loads == 1
+        assert indexed == count
 
 
 class TestOriginCacheInvalidation:
