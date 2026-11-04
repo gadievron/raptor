@@ -8,6 +8,7 @@ a real-spatch E2E test that exercises the shipped
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -241,12 +242,24 @@ def test_alias_scan_skips_non_c_files(tmp_path):
 # =====================================================================
 
 
+@pytest.fixture(scope="module")
+def attribute_rules():
+    """Run attribute contracts against shipped attrs, not unrelated axes.
+
+    The full-dispatch case below still uses analyze's default rule root.
+    """
+    rules = (Path(__file__).resolve().parents[3]
+             / "engine/coccinelle/source_intel/attrs")
+    assert any(rules.glob("*.cocci")), "shipped attribute rules are missing"
+    return rules
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_real_spatch_detects_literal_wur(tmp_path):
+def test_e2e_real_spatch_detects_literal_wur(tmp_path, attribute_rules):
     """End-to-end: real spatch runs the shipped attr_warn_unused_result
     rule against a small C file with a literal GCC attribute. Pin
     against rule-corpus drift."""
@@ -257,7 +270,7 @@ def test_e2e_real_spatch_detects_literal_wur(tmp_path):
         "int alloc_thing(size_t sz);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     assert not r.is_skipped, (
         f"expected real spatch to produce facts; got skipped_reason="
         f"{r.skipped_reason!r}"
@@ -278,7 +291,7 @@ def test_e2e_real_spatch_detects_literal_wur(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_real_spatch_detects_literal_nonnull(tmp_path):
+def test_e2e_real_spatch_detects_literal_nonnull(tmp_path, attribute_rules):
     """End-to-end: real spatch runs the shipped attr_nonnull rule
     against a small C file with nonnull declarations in three forms
     (bare, paramised, internal-alias). Pin against rule-corpus drift
@@ -290,7 +303,7 @@ def test_e2e_real_spatch_detects_literal_nonnull(tmp_path):
         "__attribute__((__nonnull__(1, 2))) int internal(int *a, int *b);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     assert not r.is_skipped
     from packages.source_intel.analyze import KIND_NONNULL
     nn_obs = r.attrs_of_kind(KIND_NONNULL)
@@ -306,7 +319,7 @@ def test_e2e_real_spatch_detects_literal_nonnull(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_real_spatch_detects_literal_alloc_size(tmp_path):
+def test_e2e_real_spatch_detects_literal_alloc_size(tmp_path, attribute_rules):
     """Both pointer-return and value-return alloc_size variants
     detected, including the __alloc_size__ internal alias."""
     src = tmp_path / "alloc_size_fixture.c"
@@ -316,7 +329,7 @@ def test_e2e_real_spatch_detects_literal_alloc_size(tmp_path):
         "__attribute__((__alloc_size__(1))) char *gimme(unsigned long n);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     from packages.source_intel.analyze import KIND_ALLOC_SIZE
     names = {ev.function_name for ev in r.attrs_of_kind(KIND_ALLOC_SIZE)
              if ev.match_source == "literal"}
@@ -331,7 +344,7 @@ def test_e2e_real_spatch_detects_literal_alloc_size(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path):
+def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path, attribute_rules):
     """Both literal and __returns_nonnull__ internal alias detected."""
     src = tmp_path / "rn_fixture.c"
     src.write_text(
@@ -339,7 +352,7 @@ def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path):
         "__attribute__((__returns_nonnull__)) char *strdup_or_die(const char *s);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     from packages.source_intel.analyze import KIND_RETURNS_NONNULL
     names = {ev.function_name for ev in r.attrs_of_kind(KIND_RETURNS_NONNULL)
              if ev.match_source == "literal"}
@@ -354,7 +367,7 @@ def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path):
+def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path, attribute_rules):
     """End-to-end across the 4 axis-1-completion attribute rules
     (noreturn, malloc, no_stack_protector, access). Pins the
     multi-rule axis-dispatch loop + ALL_KINDS membership for the
@@ -371,7 +384,7 @@ def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path):
         "__attribute__((access(write_only, 1, 2))) int wo_fn(int *buf, int n);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     from packages.source_intel.analyze import (
         KIND_ACCESS, KIND_MALLOC, KIND_NO_STACK_PROTECTOR, KIND_NORETURN,
     )
@@ -396,7 +409,7 @@ def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path):
+def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path, attribute_rules):
     """A WUR-annotated function under #ifdef must surface ``conditional_on``.
 
     Stage D consumer uses this to downweight matches behind unknown
@@ -410,7 +423,7 @@ def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path):
         "#endif\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     from packages.source_intel.conditional import clear_cache
     clear_cache()
     wur = [ev for ev in r.attributes
@@ -427,7 +440,7 @@ def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_discovers_project_alias_and_emits_project_alias_evidence(tmp_path):
+def test_e2e_discovers_project_alias_and_emits_project_alias_evidence(tmp_path, attribute_rules):
     """Target with a project-defined __must_check alias — discovery
     finds the macro, alias-scan emits ``match_source='project_alias'``
     evidence for source files where the macro is used."""
@@ -438,7 +451,7 @@ def test_e2e_discovers_project_alias_and_emits_project_alias_evidence(tmp_path):
         "MY_MUST_CHECK int validate(int x);\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=attribute_rules)
     # Discovery should surface in result.
     discovered = dict(r.discovered_aliases)
     assert "MY_MUST_CHECK" in discovered.get("wur", ())
