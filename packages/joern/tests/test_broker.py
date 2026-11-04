@@ -17,6 +17,7 @@ from core.testing.processes import reap_on_exit
 from packages.joern import broker, prereqs
 from packages.joern.models import JoernCPG
 from packages.joern.services import GraphServices
+from packages.joern.tests.broker_server import controller_server
 from packages.joern.tests.test_graph_services import Worker
 from packages.joern.tunables import JoernTunables
 
@@ -62,32 +63,30 @@ def controller(tmp_path, request):
 
     pool = GraphServices(root / "graphs", factory=factory)
     owner = broker.Controller(root, "fixture-token", services=pool)
-    ready = threading.Event()
-    original = owner.start
+    with controller_server(owner) as start_server:
+        ready = threading.Event()
+        original = owner.start
 
-    def start():
-        original()
-        ready.set()
+        def start():
+            original()
+            ready.set()
 
-    owner.start = start
-    thread = threading.Thread(target=owner.serve, kwargs={"idle_seconds": 60})
-    thread.start()
-    try:
-        assert ready.wait(2)
-        graph_path = tmp_path / "graph.bin"
-        graph_path.write_bytes(b"graph")
-        yield owner, JoernCPG(graph_path, tmp_path), workers
-    finally:
-        for worker in workers:
-            worker.proceed.set()
-        owner.stopping.set()
-        thread.join(3)
-        assert not thread.is_alive()
+        owner.start = start
+        start_server(idle_seconds=60)
+        try:
+            assert ready.wait(2)
+            graph_path = tmp_path / "graph.bin"
+            graph_path.write_bytes(b"graph")
+            yield owner, JoernCPG(graph_path, tmp_path), workers
+        finally:
+            for worker in workers:
+                worker.proceed.set()
 
 
 @pytest.mark.parametrize("fault", ["readiness", "graph-write"])
 def test_controller_setup_failure_stops_server(tmp_path, monkeypatch, request, fault):
     from types import SimpleNamespace
+    from packages.joern.tests import broker_server
 
     threads = []
     owners = []
@@ -120,6 +119,7 @@ def test_controller_setup_failure_stops_server(tmp_path, monkeypatch, request, f
                 Thread=make_thread,
                 Event=lambda: SimpleNamespace(set=ready.set, wait=wait),
             ))
+            patcher.setattr(broker_server, "threading", module.threading)
             patcher.setattr(Path, "write_bytes", write)
             with pytest.raises(OSError, match="injected .* failure"):
                 next(fixture)
@@ -269,10 +269,10 @@ def test_macos_peer_pid_reuse_does_not_reuse_controller(tmp_path, monkeypatch):
     from unittest.mock import Mock
     monkeypatch.setattr(broker.sys, "platform", "darwin")
     owner = broker.Controller(tmp_path, "token", owner_pid=321, owner_birth=1234)
-    connection = Mock(spec=socket.socket)
-    monkeypatch.setattr(broker, "_darwin_peer_uid", lambda connection: __import__('os').geteuid())
-    connection.getsockopt.return_value = struct.pack("i", 321)
-    try:
+    with controller_server(owner):
+        connection = Mock(spec=socket.socket)
+        monkeypatch.setattr(broker, "_darwin_peer_uid", lambda connection: __import__('os').geteuid())
+        connection.getsockopt.return_value = struct.pack("i", 321)
         monkeypatch.setattr(broker, "_pid_starttime", lambda pid: 1234)
         assert owner._peer_allowed(connection)
         monkeypatch.setattr(broker, "_pid_starttime", lambda pid: 5678)
@@ -280,8 +280,6 @@ def test_macos_peer_pid_reuse_does_not_reuse_controller(tmp_path, monkeypatch):
         monkeypatch.setattr(broker, "_pid_starttime", lambda pid: 1234)
         monkeypatch.setattr(broker, "_darwin_peer_uid", lambda connection: __import__('os').geteuid() + 1)
         assert not owner._peer_allowed(connection)
-    finally:
-        owner.listener.close()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux namespace identities")
@@ -290,22 +288,20 @@ def test_peer_cgroup_namespace_is_checked_even_with_same_cgroup_path(tmp_path, m
     from types import SimpleNamespace
     from unittest.mock import Mock
     owner = broker.Controller(tmp_path, "token")
-    connection = Mock()
-    connection.getsockopt.return_value = struct.pack("3i", os.getpid(), os.geteuid(), 0)
-    original = os.stat
-    sampled_peer = False
-    def stat(path, **kwargs):
-        nonlocal sampled_peer
-        result = original(path, **kwargs)
-        if path == "ns/cgroup" and not sampled_peer:
-            sampled_peer = True
-            return SimpleNamespace(st_ino=result.st_ino + 1)
-        return result
-    try:
+    with controller_server(owner):
+        connection = Mock()
+        connection.getsockopt.return_value = struct.pack("3i", os.getpid(), os.geteuid(), 0)
+        original = os.stat
+        sampled_peer = False
+        def stat(path, **kwargs):
+            nonlocal sampled_peer
+            result = original(path, **kwargs)
+            if path == "ns/cgroup" and not sampled_peer:
+                sampled_peer = True
+                return SimpleNamespace(st_ino=result.st_ino + 1)
+            return result
         monkeypatch.setattr(os, "stat", stat)
         assert not owner._peer_allowed(connection)
-    finally:
-        owner.listener.close()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux user namespaces")
@@ -369,15 +365,14 @@ def test_controller_production_idle_deadline_closes_socket_and_services(tmp_path
     clock = IdleClock()
     services = Mock()
     owner = broker.Controller(tmp_path, "token", services=services, clock=clock)
-    ready = threading.Event()
-    original_start = owner.start
-    def start():
-        original_start()
-        ready.set()
-    owner.start = start
-    thread = threading.Thread(target=owner.serve)
-    thread.start()
-    try:
+    with controller_server(owner) as start_server:
+        ready = threading.Event()
+        original_start = owner.start
+        def start():
+            original_start()
+            ready.set()
+        owner.start = start
+        thread = start_server()
         assert ready.wait(2)
         clock.advance_to(broker._CONTROLLER_IDLE_SECONDS - 0.01)
         # A second sample proves the first idle decision continued serving;
@@ -391,9 +386,6 @@ def test_controller_production_idle_deadline_closes_socket_and_services(tmp_path
         services.close.assert_called_once_with()
         assert not (tmp_path / "rpc.sock").exists()
         assert owner.listener.fileno() == -1
-    finally:
-        owner.stopping.set()
-        thread.join(2)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux procfs peer identity")
@@ -401,15 +393,13 @@ def test_changing_peer_context_is_refused(tmp_path, monkeypatch):
     import os
     from unittest.mock import Mock
     owner = broker.Controller(tmp_path, "token")
-    connection = Mock()
-    connection.getsockopt.return_value = struct.pack("3i", os.getpid(), os.geteuid(), 0)
-    contexts = iter([("namespaces", b"before"), ("namespaces", b"before"),
-                     ("namespaces", b"after")])
-    monkeypatch.setattr(broker, "_kernel_context", lambda directory: next(contexts))
-    try:
+    with controller_server(owner):
+        connection = Mock()
+        connection.getsockopt.return_value = struct.pack("3i", os.getpid(), os.geteuid(), 0)
+        contexts = iter([("namespaces", b"before"), ("namespaces", b"before"),
+                         ("namespaces", b"after")])
+        monkeypatch.setattr(broker, "_kernel_context", lambda directory: next(contexts))
         assert not owner._peer_allowed(connection)
-    finally:
-        owner.listener.close()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux procfs peer identity")
@@ -441,71 +431,69 @@ def test_peer_exit_during_context_check_does_not_read_recycled_pid_paths(tmp_pat
 def test_old_controller_cleanup_cannot_remove_concurrent_discovery_record(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import contextmanager
-    owners = []
-    threads = []
-    new_boot = threading.Event()
-    allow_boot = threading.Event()
-    cleanup_waiting = threading.Event()
-    real_lock = broker.sidecar_flock
+    with ExitStack() as controllers:
+        owners = []
+        threads = []
+        new_boot = threading.Event()
+        allow_boot = threading.Event()
+        cleanup_waiting = threading.Event()
+        real_lock = broker.sidecar_flock
 
-    class Process:
-        def __init__(self, thread):
-            self.thread = thread
-        def poll(self):
-            return None if self.thread.is_alive() else 0
+        class Process:
+            def __init__(self, thread):
+                self.thread = thread
+            def poll(self):
+                return None if self.thread.is_alive() else 0
 
-    def launch(root, environment):
-        if owners:
-            new_boot.set()
-            assert allow_boot.wait(3), "replacement bootstrap not released"
-        record = broker._record(root / "controller.json")
-        owner = broker.Controller(root, record["token"], owner_pid=record["owner_pid"],
-                                  owner_birth=record["owner_birth"])
-        owners.append(owner)
-        thread = threading.Thread(target=owner.serve, kwargs={"idle_seconds": 60})
-        threads.append(thread)
-        thread.start()
-        return Process(thread)
+        def launch(root, environment):
+            if owners:
+                new_boot.set()
+                assert allow_boot.wait(3), "replacement bootstrap not released"
+            record = broker._record(root / "controller.json")
+            owner = broker.Controller(root, record["token"], owner_pid=record["owner_pid"],
+                                      owner_birth=record["owner_birth"])
+            start_server = controllers.enter_context(controller_server(owner))
+            owners.append(owner)
+            thread = start_server(idle_seconds=60)
+            threads.append(thread)
+            return Process(thread)
 
-    @contextmanager
-    def observed_lock(path, **kwargs):
-        if kwargs.get("subject") == "Joern controller cleanup":
-            cleanup_waiting.set()
-        with real_lock(path, **kwargs):
-            yield
+        @contextmanager
+        def observed_lock(path, **kwargs):
+            if kwargs.get("subject") == "Joern controller cleanup":
+                cleanup_waiting.set()
+            with real_lock(path, **kwargs):
+                yield
 
-    monkeypatch.setattr(broker, "_start_controller", launch)
-    monkeypatch.setattr(broker, "sidecar_flock", observed_lock)
-    try:
-        old_root, _ = broker.discover(tmp_path)
-        old_record = broker._record(old_root / "controller.json")
-        owners[0].stopping.set()
-        threads[0].join(2)
-        assert not threads[0].is_alive()
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            replacement = executor.submit(broker.discover, tmp_path)
-            try:
-                assert new_boot.wait(2)
-                cleanup = executor.submit(broker._cleanup_controller, old_root, old_record)
-                assert cleanup_waiting.wait(2)
-            finally:
-                allow_boot.set()
-            new_root, token = replacement.result(timeout=4)
-            cleanup.result(timeout=4)
-        assert new_root != old_root and not old_root.exists()
-        registry = Path(broker._record(new_root / "controller.json")["registry"])
-        assert broker._record(registry / "current.json")["root"] == str(new_root)
-        with broker._connect(new_root, token):
-            pass
-        assert broker.discover(tmp_path) == (new_root, token)
-        assert len(owners) == 2
-    finally:
-        allow_boot.set()
-        for owner in owners:
-            owner.stopping.set()
-        for thread in threads:
-            thread.join(3)
-            assert not thread.is_alive()
+        monkeypatch.setattr(broker, "_start_controller", launch)
+        monkeypatch.setattr(broker, "sidecar_flock", observed_lock)
+        try:
+            old_root, _ = broker.discover(tmp_path)
+            old_record = broker._record(old_root / "controller.json")
+            owners[0].stopping.set()
+            threads[0].join(2)
+            assert not threads[0].is_alive()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                replacement = executor.submit(broker.discover, tmp_path)
+                try:
+                    assert new_boot.wait(2)
+                    cleanup = executor.submit(broker._cleanup_controller, old_root, old_record)
+                    assert cleanup_waiting.wait(2)
+                finally:
+                    allow_boot.set()
+                new_root, token = replacement.result(timeout=4)
+                cleanup.result(timeout=4)
+            assert new_root != old_root and not old_root.exists()
+            registry = Path(broker._record(new_root / "controller.json")["registry"])
+            assert broker._record(registry / "current.json")["root"] == str(new_root)
+            with broker._connect(new_root, token):
+                pass
+            assert broker.discover(tmp_path) == (new_root, token)
+            assert len(owners) == 2
+        finally:
+            allow_boot.set()
+            for owner in owners:
+                owner.stopping.set()
 
 
 def test_idle_deadline_does_not_expire_a_live_lease(tmp_path):
@@ -515,34 +503,32 @@ def test_idle_deadline_does_not_expire_a_live_lease(tmp_path):
         workers.append(worker)
         return worker
     owner = broker.Controller(tmp_path, "token", services=GraphServices(tmp_path / "graphs", factory=factory))
-    ready = threading.Event()
-    start_original = owner.start
-    def start():
-        start_original()
-        ready.set()
-    owner.start = start
-    thread = threading.Thread(target=owner.serve, kwargs={"idle_seconds": 0.01})
-    graph_path = tmp_path / "graph.bin"
-    graph_path.write_bytes(b"graph")
-    thread.start()
-    lease = None
-    try:
-        assert ready.wait(2)
-        lease = _lease(owner, JoernCPG(graph_path, tmp_path))
-        # Real quiet interval exceeds the listener's 200ms idle poll.
-        assert not owner.stopping.wait(0.3)
-        assert thread.is_alive()
-        assert lease.query("still held").ok
-        assert lease.close()
+    with controller_server(owner) as start_server:
+        ready = threading.Event()
+        start_original = owner.start
+        def start():
+            start_original()
+            ready.set()
+        owner.start = start
+        graph_path = tmp_path / "graph.bin"
+        graph_path.write_bytes(b"graph")
+        thread = start_server(idle_seconds=0.01)
         lease = None
-        thread.join(2)
-        assert not thread.is_alive()
-        assert workers[0].stops == 1
-    finally:
-        if lease is not None:
-            lease.close()
-        owner.stopping.set()
-        thread.join(2)
+        try:
+            assert ready.wait(2)
+            lease = _lease(owner, JoernCPG(graph_path, tmp_path))
+            # Real quiet interval exceeds the listener's 200ms idle poll.
+            assert not owner.stopping.wait(0.3)
+            assert thread.is_alive()
+            assert lease.query("still held").ok
+            assert lease.close()
+            lease = None
+            thread.join(2)
+            assert not thread.is_alive()
+            assert workers[0].stops == 1
+        finally:
+            if lease is not None:
+                lease.close()
 
 
 def test_controller_bootstrap_preserves_resolved_jdk_selection(tmp_path, monkeypatch):
