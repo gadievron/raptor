@@ -62,12 +62,33 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
                     obj = json.loads(line)
                     if isinstance(obj, dict):
                         events.append(obj)
-                except (json.JSONDecodeError, ValueError):
+                except (ValueError, RecursionError):
                     continue
     finally:
         if fd >= 0:
             os.close(fd)
     return events
+
+
+
+def _valid_proxy_event(event: dict[str, Any]) -> bool:
+    """Keep malformed fields from invalidating the rest of the summary."""
+    result = event.get("result")
+    if not isinstance(result, str) or not result:
+        return False
+    host = event.get("host")
+    if host is not None and not isinstance(host, str):
+        return False
+    port = event.get("port")
+    # Refused requests may report an out-of-range integer port; retain
+    # that diagnostic rather than enforcing CONNECT policy here.
+    if port is not None and type(port) is not int:
+        return False
+    for field in ("bytes_u2c", "bytes_c2u"):
+        count = event.get(field)
+        if count is not None and (type(count) is not int or count < 0):
+            return False
+    return True
 
 
 def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
@@ -77,11 +98,12 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         return None
 
     events = [e for e in raw_events
-              if e.get("result") not in _CONTROL_PLANE_RESULTS]
+              if _valid_proxy_event(e)
+              and e["result"] not in _CONTROL_PLANE_RESULTS]
     if not events:
         return None
 
-    by_host: dict[str, dict[str, Any]] = {}
+    by_host: dict[tuple[str, int | None], dict[str, Any]] = {}
     total_allowed = 0
     total_denied = 0
     total_failed = 0
@@ -92,7 +114,7 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         result = ev.get("result")
         host = ev.get("host") or "<unknown>"
         port = ev.get("port")
-        key = f"{host}:{port}" if port else host
+        key = (host, port)
 
         if key not in by_host:
             by_host[key] = {
