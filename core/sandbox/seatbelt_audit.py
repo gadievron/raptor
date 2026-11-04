@@ -458,6 +458,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
+def _reap_warm_up(proc: subprocess.Popen) -> None:
+    """Bound cleanup of the owned synthetic warm-up process."""
+    try:
+        proc.wait(timeout=1.0)
+        return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    with contextlib.suppress(OSError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=1.0)
+        return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    with contextlib.suppress(OSError):
+        proc.kill()
+    try:
+        proc.wait(timeout=1.0)
+    except (subprocess.TimeoutExpired, OSError):
+        logger.warning("seatbelt audit: could not reap warm-up process", exc_info=True)
+
+
 class LogStreamer:
     """Background log-stream subprocess feeding parsed audit records
     into ``run_dir/.audit/.sandbox-denials.jsonl``.
@@ -1053,24 +1076,19 @@ class LogStreamer:
             )
             return False
 
-        target_pid = warm_up.pid
-
-        # Explicit guard rather than assert — survives `python -O`.
-        if self._proc is None:
-            msg = "seatbelt_audit: internal invariant — log-stream proc not started"
-            raise RuntimeError(msg)
-        if self._proc.stdout is None:
-            try:
-                warm_up.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                warm_up.terminate()
-            return False
-
-        sel = _selectors.DefaultSelector()
-        sel.register(self._proc.stdout, _selectors.EVENT_READ)
-        deadline = time.monotonic() + _WARM_UP_TIMEOUT_S
+        sel = None
         seen = False
         try:
+            target_pid = warm_up.pid
+            # Explicit guard rather than assert — survives python -O.
+            if self._proc is None:
+                raise RuntimeError(
+                    "seatbelt_audit: internal invariant — log-stream proc not started")
+            if self._proc.stdout is None:
+                return False
+            sel = _selectors.DefaultSelector()
+            sel.register(self._proc.stdout, _selectors.EVENT_READ)
+            deadline = time.monotonic() + _WARM_UP_TIMEOUT_S
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1110,33 +1128,14 @@ class LogStreamer:
                 except ValueError:
                     continue
         finally:
-            sel.unregister(self._proc.stdout)
-            # On Linux DefaultSelector is an epoll FD; explicit
-            # close() releases the kernel-side FD immediately
-            # instead of waiting for GC. Long-lived audit scenarios
-            # that re-warm-up otherwise accumulate epoll FDs over
-            # the process lifetime.
-            sel.close()
-            # Reap the warm-up child. With (deny default) the exec
-            # itself is denied, so sandbox-exec exits ~immediately
-            # with non-zero. Wait briefly; terminate as a safety net.
             try:
-                warm_up.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    warm_up.terminate()
-                except OSError:
-                    # KEEP-SILENT (F070 per-site triage W21): we're in
-                    # the gate's finally-block cleanup. terminate() on
-                    # an already-dead process (sandbox-exec exits in
-                    # <50ms with deny-default) is the realistic case.
-                    # WARNING noise here would obscure the actual gate
-                    # outcome the caller cares about.
-                    pass
-                try:
-                    warm_up.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    pass
+                if sel is not None:
+                    # close() releases registrations too; unregister can
+                    # itself fail after partial setup or descriptor loss.
+                    with contextlib.suppress(Exception):
+                        sel.close()
+            finally:
+                _reap_warm_up(warm_up)
 
         return seen
 
