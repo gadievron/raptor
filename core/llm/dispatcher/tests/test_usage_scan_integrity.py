@@ -12,6 +12,8 @@ Hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import logging
@@ -332,9 +334,11 @@ class TestIdentityEncodingForced:
     def test_client_accept_encoding_replaced(
         self, fake_creds, tmp_path, client_header,
     ):
-        upstream = _EchoUpstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, _info = d.allocate_child("cc-enc", budget_usd=1.0)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=10.0) as client:
@@ -356,6 +360,3 @@ class TestIdentityEncodingForced:
                 if k.lower() == "accept-encoding"
             ]
             assert values == ["identity"]
-        finally:
-            upstream.shutdown()
-            d.shutdown()

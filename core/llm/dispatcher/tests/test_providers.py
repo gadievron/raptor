@@ -9,6 +9,8 @@ dummy header is stripped.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import os
 import threading
 import http.server
@@ -85,14 +87,14 @@ def test_registry_broker_roundtrip(all_providers_creds, tmp_path, broker):
     """New JSON rows automatically exercise the actual SDK/dispatcher boundary."""
     from core.llm.dispatcher.client import make_broker_client
 
-    upstream = _CaptiveUpstream()
-    d = _setup_with_provider_redirected(
-        all_providers_creds, tmp_path, broker.name, upstream.base_url,
-    )
-    try:
-        _, fd = d.allocate_worker(label=f"registry-{broker.name}")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+    with ExitStack() as cleanup:
+        upstream = _CaptiveUpstream()
+        cleanup.callback(upstream.shutdown)
+        d = _setup_with_provider_redirected(
+            all_providers_creds, tmp_path, broker.name, upstream.base_url,
+        )
+        cleanup.callback(d.shutdown)
+        token = _worker_token(d, label=f'registry-{broker.name}')
         if broker.protocol == "openai":
             with make_broker_client(broker.name, socket_path=str(d.socket_path),
                                     token=token, timeout=5) as client:
@@ -113,28 +115,37 @@ def test_registry_broker_roundtrip(all_providers_creds, tmp_path, broker):
         )
         assert _TOKEN_HEADER.lower() not in headers
         assert "dummy-not-used" not in str(headers)
-    finally:
-        upstream.shutdown()
-        d.shutdown()
 
 
 def _setup_with_provider_redirected(creds, tmp_path, provider: str, base_url: str):
     """Build a dispatcher and rewrite the chosen provider's
     upstream_base_url to point at the captive HTTP server."""
-    d = LLMDispatcher(
-        run_id=f"providers-{provider}",
-        creds=creds,
-        audit_path=tmp_path / "audit.jsonl",
-        token_ttl_s=3600, token_budget=10,
-    )
-    original = d._rules[provider]
-    d._rules[provider] = ProviderRule(
-        name=original.name,
-        upstream_base_url=base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
+    try:
+        d = LLMDispatcher(
+            run_id=f"providers-{provider}",
+            creds=creds,
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=3600, token_budget=10,
+        )
+        original = d._rules[provider]
+        d._rules[provider] = ProviderRule(
+            name=original.name,
+            upstream_base_url=base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+    except BaseException:
+        d.shutdown()
+        raise
     return d
+
+
+def _worker_token(d, *, label):
+    _, fd = d.allocate_worker(label=label)
+    try:
+        return os.read(fd, 64).decode().strip()
+    finally:
+        os.close(fd)
 
 
 def _post_via_dispatcher(d: LLMDispatcher, token: str, path: str, body: bytes,
@@ -151,14 +162,14 @@ def _post_via_dispatcher(d: LLMDispatcher, token: str, path: str, body: bytes,
 class TestAnthropicProvider:
 
     def test_x_api_key_injected_dummy_stripped(self, all_providers_creds, tmp_path):
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "anthropic", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="anthropic-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _setup_with_provider_redirected(
+                all_providers_creds, tmp_path, "anthropic", upstream.base_url,
+            )
+            cleanup.callback(d.shutdown)
+            token = _worker_token(d, label='anthropic-test')
             _post_via_dispatcher(
                 d, token, "http://_/anthropic/v1/messages",
                 b'{"x":1}',
@@ -168,9 +179,6 @@ class TestAnthropicProvider:
             assert sent.get("x-api-key") == "anthropic-real-NOT-LEAKED"
             assert sent.get("anthropic-version") == "2023-06-01"
             assert "x-raptor-token" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_caller_anthropic_version_honoured(
         self, all_providers_creds, tmp_path,
@@ -179,14 +187,14 @@ class TestAnthropicProvider:
         static rule's injected default must not clobber a
         worker-supplied value (the Bedrock leg already honours it —
         sibling parity). The credential header still always wins."""
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "anthropic", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="anthropic-version-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _setup_with_provider_redirected(
+                all_providers_creds, tmp_path, "anthropic", upstream.base_url,
+            )
+            cleanup.callback(d.shutdown)
+            token = _worker_token(d, label='anthropic-version-test')
             _post_via_dispatcher(
                 d, token, "http://_/anthropic/v1/messages",
                 b'{"x":1}',
@@ -196,23 +204,20 @@ class TestAnthropicProvider:
             sent = {k.lower(): v for k, v in upstream.captured["headers"].items()}
             assert sent.get("anthropic-version") == "2024-10-22"
             assert sent.get("x-api-key") == "anthropic-real-NOT-LEAKED"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 @pytest.mark.upstream_forward
 class TestOpenAIProvider:
 
     def test_authorization_bearer_injected(self, all_providers_creds, tmp_path):
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "openai", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="openai-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _setup_with_provider_redirected(
+                all_providers_creds, tmp_path, "openai", upstream.base_url,
+            )
+            cleanup.callback(d.shutdown)
+            token = _worker_token(d, label='openai-test')
             _post_via_dispatcher(
                 d, token, "http://_/openai/v1/chat/completions",
                 b'{"model":"gpt-5","messages":[]}',
@@ -224,23 +229,20 @@ class TestOpenAIProvider:
             # Path was forwarded under /v1/...
             assert upstream.captured["path"] == "/v1/chat/completions"
             assert "x-raptor-token" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 @pytest.mark.upstream_forward
 class TestGeminiProvider:
 
     def test_x_goog_api_key_injected_dummy_stripped(self, all_providers_creds, tmp_path):
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "gemini", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="gemini-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _setup_with_provider_redirected(
+                all_providers_creds, tmp_path, "gemini", upstream.base_url,
+            )
+            cleanup.callback(d.shutdown)
+            token = _worker_token(d, label='gemini-test')
             _post_via_dispatcher(
                 d, token, "http://_/gemini/v1beta/models/gemini-2.5-pro:generateContent",
                 b'{"contents":[]}',
@@ -252,9 +254,6 @@ class TestGeminiProvider:
             # Path forwarded under /v1beta/...
             assert upstream.captured["path"] == "/v1beta/models/gemini-2.5-pro:generateContent"
             assert "x-raptor-token" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestUnconfiguredProvider:
@@ -268,9 +267,7 @@ class TestUnconfiguredProvider:
             token_ttl_s=60, token_budget=5,
         )
         try:
-            _, fd = d.allocate_worker(label="unconf-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = _worker_token(d, label='unconf-test')
             r = _post_via_dispatcher(
                 d, token, "http://_/openai/v1/chat/completions",
                 b'{}', {},
@@ -290,9 +287,7 @@ class TestUnknownProviderPath:
             token_ttl_s=60, token_budget=5,
         )
         try:
-            _, fd = d.allocate_worker(label="unknown-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = _worker_token(d, label='unknown-test')
             r = _post_via_dispatcher(
                 d, token, "http://_/unknown-vendor/v1/things",
                 b'{}', {},
@@ -320,14 +315,14 @@ def test_bearer_provider_authorization_injected(
 ):
     """Bearer-auth aggregator: ``Authorization: Bearer <real>`` lands
     upstream; worker's dummy ``Authorization`` is stripped."""
-    upstream = _CaptiveUpstream()
-    d = _setup_with_provider_redirected(
-        all_providers_creds, tmp_path, provider, upstream.base_url,
-    )
-    try:
-        _, fd = d.allocate_worker(label=f"{provider}-test")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+    with ExitStack() as cleanup:
+        upstream = _CaptiveUpstream()
+        cleanup.callback(upstream.shutdown)
+        d = _setup_with_provider_redirected(
+            all_providers_creds, tmp_path, provider, upstream.base_url,
+        )
+        cleanup.callback(d.shutdown)
+        token = _worker_token(d, label=f'{provider}-test')
         _post_via_dispatcher(
             d, token, f"http://_/{provider}/{path_tail}",
             b'{"model":"x","messages":[]}',
@@ -342,9 +337,6 @@ def test_bearer_provider_authorization_injected(
         # Path forwarded verbatim under the path_tail.
         assert upstream.captured["path"] == f"/{path_tail}"
         assert "x-raptor-token" not in sent
-    finally:
-        upstream.shutdown()
-        d.shutdown()
 
 
 @pytest.mark.upstream_forward
@@ -356,14 +348,14 @@ class TestAzureOpenAIProvider:
         """Azure OpenAI uses ``api-key`` header (not Authorization).
         Worker's dummy ``api-key`` is stripped; dispatcher injects
         the real one."""
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "azure_openai", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="azure-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _setup_with_provider_redirected(
+                all_providers_creds, tmp_path, "azure_openai", upstream.base_url,
+            )
+            cleanup.callback(d.shutdown)
+            token = _worker_token(d, label='azure-test')
             _post_via_dispatcher(
                 d, token,
                 "http://_/azure_openai/openai/deployments/gpt-5/chat/completions"
@@ -376,9 +368,6 @@ class TestAzureOpenAIProvider:
             assert sent.get("api-key") != "dummy-stripped"
             # No Bearer auth — Azure doesn't use it.
             assert "authorization" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestAzureOpenAIWithoutEndpoint:
@@ -453,9 +442,7 @@ class TestNewProvidersUnconfiguredKeyReturns503:
             token_ttl_s=60, token_budget=5,
         )
         try:
-            _, fd = d.allocate_worker(label="unconf-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = _worker_token(d, label='unconf-test')
             r = _post_via_dispatcher(d, token, f"http://_{path}", b'{}', {})
             assert r.status_code == 503, (
                 f"{provider}: expected 503 with key unset, got "
