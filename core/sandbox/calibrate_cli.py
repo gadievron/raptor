@@ -185,7 +185,13 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         return _USAGE_EX
 
     if args.clear:
-        n = cal.clear_cache(bin_path)
+        try:
+            n = cal.clear_cache(bin_path)
+        except OSError as exc:
+            sys.stderr.write(
+                f"raptor-sandbox-calibrate: cannot clear profiles for {bin_path}: {exc}\n"
+            )
+            return _SOFTWARE_EX
         sys.stdout.write(
             f"cleared {n} profile(s) for {bin_path}\n"
         )
@@ -251,7 +257,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             f"raptor-sandbox-calibrate: {exc}\n"
         )
         return _USAGE_EX
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         sys.stderr.write(
             f"raptor-sandbox-calibrate: {exc}\n"
         )

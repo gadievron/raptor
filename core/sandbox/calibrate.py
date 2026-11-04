@@ -47,6 +47,8 @@ API:
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import hashlib
 import json
 import logging
@@ -59,7 +61,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
-from core.hash import sha256_file as _sha256_file
 from core.json import dumps_artifact, dumps_canonical
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,38 @@ class SandboxProfile:
 # ---------------------------------------------------------------------------
 
 
+
+
+
+def _sha256_file(path: Path) -> str:
+    """Fingerprint one regular binary without unbounded special-file reads."""
+    fd = None
+    try:
+        fd = os.open(
+            path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError(errno.EINVAL, "calibration binary is not a regular file", str(path))
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(fd, min(remaining, 1 << 20))
+            if not chunk:
+                raise OSError(errno.EIO, "calibration binary shortened while hashing", str(path))
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(fd, 1):
+            raise OSError(errno.EIO, "calibration binary grew while hashing", str(path))
+        after = os.fstat(fd)
+        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise OSError(errno.EIO, "calibration binary changed while hashing", str(path))
+        return digest.hexdigest()
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def _env_signature(env_keys: Iterable[str]) -> str:
@@ -436,6 +469,7 @@ def calibrate_binary(
 
     Raises:
         FileNotFoundError if bin_path doesn't exist.
+        OSError if the binary is unreadable, nonregular, or changes while hashing.
         RuntimeError if observe-mode failed to engage (no nonce
         produced — usually missing libseccomp / ptrace).
     """
