@@ -37,14 +37,16 @@ import json
 import logging
 import os
 import re
-import shutil
 import tarfile
 import tempfile
 import urllib.parse
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
+from core.atomic_fs import rmtree_hardened
+from core.run.scratch import scratch_dir
 from core.json.jsonc import load_jsonc
 from core.source.contained import read_contained
 
@@ -335,8 +337,14 @@ class SourceBuilder:
                 build_config=None,
                 error=f"unsafe product name: {product!r}",
             )
-        if target.exists():
-            shutil.rmtree(target)
+        if os.path.lexists(target) and (
+            not target.is_dir() or target.is_symlink() or not rmtree_hardened(target)
+        ):
+            return SourceBuildResult(
+                repo_dir=None, checked_out_tag=None, dockerfile_path=None,
+                dockerfile_text=None, build_config=None,
+                error="could not remove previous source checkout",
+            )
 
         if _is_commit_sha(version):
             outcome = self._clone_at_sha(normalized, target, version.lower())
@@ -381,10 +389,12 @@ class SourceBuilder:
     def cleanup(self) -> None:
         if not self.config.cleanup:
             return
+        pending = []
         for d in self._temp_dirs:
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
-        self._temp_dirs.clear()
+            if (os.path.lexists(d) and not d.is_dir()) or not rmtree_hardened(d):
+                pending.append(d)
+                logger.warning("source checkout cleanup incomplete: %s", d)
+        self._temp_dirs[:] = pending
 
     # -- internals ---------------------------------------------------------
 
@@ -516,8 +526,11 @@ class SourceBuilder:
         if tag is None:
             warnings.append(f"archive fallback: no tag matched {version!r}")
             return None
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
+        if os.path.lexists(target) and (
+            not target.is_dir() or target.is_symlink() or not rmtree_hardened(target)
+        ):
+            warnings.append("archive fallback: previous checkout could not be removed")
+            return None
         if not self._download_tarball(owner, repo, tag, target):
             warnings.append(
                 f"archive fallback: download or extract failed for tag {tag!r}"
@@ -558,7 +571,7 @@ class SourceBuilder:
         # path/query, and percent-encode the remainder. Host stays fixed
         # to codeload.github.com either way; this closes the
         # different-archive-than-asked-for path.
-        if not _SAFE_TAG_RE.fullmatch(tag):
+        if not _SAFE_TAG_RE.fullmatch(tag) or os.path.lexists(target):
             return False
         codeload_url = (
             "https://codeload.github.com/"
@@ -573,57 +586,48 @@ class SourceBuilder:
         if payload is None:
             return False
         try:
-            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
-                members = tf.getmembers()
-                if not members:
-                    return False
-                # Security: bound extraction to defeat a decompression bomb
-                # (tiny gzip -> enormous expansion). Over-cap -> refuse (cascade
-                # falls back to clone). Caps sit far above any real source repo.
-                if len(members) > _MAX_EXTRACT_MEMBERS:
-                    logger.warning(
-                        "source_build: tarball member count %d over cap %d — refusing extract",
-                        len(members),
-                        _MAX_EXTRACT_MEMBERS,
-                    )
-                    return False
-                total_size = sum(max(0, m.size) for m in members)
-                if total_size > _MAX_EXTRACT_BYTES:
-                    logger.warning(
-                        "source_build: tarball expands to %d B (cap %d) — refusing extract",
-                        total_size,
-                        _MAX_EXTRACT_BYTES,
-                    )
-                    return False
-                top_segment = members[0].name.split("/", 1)[0]
-                if not top_segment:
-                    return False
-                prefix = f"{top_segment}/"
-                target.mkdir(parents=True, exist_ok=True)
-                for m in members:
-                    if m.name == top_segment:
-                        continue
-                    if not m.name.startswith(prefix):
-                        continue
-                    rel = m.name[len(prefix) :]
-                    if not rel or ".." in Path(rel).parts:
-                        continue
-                    m.name = rel
-                    # filter="data" rejects symlinks pointing outside the
-                    # destination, absolute paths, setuid/sgid bits, and special
-                    # device files. Required by Python 3.12; 3.14 makes it the
-                    # default but the supported floor is 3.12.
-                    try:
-                        tf.extract(m, target, set_attrs=False, filter="data")
-                    except TypeError:
-                        if m.issym() or m.islnk():
+            with scratch_dir("cve-env-archive-", dir=target.parent) as scratch:
+                tree = scratch / "checkout"
+                with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
+                    members = []
+                    total_size = 0
+                    for member in tf:
+                        total_size += max(0, member.size)
+                        if len(members) >= _MAX_EXTRACT_MEMBERS or total_size > _MAX_EXTRACT_BYTES:
+                            logger.warning("source_build: archive exceeds extraction quotas")
+                            return False
+                        members.append(member)
+                    if not members:
+                        return False
+                    top_segment = members[0].name.split("/", 1)[0]
+                    if not top_segment:
+                        return False
+                    prefix = f"{top_segment}/"
+                    tree.mkdir()
+                    extracted_files = 0
+                    for m in members:
+                        if m.name == top_segment or not m.name.startswith(prefix):
                             continue
-                        if m.isdev() or m.isblk() or m.ischr() or m.isfifo():
+                        rel = m.name[len(prefix):]
+                        if not rel or ".." in Path(rel).parts:
                             continue
-                        if m.mode is not None:
-                            m.mode &= 0o777
-                        tf.extract(m, target, set_attrs=False)
-        except (tarfile.TarError, OSError):
+                        m.name = rel
+                        try:
+                            tf.extract(m, tree, set_attrs=False, filter="data")
+                        except TypeError:
+                            if m.issym() or m.islnk() or m.isdev() or m.isfifo():
+                                continue
+                            if m.mode is not None:
+                                m.mode &= 0o777
+                            tf.extract(m, tree, set_attrs=False)
+                        extracted_files += int(m.isfile())
+                    if not extracted_files:
+                        return False
+                # A concurrent nonempty checkout cannot be overwritten.
+                # The scratch context reclaims partial data on every error,
+                # including cancellation, without touching the final path.
+                os.rename(tree, target)
+        except (tarfile.TarError, OSError, EOFError, zlib.error):
             return False
         return True
 
@@ -631,19 +635,24 @@ class SourceBuilder:
         if not url.startswith(_GITHUB_HTTPS_PREFIX):
             logger.warning("refusing to clone non-GitHub URL: %s", url)
             return False
-        outcome = self._run_git(
-            ["git", "clone", "--depth", "1", url, str(target)], network=True
-        )
-        if outcome.timed_out:
-            logger.warning(
-                "git clone timed out after %ss: %s",
-                self.config.clone_timeout_seconds,
-                url,
-            )
-            if target.exists():
-                shutil.rmtree(target, ignore_errors=True)
+        if os.path.lexists(target):
             return False
-        return outcome.returncode == 0
+        complete = False
+        try:
+            outcome = self._run_git(
+                ["git", "clone", "--depth", "1", url, str(target)], network=True,
+            )
+            if outcome.timed_out:
+                logger.warning(
+                    "git clone timed out after %ss: %s",
+                    self.config.clone_timeout_seconds, url,
+                )
+                return False
+            complete = outcome.returncode == 0
+            return complete
+        finally:
+            if not complete:
+                rmtree_hardened(target)
 
     def _deepen(self, repo_dir: Path, new_depth: int) -> bool:
         cmd = (
@@ -682,26 +691,31 @@ class SourceBuilder:
         if not url.startswith(_GITHUB_HTTPS_PREFIX):
             warnings.append(f"refusing to clone non-GitHub URL: {url}")
             return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
-        outcome = self._run_git(["git", "clone", url, str(target)], network=True)
-        if outcome.timed_out:
-            warnings.append(
-                f"git clone (full) timed out after "
-                f"{self.config.clone_timeout_seconds}s for SHA checkout"
+        if os.path.lexists(target):
+            warnings.append("clone destination already exists")
+            return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
+        complete = False
+        try:
+            outcome = self._run_git(["git", "clone", url, str(target)], network=True)
+            if outcome.timed_out:
+                warnings.append(
+                    f"git clone (full) timed out after "
+                    f"{self.config.clone_timeout_seconds}s for SHA checkout"
+                )
+            elif outcome.returncode != 0:
+                warnings.append(
+                    f"git clone failed for SHA checkout: {outcome.stderr.strip()[:200]}"
+                )
+            elif not self._checkout(target, sha):
+                warnings.append(f"git checkout {sha[:10]}... failed")
+            else:
+                complete = True
+            return _CloneOutcome(
+                tag=sha if complete else None, warnings=warnings, needs_checkout=False,
             )
-            if target.exists():
-                shutil.rmtree(target, ignore_errors=True)
-            return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
-        if outcome.returncode != 0:
-            warnings.append(
-                f"git clone failed for SHA checkout: {outcome.stderr.strip()[:200]}"
-            )
-            if target.exists():
-                shutil.rmtree(target, ignore_errors=True)
-            return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
-        if not self._checkout(target, sha):
-            warnings.append(f"git checkout {sha[:10]}... failed")
-            return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
-        return _CloneOutcome(tag=sha, warnings=warnings, needs_checkout=False)
+        finally:
+            if not complete:
+                rmtree_hardened(target)
 
     def _checkout(self, repo_dir: Path, tag: str) -> bool:
         # The tag comes from the untrusted clone's own ref list (git refs
@@ -963,10 +977,12 @@ def _cleanup_retained_dirs() -> None:
     atexit cleanup is best-effort; not called on SIGKILL. In long bench
     runs, monitor /tmp for orphaned cve-env- dirs.
     """
-    while _RETAINED_DIRS:
-        d = _RETAINED_DIRS.pop()
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
+    pending = []
+    for d in _RETAINED_DIRS:
+        if (os.path.lexists(d) and not d.is_dir()) or not rmtree_hardened(d):
+            pending.append(d)
+            logger.warning("retained checkout cleanup incomplete: %s", d)
+    _RETAINED_DIRS[:] = pending
 
 
 atexit.register(_cleanup_retained_dirs)
