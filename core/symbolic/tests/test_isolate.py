@@ -6,6 +6,7 @@ frames, restricted result decoding, and deadline enforcement.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import tempfile
 from pathlib import Path
@@ -440,7 +441,9 @@ def test_high_fd_frame_read_bounded_past_fd_setsize():
         resource.setrlimit(resource.RLIMIT_NOFILE, (high_fd + 64, hard))
     try:
         reader, writer = _pipe_pair()
-        try:
+        with ExitStack() as streams:
+            streams.callback(writer.close)
+            streams.callback(reader.close)
             # F_DUPFD (lowest free fd >= high_fd) — never clobbers an
             # fd some other part of the test process owns.
             dup = fcntl.fcntl(reader.fileno(), fcntl.F_DUPFD, high_fd)
@@ -462,9 +465,6 @@ def test_high_fd_frame_read_bounded_past_fd_setsize():
                 ) is None
             finally:
                 os.close(dup)
-        finally:
-            reader.close()
-            writer.close()
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
