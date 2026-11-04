@@ -9,6 +9,7 @@ upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import http.server
 import json
 import os
@@ -117,6 +118,9 @@ class _Upstream:
     def shutdown(self):
         self._server.shutdown()
         self._server.server_close()
+        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            raise RuntimeError("relay upstream serving thread did not stop")
 
 
 @pytest.mark.parametrize("fault", ["construction", "start"])
@@ -245,18 +249,17 @@ class TestRelayLimits:
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_RELAY_MAX_BYTES", "4096",
         )
-        upstream = _Upstream("firehose")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("firehose")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             received = _post(d, token)
             # The relay stopped within a chunk of the cap instead of
             # forwarding all 64 KiB.
             assert len(received) < 64 * 1024
             assert _wait_relay_abort(d)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_cap_abort_mid_sse_emits_terminal_error_event(
         self, fake_creds, tmp_path, monkeypatch,
@@ -270,9 +273,11 @@ class TestRelayLimits:
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_RELAY_MAX_BYTES", "4096",
         )
-        upstream = _Upstream("sse_firehose")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("sse_firehose")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             received = _post(d, token)
             # The 200 + partial body had been sent before the abort.
@@ -295,9 +300,6 @@ class TestRelayLimits:
             assert "relay cap" in payload["error"]["message"]
             # Audit row still records the abort.
             assert _wait_relay_abort(d)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_cap_abort_mid_json_closes_without_http_error_message(
         self, fake_creds, tmp_path, monkeypatch,
@@ -309,9 +311,11 @@ class TestRelayLimits:
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_RELAY_MAX_BYTES", "4096",
         )
-        upstream = _Upstream("firehose")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("firehose")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             received = _post(d, token)
             assert b"HTTP/1.0" not in received
@@ -325,9 +329,6 @@ class TestRelayLimits:
             # never a truncated-but-apparently-successful payload.
             assert set(received) <= {ord("x")}
             assert _wait_relay_abort(d)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_total_deadline_aborts_drip_upstream(
         self, fake_creds, tmp_path, monkeypatch,
@@ -335,9 +336,11 @@ class TestRelayLimits:
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_RELAY_DEADLINE_S", "1",
         )
-        upstream = _Upstream("drip")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _Upstream("drip")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             start = time.monotonic()
             _post(d, token)
@@ -346,6 +349,41 @@ class TestRelayLimits:
             # the 1s total deadline must cut it well short.
             assert elapsed < 4.0
             assert _wait_relay_abort(d)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
+
+
+@pytest.mark.parametrize("test_name", [
+    "test_byte_cap_aborts_firehose_upstream",
+    "test_cap_abort_mid_sse_emits_terminal_error_event",
+    "test_cap_abort_mid_json_closes_without_http_error_message",
+    "test_total_deadline_aborts_drip_upstream",
+])
+def test_dispatcher_setup_failure_stops_upstream(
+    fake_creds, tmp_path, monkeypatch, test_name,
+):
+    import sys
+
+    upstreams = []
+    real_upstream = _Upstream
+
+    def upstream(mode):
+        instance = real_upstream(mode)
+        upstreams.append(instance)
+        return instance
+
+    def fail_dispatcher(*args, **kwargs):
+        raise RuntimeError("injected dispatcher setup failure")
+
+    module = sys.modules[__name__]
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(module, "_Upstream", upstream)
+            patcher.setattr(module, "_make_dispatcher", fail_dispatcher)
+            with pytest.raises(RuntimeError, match="injected dispatcher setup failure"):
+                getattr(TestRelayLimits(), test_name)(fake_creds, tmp_path, patcher)
+        assert len(upstreams) == 1
+        assert not upstreams[0]._thread.is_alive(), "setup failure left upstream running"
+        assert upstreams[0]._server.socket.fileno() == -1
+    finally:
+        # Reclaim the actual server even when the regression assertion fails.
+        for instance in upstreams:
+            instance.shutdown()
