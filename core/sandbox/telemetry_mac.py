@@ -225,11 +225,18 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
     try:
         fd = os.open(
             tamper_marker_path(),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+            | os.O_NONBLOCK,
             0o600,
         )
         try:
-            os.write(fd, line.encode("utf-8"))
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "tamper marker is not a regular file")
+            data = line.encode("utf-8")
+            if os.write(fd, data) != len(data):
+                # Do not retry fragments: concurrent appenders may have
+                # already written another marker after this partial one.
+                raise OSError(errno.EIO, "short tamper marker write")
         finally:
             os.close(fd)
     except OSError:
@@ -245,14 +252,25 @@ def tamper_events() -> list[dict]:
     triage). Best-effort: unparseable lines are skipped."""
     events: list[dict] = []
     try:
-        with open(tamper_marker_path(), encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict):
-                    events.append(rec)
+        fd = os.open(
+            tamper_marker_path(),
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return []
+            # Decode per line so one damaged UTF-8 record cannot hide
+            # the intact records that follow it.
+            with os.fdopen(fd, "rb", closefd=False) as fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line.decode("utf-8"))
+                    except (ValueError, RecursionError):
+                        continue
+                    if isinstance(rec, dict):
+                        events.append(rec)
+        finally:
+            os.close(fd)
     except OSError:
         return []
     return events
