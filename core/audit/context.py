@@ -3709,11 +3709,11 @@ def _extract_type_definition_uncached(
 
     # One search per line; preserve the alternatives and their order.
     # No DOTALL: the multiline typedef fallback remains separate below.
-    # (?=\S) pins the typedef whitespace run to the tail, avoiding the
-    # quadratic whitespace-vs-dot-star split of an unguarded pattern.
+    # Possessive whitespace makes the typedef prefix non-backtracking;
+    # the non-whitespace guard preserves the existing match language.
     line_pattern = re.compile(
         rf'(?:^\s*(?:typedef\s+)?struct\s+{re.escape(type_name)}\s*\{{|'
-        rf'^\s*typedef\s+(?=\S).*\b{re.escape(type_name)}\s*;|'
+        rf'^\s*typedef\s++(?=\S).*\b{re.escape(type_name)}\s*;|'
         rf'^\s*(?:typedef\s+)?enum\s+{re.escape(type_name)}\s*\{{)',
     )
 
