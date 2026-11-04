@@ -10,6 +10,10 @@ import tarfile
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+DEBIAN_SPEC = importlib.util.spec_from_file_location("debian_cargo_notices", ROOT / ".devcontainer/debian_cargo_notices.py")
+debian = importlib.util.module_from_spec(DEBIAN_SPEC)
+sys.modules[DEBIAN_SPEC.name] = debian
+DEBIAN_SPEC.loader.exec_module(debian)
 SPEC = importlib.util.spec_from_file_location("cargo_notice_inventory", ROOT / ".devcontainer/cargo_notice_inventory.py")
 tool = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = tool
@@ -158,6 +162,8 @@ def test_missing_vcs_recovery_requires_all_published_payload_and_original_manife
     calls = []
     def fetch(url, **kwargs):
         calls.append(url)
+        if 'deb.debian.org' in url:
+            return b''
         if 'static.crates.io' in url:
             return raw
         if '/commits?' in url:
@@ -175,3 +181,32 @@ def test_missing_vcs_recovery_requires_all_published_payload_and_original_manife
     else:
         assert 'notice_source_match' not in row
         assert not result.contents
+
+
+def test_distributor_notice_coverage_remains_distinct_from_upstream_text(monkeypatch):
+    raw, lock = case({}, 'repository="https://github.com/publisher/project"\n')
+    body = b'Unchanged distributor-published copyright and licence text'
+    monkeypatch.setattr(tool, '_matched_upstream', lambda *args: ({}, None))
+    proof = dict(publisher='Debian', packaging_archive_url='https://deb.debian.org/debian/pool/main/r/rust-example/metadata.tar.xz')
+    monkeypatch.setattr(sys.modules['debian_cargo_notices'], 'recover_debian_notice', lambda *args: (proof, body))
+    result = tool.collect_cargo_notices(lock, lambda *args, **kwargs: raw)
+    assert result.summary['captured'] == result.summary['distributor_notices'] == 1
+    assert result.summary['metadata_only'] == result.summary['unavailable'] == 0
+    row = json.loads(result.inventory)['packages'][0]
+    assert row['status'] == 'distributor_notice_captured'
+    assert row['notices'][0]['origin'] == 'debian_distributor_notice'
+    assert list(result.contents.values()) == [body]
+
+
+def test_distributor_transport_failure_preserves_other_package_notices(monkeypatch):
+    import http.client
+    good, lock = case()
+    bad = source({'Cargo.toml': b'[package]\nname="missing"\nversion="1.0.0"\nlicense="MIT"\nrepository="https://github.com/publisher/project"\n'})
+    lock += ('\n[[package]]\nname="missing"\nversion="1.0.0"\nsource="' + tool.REGISTRY + '"\nchecksum="' + hashlib.sha256(bad).hexdigest() + '"\n').encode()
+    monkeypatch.setattr(tool, '_matched_upstream', lambda *args: ({}, None))
+    def fail(*args):
+        raise http.client.IncompleteRead(b'partial index')
+    monkeypatch.setattr(sys.modules['debian_cargo_notices'], 'recover_debian_notice', fail)
+    result = tool.collect_cargo_notices(lock, lambda url, **kwargs: bad if '/missing/' in url else good)
+    assert result.summary['captured'] == result.summary['unavailable'] == 1
+    assert list(result.contents.values()) == [b'Publisher copyright and original grant']

@@ -540,3 +540,28 @@ def test_rust_notice_summary_keeps_collection_separate_from_installed_packages(t
         assert 'Rust standard-library notice candidates' in tool.markdown(report)
         assert 'do not establish the compiler' in tool.markdown(report)
         assert any('title=Rust standard-library notice candidates' in line for line in tool.annotations(report)) == (status == 'unavailable')
+
+
+@pytest.mark.parametrize('distributor', [3,4,'3'])
+def test_distributor_notice_count_is_separate_and_validated(tmp_path, distributor):
+    _, provenance, digest = inputs(tmp_path)
+    receipt = dict(name='uv', version='0.7.22', status='unavailable', files=[], dependency_notices=dict(
+        candidates=3, captured=3, distributor_notices=distributor, metadata_only=0, unavailable=0))
+    raw = json.dumps(receipt).encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    directory = tmp_path / 'prepared/notices/sha256'
+    directory.mkdir(parents=True)
+    (directory / sha).write_bytes(raw)
+    provenance['notice_evidence']['unassociated_files'] = [dict(
+        path='/usr/share/doc/raptor-native-notices/uv/NOTICE-PROVENANCE.json', sha256=sha,
+        content_kind='notice_candidate', catalogue_layer_diff_id='layer')]
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    if type(distributor) is int and distributor == 3:
+        assert 'Distributor notices' in tool.markdown(report)
+        assert '| uv | 3 | 0 | 3 | 0 | 0 |' in tool.markdown(report)
+        assert 'distinct from upstream-authored text' in tool.markdown(report)
+        assert not any('title=Native dependency notice candidates' in line for line in tool.annotations(report))
+        assert report.metrics.packages == 1 and report.metrics.notice_gap_packages == 0
+    else:
+        assert report.inventory_errors and not report.native_notice_collections

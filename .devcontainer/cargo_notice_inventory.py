@@ -9,6 +9,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import hashlib
+import http.client
 import io
 import json
 from pathlib import PurePosixPath
@@ -316,6 +317,12 @@ def _candidate(package, fetch, header_reader):
             notices, proof = _matched_upstream(raw, metadata, fetch)
             if proof is not None:
                 result["notice_source_match"] = proof
+        if not notices and source == REGISTRY:
+            from debian_cargo_notices import recover_debian_notice
+            proof, body = recover_debian_notice(name, version, raw, declared, metadata.get("repository"), fetch)
+            if proof is not None:
+                result["distributor_notice"] = proof
+                notices = {proof["packaging_archive_url"] + "#debian/copyright": (body, "debian_distributor_notice")}
         contents = {}
         for path, (body, origin) in notices.items():
             body.decode("utf-8")
@@ -325,11 +332,11 @@ def _candidate(package, fetch, header_reader):
             if sha not in contents:
                 result["notices"].append({"source_member": path, "sha256": sha, "origin": origin})
                 contents[sha] = body
-        result["status"] = "notice_candidates_captured" if contents else "metadata_only"
+        result["status"] = ("distributor_notice_captured" if result.get("distributor_notice") else "notice_candidates_captured") if contents else "metadata_only"
         if not contents:
             result["gap"] = "No original notice text located; publisher license declaration retained"
         return result, contents
-    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, EOFError, RecursionError) as error:
+    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, EOFError, RecursionError, http.client.HTTPException) as error:
         result["error"] = type(error).__name__ + ": " + str(error)[:400]
         return result, {}
 
@@ -359,7 +366,9 @@ def collect_cargo_notices(lock, fetch, header_reader=None):
     if len(raw) > MAX_INVENTORY:
         raise ValueError("Cargo source inventory exceeds byte budget")
     records = [{"file": filename, "sha256": filename[8:-4]} for filename in sorted(contents)]
-    summary = {"candidates": len(rows), "captured": sum(r["status"] == "notice_candidates_captured" for r in rows),
+    summary = {"candidates": len(rows), "captured": sum(r["status"] in {"notice_candidates_captured", "distributor_notice_captured"} for r in rows),
                "metadata_only": sum(r["status"] == "metadata_only" for r in rows),
                "unavailable": sum(r["status"] == "unavailable" for r in rows), "scope": "external Cargo.lock candidates"}
+    if any(r["status"] == "distributor_notice_captured" for r in rows):
+        summary["distributor_notices"] = sum(r["status"] == "distributor_notice_captured" for r in rows)
     return CargoNotices(records, contents, raw, summary)
