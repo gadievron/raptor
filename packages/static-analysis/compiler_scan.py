@@ -88,7 +88,7 @@ from core.audit.compiler_sweep import (
 from core.audit.run_memo import BoundedMemo
 from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
-    CompilerInvocationError, CompilerRequest, run_compiler_analysis,
+    CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, WorkBudget, bounded_futures, positive_seconds
 from core.detectors.setup import AnalysisSetup
@@ -424,6 +424,11 @@ def analyze_tu(
                 ),
             ),
             sandbox_run,
+        )
+    except CompilerDiagnosticError as exc:
+        return TuDiagnostics(
+            rel_path, ok=False, compiler=compiler_name,
+            reason=f"analyzer diagnostics unavailable: {exc}",
         )
     except CompilerInvocationError as exc:
         if isinstance(exc.error, subprocess.TimeoutExpired):

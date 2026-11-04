@@ -471,6 +471,10 @@ When `/audit` checks a hypothesis with a compiler analyzer, a warning from
 a recognized checker whose wording cannot be classified remains inconclusive.
 It is not treated as analyzer silence or as confirmation of the hypothesis.
 
+Missing or malformed GCC diagnostic output is reported as an analysis error
+or scan coverage limitation. It cannot establish a clean result, and `/audit`
+retries the analyzer if a later hypothesis needs the same translation unit.
+
 ## Output
 
 ### SARIF Files
