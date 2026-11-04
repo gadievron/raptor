@@ -4,6 +4,9 @@ import threading
 
 
 def _stop_serving(server, thread):
+    # shutdown() waits forever if serve_forever() never started.
+    if thread.ident is None:
+        return
     try:
         server.shutdown()
     finally:
@@ -14,8 +17,12 @@ def _stop_serving(server, thread):
 
 def start_http_server(server, add_cleanup):
     """Register ownership before starting a serving loop; return its thread."""
-    add_cleanup(server.server_close)
+    try:
+        add_cleanup(server.server_close)
+    except BaseException:
+        server.server_close()
+        raise
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     add_cleanup(_stop_serving, server, thread)
+    thread.start()
     return thread
