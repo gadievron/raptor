@@ -175,6 +175,12 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
             "verified as tracer-written. Treat as unverified signal."
         )
 
+    if getattr(profile, "capture_incomplete", False):
+        parts.append(
+            "\n⚠️  audit capture INCOMPLETE — the reader failed or did not "
+            "drain before shutdown; observed paths and connections may be missing."
+        )
+
     # Surface budget truncation FIRST — if the probe hit any cap,
     # the rest of the summary is incomplete and operators need to
     # know before they reason about counts. The drops-by-category
@@ -242,6 +248,7 @@ def _profile_to_json(profile, *, run_dir: Path, kept: bool,
             _connect_target_to_dict(t) for t in profile.connect_targets
         ],
         "budget_truncated": bool(profile.budget_truncated),
+        "capture_incomplete": bool(getattr(profile, "capture_incomplete", False)),
         "dropped_by_category": dict(profile.dropped_by_category),
         # False when the run produced no per-run nonce (degraded
         # audit) — downstream consumers must demote such profiles.

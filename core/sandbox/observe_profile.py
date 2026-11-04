@@ -261,6 +261,9 @@ class ObserveProfile:
         could have learned the nonce and minted matching records.
         Consumers deriving allowlists from this profile should treat
         it as unauthenticated observation, not verified evidence.
+    capture_incomplete
+        True when an accepted audit summary reports reader failure or an
+        undrained stream. Independent of budget drops; sticky across merges.
     """
     paths_read: list = field(default_factory=list)
     paths_written: list = field(default_factory=list)
@@ -269,6 +272,8 @@ class ObserveProfile:
     budget_truncated: bool = False
     dropped_by_category: dict = field(default_factory=dict)
     nonce_trusted: bool = True
+    # Reader failure or an undrained stream, independently of budget drops.
+    capture_incomplete: bool = False
 
     def merge(self, other: ObserveProfile) -> None:
         """In-place stable union of observations from multiple probe runs."""
@@ -286,6 +291,8 @@ class ObserveProfile:
                     seen.add(item)
         if other.budget_truncated:
             self.budget_truncated = True
+        if other.capture_incomplete:
+            self.capture_incomplete = True
         for cat, count in other.dropped_by_category.items():
             self.dropped_by_category[cat] = (
                 self.dropped_by_category.get(cat, 0) + count
@@ -653,6 +660,8 @@ def parse_observe_log(run_dir, *,
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
+            if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
+                profile.capture_incomplete = True
             dropped = rec.get("dropped_by_category") or {}
             if isinstance(dropped, dict) and dropped:
                 # The writers emit nonnegative integer counts.
