@@ -87,6 +87,7 @@ if sys.platform == 'linux':
 
 @pytest.mark.parametrize('waived', [False, True])
 def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch, waived, record_property):
+    pytest.importorskip('playwright.sync_api', reason='optional Playwright dependency is not installed')
     from packages.web._browser_sandbox import macos_nested_seatbelt_available
     if sys.platform == 'darwin' and not waived and not macos_nested_seatbelt_available():
         from packages.web.browser import BrowserEngine
