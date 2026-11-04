@@ -436,7 +436,10 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
                 print(f"[*] Unpacked {stats['format']} archive: {stats['files']} "
                       f"files{drop_note} (cache {sha[:12]})")
     except Exception as exc:  # noqa: BLE001 — refuse failed acquisition
-        print(f"✗ archive extraction failed for {target}: {exc}", file=sys.stderr)
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(sanitise_for_terminal(
+            f"✗ archive extraction failed for {target}: {exc}", max_len=1000,
+        ), file=sys.stderr)
         return None
 
     # Acquisition stamp only — {source, archive_sha256, archive_name, format}.
