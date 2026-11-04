@@ -130,13 +130,51 @@ def _walk(root: Path, result: EvictionResult) -> Iterator[tuple[Path, os.stat_re
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
-                    st = entry.stat(follow_symlinks=False)
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        result.errors += 1
+                        continue
                     if stat.S_ISDIR(st.st_mode):
                         stack.append(Path(entry.path))
                     elif stat.S_ISREG(st.st_mode):
                         yield Path(entry.path), st
         except OSError:
             result.errors += 1
+
+
+def _is_database(path: Path) -> bool:
+    """Keep database files/sidecars without pinning ordinary JSON cache keys.
+
+    Names such as npm-meta:thing.db.json are ordinary cache entries. For
+    database-like JSON names, inspect only the bounded SQLite header so an
+    actual database with a JSON suffix remains protected. An unreadable or
+    replaced entry stays protected; never follow a link or wait on a FIFO.
+    """
+    name = path.name.lower()
+    if not any(part in name for part in ('.sqlite', '.db')):
+        return False
+    if not name.endswith('.json'):
+        return True
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                     | getattr(os, 'O_NOATIME', 0))
+        try:
+            info = os.fstat(fd)
+            # A newly opened SQLite database may still be an empty file.
+            if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+                return True
+            header = bytearray()
+            while len(header) < 16:
+                chunk = os.read(fd, 16 - len(header))
+                if not chunk:
+                    break
+                header.extend(chunk)
+            return header == b'SQLite format 3\x00'
+        finally:
+            os.close(fd)
+    except OSError:
+        return True
 
 
 def _units(root: Path, result: EvictionResult) -> list[_Unit]:
@@ -154,11 +192,15 @@ def _units(root: Path, result: EvictionResult) -> list[_Unit]:
                         continue
                     if directory == root and entry.name in {'fingerprints', 'stress', 'inventory'}:
                         continue
-                    st = entry.stat(follow_symlinks=False)
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        result.errors += 1
+                        continue
                     if stat.S_ISDIR(st.st_mode):
                         stack.append(p)
                     elif stat.S_ISREG(st.st_mode):
-                        if any(s in entry.name for s in ('.sqlite', '.db')):
+                        if _is_database(p):
                             continue
                         units.append(_Unit(p, st.st_size, st.st_mtime,
                                            max(st.st_atime, st.st_mtime)))
@@ -173,10 +215,19 @@ def _units(root: Path, result: EvictionResult) -> list[_Unit]:
             continue
         if stress and (root / 'stress').is_symlink():
             continue
-        for project in namespace.iterdir():
-            if project.is_symlink() or not project.is_dir():
+        try:
+            projects = list(namespace.iterdir())
+        except OSError:
+            result.errors += 1
+            continue
+        for project in projects:
+            try:
+                if project.is_symlink() or not project.is_dir():
+                    continue
+                st = project.stat()
+            except OSError:
+                result.errors += 1
                 continue
-            st = project.stat()
             size, count, newest, used = 0, 0, st.st_mtime, st.st_mtime
             for _, info in _walk(project, result):
                 size += info.st_size
