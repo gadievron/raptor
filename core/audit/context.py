@@ -3571,11 +3571,15 @@ def _resolve_types(
     source: str,
     max_types: int = 5,
 ) -> list[dict[str, Any]]:
-    """Find struct/typedef definitions for types used in this function.
+    """Find source declarations for types used in this function.
 
     Extracts non-builtin type names from parameter types and source,
     then searches header files in the target for their definitions.
     """
+    if file_path.endswith(".go"):
+        from .go_type_context import resolve_go_types
+
+        return resolve_go_types(target_path, file_path, metadata, source, max_types)
     type_names: set = set()
 
     for p in metadata.get("parameters", []):
