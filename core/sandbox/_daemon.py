@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
+import errno
 import json
 import os
 import re
@@ -124,19 +125,25 @@ def _read_frame(fd: int) -> dict | None:
     while len(hdr) < 4:
         chunk = os.read(fd, 4 - len(hdr))
         if not chunk:
+            if hdr:
+                raise EOFError(f"truncated RPC header: {len(hdr)} of 4 bytes")
             return None
         hdr += chunk
     (length,) = struct.unpack("!I", hdr)
     if length > 64 * 1024 * 1024:
         msg = f"frame too large: {length}"
         raise ValueError(msg)
-    body = b""
+    body = bytearray()
     while len(body) < length:
         chunk = os.read(fd, length - len(body))
         if not chunk:
-            return None
-        body += chunk
-    return json.loads(body.decode("utf-8"))
+            raise EOFError(
+                f"truncated RPC body: {len(body)} of {length} bytes")
+        body.extend(chunk)
+    frame = json.loads(body.decode("utf-8"))
+    if not isinstance(frame, dict):
+        raise ValueError("RPC frame must contain a JSON object")
+    return frame
 
 
 def _write_frame(fd: int, payload: dict) -> None:
@@ -147,6 +154,8 @@ def _write_frame(fd: int, payload: dict) -> None:
     view = memoryview(hdr + body)
     while view:
         n = os.write(fd, view)
+        if n <= 0:
+            raise OSError(errno.EIO, "RPC frame write made no progress")
         view = view[n:]
 
 
@@ -1360,7 +1369,7 @@ def _run_one_shot() -> int:
         _write_frame(out_fd, {"ok": False, "error": "empty stdin"})
         return 1
     cmd = frame.get("cmd")
-    handler = DISPATCH.get(cmd)  # type: ignore[arg-type]
+    handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
     if handler is None:
         _write_frame(out_fd, _echo_rid(frame, {
             "ok": False, "error": f"unknown cmd {cmd!r}"}))
@@ -1439,7 +1448,7 @@ def main() -> int:
                 _write_frame(out_fd, _echo_rid(frame, {"ok": True,
                                                        "closed": True}))
                 return 0
-            handler = DISPATCH.get(cmd)  # type: ignore[arg-type]
+            handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
             if handler is None:
                 _write_frame(out_fd, _echo_rid(frame, {
                     "ok": False, "error": f"unknown cmd {cmd!r}"}))
