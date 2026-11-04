@@ -178,18 +178,17 @@ class ShebangRouteTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=60, env=env,
             )
             potent = _tripwire_lines(potency_trip) == 1
-        if not potent:
-            with tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                env = _base_env(tmp)
-                tripwire = self._plant_user_site_hook(tmp, env)
+            # Reuse the measured hook and HOME; each surface must leave
+            # the tripwire absent after clearing the potency observation.
+            potency_trip.unlink(missing_ok=True)
+            if not potent:
                 # Vacuity, asserted: bare python3 does not load the
                 # hook in this environment either.
                 subprocess.run(
                     ["python3", "-c", "pass"],
                     capture_output=True, text=True, timeout=60, env=env,
                 )
-                self.assertEqual(_tripwire_lines(tripwire), 0)
+                self.assertEqual(_tripwire_lines(potency_trip), 0)
                 # Mechanism: -I forces user site off unconditionally.
                 flags = subprocess.run(
                     ["python3", "-I", "-c",
@@ -197,26 +196,22 @@ class ShebangRouteTests(unittest.TestCase):
                     capture_output=True, text=True, timeout=60, env=env,
                 )
                 self.assertEqual(flags.stdout.strip(), "1")
-            return
-        for name in _surface_names():
-            with self.subTest(surface=name), \
-                    tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                env = _base_env(tmp)
-                tripwire = self._plant_user_site_hook(tmp, env)
-                args, fragment = SURFACES[name]
-                proc = _run([self._script(name), *args], env)
-                self.assertEqual(
-                    _tripwire_lines(tripwire), 0,
-                    msg=f"{name}: the shebang route processed the user "
-                        f"site (zero-variable forge shape)\n"
-                        f"{proc.stderr}",
-                )
-                self.assertIn(
-                    fragment, proc.stdout + proc.stderr,
-                    msg=f"{name}: normal operation broken\n"
-                        f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}",
-                )
+                return
+            for name in _surface_names():
+                with self.subTest(surface=name):
+                    args, fragment = SURFACES[name]
+                    proc = _run([self._script(name), *args], env)
+                    self.assertEqual(
+                        _tripwire_lines(potency_trip), 0,
+                        msg=f"{name}: the shebang route processed the user "
+                            f"site (zero-variable forge shape)\n"
+                            f"{proc.stderr}",
+                    )
+                    self.assertIn(
+                        fragment, proc.stdout + proc.stderr,
+                        msg=f"{name}: normal operation broken\n"
+                            f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}",
+                    )
 
 
 class PythonRouteTests(unittest.TestCase):
