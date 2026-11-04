@@ -47,6 +47,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,7 @@ from urllib.parse import urlsplit
 from core.atomic_fs import write_text_atomically
 from core.json import load_json
 from core.logging import get_logger
+from core.run.scratch import scratch_dir
 
 # Same ceiling as the scanner's other reads of run-dir JSON documents.
 from core.coverage.record import RUN_ARTIFACT_MAX_BYTES as _MAX_BYTES
@@ -474,32 +476,45 @@ def seed_scan_dir(prior_scan: Path, new_scan: Path) -> int:
     loudly, as does nesting deeper than :data:`SEED_MAX_DEPTH`
     (child-authored depth must not drive the walk into pathological
     trees). On any failure — refusal, OS error, or anything else —
-    the partially seeded dir is removed: a refused resume leaves no
-    hostile residue in the new run dir.
+    private partial copies are removed. Only a completed copy is renamed
+    into the new scan directory; refused resumes never remove or populate
+    an existing destination. Source and destination must not overlap.
     """
     prior_scan = Path(prior_scan)
     new_scan = Path(new_scan)
-    if new_scan.exists() and any(new_scan.iterdir()):
-        raise OpenAntResumeError(
-            f"--resume: refusing to seed into non-empty {new_scan}")
     try:
-        new_scan.mkdir(parents=True, exist_ok=True)
-        _copy_regular_tree(prior_scan, new_scan)
+        source = prior_scan.resolve()
+        destination = new_scan.resolve()
+        if (source == destination or source in destination.parents
+                or destination in source.parents):
+            raise OpenAntResumeError("--resume: source and destination must not overlap")
+        try:
+            previous = new_scan.lstat()
+        except FileNotFoundError:
+            previous = None
+        if previous is not None:
+            if not stat.S_ISDIR(previous.st_mode):
+                raise OpenAntResumeError("--resume: destination must be a real directory")
+            if any(new_scan.iterdir()):
+                raise OpenAntResumeError(
+                    f"--resume: refusing to seed into non-empty {new_scan}")
+        with scratch_dir("raptor-openant-seed-", dir=new_scan.parent) as scratch:
+            tree = scratch / "scan"
+            tree.mkdir()
+            _copy_regular_tree(prior_scan, tree)
+            count = sum(1 for _ in tree.iterdir())
+            if previous is not None:
+                tree.chmod(stat.S_IMODE(previous.st_mode))
+            # This refuses any populated directory or non-directory that
+            # appeared during the copy. Never delete a replacement on error.
+            os.rename(tree, new_scan)
+        return count
     except OpenAntResumeError:
-        shutil.rmtree(new_scan, ignore_errors=True)
         raise
-    except (OSError, shutil.Error) as e:
-        shutil.rmtree(new_scan, ignore_errors=True)
+    except (OSError, shutil.Error, RuntimeError) as exc:
         raise OpenAntResumeError(
-            f"--resume: seeding from {prior_scan} failed ({e}); the "
-            f"partially-seeded run dir was removed") from e
-    except BaseException:
-        # The no-residue contract holds for EVERY exception type
-        # (interpreter limits, an interrupt landing mid-copy), not
-        # just the shapes wrapped into a refusal above.
-        shutil.rmtree(new_scan, ignore_errors=True)
-        raise
-    return sum(1 for _ in new_scan.iterdir())
+            f"--resume: seeding from {prior_scan} failed ({exc}); "
+            "the private partial seed was discarded") from exc
 
 
 def _refuse_entry(kind: str, name: str) -> None:
@@ -605,13 +620,17 @@ def _copy_regular_file(src_name: str, dst: Path, *, dir_fd: int) -> None:
         st = os.fstat(in_fd)
         if not stat_mod.S_ISREG(st.st_mode):
             _refuse_entry("special file (fifo/device/socket)", src_name)
-    except BaseException:
+        # Keep raw-fd ownership through stream setup as well as copying.
+        # fdopen can itself fail before a context manager owns the fd.
+        with os.fdopen(in_fd, "rb", closefd=False) as inp:
+            out_fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            try:
+                with os.fdopen(out_fd, "wb", closefd=False) as out:
+                    shutil.copyfileobj(inp, out)
+            finally:
+                os.close(out_fd)
+    finally:
         os.close(in_fd)
-        raise
-    with os.fdopen(in_fd, "rb") as inp:
-        out_fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        with os.fdopen(out_fd, "wb") as out:
-            shutil.copyfileobj(inp, out)
     # Checkpoint mtimes participate in upstream's dual-stale-file
     # consolidation tie-breaks — preserve them on the copy.
     os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
