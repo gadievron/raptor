@@ -1410,8 +1410,11 @@ else:
                 cmd,
                 target=str(source), output=str(rd),
                 block_network=False, nproc_limit=0, limits={},
-                writable_paths=[str(rd)], readable_paths=[str(source)],
-                restrict_reads=True,
+                # This low-level runner does not merge interpreter/library
+                # read grants like context.run(). Unrestricted reads are the
+                # policy being tested; only writes need a narrow allowlist.
+                writable_paths=[str(rd)], readable_paths=None,
+                restrict_reads=False,
                 allowed_tcp_ports=None,
                 seccomp_profile="full", seccomp_block_udp=False,
                 env=None, cwd=None, timeout=15,
