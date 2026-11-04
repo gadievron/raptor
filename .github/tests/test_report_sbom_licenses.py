@@ -487,3 +487,32 @@ def test_malformed_source_proof_cannot_produce_successful_coverage(tmp_path):
     report = tool.collect(tmp_path, digest)
     assert report.metrics is None and report.status == "unavailable"
     assert report.source_assessments == []
+
+
+@pytest.mark.parametrize('unavailable', [0, 1])
+def test_cargo_candidate_summary_does_not_change_installed_coverage(tmp_path, unavailable):
+    _, provenance, digest = inputs(tmp_path)
+    counts = dict(candidates=3, captured=2-unavailable, metadata_only=1, unavailable=unavailable)
+    receipt = dict(name='uv', version='0.7.22', status='unavailable', files=[], dependency_notices=counts)
+    raw = json.dumps(receipt).encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    directory = tmp_path / 'prepared/notices/sha256'
+    directory.mkdir(parents=True)
+    (directory / sha).write_bytes(raw)
+    provenance['notice_evidence']['unassociated_files'] = [dict(
+        path='/usr/share/doc/raptor-native-notices/uv/NOTICE-PROVENANCE.json', sha256=sha,
+        content_kind='notice_candidate', catalogue_layer_diff_id='layer')]
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.packages == 1
+    assert report.metrics.notice_gap_packages == report.metrics.unresolved_declarations == 0
+    assert 'Native dependency notice candidates' in tool.markdown(report)
+    assert any(line.startswith('::' + ('warning' if unavailable else 'notice') + ' title=Native dependency notice candidates')
+               for line in tool.annotations(report))
+    receipt['dependency_notices']['candidates'] = 99
+    raw = json.dumps(receipt).encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    (directory / sha).write_bytes(raw)
+    provenance['notice_evidence']['unassociated_files'][0]['sha256'] = sha
+    save(tmp_path, provenance)
+    assert tool.collect(tmp_path, digest).inventory_errors

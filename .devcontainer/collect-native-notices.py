@@ -264,7 +264,7 @@ def verify_python_source(sbom, version, archive_url, archive_sha):
         raise ValueError("Python source SBOM does not match the selected release archive")
 
 
-def collect(name, binary, args, pattern, repository, tag_prefix, output, *, python_source=False, build_inventory=False):
+def collect(name, binary, args, pattern, repository, tag_prefix, output, *, python_source=False, build_inventory=False, cargo_dependencies=False):
     record = {"name": name, "binary": str(binary), "status": "unavailable", "files": [],
               "limitations": ["Release notice candidates do not prove exact build-source correspondence.",
                               "Statically linked and bundled dependency completeness is not established."]}
@@ -286,14 +286,30 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             record["source_sbom_url"] = url + ".spdx.json"
             sbom = download(record["source_sbom_url"], max_bytes=MAX_SOURCE_SBOM)
             verify_python_source(sbom, version, url, record["source_archive_sha256"])
-        definitions = ("Makefile",) if name == "git" else ("build.conf",) if name == "subversion" else ()
+        definitions = (("Cargo.lock",) if cargo_dependencies else ("Makefile",) if name == "git"
+                       else ("build.conf",) if name == "subversion" else ())
         members, dependencies = python_notice_sources(sbom, version) if sbom is not None else ({}, [])
-        record["files"], contents = release_notices(archive, definitions if build_inventory else (), members)
+        record["files"], contents = release_notices(archive, definitions if build_inventory or cargo_dependencies else (), members)
         extra_records, extra_contents = upstream_commit_notices(dependencies)
         record["files"].extend(extra_records)
         contents.update(extra_contents)
         if sum(len(text) for text in contents.values()) > MAX_TOTAL:
             raise ValueError("release notices exceed byte budget")
+        if cargo_dependencies:
+            from cargo_notice_inventory import collect_cargo_notices
+            lock = next(contents[row["file"]] for row in record["files"]
+                        if row.get("content_kind") == "build_declaration" and PurePosixPath(row["source_member"]).name == "Cargo.lock")
+            cargo = collect_cargo_notices(lock, download, source_header)
+            record["dependency_notices"] = cargo.summary
+            record["files"].extend(cargo.records)
+            contents.update(cargo.contents)
+            sha = hashlib.sha256(cargo.inventory).hexdigest()
+            filename = "NOTICE-SOURCE-SBOM-" + sha + ".json"
+            record["files"].append({"file": filename, "sha256": sha, "content_kind": "source_sbom",
+                                    "scope": "Cargo.lock source candidates, not installed components"})
+            contents[filename] = cargo.inventory
+            if sum(len(text) for name, text in contents.items() if name.startswith("LICENSE-")) > MAX_TOTAL:
+                raise ValueError("release notices exceed byte budget")
         if sbom is not None:
             sha = hashlib.sha256(sbom).hexdigest()
             filename = "NOTICE-SOURCE-SBOM-" + sha + ".json"
@@ -319,7 +335,7 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
                 record["inventory_gaps"] = [type(exc).__name__ + ": " + str(exc)[:500]]
         record["status"] = "release_notice_candidates_captured"
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError, tarfile.TarError, EOFError,
-            subprocess.SubprocessError, urllib.error.URLError, http.client.HTTPException) as exc:
+            subprocess.SubprocessError, urllib.error.URLError, http.client.HTTPException, StopIteration) as exc:
         record["error"] = type(exc).__name__ + ": " + str(exc)[:500]
         print("Native notice collection warning; inspect /usr/share/doc/raptor-native-notices.")
     destination = output / name
@@ -341,7 +357,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("/usr/share/doc/raptor-native-notices"))
     args = parser.parse_args()
     collect("uv", Path("/usr/local/bin/uv"), ["--version"],
-            r"uv ([0-9]+\.[0-9]+\.[0-9]+)(?: \([^\r\n]*\))?", "astral-sh/uv", "", args.output)
+            r"uv ([0-9]+\.[0-9]+\.[0-9]+)(?: \([^\r\n]*\))?", "astral-sh/uv", "", args.output, cargo_dependencies=True)
     collect("git", Path("/usr/local/bin/git"), ["--version"],
             r"git version ([0-9]+\.[0-9]+\.[0-9]+)", "git/git", "v", args.output, build_inventory=True)
     collect("subversion", Path("/usr/bin/svn"), ["--version", "--quiet"],
