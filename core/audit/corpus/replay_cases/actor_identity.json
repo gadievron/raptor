@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "provenance": "Synthetic semantic examples, never executed and not real-bug recall labels.",
+  "split_policy": "Development: a01/a02. All other cases were fixed before provider evaluation. Expected fields are withheld from model requests.",
+  "cases": [
+    {
+      "id": "a01",
+      "split": "development",
+      "sources": {
+        "contract": "settle(claim) clears pending for claim->account. A proxy may settle a claim for an account other than the running account.",
+        "caller": "void proxy(struct account *target) {\n    struct claim c = { .account = target };\n    settle(&c);\n}\n",
+        "implementation": "void settle(struct claim *claim) {\n    struct account *account = running_account();\n    lock(&account->mutex);\n    account->pending = 0;\n    unlock(&account->mutex);\n}\n"
+      },
+      "actor_expressions": [
+        "claim->account",
+        "running_account()"
+      ],
+      "expected": {
+        "verdict": "mismatch",
+        "logical_actor": "claim->account",
+        "state_actor": "running_account()",
+        "required_evidence": [
+          {
+            "source": "contract",
+            "quote": "claim->account"
+          },
+          {
+            "source": "implementation",
+            "quote": "account = running_account()"
+          },
+          {
+            "source": "implementation",
+            "quote": "account->pending = 0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a02",
+      "split": "development",
+      "sources": {
+        "contract": "settle(claim) clears pending for claim->account. A proxy may settle a claim for an account other than the running account.",
+        "caller": "void proxy(struct account *target) {\n    struct claim c = { .account = target };\n    settle(&c);\n}\n",
+        "implementation": "void settle(struct claim *claim) {\n    struct account *account = claim->account;\n    lock(&account->mutex);\n    account->pending = 0;\n    unlock(&account->mutex);\n}\n"
+      },
+      "actor_expressions": [
+        "claim->account",
+        "running_account()"
+      ],
+      "expected": {
+        "verdict": "consistent",
+        "logical_actor": "claim->account",
+        "state_actor": "claim->account",
+        "required_evidence": [
+          {
+            "source": "implementation",
+            "quote": "account = claim->account"
+          },
+          {
+            "source": "implementation",
+            "quote": "account->pending = 0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a03",
+      "split": "heldout",
+      "sources": {
+        "contract": "settle(claim) clears pending for claim->account. A proxy may settle a claim for an account other than the running account.",
+        "caller": "void proxy(struct account *target) {\n    struct claim c = { .account = target };\n    settle(&c);\n}\n",
+        "implementation": "void settle(struct claim *claim) {\n    struct account *account = running_account();\n    if (claim->account != account) return;\n    lock(&account->mutex);\n    account->pending = 0;\n    unlock(&account->mutex);\n}\n"
+      },
+      "actor_expressions": [
+        "claim->account",
+        "running_account()"
+      ],
+      "expected": {
+        "verdict": "consistent",
+        "logical_actor": "claim->account",
+        "state_actor": "running_account()",
+        "required_evidence": [
+          {
+            "source": "implementation",
+            "quote": "if (claim->account != account) return;"
+          },
+          {
+            "source": "implementation",
+            "quote": "account->pending = 0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a04",
+      "split": "heldout",
+      "sources": {
+        "contract": "record_execution records work performed by the running account, irrespective of the claim subject.",
+        "implementation": "void record_execution(struct claim *claim) {\n    struct account *account = running_account();\n    account->executions++;\n}\n",
+        "caller": "void proxy(struct claim *c) { record_execution(c); }"
+      },
+      "actor_expressions": [
+        "claim->account",
+        "running_account()"
+      ],
+      "expected": {
+        "verdict": "consistent",
+        "logical_actor": "running_account()",
+        "state_actor": "running_account()",
+        "required_evidence": [
+          {
+            "source": "contract",
+            "quote": "work performed by the running account"
+          },
+          {
+            "source": "implementation",
+            "quote": "account = running_account()"
+          },
+          {
+            "source": "implementation",
+            "quote": "account->executions++"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a05",
+      "split": "heldout",
+      "sources": {
+        "contract": "deliver(job) increments the completion count of job.owner. The worker may execute jobs for other actors.",
+        "caller": "job = Job(owner=recipient)\nworker.enqueue(deliver, job)\n",
+        "implementation": "def deliver(job):\n    actor = worker.actor\n    with actor.lock:\n        actor.done += 1\n"
+      },
+      "actor_expressions": [
+        "job.owner",
+        "worker.actor"
+      ],
+      "expected": {
+        "verdict": "mismatch",
+        "logical_actor": "job.owner",
+        "state_actor": "worker.actor",
+        "required_evidence": [
+          {
+            "source": "contract",
+            "quote": "job.owner"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor = worker.actor"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor.done += 1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a06",
+      "split": "heldout",
+      "sources": {
+        "contract": "deliver(job) increments the completion count of job.owner. The worker may execute jobs for other actors.",
+        "caller": "job = Job(owner=recipient)\nworker.enqueue(deliver, job)\n",
+        "implementation": "def deliver(job):\n    actor = job.owner\n    with actor.lock:\n        actor.done += 1\n"
+      },
+      "actor_expressions": [
+        "job.owner",
+        "worker.actor"
+      ],
+      "expected": {
+        "verdict": "consistent",
+        "logical_actor": "job.owner",
+        "state_actor": "job.owner",
+        "required_evidence": [
+          {
+            "source": "implementation",
+            "quote": "actor = job.owner"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor.done += 1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a07",
+      "split": "heldout",
+      "sources": {
+        "contract": "Completion counts belong to job.owner. Execution may be deferred to a worker.",
+        "caller": "def schedule(job):\n    actor = job.owner\n    defer(lambda: complete(actor))\n",
+        "implementation": "def complete(actor):\n    with actor.lock:\n        actor.done += 1\n"
+      },
+      "actor_expressions": [
+        "job.owner",
+        "worker.actor"
+      ],
+      "expected": {
+        "verdict": "consistent",
+        "logical_actor": "job.owner",
+        "state_actor": "job.owner",
+        "required_evidence": [
+          {
+            "source": "caller",
+            "quote": "actor = job.owner"
+          },
+          {
+            "source": "caller",
+            "quote": "complete(actor)"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor.done += 1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a08",
+      "split": "heldout",
+      "sources": {
+        "contract": "finalize records completion for request.subject. request.submitter may act for a different subject.",
+        "caller": "request = Request(subject=recipient, submitter=agent)\nfinalize(request)\n",
+        "implementation": "def finalize(request):\n    actor = request.submitter\n    with actor.lock:\n        actor.completions += 1\n"
+      },
+      "actor_expressions": [
+        "request.subject",
+        "request.submitter"
+      ],
+      "expected": {
+        "verdict": "mismatch",
+        "logical_actor": "request.subject",
+        "state_actor": "request.submitter",
+        "required_evidence": [
+          {
+            "source": "contract",
+            "quote": "request.subject"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor = request.submitter"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor.completions += 1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a09",
+      "split": "heldout",
+      "sources": {
+        "caller": "item = Item(owner=recipient)\nworker.enqueue(dispatch, item)\n",
+        "implementation": "def dispatch(item):\n    actor = worker.actor\n    with actor.lock:\n        actor.done += 1\n"
+      },
+      "actor_expressions": [
+        "item.owner",
+        "worker.actor"
+      ],
+      "expected": {
+        "verdict": "unknown",
+        "logical_actor": "unknown",
+        "state_actor": "worker.actor",
+        "required_evidence": [
+          {
+            "source": "implementation",
+            "quote": "actor = worker.actor"
+          },
+          {
+            "source": "implementation",
+            "quote": "actor.done += 1"
+          }
+        ]
+      }
+    }
+  ]
+}
