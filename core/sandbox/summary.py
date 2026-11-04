@@ -442,15 +442,20 @@ def record_proxy_persist_state(run_dir: Path, *,
 
 
 def get_proxy_persist_state(run_dir: Path) -> "dict | None":
-    """Parent-memory persist mirror for ``run_dir`` (a copy), or None
-    when no sandbox call persisted proxy events in this process."""
+    """Detached parent-memory snapshot for ``run_dir``, or None.
+
+    Count and flags come from one locked state; later writes or caller
+    edits must not mutate an earlier snapshot.
+    """
     try:
         run_key = str(Path(run_dir).resolve())
     except OSError:
         return None
     with _lock:
         cur = _proxy_persist_state.get(run_key)
-        return dict(cur) if cur is not None else None
+        if cur is None:
+            return None
+        return {**cur, "flags": list(cur["flags"])}
 
 
 def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
