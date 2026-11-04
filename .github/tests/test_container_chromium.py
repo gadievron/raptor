@@ -71,6 +71,7 @@ def test_nightly_provisions_browser_sdk_and_native_runtime():
     # Limit assertions to this job, excluding following sibling jobs.
     import re
     slow_job = re.split(r"^  [A-Za-z0-9_-]+:\s*$", slow_job, maxsplit=1, flags=re.MULTILINE)[0]
+    assert "runs-on: ubuntu-24.04" in slow_job
     assert "cache-key-prefix: venv-grammars-web" in slow_job
     assert "uv-export-extra-args: --extra grammars --extra web" in slow_job
     install = slow_job.index("python -m playwright install --with-deps chromium")
