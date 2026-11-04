@@ -191,7 +191,7 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
     try:
         fd = os.open(
             str(path),
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
         )
     except OSError:
         return False
@@ -213,8 +213,18 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
         # legitimate mint is always in the past on the same host.
         if not (0 <= age <= NONCE_FILE_TTL_S):
             return False
-        content = os.read(fd, NONCE_FILE_MAX_BYTES).decode(
-            "ascii", errors="replace").strip()
+        chunks = []
+        remaining = NONCE_FILE_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > NONCE_FILE_MAX_BYTES:
+            return False
+        content = data.decode("ascii", errors="replace").strip()
         return hmac.compare_digest(content, _nonce_digest(nonce))
     except OSError:
         return False
