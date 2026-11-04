@@ -3628,3 +3628,21 @@ def test_gcc_control_path_survives_audit_receipt(tmp_path, sandbox_spy):
     assert len(events) >= 2
     assert all(e["location"]["physicalLocation"]["artifactLocation"]["uri"] == "uaf.c" for e in events)
     assert any("free" in e["location"]["message"]["text"] for e in events)
+
+
+@needs_clang
+@pytest.mark.parametrize("source, expected", [
+    ("void f() { int *p = new int(1); *p = 2; }\n", "confirmed"),
+    ("void f() { int *p = new int(1); *p = 2; delete p; }\n", "refuted"),
+    ("struct Owner { int *p; ~Owner() { delete p; } }; void f() { Owner o{new int(1)}; *o.p=2; }\n", "refuted"),
+])
+def test_cpp_leak_checker_and_cleanup_controls(tmp_path, sandbox_spy, source, expected):
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "a.cpp").write_text(source)
+    result = _guarded_compiler_sweep(gcc_probed=False, target_path=target, file_path="a.cpp", function_name="f",
+        cwe="CWE-401", hypothesis="memory leak", line_start=1, line_end=1)
+    assert result.outcome == expected
+    if expected == "confirmed":
+        assert result.rule_id == "compiler:cplusplus.NewDeleteLeaks"
+        assert is_tool_evidence(result.rule_id)

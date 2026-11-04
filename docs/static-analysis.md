@@ -610,3 +610,18 @@ that a path is feasible in the application. Caller contracts still need
 review. Paths are limited to the target tree and bounded in count, size and
 retained memory. If a path is malformed, outside scope or over a limit, the
 warning remains and its metadata records why path context was omitted.
+
+### Compiler weakness classification
+
+Compiler finding CWE tags use the compiler's own diagnostic classification when
+it supplies one. For shared Clang checkers, Raptor uses the diagnostic message
+to distinguish supported cases such as leaks, double-free and use-after-free.
+Compiler verification includes leaks from C++ `new` allocations as well as
+C allocation leaks.
+A checker name alone does not establish a specific weakness.
+
+If the subtype remains ambiguous, the finding is retained with a broad family
+or no CWE tag. Findings merged at one location with conflicting classifications
+keep the observed CWE values in their metadata without selecting one by order.
+Per-result tags take precedence over rule-level defaults during SARIF import.
+These tags describe the reported mechanism; they do not prove path feasibility.

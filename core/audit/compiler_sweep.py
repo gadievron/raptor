@@ -87,7 +87,7 @@ _CXX_SUFFIXES = frozenset({".cc", ".cpp", ".cxx", ".C"})
 
 
 from core.detectors.compiler_families import (
-    COMPILER_CWE_MAP, FamilySpec as FamilySpec, _id_matches, _normalise_cwe,
+    COMPILER_CWE_MAP, FamilySpec as FamilySpec, _id_matches, _normalise_cwe, compiler_reported_cwe,
     compiler_applicable as compiler_applicable, get_compiler_check_role as get_compiler_check_role,
 )
 
@@ -1722,6 +1722,9 @@ def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
             "file": caret.get("file", "") or "",
             "message": d.get("message", "") or "",
         })
+        reported = compiler_reported_cwe(d)
+        if reported:
+            diags[-1]["cwe"] = reported
         paths, notes = json_paths(d.get("path"))
         path_budget.retain(diags[-1], paths, notes)
     return diags
@@ -1745,6 +1748,9 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
                 "file": phys.get("artifactLocation", {}).get("uri", "") or "",
                 "message": (result.get("message", {}) or {}).get("text", "") or "",
             })
+            reported = compiler_reported_cwe(result, run)
+            if reported:
+                diags[-1]["cwe"] = reported
             paths, notes = normalize_paths(result.get("codeFlows"))
             path_budget.retain(diags[-1], paths, notes)
     return diags
@@ -2110,6 +2116,8 @@ def run_compiler_analyzer_sweep(
             except (OSError, ValueError, RuntimeError, _VetLimitExceeded):
                 return None
         for match, diagnostic in zip(matches, attributed):
+            if diagnostic.get("cwe"):
+                match["cwe"] = diagnostic["cwe"]
             attach_paths(match, diagnostic, locate_event)
         if not spec.positive_evidence:
             from core.detectors.budget import WorkBudget

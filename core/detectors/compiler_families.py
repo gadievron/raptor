@@ -1,6 +1,8 @@
 """Shared compiler diagnostic families and their evidence policy."""
 
 from dataclasses import dataclass
+import re
+
 
 @dataclass(frozen=True)
 class FamilySpec:
@@ -91,7 +93,7 @@ COMPILER_CWE_MAP: dict[str, FamilySpec] = {
         gcc_ids=("-Wanalyzer-malloc-leak",),
         gcc_flags=(),
         clang_engine="analyze",
-        clang_ids=("unix.Malloc",),
+        clang_ids=("unix.Malloc", "cplusplus.NewDeleteLeaks"),
         clang_flags=(),
         clang_message_re=r"leak",
         reliable=True,
@@ -107,10 +109,12 @@ COMPILER_CWE_MAP: dict[str, FamilySpec] = {
         # visible in this TU; wrappers defeat it — confirm-only.
         reliable=False,
     ),
+    "CWE-119": _OOB_SPEC,
     "CWE-120": _OOB_SPEC,
     "CWE-121": _OOB_SPEC,
     "CWE-122": _OOB_SPEC,
     "CWE-125": _OOB_SPEC,
+    "CWE-126": _OOB_SPEC,
     "CWE-130": _OOB_SPEC,
     "CWE-787": _OOB_SPEC,
     # Type confusion via pointer punning: strict-aliasing diagnostics
@@ -220,3 +224,102 @@ def _id_matches(diag_id: str, family_ids: tuple[str, ...]) -> bool:
         if norm == fam_norm or norm.startswith(fam_norm + "."):
             return True
     return False
+
+
+# These IDs cover several hypothesis families but have an unambiguous broad
+# reporting class. Specific compiler-emitted taxonomy metadata takes priority.
+_DIAGNOSTIC_REPORTING_CWES = {
+    "-Wanalyzer-out-of-bounds": "CWE-119",
+    "-Warray-bounds": "CWE-119",
+    "-Wfortify-source": "CWE-119",
+    "-Wstringop-overflow": "CWE-120",
+    "-Wstringop-overread": "CWE-125",
+    "-Wanalyzer-infinite-loop": "CWE-835",
+    "-Wloop-analysis": "CWE-834",
+}
+
+
+def _reported_cwe(value) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    from core.cve.cwe import canonicalize_cwe, format_cwe
+    if isinstance(value, str):
+        if len(value) > 32:
+            return None
+        canonical = canonicalize_cwe(value)
+        if canonical:
+            return format_cwe(canonical.removeprefix("CWE-"))
+    return format_cwe(value)
+
+
+def compiler_reported_cwe(diagnostic: dict, run: dict | None = None) -> str | None:
+    """Read GCC JSON metadata or an explicitly identified SARIF CWE taxonomy.
+
+    Several different taxonomy entries remain ambiguous: never choose one by
+    list order. Unknown/malformed metadata does not remove a diagnostic.
+    """
+    found: set[str] = set()
+    metadata = diagnostic.get("metadata")
+    if isinstance(metadata, dict):
+        cwe = _reported_cwe(metadata.get("cwe"))
+        if cwe:
+            found.add(cwe)
+    taxa = diagnostic.get("taxa")
+    if isinstance(taxa, list):
+        if len(taxa) > 16:
+            return None
+        for entry in taxa:
+            if not isinstance(entry, dict):
+                continue
+            component = entry.get("toolComponent")
+            if not isinstance(component, dict):
+                continue
+            taxonomy = None
+            name = component.get("name")
+            if component.get("index") is not None and isinstance(run, dict):
+                index = component.get("index")
+                catalogs = run.get("taxonomies")
+                if (isinstance(index, int) and not isinstance(index, bool) and isinstance(catalogs, list)
+                        and 0 <= index < len(catalogs) and isinstance(catalogs[index], dict)):
+                    taxonomy = catalogs[index]
+                    indexed_name = taxonomy.get("name")
+                    if name is not None and name != indexed_name:
+                        continue
+                    name = indexed_name
+                else:
+                    continue
+            if not isinstance(name, str) or len(name) != 3 or name.casefold() != "cwe":
+                continue
+            value = entry.get("id")
+            if value is None and isinstance(taxonomy, dict):
+                index = entry.get("index")
+                entries = taxonomy.get("taxa")
+                if (isinstance(index, int) and not isinstance(index, bool) and isinstance(entries, list)
+                        and 0 <= index < len(entries) and isinstance(entries[index], dict)):
+                    value = entries[index].get("id")
+            cwe = _reported_cwe(value)
+            if cwe:
+                found.add(cwe)
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def diagnostic_cwe(diag_id: str, message: str = "", reported=None) -> str | None:
+    """A reporting hint, independent of positive/negative evidence policy."""
+    native = _reported_cwe(reported)
+    if native:
+        return native
+    if not isinstance(diag_id, str):
+        return None
+    normalized = diag_id.partition("=")[0] if diag_id.startswith("-W") else diag_id
+    if normalized in _DIAGNOSTIC_REPORTING_CWES:
+        return _DIAGNOSTIC_REPORTING_CWES[normalized]
+    if not isinstance(message, str) or len(message) > 4096:
+        return None
+    matches: set[str] = set()
+    for cwe, spec in COMPILER_CWE_MAP.items():
+        if _id_matches(normalized, spec.gcc_ids):
+            matches.add(cwe)
+        elif _id_matches(normalized, spec.clang_ids):
+            if not spec.clang_message_re or (message and re.search(spec.clang_message_re, message, re.IGNORECASE)):
+                matches.add(cwe)
+    return next(iter(matches)) if len(matches) == 1 else None
