@@ -1409,8 +1409,17 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
     Returns in the CHILD (the exec path). The PID 1 side never returns
     (``os._exit``).
     """
+    forward_r, forward_w = os.pipe()
     child = os.fork()
     if child == 0:
+        os.close(forward_w)
+        try:
+            ready = os.read(forward_r, 1)
+        except OSError:
+            os._exit(126)
+        os.close(forward_r)
+        if ready != b"R":
+            os._exit(126)
         # Exec path: drop the side-channel write end immediately so
         # EOF semantics never depend on the pre-exec fd sweep.
         if wstat_w is not None:
@@ -1420,16 +1429,20 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
 
     # Only the target owns caller capabilities. Retaining either end of an
     # RPC pipe here can prevent the target from seeing EOF or keep its reply
-    # pipe open after it dies. This init only needs its wait-status channel.
-    _close_fds_except(() if wstat_w is None else (wstat_w,))
+    # pipe open after it dies. Retain only the wait-status channel and
+    # the startup gate, which is closed as soon as the forwarders are armed.
+    os.close(forward_r)
+    _close_fds_except((forward_w,) if wstat_w is None else (wstat_w, forward_w))
 
     def _forward(signum, _frame, _child=child) -> None:
         with contextlib.suppress(OSError):
             os.kill(_child, signum)
 
     for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
-        with contextlib.suppress(OSError, ValueError):
-            signal.signal(_sig, _forward)
+        signal.signal(_sig, _forward)
+    # Keep C behind the gate until PID 1 can forward an immediate TERM.
+    os.write(forward_w, b"R")
+    os.close(forward_w)
 
     def _report_and_exit(status: int, code: int) -> None:
         if wstat_w is not None:
