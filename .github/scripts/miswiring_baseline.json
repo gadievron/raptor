@@ -520,9 +520,6 @@
   "artifacts:write_only_artifact::study-stale.json": {
    "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
   },
-  "artifacts:write_only_artifact::summary.json": {
-   "note": "variant-sweep output (replay_sweep.write_report, library API driven by run_sweep consumers): per-rule totals + errors for operator review (\"see summary.json\" is printed when a sweep records errors)"
-  },
   "artifacts:write_only_artifact::summary.txt": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
