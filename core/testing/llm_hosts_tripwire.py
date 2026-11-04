@@ -143,9 +143,11 @@ def serve(directory, hosts_file, stop, ports=None):
                 else:
                     retained.append(line)
             hosts_file.write_text(entries + "".join(retained))
-        (directory / "ready.json").write_text(json.dumps({
+        pending = directory / "ready.json.pending"
+        pending.write_text(json.dumps({
             "pid": os.getpid(), "addresses": [s.getsockname() for s in sockets],
         }))
+        pending.replace(directory / "ready.json")
         while not stop():
             for ready, _ in selector.select(timeout=0.1):
                 conn, _ = ready.fileobj.accept()
@@ -178,6 +180,7 @@ def serve(directory, hosts_file, stop, ports=None):
         for sock in sockets:
             sock.close()
         selector.close()
+        (directory / "ready.json.pending").unlink(missing_ok=True)
         (directory / "ready.json").unlink(missing_ok=True)
 
 
