@@ -60,6 +60,7 @@ Semgrep pass (`--expanded-semgrep`).
 | `--no-traced-build` | -- | Force buildless extraction for this run, overriding `--traced-build` and the project's `build` trust marker |
 | `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes). TUs whose analyzer silence is repo-steerable are reported as a coverage limitation, never as a finding — see [Compiler-scan coverage limitations](#compiler-scan-coverage-limitations) |
 | `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
+| `--compiler-scan-max-seconds <seconds>` | 300 | Shared compiler analysis budget, also available in `/agentic`. Completed findings are retained; unfinished coverage is reported. Discovery and cleanup add overhead. |
 | `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
 | `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
 | `--no-sanitizer-cut-postpass` | on by default | Disable the sanitizer-cut post-pass over scan findings (see [Sanitizer-cut post-pass](#sanitizer-cut-post-pass)) |
@@ -431,6 +432,26 @@ Only candidate files get the additional preprocessing and analysis, with at most
 50 candidate translation units and 256 candidate locations per unit, with the
 existing worker and tool timeout limits. Missing Clang or an incompatible source view limits this additional check
 and is reported as a coverage warning; it does not disable the compiler scan.
+
+### Compiler analysis time budget
+
+Compiler scanning shares a 300-second analysis budget across ordinary compiler
+runs, suppression checks, memcpy overlap analysis and stack-return corroboration.
+Use `--compiler-scan-max-seconds 600` to allow ten minutes, or a smaller positive
+value to limit extra analysis time. This option does not enable compiler scanning
+by itself; `--compiler-scan` is still required and `--no-compiler-scan` takes
+precedence.
+
+When the budget expires, no further translation units are submitted. In-flight
+tool calls receive the remaining time as their timeout and are allowed to clean
+up. Completed findings are retained. The summary and SARIF coverage warnings
+report the interruption, including ordinary translation units that never
+started; supplementary checks can also be incomplete even when all ordinary
+translation units finished.
+
+The analysis window starts after tool and source discovery. Result processing,
+filesystem operations and sandbox teardown can add overhead, so this is not a
+hard wall-clock limit for the entire command.
 
 ### Compiler-scan coverage limitations
 

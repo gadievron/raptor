@@ -1264,3 +1264,77 @@ def test_parser_failure_still_propagates_from_scan(tmp_path, monkeypatch):
             tmp_path, "a.c",
             sandbox_run=lambda *a, **kw: SimpleNamespace(returncode=0, stderr="[]"),
         )
+
+
+def test_shared_budget_keeps_baseline_finding_when_closure_vet_cannot_start(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from core.detectors import budget as module
+    now = [0.0]
+    monkeypatch.setattr(module, 'monotonic', lambda: now[0])
+    for name in ('a.c', 'b.c', 'c.c'):
+        (tmp_path / name).write_text('void f(void) {}\n')
+    monkeypatch.setattr(_cs, '_gcc_analyzer', lambda: ('/trusted/gcc', 'json'))
+    monkeypatch.setattr(_cs, '_clang_path', lambda: None)
+    calls = []
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        assert '-E' not in command
+        now[0] = 5
+        return SimpleNamespace(returncode=0, stderr=json.dumps([{
+            'kind': 'warning', 'option': '-Wanalyzer-use-after-free', 'message': 'freed',
+            'locations': [{'caret': {'file': str(tmp_path / 'a.c'), 'line': 1}}],
+        }]))
+    monkeypatch.setattr(_cs, '_sandbox_runner', lambda: run)
+    result = _cs.scan_target(tmp_path, max_workers=1, max_seconds=5)
+    assert len(calls) == 1 and calls[0][1]['timeout'] == 5
+    assert result.tus_analyzed == 1 and result.tus_failed == 0 and result.tus_skipped_budget == 2
+    assert result.budget_exhausted and len(result.unvetted_tus) == 1
+    assert [f['rule_id'] for f in result.findings] == ['-Wanalyzer-use-after-free']
+    report = _cs.to_sarif(result)
+    assert len(report['runs'][0]['results']) == 1
+    notes = report['runs'][0]['invocations'][0]['toolExecutionNotifications']
+    assert any(n['properties']['coverage_limitation'] == 'compiler_budget' for n in notes)
+    assert '--compiler-scan-max-seconds' in result.summary_line()
+
+
+@pytest.mark.parametrize('seconds', [0, -1, float('nan'), float('inf')])
+def test_invalid_analysis_budget_refuses_before_tool_discovery(tmp_path, monkeypatch, seconds):
+    monkeypatch.setattr(_cs, '_sandbox_runner', lambda: pytest.fail('must validate first'))
+    with pytest.raises(ValueError):
+        _cs.scan_target(tmp_path, max_seconds=seconds)
+
+
+@pytest.mark.slow
+def test_native_budget_times_out_wedged_compiler_and_keeps_prior_result(tmp_path, monkeypatch, sandbox_spy):
+    import time
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    for name in ('a.c', 'b.c', 'c.c'):
+        (repo / name).write_text('void f(void) {}\n')
+    tool = tmp_path / 'compiler.py'
+    tool.write_text(f'#!{sys.executable}\n'+'''import json,sys,time
+from pathlib import Path
+args=sys.argv[1:]
+if '-E' in args:
+    source=args[-1]
+    print('# 1 "'+source+'"\\nvoid f(void) {}')
+    sys.exit(0)
+source=args[args.index('-c')+1]
+if Path(source).name!='a.c':
+    time.sleep(60)
+print(json.dumps([{'kind':'warning','option':'-Wanalyzer-use-after-free','message':'freed',
+                  'locations':[{'caret':{'file':source,'line':1}}]}]),file=sys.stderr)
+''')
+    tool.chmod(0o755)
+    monkeypatch.setattr(_cs, '_gcc_analyzer', lambda: (str(tool), 'json'))
+    monkeypatch.setattr(_cs, '_clang_path', lambda: None)
+    out = tmp_path / 'out'
+    started = time.monotonic()
+    result = _cs.scan_target(repo, out_dir=out, max_workers=1, max_seconds=5)
+    assert time.monotonic() - started < 15  # includes process teardown on a loaded runner
+    assert result.budget_exhausted and result.tus_analyzed == 1
+    assert result.tus_failed == 1 and result.tus_skipped_budget == 1
+    assert [f['rule_id'] for f in result.findings] == ['-Wanalyzer-use-after-free']
+    assert len([call for call in sandbox_spy if '-c' in call['cmd']]) == 2
+    assert not list(out.glob('compiler_scan_*'))
