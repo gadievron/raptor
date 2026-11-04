@@ -11,6 +11,8 @@ import shutil
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     SourceIntelResult,
     analyze,
@@ -39,7 +41,7 @@ def test_e2e_user_boundary_fires_on_copy_from_user(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     fns = {b.boundary_fn for b in r.boundary_crossings}
     assert "copy_from_user" in fns
     assert "copy_to_user" in fns
@@ -62,7 +64,7 @@ def test_e2e_user_boundary_fires_on_get_put_user(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     fns = {b.boundary_fn for b in r.boundary_crossings}
     assert "get_user" in fns
     assert "put_user" in fns
@@ -94,7 +96,7 @@ def test_e2e_lsm_fires_on_security_inode(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     hooks = {h.hook_name for h in r.lsm_hooks}
     assert "security_inode_permission" in hooks
     assert "security_file_permission" in hooks
@@ -118,7 +120,7 @@ def test_e2e_lsm_skips_non_security_prefix(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     assert not any(
         h.hook_name.startswith("secure_") and "_" not in h.hook_name[7:]
         for h in r.lsm_hooks

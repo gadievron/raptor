@@ -6,6 +6,8 @@ import shutil
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     _classify_arg_shape,
     _classify_size_source,
@@ -117,7 +119,7 @@ def test_e2e_allocation_evidence_carries_size_source(tmp_path):
         "    use(p);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     user_controlled = [
         a for a in r.allocations if a.size_source == "user_controlled"
     ]

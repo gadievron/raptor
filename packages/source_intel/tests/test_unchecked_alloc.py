@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.adapter import (
@@ -61,7 +63,7 @@ def test_e2e_unchecked_alloc_field_fires(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert r.allocations, "expected at least one AllocationEvidence"
     ae = r.allocations[0]
     assert ae.allocator == "kstrdup"
@@ -94,7 +96,7 @@ def test_e2e_unchecked_alloc_local_fires_on_kstrdup(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     locals_ = [a for a in r.allocations if a.shape == "local"]
     assert locals_, (
         f"expected at least one local-shape AllocationEvidence; got "
@@ -124,7 +126,7 @@ def test_e2e_unchecked_alloc_skips_checked_case(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("allocation"))
     assert not r.allocations, (
         f"expected zero AllocationEvidence on checked case; got "
         f"{r.allocations!r}"

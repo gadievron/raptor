@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.adapter import (
@@ -72,7 +74,7 @@ def test_e2e_capability_check_fires_on_capable(tmp_path):
         "}\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     fns = {c.cap_function for c in r.capabilities}
     assert "capable" in fns
 
@@ -99,7 +101,7 @@ def test_e2e_capability_captures_enclosing_function(tmp_path):
         "}\n"
     )
 
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("privilege"))
     privileged = [
         c for c in r.capabilities if c.enclosing_function == "privileged"
     ]

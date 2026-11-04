@@ -11,7 +11,7 @@ import pytest
 
 from packages.coccinelle.runner import meets_min_version as _spatch_meets_min
 
-from packages.source_intel.analyze import SourceIntelResult, analyze
+from packages.source_intel.analyze import SourceIntelResult
 
 
 def test_status_unknown_when_no_target():
@@ -23,7 +23,7 @@ def test_status_unknown_when_no_target():
     not _spatch_meets_min(),
     reason="spatch >= 1.3 required for prereqs E2E",
 )
-@pytest.mark.slow  # genuine cost: full analyze()/spatch E2E through the sandbox exceeds the 10s default-tier budget; logic-level coverage stays default-tier
+@pytest.mark.slow  # real prerequisites inventory through spatch/sandbox; logic-level coverage stays default-tier
 def test_status_in_tree_for_defined_function(tmp_path):
     src = tmp_path / "x.c"
     src.write_text(
@@ -31,7 +31,7 @@ def test_status_in_tree_for_defined_function(tmp_path):
         "    return x + 1;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = SourceIntelResult(target=str(tmp_path))
     assert r.function_intel_status("defined_fn") == "in_tree"
 
 
@@ -39,7 +39,7 @@ def test_status_in_tree_for_defined_function(tmp_path):
     not _spatch_meets_min(),
     reason="spatch >= 1.3 required for prereqs E2E",
 )
-@pytest.mark.slow  # genuine cost: full analyze()/spatch E2E through the sandbox exceeds the 10s default-tier budget; logic-level coverage stays default-tier
+@pytest.mark.slow  # real prerequisites inventory through spatch/sandbox; logic-level coverage stays default-tier
 def test_status_name_not_in_tree_for_undefined(tmp_path):
     src = tmp_path / "x.c"
     src.write_text(
@@ -47,7 +47,7 @@ def test_status_name_not_in_tree_for_undefined(tmp_path):
         "    return x + 1;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = SourceIntelResult(target=str(tmp_path))
     assert r.function_intel_status("not_in_this_file") == "name_not_in_tree"
 
 

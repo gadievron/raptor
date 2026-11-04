@@ -13,6 +13,8 @@ import shutil
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     CheckedAllocationEvidence,
     SourceIntelResult,
@@ -42,7 +44,7 @@ def test_e2e_checked_alloc_fires_on_bang_check(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("variants"))
     assert r.checked_allocations, (
         f"expected at least one CheckedAllocationEvidence; got "
         f"{r.checked_allocations!r}"
@@ -67,7 +69,7 @@ def test_e2e_checked_alloc_fires_on_eq_null(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("variants"))
     assert r.checked_allocations
     assert r.checked_allocations[0].allocator == "kstrdup"
 
@@ -88,7 +90,7 @@ def test_e2e_unchecked_does_not_emit_checked_alloc(tmp_path):
         "    return p[0];\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("variants"))
     assert not r.checked_allocations, (
         f"expected no CheckedAllocationEvidence on unchecked-only file; "
         f"got {r.checked_allocations!r}"

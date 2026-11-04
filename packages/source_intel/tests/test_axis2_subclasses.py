@@ -11,6 +11,8 @@ import shutil
 
 import pytest
 
+from packages.source_intel.tests._rule_paths import shipped_axis_rules
+
 from packages.source_intel.analyze import (
     SourceIntelResult,
     analyze,
@@ -37,7 +39,7 @@ def test_e2e_warn_class_fires(tmp_path):
         "    pr_warn(\"value %d\\n\", x);\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("proximity"))
     fns = {w.warn_fn for w in r.warns}
     assert "WARN_ON" in fns
     assert "pr_warn" in fns
@@ -68,7 +70,7 @@ def test_e2e_null_guards_fires_on_bang(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("proximity"))
     kinds = {g.kind for g in r.null_guards}
     assert "bang" in kinds, f"got {kinds!r}"
 
@@ -91,7 +93,7 @@ def test_e2e_null_guards_fires_on_is_err(tmp_path):
         "    return 0;\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    r = analyze(tmp_path, rules_dir=shipped_axis_rules("proximity"))
     assert any(g.kind == "is_err" for g in r.null_guards)
 
 
