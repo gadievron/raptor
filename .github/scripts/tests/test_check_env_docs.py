@@ -435,3 +435,31 @@ def test_container_runtime_environment_consumer_is_inventoried(det, tmp_path):
     documented, _, _ = det.documented_vars(root)
     assert "PLAYWRIGHT_NODEJS_PATH" in documented
     assert "PLAYWRIGHT_NODEJS_PATH" in inventory.vars
+
+
+def test_module_facts_are_collected_once_and_declaration_order_is_preserved(
+    det, tmp_path, monkeypatch,
+):
+    root = _tree(tmp_path, {
+        'core/a.py': (
+            'def nested():\n'
+            '    SHARED_ENV = "RAPTOR_SHARED"\n'
+            '\n'
+            'SHARED_ENV = "RAPTOR_SHARED"\n'
+        ),
+        'core/b.py': 'import os\nx = os.environ.get("RAPTOR_OTHER")\n',
+    })
+    calls = []
+    original = det._collect_module_facts
+
+    def collect_once(tree):
+        calls.append(tree)
+        return original(tree)
+
+    monkeypatch.setattr(det, '_collect_module_facts', collect_once)
+    inventory = det.scan_tree(root)
+    assert len(calls) == 2
+    assert [(o.file, o.line, o.kind) for o in inventory.vars['RAPTOR_SHARED']] == [
+        ('core/a.py', 4, 'read'),
+    ]
+    assert 'RAPTOR_OTHER' in inventory.vars

@@ -4361,8 +4361,12 @@ class ScanRestartNightly(unittest.TestCase):
                 key, lineno, pattern, flags, "search", None,
             ))
             starved = any(lane.get("starved") for lane in lanes)
-            return (key, starved, len(lanes),
-                    _scan_oracle_classify(pattern, flags))
+            row = pinned["\x1f".join(key)]
+            # Adjudicated table strings are verified by identity in the
+            # static census. Their timings are never used for a verdict.
+            measured = ((None, False) if row["verdict"] == "adjudicated"
+                        else _scan_oracle_classify(pattern, flags))
+            return key, starved, len(lanes), measured
 
         items = [
             (key, record) for key, record in sorted(live.items())
@@ -4860,3 +4864,41 @@ if __name__ == "__main__":
     if "--regen-scan-restart" in sys.argv:
         sys.exit(_regen_scan_expected())
     unittest.main()
+
+
+def test_nightly_adjudicated_members_skip_timing_but_keep_lane_cap(monkeypatch):
+    """Ignored measurements cost no subprocess time; cap enforcement stays live."""
+    import sys
+
+    module = sys.modules[__name__]
+    linear = ('core/fx.py', 'LINEAR')
+    adjudicated = ('core/fx.py', 'ADJUDICATED')
+    members = {
+        linear: {'sites': [(1, 'linear', 0, 'search')]},
+        adjudicated: {'sites': [(2, 'adjudicated', 0, 'search')]},
+    }
+    pins = {'members': {
+        '\x1f'.join(linear): {'verdict': 'linear'},
+        '\x1f'.join(adjudicated): {'verdict': 'adjudicated'},
+    }}
+    measured = []
+
+    def measure(pattern, flags):
+        assert pattern == 'linear', 'adjudicated timing cannot affect a verdict'
+        measured.append(pattern)
+        return 1.0, True
+
+    monkeypatch.setattr(module, '_scan_restart_members', lambda: members)
+    monkeypatch.setattr(module, '_load_scan_expected', lambda: pins)
+    monkeypatch.setattr(module, '_scan_oracle_classify', measure)
+    monkeypatch.setattr(module, '_site_scan_lanes', lambda site: [])
+    ScanRestartNightly().test_nightly_oracle_agrees_with_pins()
+    assert measured == ['linear']
+
+    def too_many_lanes(site):
+        return ([{'starved': False}] * (_SCAN_LANE_CAP + 1)
+                if site.pattern == 'adjudicated' else [])
+
+    monkeypatch.setattr(module, '_site_scan_lanes', too_many_lanes)
+    with pytest.raises(AssertionError, match='over the classify cap'):
+        ScanRestartNightly().test_nightly_oracle_agrees_with_pins()

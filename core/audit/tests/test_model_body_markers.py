@@ -898,9 +898,15 @@ from core.audit.evidence_grade import (  # noqa: E402
     MODEL_AUTHORED_REVIEW_KEYS,
     PIPELINE_OWNED_REVIEW_KEYS,
 )
-from core.audit.tests._review_keys import scan as _scan_review_keys  # noqa: E402
+from core.audit.tests._review_keys import (  # noqa: E402
+    scan as _scan_review_keys,
+    scan_full as _scan_review_keys_full,
+)
 
-KEY_READS, KEY_WRITES = _scan_review_keys(_REPO)
+# The checkout is read-only throughout this module. Reuse its complete
+# census for the closure and live-site assertions; mutation tests below
+# still scan their own scratch trees after every edit.
+KEY_READS, KEY_WRITES, KEY_UNRESOLVED = _scan_review_keys_full(_REPO)
 
 
 class TestReviewKeyClosure:
@@ -1580,10 +1586,9 @@ class TestReviewKeyScannerWrites:
         pin is stale."""
         # Default: a reached write the scanner cannot resolve fails here
         # unless its exact content is pinned below with a justification.
-        from core.audit.tests._review_keys import pin_violations, scan_full
-        _, _, unresolved = scan_full(_REPO)
+        from core.audit.tests._review_keys import pin_violations
         unpinned, stale = pin_violations(
-            unresolved, PINNED_REVIEW_RESULT_WRITES)
+            KEY_UNRESOLVED, PINNED_REVIEW_RESULT_WRITES)
         assert unpinned == [], (
             "unresolved review_result writes (pin each with its keys and "
             f"where they are classified): {unpinned}")
@@ -1597,9 +1602,7 @@ class TestReviewKeyScannerWrites:
         """The dict literal that verdict reuse binds to a review result is read
         as a write of its keys."""
         # The live instance the scanner used to miss.
-        from core.audit.tests._review_keys import scan_full
-        _, writes, _ = scan_full(_REPO)
-        at = {k for k, f, _ in writes if f == "core/audit/verdict_reuse.py"}
+        at = {k for k, f, _ in KEY_WRITES if f == "core/audit/verdict_reuse.py"}
         assert {"status", "reused", "reused_from_run"} <= at
 
     @pytest.mark.parametrize("rel,keys", [
@@ -1613,9 +1616,7 @@ class TestReviewKeyScannerWrites:
     def test_live_attribute_and_keyword_writes_are_seen(self, rel, keys):
         """Writes in the real tree through an attribute assignment, a
         conditional keyword and the panel merge are seen with their keys."""
-        from core.audit.tests._review_keys import scan_full
-        _, writes, _ = scan_full(_REPO)
-        assert keys <= {k for k, f, _ in writes if f == rel}
+        assert keys <= {k for k, f, _ in KEY_WRITES if f == rel}
 
 
 #: Every review_result write in the tree the scanner cannot resolve to

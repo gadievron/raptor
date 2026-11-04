@@ -301,7 +301,10 @@ class Inventory:
 
 # --- python extraction ----------------------------------------------------
 
-def _collect_module_facts(tree: ast.Module) -> tuple[set, set, set, dict]:
+_ModuleFacts = tuple[set[str], set[str], set[str], dict[str, str]]
+
+
+def _collect_module_facts(tree: ast.Module) -> _ModuleFacts:
     """(os aliases, environ aliases, getenv aliases, str-const map)."""
     os_names: set[str] = {"os"}
     environ_names: set[str] = set()
@@ -344,11 +347,13 @@ class _PyScanner(ast.NodeVisitor):
     """Collects os.environ / os.getenv accesses and child-env writes."""
 
     def __init__(self, rel: str, inv: Inventory, tree: ast.Module,
-                 global_consts: dict[str, str]) -> None:
+                 global_consts: dict[str, str],
+                 module_facts: _ModuleFacts | None = None) -> None:
         self.rel = rel
         self.inv = inv
         (self.os_names, self.environ_names, self.getenv_names,
-         self.consts) = _collect_module_facts(tree)
+         self.consts) = (_collect_module_facts(tree)
+                         if module_facts is None else module_facts)
         self.global_consts = global_consts
 
     def _name_of(self, node: ast.AST) -> str | None:
@@ -696,7 +701,7 @@ _ENVISH_CONST = re.compile(r"(^_?[A-Z][A-Z0-9_]*_ENV$|_ENV_[A-Z0-9_]+$)")
 
 def scan_tree(root: Path) -> Inventory:
     inv = Inventory()
-    py: list[tuple[str, ast.Module]] = []
+    py: list[tuple[str, ast.Module, _ModuleFacts]] = []
     for p in _iter_files(root):
         rel = p.relative_to(root).as_posix()
         if p.suffix == ".py":
@@ -713,15 +718,15 @@ def scan_tree(root: Path) -> Inventory:
                                              errors="replace"))
             except SyntaxError:
                 continue
-            py.append((rel, tree))
+            py.append((rel, tree, _collect_module_facts(tree)))
         elif kind == "bash":
             _scan_bash(p, rel, inv)
     # Tree-wide map of env-name constants (FOO_ENV = "RAPTOR_FOO",
     # _ENV_MODE = ...) so a key imported from a sibling module still
     # resolves. Conflicts poison the entry (kept unresolvable).
     global_consts: dict[str, str | None] = {}
-    for _rel, tree in py:
-        for name, value in _collect_module_facts(tree)[3].items():
+    for _rel, _tree, facts in py:
+        for name, value in facts[3].items():
             if not _ENVISH_CONST.search(name):
                 continue
             if name in global_consts and global_consts[name] != value:
@@ -731,31 +736,30 @@ def scan_tree(root: Path) -> Inventory:
     global_consts = {
         k: v for k, v in global_consts.items() if v is not None
     }
-    for rel, tree in py:
-        scanner = _PyScanner(rel, inv, tree, global_consts)
+    for rel, tree, facts in py:
+        scanner = _PyScanner(rel, inv, tree, global_consts, module_facts=facts)
         scanner.visit(tree)
         # Env-name constants count as a read even when the actual
         # os.environ access hides behind a helper parameter
         # (``_env_number(_KEEPALIVE_ENV, ...)``): the constant's
         # existence in production code IS the consumer declaration.
-        for cname, value in scanner.consts.items():
-            # Trailing underscore = a prefix constant (``"AWS_"``),
-            # not a variable name.
-            if (
-                _ENVISH_CONST.search(cname)
-                and CAPS_NAME.match(value)
-                and not value.endswith("_")
-            ):
-                for node in ast.walk(tree):
-                    if (
-                        isinstance(node, ast.Assign)
-                        and len(node.targets) == 1
+        declarations = {
+            name: value for name, value in scanner.consts.items()
+            if _ENVISH_CONST.search(name) and CAPS_NAME.match(value)
+            and not value.endswith("_")
+        }
+        first_lines: dict[str, int] = {}
+        if declarations:
+            # One breadth-first walk preserves the previous first-assignment
+            # semantics without walking the entire AST for each constant.
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
                         and isinstance(node.targets[0], ast.Name)
-                        and node.targets[0].id == cname
-                    ):
-                        inv.add(value,
-                                Occurrence(rel, node.lineno, "read"))
-                        break
+                        and node.targets[0].id in declarations):
+                    first_lines.setdefault(node.targets[0].id, node.lineno)
+        for name, value in declarations.items():
+            if name in first_lines:
+                inv.add(value, Occurrence(rel, first_lines[name], "read"))
     _parse_config_tables(root, inv)
     # Broker credentials moved out of Python policy tables. Keep them in the
     # inventory without importing application modules or executing the catalog.

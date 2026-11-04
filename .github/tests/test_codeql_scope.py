@@ -402,17 +402,10 @@ class TestOnRealRepo:
 
     @pytest.fixture(scope="class")
     @staticmethod
-    def repo_graph(repo):
-        """One whole-repo graph build shared by the class.
-
-        The graph is a pure function of the tree and the tree does
-        not change while this class runs; rebuilding it per test
-        re-paid the full-repo AST parse (tens of seconds on a CI
-        runner) for an identical result.
-        """
-        files = discover_py_files(repo)
-        reverse, failures = build_graph(files, repo)
-        return files, reverse, failures
+    def repo_graph(repo, whole_repo_import_graph):
+        """Use the same real-tree graph as the dispatch suite."""
+        assert whole_repo_import_graph[4] == repo
+        return whole_repo_import_graph[:3]
 
     def test_discover_finds_files(self, repo):
         files = discover_py_files(repo)
