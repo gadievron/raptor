@@ -16,6 +16,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+import pytest
 
 # parents[3]: tests/ → static-analysis/ → packages/ → repo root
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -32,6 +33,14 @@ _spec.loader.exec_module(_scanner)
 
 def _load_cs():
     return _scanner._load_compiler_scan()
+
+
+@pytest.fixture(autouse=True)
+def _baseline_compiler_channel_only(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(_load_cs(), "run_memcpy_overlap", lambda *a, **kw: SimpleNamespace(
+        value=SimpleNamespace(diagnostics={}, limitations=[]),
+    ))
 
 
 # ---------------------------------------------------------------------

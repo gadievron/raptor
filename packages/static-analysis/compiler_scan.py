@@ -84,6 +84,7 @@ from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
+from core.detectors.memcpy_overlap import OVERLAP_ID, run_memcpy_overlap
 from core.sarif import emit
 from core.source import read_text_capped
 
@@ -293,6 +294,34 @@ def _suppression_vet(
     )
 
 
+def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: str, rel_path: str):
+    kept: list[dict[str, Any]] = []
+    for d in raw:
+        if "error" in str(d.get("kind", "")):
+            continue
+        diag_id = d.get("id") or ""
+        if not _keep_diag_id(diag_id):
+            continue
+        rel = _rel_under_target(
+            d.get("file", ""), target_path, full_path.parent,
+        )
+        if rel is None:
+            continue
+        line = d.get("line", 0)
+        if not isinstance(line, int) or line <= 0:
+            continue
+        kept.append({
+            "rule_id": diag_id,
+            "file": rel,
+            "line": line,
+            "message": d.get("message", ""),
+            "cwe": _cwe_for_diag_id(diag_id),
+            "compiler": compiler_name,
+            "tu": rel_path,
+        })
+    return kept
+
+
 def analyze_tu(
     target_path: Path,
     rel_path: str,
@@ -347,30 +376,7 @@ def analyze_tu(
         ]
 
     def interpret(record: dict[str, Any], workdir: Path) -> TuDiagnostics:
-        kept: list[dict[str, Any]] = []
-        for d in record["diags"]:
-            if "error" in str(d.get("kind", "")):
-                continue
-            diag_id = d.get("id") or ""
-            if not _keep_diag_id(diag_id):
-                continue
-            rel = _rel_under_target(
-                d.get("file", ""), target_path, full_path.parent,
-            )
-            if rel is None:
-                continue
-            line = d.get("line", 0)
-            if not isinstance(line, int) or line <= 0:
-                continue
-            kept.append({
-                "rule_id": diag_id,
-                "file": rel,
-                "line": line,
-                "message": d.get("message", ""),
-                "cwe": _cwe_for_diag_id(diag_id),
-                "compiler": compiler_name,
-                "tu": rel_path,
-            })
+        kept = _scan_diagnostics(record["diags"], target_path, full_path, compiler_name, rel_path)
         try:
             witness, unvetted = _suppression_vet(
                 cmd[0], compiler_name, include_flags, target_path,
@@ -449,6 +455,8 @@ class CompilerScanResult:
     suppressed_tus: list[dict[str, str]] = field(default_factory=list)
     unvetted_tus: list[dict[str, str]] = field(default_factory=list)
 
+    detector_limitations: list[dict[str, str]] = field(default_factory=list)
+
     def summary_line(self) -> str:
         """One-line operator-facing summary (LOUD about skips)."""
         parts = [
@@ -485,6 +493,8 @@ class CompilerScanResult:
                 f"⚠️  {len(self.unvetted_tus)} TU(s) not vetted for "
                 f"analyzer suppression — silence there is not evidence"
             )
+        if self.detector_limitations:
+            parts.append(f"{len(self.detector_limitations)} memcpy overlap check limitation(s)")
         return "; ".join(parts)
 
 
@@ -554,6 +564,46 @@ def scan_target(
                 per_tu[rel] = TuDiagnostics(
                     rel, ok=False, reason=f"unexpected failure: {exc}",
                 )
+
+    eligible = tuple(rel for rel in tus
+                     if Path(rel).suffix in _C_SUFFIXES and per_tu.get(rel) is not None
+                     and per_tu[rel].ok)
+    if eligible:
+        gcc = _gcc_analyzer()
+
+        def overlap_request(rel):
+            assert gcc is not None
+            gcc_path, mode = gcc
+            full = target_path / rel
+            includes = [f"-I{d}" for d in _derive_include_dirs(target_path, full.parent)]
+            return CompilerRequest(
+                command=(gcc_path, "-fanalyzer", OVERLAP_ID, "-fno-builtin-memcpy",
+                         f"-fdiagnostics-format={mode}", *includes,
+                         "-c", str(full), "-o", os.devnull),
+                target=target_path, timeout=_COMPILE_TIMEOUT_S,
+                caller_label="compiler-scan", scratch_prefix="compiler_overlap_",
+                scratch_root=scratch_root,
+                parse=lambda workdir, stderr: _parse_analyzer_output(
+                    workdir, stderr, compiler_name="gcc", mode=mode, full_path=full,
+                ),
+            )
+
+        try:
+            extra = run_memcpy_overlap(
+                target_path, eligible, request_for=overlap_request if gcc else None,
+                sandbox_run=sandbox_run, max_workers=workers,
+            ).value
+            result.detector_limitations.extend({
+                "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
+            } for item in extra.limitations)
+            for rel, raw in extra.diagnostics.items():
+                per_tu[rel].diagnostics.extend(
+                    _scan_diagnostics(raw, target_path, target_path / rel, "gcc", rel),
+                )
+        except Exception as exc:  # additive detector failures cannot erase baseline findings
+            result.detector_limitations.append({
+                "tu": "", "reason": f"memcpy overlap detector failed: {type(exc).__name__}",
+            })
 
     # Deterministic aggregation order regardless of completion order.
     for rel in tus:
@@ -656,6 +706,9 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
             reason=u["reason"],
         )
         for u in result.unvetted_tus
+    ] + [
+        _limitation_note(item["tu"], "memcpy_overlap", item["reason"])
+        for item in result.detector_limitations
     ]
     if notifications:
         run["invocations"] = [{
@@ -682,11 +735,13 @@ def _limitation_note(
     tu: str, kind: str, text: str, **props: str,
 ) -> dict[str, Any]:
     """One SARIF ``notification`` recording a per-TU coverage limitation."""
-    return {
+    note: dict[str, Any] = {
         "level": "warning",
         "message": {"text": text[:500]},
-        "locations": [{
-            "physicalLocation": {"artifactLocation": {"uri": tu}},
-        }],
         "properties": {"coverage_limitation": kind, **props},
     }
+    if tu:
+        note["locations"] = [{
+            "physicalLocation": {"artifactLocation": {"uri": tu}},
+        }]
+    return note
