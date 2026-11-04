@@ -31,15 +31,15 @@ _HEX = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{32,}")
 def pytest_make_parametrize_id(val: object, argname: str) -> str | None:
     """Use compact stable IDs for payloads; defer other values to pytest."""
     is_pattern = isinstance(val, re.Pattern)
-    if is_pattern:
+    if isinstance(val, re.Pattern):
         val = val.pattern
     if not isinstance(val, (str, bytes)):
         return None
     prefix = re.sub(r"[^A-Za-z0-9_-]", "-", argname)[:24] or "parameter"
     is_bytes = isinstance(val, bytes)
-    text = bytes.decode(val, "ascii", errors="backslashreplace") if is_bytes else str.__str__(val)
-    if (bytes.__len__(val) if is_bytes else len(text)) == 1:
-        code = bytes.__getitem__(val, 0) if is_bytes else ord(text)
+    text = bytes.decode(val, "ascii", errors="backslashreplace") if isinstance(val, bytes) else str.__str__(val)
+    if (bytes.__len__(val) if isinstance(val, bytes) else len(text)) == 1:
+        code = bytes.__getitem__(val, 0) if isinstance(val, bytes) else ord(text)
         if code < 32 or code >= 127:
             if is_bytes:
                 kind = "byte-" + _CONTROLS.get(code, f"{code:02x}")
@@ -56,7 +56,7 @@ def pytest_make_parametrize_id(val: object, argname: str) -> str | None:
         kind = "multiline"
     elif any(unicodedata.category(c) in {"Cc", "Cf", "Cs"} for c in text):
         kind = "control-text"
-    elif is_bytes and not bytes.isascii(val):
+    elif isinstance(val, bytes) and not bytes.isascii(val):
         kind = "binary"
     elif any(ord(c) > 126 for c in text):
         kind = "unicode-text"
@@ -72,7 +72,7 @@ def pytest_make_parametrize_id(val: object, argname: str) -> str | None:
         kind = "source-text"
     else:
         return None
-    raw = val if is_bytes else text.encode("utf-8", errors="surrogatepass")
+    raw = val if isinstance(val, bytes) else text.encode("utf-8", errors="surrogatepass")
     digest = hashlib.sha256(b"bytes:" if is_bytes else b"text:")
     digest.update(raw)
     return f"{prefix}-{'regex-' if is_pattern else ''}{kind}-{digest.hexdigest()[:10]}"

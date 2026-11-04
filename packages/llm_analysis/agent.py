@@ -21,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from collections.abc import Iterable
 
 if __name__ == "__main__":
     # Standalone subprocess (python3 packages/llm_analysis/agent.py,
@@ -529,7 +530,8 @@ class VulnerabilityContext:
                 logger.warning(
                     "Source file %s exceeded the capped read; analysis sees truncated content", file_path
                 )
-            if window is not None:
+            if isinstance(payload, list):
+                assert window is not None  # Only the window reader returns lines.
                 if not self.start_line:
                     self.full_code = "\n".join(payload)
                     self.surrounding_context = self.full_code
@@ -608,6 +610,7 @@ class VulnerabilityContext:
             # Same capped read as read_vulnerable_code above. Same
             # rationale: bound the in-flight memory regardless of
             # source-file size.
+            numbered: Iterable[tuple[int, str]]
             if (type(line) is int and line >= 0
                     and type(context_lines) is int and context_lines >= 0):
                 start = max(0, line - context_lines - 1)
@@ -618,10 +621,10 @@ class VulnerabilityContext:
                     return f"[Error reading code: {file_uri}]"
                 numbered = enumerate(got[0], start=start)
             else:
-                got = read_text_capped(file_path, newline="")
-                if got is None:
+                text_result = read_text_capped(file_path, newline="")
+                if text_result is None:
                     return f"[Error reading code: {file_uri}]"
-                lines = split_lines(got[0])
+                lines = split_lines(text_result[0])
                 start = max(0, line - context_lines - 1)
                 end = min(len(lines), line + context_lines)
                 numbered = ((i, lines[i]) for i in range(start, end))

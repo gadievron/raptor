@@ -35,6 +35,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
+from contextlib import AbstractContextManager
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from core.logging import get_logger
@@ -112,7 +113,7 @@ class BrowserEngine:
         allow_unsandboxed_chromium: bool = False,
     ) -> None:
         self._launch_kwargs = _launch_options(allow_unsandboxed_chromium=allow_unsandboxed_chromium)
-        self._driver_scope = None
+        self._driver_scope: AbstractContextManager[Any] | None = None
         self._origin = self._normalized_origin(base_url)
         self._base_url = base_url.rstrip("/")
         self._timeout_ms = timeout_ms

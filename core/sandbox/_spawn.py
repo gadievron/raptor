@@ -3352,7 +3352,7 @@ def run_sandboxed(
                     except Exception:  # noqa: BLE001
                         _proc_rc = -1
                     if seccomp_profile == "chromium":
-                        if _proc_rc != 0:
+                        if _proc_rc != 0 or _libc is None:
                             _write_setup_status(status_w, b"F", "Chromium requires fresh private procfs")
                             os._exit(126)
                         # Never expose writable kernel controls with the per-PID

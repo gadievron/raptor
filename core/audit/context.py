@@ -3262,9 +3262,10 @@ def _read_source(
         lines = split_lines(text)
         selected = lines[start:end]
     else:
-        selected = _read_target_line_window(full_path, start, end)
-        if selected is None:
+        window = _read_target_line_window(full_path, start, end)
+        if window is None:
             return "(read error)"
+        selected = window
     return "\n".join(
         f"{i + 1:4d}  {line}"
         for i, line in enumerate(selected, start=start)

@@ -212,7 +212,7 @@ class WebScanner:
         self.ffuf_api_wordlist = ffuf_api_wordlist
         self.use_browser = browser
         self.allow_unsandboxed_chromium = allow_unsandboxed_chromium
-        self._browser_coverage_gaps = []
+        self._browser_coverage_gaps: list[str] = []
         self.oob_grace = oob_grace
         self.oob_listener = None
         if oob_listen:

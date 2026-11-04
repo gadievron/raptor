@@ -2646,12 +2646,12 @@ def _run_smt_verb_inner_json(request: dict) -> dict:
         for name, values in raw.items():
             if not isinstance(values, list):
                 raise ValueError("invalid vocabulary field")
-            entries = []
+            entries: list[str | tuple[str, str]] = []
             for value in values:
                 if isinstance(value, str):
                     entries.append(value)
                 elif isinstance(value, list) and len(value) == 2 and all(isinstance(v, str) for v in value):
-                    entries.append(tuple(value))
+                    entries.append((value[0], value[1]))
                 else:
                     raise ValueError("invalid vocabulary entry")
             converted[name] = frozenset(entries)

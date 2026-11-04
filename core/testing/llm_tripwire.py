@@ -18,7 +18,7 @@ from tempfile import mkdtemp
 
 import pytest
 
-_KEY = pytest.StashKey()
+_KEY: pytest.StashKey[tuple[Listener, Path, dict[str, str | None]]] = pytest.StashKey()
 _CREDENTIALS = (
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
     "MISTRAL_API_KEY",
@@ -37,7 +37,7 @@ class Listener:
         self.previous = None
         self.count = 0
         self.worker_requests = 0
-        self.journal_errors = []
+        self.journal_errors: list[str] = []
         self.host_dir = None
         self.context_path = None
         owner = self

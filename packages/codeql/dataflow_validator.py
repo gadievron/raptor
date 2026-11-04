@@ -652,6 +652,7 @@ class DataflowValidator:
             # legacy path for unusual arguments and its negative-bound rules.
             streaming = (type(line) is int and type(context_lines) is int
                          and line >= 0 and context_lines >= 0)
+            got: tuple[list[str], bool] | tuple[str, bool] | None
             if streaming:
                 start = max(0, line - context_lines - 1)
                 got = read_text_line_window_capped(
@@ -669,7 +670,7 @@ class DataflowValidator:
                     "Source file %s exceeded the capped read; context window reflects truncated read",
                     resolved,
                 )
-            if streaming:
+            if isinstance(content, list):
                 lines = content
             else:
                 lines = split_lines(content)

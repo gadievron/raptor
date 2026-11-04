@@ -139,6 +139,7 @@ class SweepMemo:
                 self._flights[key] = completed
             else:
                 self.waits += 1
+        assert completed is not None  # Existing flight or the event just installed.
         try:
             if not leader:
                 completed.wait()
