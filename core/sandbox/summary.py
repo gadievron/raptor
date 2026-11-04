@@ -60,6 +60,7 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import os
 import stat as _stat
 import threading
@@ -906,6 +907,14 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
     return True
 
 
+def _finite_json_number(value: str) -> float:
+    """Reject JSON extensions and overflowing floats before persistence."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite evidence number")
+    return number
+
+
 def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
@@ -1107,10 +1116,13 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             corrupt_lines += 1
             continue
         try:
-            record = json.loads(line)
+            record = json.loads(
+                line, parse_constant=_finite_json_number,
+                parse_float=_finite_json_number,
+            )
         except (RecursionError, ValueError):
-            # ValueError also covers integers exceeding Python's digit
-            # limit; those lines are corrupt evidence, not fatal errors.
+            # ValueError covers oversized integers and non-finite numbers;
+            # those lines are corrupt evidence, not fatal errors.
             # RecursionError: deeply nested input ("["*100k) raises it
             # out of json.loads instead of JSONDecodeError. The line
             # is target-writable content read AFTER the irreversible
@@ -1120,7 +1132,15 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             # summary, never silence it.
             corrupt_lines += 1
             continue
-        if not isinstance(record, dict):
+        # Validate the fields aggregation/classification consume without
+        # coercing malformed values into apparently valid evidence. Keep
+        # missing fields and unknown string types for legacy/future writers.
+        if (not isinstance(record, dict)
+                or ("type" in record and not isinstance(record["type"], str))
+                or (record.get("syscall") is not None
+                    and not isinstance(record["syscall"], str))
+                or (record.get("args") is not None
+                    and not isinstance(record["args"], list))):
             corrupt_lines += 1
             continue
         records.append(record)
@@ -1217,7 +1237,7 @@ def _assemble_and_write_summary(
             # accepts arbitrary kwargs and uses .get() internally.
             details = {k: v for k, v in d.items()
                        if k not in ("ts", "cmd", "returncode", "type",
-                                    "suggested_fix")}
+                                    "suggested_fix", "denial_type")}
             d["suggested_fix"] = _suggested_fix(
                 d.get("type", "unknown"), **details,
             )
