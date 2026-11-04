@@ -24737,8 +24737,7 @@ def _verify_hypotheses_immediate(
                 mechanism[:60], tools_confirmed,
             )
         else:
-            _chain_types = {e["type"] for e in chain}
-            _ran_clean = _chain_types - _errored - _inconclusive
+            _ran_clean = _dispatched - _errored - _inconclusive
             if _ran_clean:
                 refuted_count += 1
 
@@ -24895,10 +24894,10 @@ def _aggregate_ihv_verdicts(
         )
         return outcome
 
-    # Otherwise → suspicious (some untested, none confirmed)
-    if outcome.status not in ("finding", "suspicious"):
-        outcome.status = "suspicious"
-    outcome.review_result["immediate_verified"] = True
+    # Some claims remain untested. Preserve the review verdict rather
+    # than inventing a suspicion (or a clean result) from tool absence.
+    # An attempted verification is not a completed verification.
+    outcome.review_result.pop("immediate_verified", None)
     outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
     outcome.review_result["ihv_refuted"] = refuted_count
     return outcome
