@@ -204,6 +204,69 @@ def _upstream(manifest, vcs, fetch):
     return results
 
 
+
+def _published_payload(raw, *, generated_manifest=True):
+    """Hash all shipped regular files, retaining the original manifest identity.
+
+    _archive validates paths, duplicates and expansion before this bounded pass.
+    Cargo generates the normalized manifest, lockfile and VCS receipt; those
+    cannot be compared byte for byte to an upstream working tree.
+    """
+    result = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r|gz") as archive:
+        for member in archive:
+            if not member.isfile():
+                continue
+            relative = str(PurePosixPath(*_path(member.name).parts[1:]))
+            if relative in {"Cargo.lock", ".cargo_vcs_info.json"} or (generated_manifest and relative == "Cargo.toml"):
+                continue
+            if relative == "Cargo.toml.orig":
+                relative = "Cargo.toml"
+            digest = hashlib.sha256()
+            with archive.extractfile(member) as stream:
+                while block := stream.read(128 * 1024):
+                    digest.update(block)
+            result[relative] = digest.hexdigest()
+    return result
+
+
+def _matched_upstream(raw, metadata, fetch):
+    """Recover notices only when every published payload file still matches.
+
+    Older crates can omit VCS metadata and exclude LICENSE from their package.
+    The current upstream commit is only a discovery candidate: a missing or
+    changed original manifest or payload prevents reuse of its notice texts.
+    """
+    payload = _published_payload(raw)
+    if "Cargo.toml" not in payload or len(payload) < 2:
+        return {}, None
+    for field in ("repository", "homepage"):
+        repository = _github_repo(metadata.get(field))
+        if not repository:
+            continue
+        try:
+            commits = json.loads(fetch(f"https://api.github.com/repos/{repository}/commits?per_page=1", max_bytes=MAX_INVENTORY))
+            commit = commits[0]["sha"]
+            if not isinstance(commit, str) or not re.fullmatch(r"[a-f0-9]{40}", commit):
+                raise ValueError("upstream discovery did not return an immutable commit")
+            url = f"https://codeload.github.com/{repository}/tar.gz/{commit}"
+            source = fetch(url, max_bytes=MAX_ARCHIVE)
+            _, _, notices = _archive(source)
+            upstream = _published_payload(source, generated_manifest=False)
+            if any(upstream.get(path) != digest for path, digest in payload.items()):
+                continue
+            if notices:
+                proof = {"repository": repository, "commit": commit,
+                         "archive_sha256": hashlib.sha256(source).hexdigest(),
+                         "matched_files": [{"path": path, "sha256": payload[path]} for path in sorted(payload)],
+                         "scope": "all published payload files and original manifest; not build correspondence"}
+                return {url + "#" + path: (body, "source_matched_upstream_file")
+                        for path, (body, _) in notices.items()}, proof
+        except (OSError, ValueError, KeyError, TypeError, IndexError, tarfile.TarError, EOFError):
+            continue
+    return {}, None
+
+
 def _candidate(package, fetch, header_reader):
     result = {key: package.get(key, "") for key in ("name", "version", "source")}
     result.update(status="unavailable", notices=[])
@@ -249,6 +312,10 @@ def _candidate(package, fetch, header_reader):
         result["license_declared"] = declared
         if not notices:
             notices = _upstream(metadata, vcs, fetch)
+        if not notices and not vcs:
+            notices, proof = _matched_upstream(raw, metadata, fetch)
+            if proof is not None:
+                result["notice_source_match"] = proof
         contents = {}
         for path, (body, origin) in notices.items():
             body.decode("utf-8")

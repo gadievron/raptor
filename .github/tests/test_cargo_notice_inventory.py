@@ -138,3 +138,40 @@ def test_notice_symlink_resolves_only_to_retained_in_archive_text():
         archive.addfile(member)
     _, _, notices = tool._archive(output.getvalue())
     assert notices['crate/LICENSE'] == notices['LICENSE']
+
+
+@pytest.mark.parametrize('change', ['none', 'payload', 'manifest', 'missing', 'unrelated', 'bad-commit'])
+def test_missing_vcs_recovery_requires_all_published_payload_and_original_manifest(change):
+    manifest = b'[package]\nname="example"\nversion="1.0.0"\nlicense="MIT"\nrepository="https://github.com/publisher/project"\n'
+    files = {'Cargo.toml': manifest, 'Cargo.toml.orig': manifest, 'src/lib.rs': b'pub fn original() {}'}
+    raw = source(files)
+    lock = ('[[package]]\nname="example"\nversion="1.0.0"\nsource="' + tool.REGISTRY + '"\nchecksum="' + hashlib.sha256(raw).hexdigest() + '"\n').encode()
+    upstream = {'Cargo.toml': manifest, 'src/lib.rs': files['src/lib.rs'], 'LICENSE': b'Original publisher MIT notice'}
+    if change == 'payload':
+        upstream['src/lib.rs'] += b'// changed'
+    elif change == 'manifest':
+        upstream['Cargo.toml'] += b'\n# changed'
+    elif change == 'missing':
+        del upstream['src/lib.rs']
+    elif change == 'unrelated':
+        upstream = {'Cargo.toml': b'[package]\nname="other"\n', 'LICENSE': b'Unrelated notice'}
+    calls = []
+    def fetch(url, **kwargs):
+        calls.append(url)
+        if 'static.crates.io' in url:
+            return raw
+        if '/commits?' in url:
+            return json.dumps([{'sha': 'not-a-commit' if change == 'bad-commit' else 'a'*40}]).encode()
+        assert 'a'*40 in url
+        return source(upstream)
+    result = tool.collect_cargo_notices(lock, fetch)
+    row = json.loads(result.inventory)['packages'][0]
+    assert (row['status'] == 'notice_candidates_captured') == (change == 'none')
+    if change == 'none':
+        assert list(result.contents.values()) == [b'Original publisher MIT notice']
+        assert row['notice_source_match']['commit'] == 'a'*40
+        assert len(row['notice_source_match']['matched_files']) == 2
+        assert row['notices'][0]['origin'] == 'source_matched_upstream_file'
+    else:
+        assert 'notice_source_match' not in row
+        assert not result.contents
