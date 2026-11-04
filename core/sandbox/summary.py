@@ -1108,7 +1108,9 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             continue
         try:
             record = json.loads(line)
-        except (RecursionError, json.JSONDecodeError):
+        except (RecursionError, ValueError):
+            # ValueError also covers integers exceeding Python's digit
+            # limit; those lines are corrupt evidence, not fatal errors.
             # RecursionError: deeply nested input ("["*100k) raises it
             # out of json.loads instead of JSONDecodeError. The line
             # is target-writable content read AFTER the irreversible
