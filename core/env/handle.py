@@ -11,12 +11,12 @@ namespace-isolated, syscall-observable).
 from __future__ import annotations
 
 import inspect as _inspect
-import shutil
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import rmtree_hardened
 from core.container.containers import (
     container_logs_tail,
     inspect_state,
@@ -335,4 +335,8 @@ class SandboxHandle(RuntimeHandle):
 
     def teardown(self) -> None:
         self._torn_down = True
-        shutil.rmtree(self.rootfs, ignore_errors=True)
+        if getattr(self, "_rootfs_removed", False):
+            return
+        if not rmtree_hardened(self.rootfs):
+            raise OSError(f"could not remove sandbox rootfs {self.rootfs}")
+        self._rootfs_removed = True

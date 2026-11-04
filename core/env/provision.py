@@ -21,7 +21,6 @@ half-provisioned.
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -29,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.atomic_fs import rmtree_hardened
 from core.container.build import build_image
 from core.container.containers import create_internal_network, launch_container
 from core.container.export import export_rootfs
@@ -50,6 +50,45 @@ logger = logging.getLogger(__name__)
 #: Ownership label every provisioned artifact carries; the value is the
 #: per-provision nonce so cleanup is exact-scope.
 OWNER_LABEL = "raptor-env.id"
+
+
+def _teardown_resources(
+    provision_id: str, *, handle: RuntimeHandle | None = None,
+    owned_workdir: Path | None = None,
+    release_workdir: Callable[[], None] | None = None,
+) -> None:
+    """Attempt every independent cleanup, then propagate the first error."""
+    actions: list[tuple[str, Callable[[], Any]]] = []
+    if handle is not None:
+        actions.append(("runtime", handle.teardown))
+    actions.extend([
+        ("containers", lambda: remove_labeled_containers(OWNER_LABEL, provision_id)),
+        ("networks", lambda: remove_labeled_networks(OWNER_LABEL, provision_id)),
+        ("images", lambda: remove_labeled_images(OWNER_LABEL, provision_id)),
+    ])
+    if owned_workdir is not None:
+        def remove_workdir() -> None:
+            if not rmtree_hardened(owned_workdir):
+                raise OSError(f"could not remove owned environment workdir {owned_workdir}")
+            if release_workdir is not None:
+                release_workdir()
+
+        actions.extend([
+            ("keepalive", lambda: keepalive_unregister(owned_workdir)),
+            ("workdir", remove_workdir),
+        ])
+    first_error: BaseException | None = None
+    for name, action in actions:
+        try:
+            action()
+        except BaseException as exc:
+            # Cancellation must not prevent later owned resources from
+            # being released. Propagate it after finishing this teardown.
+            logger.warning("environment %s cleanup failed", name, exc_info=True)
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 @dataclass
@@ -74,13 +113,18 @@ class Environment:
 
     def teardown(self) -> None:
         """Tear down the instance and remove provision-scoped artifacts."""
-        self.handle.teardown()
-        remove_labeled_containers(OWNER_LABEL, self.provision_id)
-        remove_labeled_networks(OWNER_LABEL, self.provision_id)
-        remove_labeled_images(OWNER_LABEL, self.provision_id)
-        if self.owned_workdir is not None:
-            keepalive_unregister(self.owned_workdir)
-            shutil.rmtree(self.owned_workdir, ignore_errors=True)
+        owned = self.owned_workdir
+
+        def release_workdir() -> None:
+            # A confirmed removal ends ownership, even if an earlier
+            # independent action failed or the name is subsequently reused.
+            if self.owned_workdir == owned:
+                self.owned_workdir = None
+
+        _teardown_resources(
+            self.provision_id, handle=self.handle, owned_workdir=owned,
+            release_workdir=release_workdir,
+        )
 
 
 @dataclass
@@ -195,25 +239,22 @@ def provision(
     # export), so the owner refreshes it until teardown.
     work = Path(workdir) if workdir else Path(
         tempfile.mkdtemp(prefix="raptor-env-"))
-    if created_work:
-        keepalive_register(work)
-
     def _cleanup() -> None:
         """Exact-scope artifact cleanup. A launch that failed AFTER
         ``docker run`` succeeded (e.g. ``no_host_port``) leaves a
         RUNNING container behind; every provision-labeled artifact is
         removed here, along with the provisioner-owned work dir.
         Idempotent — safe to run after a partial teardown."""
-        remove_labeled_containers(OWNER_LABEL, provision_id)
-        remove_labeled_networks(OWNER_LABEL, provision_id)
-        remove_labeled_images(OWNER_LABEL, provision_id)
-        if created_work:
-            keepalive_unregister(work)
-            shutil.rmtree(work, ignore_errors=True)
+        _teardown_resources(
+            provision_id, owned_workdir=work if created_work else None,
+        )
 
     def _fail(**kw: Any) -> ProvisionOutcome:
-        """Failure outcome + exact-scope cleanup."""
-        _cleanup()
+        """Failure outcome + best-effort exact-scope cleanup."""
+        try:
+            _cleanup()
+        except Exception:  # noqa: BLE001 — preserve the structured provision failure
+            logger.warning("cleanup after provision failure was incomplete", exc_info=True)
         return ProvisionOutcome(ok=False, **kw)
 
     # Exceptions are not the contract (failures are data), but an
@@ -221,6 +262,8 @@ def provision(
     # plan's kwargs — must not leak the launched container, network,
     # image, or keepalive-pinned work dir on its way out.
     try:
+        if created_work:
+            keepalive_register(work)
         return _provision_steps(
             spec, runtime=runtime, verify=verify,
             fail_on_verify=fail_on_verify, output_dir=output_dir,
@@ -229,7 +272,10 @@ def provision(
             created_work=created_work, work=work, fail=_fail,
         )
     except BaseException:
-        _cleanup()
+        try:
+            _cleanup()
+        except BaseException:
+            logger.warning("cleanup after provision exception was incomplete", exc_info=True)
         raise
 
 
