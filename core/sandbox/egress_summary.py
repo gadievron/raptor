@@ -98,6 +98,8 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         return None
 
     by_host: dict[tuple[str, int | None], dict[str, Any]] = {}
+    # Keep display order in reasons while avoiding repeated linear scans.
+    reasons_seen: dict[tuple[str, int | None], set[str]] = {}
     total_allowed = 0
     total_denied = 0
     total_failed = 0
@@ -111,6 +113,7 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         key = (host, port)
 
         if key not in by_host:
+            reasons_seen[key] = set()
             by_host[key] = {
                 "host": host,
                 "port": port,
@@ -132,12 +135,14 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         elif result and result.startswith(_DENIED_PREFIXES):
             entry["denied"] += 1
             total_denied += 1
-            if result not in entry["reasons"]:
+            if result not in reasons_seen[key]:
+                reasons_seen[key].add(result)
                 entry["reasons"].append(result)
         elif result in _FAILED_RESULTS:
             entry["failed"] += 1
             total_failed += 1
-            if result not in entry["reasons"]:
+            if result not in reasons_seen[key]:
+                reasons_seen[key].add(result)
                 entry["reasons"].append(result)
         else:
             entry["failed"] += 1
