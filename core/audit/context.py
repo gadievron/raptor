@@ -379,7 +379,7 @@ def assemble_context(
     from core.audit.prefilter import detect_language
     ctx["language"] = detect_language(file_path)
     ctx["source"] = _read_source(target_path, file_path, line_start, line_end)
-    ctx["metadata"] = _extract_metadata(checklist, file_path, function_name)
+    ctx["metadata"] = _extract_metadata(checklist, file_path, function_name, line_start)
     ctx["callers"] = _find_callers(
         inventory, file_path, function_name, line_start, context_map,
     )
@@ -3318,8 +3318,13 @@ def _extract_metadata(
     checklist: dict[str, Any] | None,
     file_path: str,
     function_name: str,
+    line_start: int = 0,
 ) -> dict[str, Any]:
-    """Extract metadata for a function from the checklist."""
+    """Resolve a function occurrence, never an arbitrary same-name peer.
+
+    The source span disambiguates overloads and receiver methods. Without
+    a span, only an unambiguous name may supply metadata.
+    """
     if not checklist:
         return {}
 
@@ -3327,15 +3332,23 @@ def _extract_metadata(
         if file_info.get("path") != file_path:
             continue
         items = file_info.get("items", file_info.get("functions", []))
+        candidates = []
         for item in items:
-            if item.get("name") == function_name:
-                result = {}
-                if item.get("signature"):
-                    result["signature"] = item["signature"]
-                meta = item.get("metadata", {})
-                if meta:
-                    result.update(meta)
-                return result
+            name = item.get("name")
+            owner = (item.get("metadata") or {}).get("class_name")
+            if function_name not in (name, f"{owner}.{name}" if owner else name):
+                continue
+            if line_start and item.get("line_start") != line_start:
+                continue
+            candidates.append(item)
+        if len(candidates) != 1:
+            return {}
+        item = candidates[0]
+        result = {}
+        if item.get("signature"):
+            result["signature"] = item["signature"]
+        result.update(item.get("metadata") or {})
+        return result
     return {}
 
 
