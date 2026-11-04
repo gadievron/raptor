@@ -105,29 +105,28 @@ def _collection(node, env) -> tuple[str, ...]:
     return ()
 
 
-def _consts(tree) -> dict[str, tuple[str, ...]]:
+def _consts(nodes) -> dict[str, tuple[str, ...]]:
     env: dict[str, tuple[str, ...]] = {}
+    assignments = []
+    for n in nodes:
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)):
+            assignments.append((n.targets[0].id, n.value))
+        elif (isinstance(n, ast.AnnAssign) and n.value is not None
+              and isinstance(n.target, ast.Name)):
+            assignments.append((n.target.id, n.value))
     for _ in range(2):  # second pass resolves constants built from constants
-        for n in ast.walk(tree):
-            target = value = None
-            if (isinstance(n, ast.Assign) and len(n.targets) == 1
-                    and isinstance(n.targets[0], ast.Name)):
-                target, value = n.targets[0].id, n.value
-            elif (isinstance(n, ast.AnnAssign) and n.value is not None
-                  and isinstance(n.target, ast.Name)):
-                target, value = n.target.id, n.value
-            if target is None:
-                continue
+        for target, value in assignments:
             got = _collection(value, env)
             if got:
                 env[target] = got
     return env
 
 
-def _loop_env(tree, env) -> dict[str, tuple[str, ...]]:
+def _loop_env(nodes, env) -> dict[str, tuple[str, ...]]:
     """Loop / comprehension variables bound over constant collections."""
     loops = dict(env)
-    for n in ast.walk(tree):
+    for n in nodes:
         gens = []
         if isinstance(n, (ast.For, ast.AsyncFor)):
             gens = [(n.target, n.iter)]
@@ -156,7 +155,7 @@ def _normalised(node) -> bool:
         return False
 
 
-def scan(sources: dict[str, str]) -> tuple[list[tuple], list[tuple]]:
+def scan(sources: dict[str, str], *, parsed_trees=None) -> tuple[list[tuple], list[tuple]]:
     """(sites, normalised_sites); each item (file, line, kind, marker)."""
     trees = {}
     genv: dict[str, tuple[str, ...]] = {}
@@ -165,15 +164,22 @@ def scan(sources: dict[str, str]) -> tuple[list[tuple], list[tuple]]:
             t = ast.parse(text)
         except SyntaxError:
             continue
-        trees[rel] = t
-        for k, v in _consts(t).items():
+        if parsed_trees is not None:
+            parsed_trees[rel] = t
+        # All passes are read-only and use the same breadth-first order.
+        # Traverse each tree once instead of rebuilding that walk for
+        # constant extraction, loop bindings and consumer recognition.
+        nodes = tuple(ast.walk(t))
+        constants = _consts(nodes)
+        trees[rel] = (nodes, constants)
+        for k, v in constants.items():
             genv.setdefault(k, v)
     sites, normed = set(), set()
-    for rel, t in trees.items():
+    for rel, (nodes, constants) in trees.items():
         env = dict(genv)
-        env.update(_consts(t))
-        env = _loop_env(t, env)
-        for n in ast.walk(t):
+        env.update(constants)
+        env = _loop_env(nodes, env)
+        for n in nodes:
             hits: list[tuple[str, str, bool]] = []
             if isinstance(n, ast.Compare) and len(n.ops) == 1:
                 op, right = n.ops[0], n.comparators[0]

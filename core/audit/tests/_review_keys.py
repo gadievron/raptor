@@ -414,7 +414,7 @@ def scan(root: Path):
     return reads, writes
 
 
-def scan_full(root: Path):
+def scan_full(root: Path, *, parsed_trees=None):
     """(reads, writes, unresolved). ``unresolved`` is a set of
     :class:`Site` for reached writes whose keys cannot be resolved
     statically. They are NOT counted as covered; the closure test fails
@@ -454,11 +454,16 @@ def scan_full(root: Path):
         for f in (root / sub).rglob("*.py"):
             if "tests" in f.parts or f.name.startswith("test_"):
                 continue
-            try:
-                tree = ast.parse(f.read_text())
-            except (SyntaxError, UnicodeDecodeError):
-                continue
             rel = str(f.relative_to(root))
+            # A caller scanning the same immutable source snapshot can
+            # supply its ASTs. Enumerate the real tree regardless, so a
+            # partial map cannot silently omit a file from the census.
+            tree = parsed_trees.get(rel) if parsed_trees is not None else None
+            if tree is None:
+                try:
+                    tree = ast.parse(f.read_text())
+                except (SyntaxError, UnicodeDecodeError):
+                    continue
             qualnames = _qualnames(tree)
             for fn in ast.walk(tree):
                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):

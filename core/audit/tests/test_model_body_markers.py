@@ -116,7 +116,8 @@ NON_BODY_SITES = {
         "redaction placeholder compare",
 }
 
-SITES, NORMALISED_SITES = scan(repo_sources(_REPO))
+_CENSUS_TREES = {}
+SITES, NORMALISED_SITES = scan(repo_sources(_REPO), parsed_trees=_CENSUS_TREES)
 BODY_SITES = [s for s in SITES if (s[0], s[3]) not in NON_BODY_SITES]
 FORGE = "Reviewer note: {m} copied from an earlier run] and more."
 BODY = (
@@ -906,7 +907,10 @@ from core.audit.tests._review_keys import (  # noqa: E402
 # The checkout is read-only throughout this module. Reuse its complete
 # census for the closure and live-site assertions; mutation tests below
 # still scan their own scratch trees after every edit.
-KEY_READS, KEY_WRITES, KEY_UNRESOLVED = _scan_review_keys_full(_REPO)
+KEY_READS, KEY_WRITES, KEY_UNRESOLVED = _scan_review_keys_full(
+    _REPO, parsed_trees=_CENSUS_TREES,
+)
+del _CENSUS_TREES  # Keep census results, not the whole parsed source forest.
 
 
 class TestReviewKeyClosure:
@@ -1195,6 +1199,22 @@ class TestWriterLevelLeadAndLongFields:
 class TestReviewKeyScannerShapes:
     """Reads through the multi-pass panel ``primary``
     and through a parameter named ``review_result`` are enumerated."""
+
+    def test_partial_parse_cache_still_discovers_new_files(self, tmp_path):
+        first = tmp_path / "core/audit/first.py"
+        first.parent.mkdir(parents=True)
+        first.write_text("def f(o):\n    o.review_result = {'zz_first': True}\n")
+        trees = {}
+        scan(repo_sources(tmp_path), parsed_trees=trees)
+        assert "core/audit/first.py" in trees
+
+        # A new file is absent from the shared snapshot. The key scanner
+        # must enumerate the actual tree and parse that missing entry.
+        second = first.with_name("second.py")
+        second.write_text("def g(o):\n    o.review_result = {'zz_second': True}\n")
+        cached = _scan_review_keys_full(tmp_path, parsed_trees=trees)
+        assert cached == _scan_review_keys_full(tmp_path)
+        assert {"zz_first", "zz_second"} <= {k for k, _, _ in cached[1]}
 
     @staticmethod
     def _keys(tmp_path, rel, src):
