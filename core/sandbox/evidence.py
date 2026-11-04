@@ -213,6 +213,7 @@ class EvidenceFile:
         dirfd = ensure_audit_dirfd(run_dir)
         path = evidence_write_path(run_dir, filename)
         flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
+        fd = None
         try:
             try:
                 fd = os.open(filename, flags | os.O_CREAT | os.O_EXCL,
@@ -228,7 +229,6 @@ class EvidenceFile:
                     and not (st.st_mode & 0o022)
                 )
                 if not ok:
-                    os.close(fd)
                     raise OSError(
                         f"existing evidence file {path} failed validation "
                         f"(mode={oct(st.st_mode)}, uid={st.st_uid}, "
@@ -242,6 +242,14 @@ class EvidenceFile:
                 _fcntl.fcntl(fd, _fcntl.F_SETFL, fl & ~os.O_NONBLOCK)
                 return cls(fd, path, st)
             return cls(fd, path, os.fstat(fd))
+        except BaseException:
+            # Ownership transfers only after construction succeeds.
+            # Metadata/flag setup failures must release the file as
+            # well as the directory fd, preserving the original error.
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            raise
         finally:
             with contextlib.suppress(OSError):
                 os.close(dirfd)
