@@ -78,6 +78,10 @@ def python_runtime_tool_paths() -> list[str]:
     homes = _home_roots()
     narrow_candidates: list[str] = []
     for raw in candidates:
+        # Reject relative input before HOME narrowing or realpath() can
+        # turn the caller's working directory into an absolute grant.
+        if not os.path.isabs(raw):
+            continue
         prefix = Path(os.path.realpath(raw))
         if any(prefix == home or prefix in home.parents for home in homes):
             narrow_candidates.extend(str(prefix / item) for item in (
