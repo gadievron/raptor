@@ -271,19 +271,19 @@ class ObserveProfile:
     nonce_trusted: bool = True
 
     def merge(self, other: ObserveProfile) -> None:
-        """In-place union — used when concatenating multiple probe runs."""
-        for p in other.paths_read:
-            if p not in self.paths_read:
-                self.paths_read.append(p)
-        for p in other.paths_written:
-            if p not in self.paths_written:
-                self.paths_written.append(p)
-        for p in other.paths_stat:
-            if p not in self.paths_stat:
-                self.paths_stat.append(p)
-        for c in other.connect_targets:
-            if c not in self.connect_targets:
-                self.connect_targets.append(c)
+        """In-place stable union of observations from multiple probe runs."""
+        for name in ("paths_read", "paths_written", "paths_stat",
+                     "connect_targets"):
+            incoming = getattr(other, name)
+            if not incoming:
+                continue
+            current = getattr(self, name)
+            # Rebuild per merge: these public lists may have been edited.
+            seen = set(current)
+            for item in incoming:
+                if item not in seen:
+                    current.append(item)
+                    seen.add(item)
         if other.budget_truncated:
             self.budget_truncated = True
         for cat, count in other.dropped_by_category.items():
