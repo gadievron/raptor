@@ -69,6 +69,11 @@ def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
     (they are structural in source code and multi-line prose). All other
     non-printable characters are still escaped.
     """
+    # Printable plain strings need neither escaping nor reconstruction.
+    # Keep subclasses and unusual flag values on the legacy path so
+    # their iteration/truthiness behaviour remains unchanged.
+    if type(s) is str and type(preserve_newlines) is bool and s.isprintable():
+        return s
     if preserve_newlines:
         return "".join(
             c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else _escape_char(c)
