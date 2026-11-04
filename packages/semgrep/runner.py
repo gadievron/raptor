@@ -32,6 +32,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
 
+from core.atomic_fs import rmtree_hardened
+from core.run.scratch import keepalive_register, keepalive_unregister
 from core.run.toolprobe import probe
 
 if TYPE_CHECKING:
@@ -381,50 +383,80 @@ def build_cmd(
     return cmd
 
 
-# One sandbox scratch PARENT per process, one fake-HOME subdirectory
-# per invocation. The parent amortises the per-process cost (created
-# lazily, removed once at exit — its rmtree sweeps every invocation
-# subdir with it); the per-invocation mkdtemp subdir is what each
-# sandboxed child gets as its output/fake-HOME root. Per-invocation
-# isolation is load-bearing, not hygiene: a sandboxed child has write
-# access to ITS OWN output dir for its whole lifetime, so with a
-# SHARED dir a still-live compromised child of call A could rewrite
-# call B's ``.home`` between B's parent-side lstat sweep and makedirs
-# (core.sandbox.context's symlink-TOCTOU check-then-act) — regaining
-# the bounded parent-side write-outside escape that check exists to
-# stop — and a damaged shared ``.home`` would also poison every later
-# semgrep call in the process. With a fresh subdir per call, no child
-# ever holds write access to another call's scratch, and the
-# sandbox's fake-home materialisation validates each fresh ``.home``
-# tree per call exactly as before. Scan RESULTS come exclusively from
-# stdout SARIF and --json-output, both outside this dir.
+# One process-owned parent, with an isolated fake HOME per invocation.
+# A child must never share writable scratch with another invocation: it
+# could otherwise change that invocation's .home during parent-side setup.
+# Results are read/persisted before the invocation directory is reclaimed;
+# only the empty parent normally survives until process exit.
 _SCRATCH_LOCK = threading.Lock()
 _scratch_parent: str | None = None
+_scratch_owner_pid: int | None = None
 
 
 def _sandbox_scratch_parent() -> str:
-    global _scratch_parent
+    global _scratch_parent, _scratch_owner_pid
+    pid = os.getpid()
     with _SCRATCH_LOCK:
-        if _scratch_parent is None or not os.path.isdir(_scratch_parent):
-            _scratch_parent = tempfile.mkdtemp(prefix="semgrep-sbx-")
-            atexit.register(
-                shutil.rmtree, _scratch_parent, ignore_errors=True,
-            )
+        if _scratch_owner_pid is not None and _scratch_owner_pid != pid:
+            # Inherited state belongs to another process, never this child.
+            _scratch_parent = None
+            _scratch_owner_pid = None
+        if (_scratch_parent is not None
+                and (not os.path.isdir(_scratch_parent) or os.path.islink(_scratch_parent))):
+            keepalive_unregister(_scratch_parent)
+            _scratch_parent = None
+            _scratch_owner_pid = None
+        if _scratch_parent is None:
+            parent = tempfile.mkdtemp(prefix="semgrep-sbx-")
+            try:
+                keepalive_register(parent)
+            except BaseException:
+                try:
+                    keepalive_unregister(parent)
+                except BaseException:
+                    logger.warning("could not unregister failed semgrep scratch", exc_info=True)
+                rmtree_hardened(parent)
+                raise
+            _scratch_parent = parent
+            _scratch_owner_pid = pid
+        else:
+            # A previous failed cleanup may have unregistered this parent.
+            keepalive_register(_scratch_parent)
         return _scratch_parent
 
 
 def _invocation_scratch_dir() -> str:
-    """Fresh per-invocation scratch under the process-shared parent."""
+    """Fresh per-invocation scratch under the process-owned parent."""
     return tempfile.mkdtemp(prefix="inv-", dir=_sandbox_scratch_parent())
 
 
 def _reset_sandbox_scratch() -> None:
-    """Test hook: drop the shared scratch parent immediately."""
-    global _scratch_parent
+    """Remove this process's scratch; retain failed cleanup for retry."""
+    global _scratch_parent, _scratch_owner_pid
     with _SCRATCH_LOCK:
+        if _scratch_owner_pid is not None and _scratch_owner_pid != os.getpid():
+            return
         if _scratch_parent is not None:
-            shutil.rmtree(_scratch_parent, ignore_errors=True)
-        _scratch_parent = None
+            try:
+                keepalive_unregister(_scratch_parent)
+            finally:
+                if rmtree_hardened(_scratch_parent):
+                    _scratch_parent = None
+                    _scratch_owner_pid = None
+                else:
+                    logger.warning("semgrep scratch cleanup incomplete: %s", _scratch_parent)
+
+
+def _after_scratch_fork_child() -> None:
+    global _SCRATCH_LOCK, _scratch_parent, _scratch_owner_pid
+    _SCRATCH_LOCK = threading.Lock()
+    _scratch_parent = None
+    _scratch_owner_pid = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_scratch_fork_child)
+atexit.register(_reset_sandbox_scratch)
 
 
 def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None, target_root=None):
@@ -483,8 +515,8 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
         # process-shared parent (see the _sandbox_scratch_parent
         # comment for why sharing one dir across concurrent
         # invocations would reopen the fake-home symlink-TOCTOU
-        # window); the parent's atexit rmtree reclaims them all, and
-        # semgrep's stderr still carries any real failure.
+        # window). An owned directory is reclaimed when this call exits;
+        # run_rule supplies its own directory until sidecar parsing ends.
         from core.sandbox.python_paths import python_tool_paths
         tool_paths = python_tool_paths(cmd[0]) if cmd else []
         # Local rules are outside target/output in common run_rule calls.
@@ -504,17 +536,22 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
             if sandbox_target is None:
                 tool_paths.append(str(target.absolute()))
             tool_paths.extend(str(Path(path).absolute()) for path in extra_targets)
-        return sandbox_run(
-            cmd,
-            target=sandbox_target,
-            caller_label="semgrep-runner",
-            env_caller_filtered=True,
-            output=output_dir or _invocation_scratch_dir(),
-            fake_home=True,
-            tool_paths=list(dict.fromkeys(tool_paths)),
-            **net_kwargs,
-            **options,
-        )
+        owned_output = _invocation_scratch_dir() if output_dir is None else None
+        try:
+            return sandbox_run(
+                cmd,
+                target=sandbox_target,
+                caller_label="semgrep-runner",
+                env_caller_filtered=True,
+                output=output_dir if output_dir is not None else owned_output,
+                fake_home=True,
+                tool_paths=list(dict.fromkeys(tool_paths)),
+                **net_kwargs,
+                **options,
+            )
+        finally:
+            if owned_output is not None:
+                rmtree_hardened(owned_output)
 
     return _runner
 
@@ -636,18 +673,15 @@ def run_rule(
                       if subprocess_runner is None and not unsandboxed else None)
     cleanup_json = False
     json_path = None if sandbox_output is not None else json_output_path
-    if json_path is None:
-        with NamedTemporaryFile(prefix="semgrep_", suffix=".json",
-                                dir=sandbox_output, delete=False) as tmp:
-            json_path = Path(tmp.name)
-        cleanup_json = True
-
-    # Wrap the entire subprocess + parse path in try/finally so an
-    # unexpected exception (MemoryError, KeyboardInterrupt mid-parse,
-    # any future exception type the runner adds) still unlinks the
-    # tempfile. Pre-fix only TimeoutExpired / OSError were handled;
-    # everything else leaked the tempfile.
+    # Protect sidecar setup too: allocating the invocation directory
+    # precedes NamedTemporaryFile, whose constructor can itself fail.
     try:
+        if json_path is None:
+            with NamedTemporaryFile(prefix="semgrep_", suffix=".json",
+                                    dir=sandbox_output, delete=False) as tmp:
+                json_path = Path(tmp.name)
+            cleanup_json = True
+
         cmd = build_cmd(
             target, config,
             json_output_path=json_path,
@@ -767,8 +801,12 @@ def run_rule(
             except OSError as exc:
                 budget_errors.append(f"cannot save semgrep --json output: {exc}")
     finally:
-        if cleanup_json:
-            _safe_unlink(json_path)
+        try:
+            if cleanup_json:
+                _safe_unlink(json_path)
+        finally:
+            if sandbox_output is not None:
+                rmtree_hardened(sandbox_output)
 
     findings = parse_sarif(sarif_text)
     parsed_json = parse_json_output(json_text)
