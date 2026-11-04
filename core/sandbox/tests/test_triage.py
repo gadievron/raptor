@@ -564,18 +564,12 @@ class TestLifecycleIntegration:
 
     def test_failed_run_still_writes_triage(self, tmp_path):
         from core.run.metadata import start_run, fail_run
-        from core.sandbox.observe import _check_blocked
 
         run_dir = tmp_path / "scan-failed"
         start_run(run_dir, command="scan")
-        _check_blocked(
-            stderr="Operation not permitted\n",
-            cmd_display="weird-tool",
-            returncode=137,
-            sandbox_info={},
-            seccomp_engaged=True,
-            seccomp_profile="full",
-        )
+        # Exercise terminal-state finalization with a known denial record.
+        # EPERM-to-seccomp attribution is Linux-only and tested separately.
+        summary_mod.record_denial("weird-tool", 137, "seccomp", profile="full")
         fail_run(run_dir, error="something broke")
 
         triage_path = run_dir / triage_mod.TRIAGE_FILE
