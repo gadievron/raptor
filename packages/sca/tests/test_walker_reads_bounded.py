@@ -174,6 +174,9 @@ def test_no_bare_reads_in_walker_subtrees() -> None:
 # run artifact whose size the run itself controls. Keyed on
 # (filename, distinctive line fragment) — line numbers churn.
 _ROOT_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("cache_budget.py", "fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK"):
+        "_is_database: no-follow/nonblocking open, fstat regular-file check, "
+        "and os.read(fd, 16 - len(header)) cap the SQLite header read at 16 bytes",
     ("cache_budget.py", "fd = os.open(unit.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK"):
         "regular-file header probe only: fstat rejects other inode types, "
         "O_NOFOLLOW refuses final symlinks and os.read(fd, 256) bounds the read",
