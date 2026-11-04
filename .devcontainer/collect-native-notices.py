@@ -286,7 +286,7 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             record["source_sbom_url"] = url + ".spdx.json"
             sbom = download(record["source_sbom_url"], max_bytes=MAX_SOURCE_SBOM)
             verify_python_source(sbom, version, url, record["source_archive_sha256"])
-        definitions = (("Cargo.lock",) if cargo_dependencies else ("Makefile",) if name == "git"
+        definitions = (("Cargo.lock", "rust-toolchain.toml") if cargo_dependencies else ("Makefile",) if name == "git"
                        else ("build.conf",) if name == "subversion" else ())
         members, dependencies = python_notice_sources(sbom, version) if sbom is not None else ({}, [])
         record["files"], contents = release_notices(archive, definitions if build_inventory or cargo_dependencies else (), members)
@@ -308,6 +308,13 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             record["files"].append({"file": filename, "sha256": sha, "content_kind": "source_sbom",
                                     "scope": "Cargo.lock source candidates, not installed components"})
             contents[filename] = cargo.inventory
+            from rust_notice_inventory import collect_rust_notices
+            declaration = next((contents[row["file"]] for row in record["files"]
+                               if row.get("content_kind") == "build_declaration" and PurePosixPath(row.get("source_member", "")).name == "rust-toolchain.toml"), b"")
+            rust_records, rust_contents, rust_receipt = collect_rust_notices(declaration, download)
+            record["toolchain_notices"] = rust_receipt
+            record["files"].extend(rust_records)
+            contents.update(rust_contents)
             if sum(len(text) for name, text in contents.items() if name.startswith("LICENSE-")) > MAX_TOTAL:
                 raise ValueError("release notices exceed byte budget")
         if sbom is not None:

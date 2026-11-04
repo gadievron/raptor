@@ -197,6 +197,14 @@ def collect(audit, image_digest):
                     counts = [dependency_notices.get(key) for key in ("candidates", "captured", "metadata_only", "unavailable")]
                     if any(type(value) is not int or value < 0 or value > 5000 for value in counts) or counts[0] != sum(counts[1:]):
                         raise ValueError("inconsistent native dependency notice counts")
+                toolchain = receipt.get("toolchain_notices")
+                if toolchain is not None:
+                    if not isinstance(toolchain, dict) or toolchain.get("status") not in {"unavailable", "release_library_notices_captured"}:
+                        raise ValueError("invalid Rust toolchain notice status")
+                    if toolchain["status"] == "release_library_notices_captured":
+                        if (not isinstance(toolchain.get("version"), str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", toolchain["version"])
+                                or type(toolchain.get("notice_files")) is not int or not 1 <= toolchain["notice_files"] <= 1000):
+                            raise ValueError("invalid Rust toolchain notice summary")
                 if receipt["status"] == "release_notice_candidates_captured":
                     if not receipt.get("files"):
                         raise ValueError("native notice collection has no files")
@@ -338,6 +346,16 @@ def markdown(report):
             lines.append("| " + " | ".join(_cell(value) for value in (
                 row.get("name", "unknown"), counts["candidates"], counts["captured"], counts["metadata_only"], counts["unavailable"])) + " |")
         lines += ["", "The collected source inventory records package names, versions, archive checksums, publisher license declarations and notice origins. Runtime membership and Rust standard-library completeness require separate evidence.", ""]
+    toolchains = [row for row in report.native_notice_collections if row.get("toolchain_notices")]
+    if toolchains:
+        lines += ["### Rust standard-library notice candidates", "",
+                  "These original release texts follow the toolchain declared in the tool's source. They do not establish the compiler used for the installed executable or its compiled dependency membership.", "",
+                  "| Tool | Rust release | Notice files | Collection |", "| --- | --- | ---: | --- |"]
+        for row in toolchains:
+            rust = row["toolchain_notices"]
+            lines.append("| " + " | ".join(_cell(value) for value in (
+                row.get("name", "unknown"), rust.get("version", "unknown"), rust.get("notice_files", "unknown"), rust["status"])) + " |")
+        lines += ["", "The collected library copyright document includes the release's third-party standard-library notices. Release metadata, archive checksums and source declarations are retained with the notice provenance.", ""]
     if report.inventory_candidates:
         lines += ["### Unexplained executable files", "",
                   "These files need ownership checks; they are not necessarily separate packages or missing licenses.", "",
@@ -375,6 +393,11 @@ def annotations(report):
         inventory.append("::" + level + " title=Container source/build evidence::" +
                          str(len(report.source_gaps)) +
                          " assessed package(s) have source/build warnings. See Source and build evidence in the job summary and prepared/provenance.json in the container-sbom artifact.")
+    missing_toolchains = sum((row.get("toolchain_notices") or {}).get("status") == "unavailable"
+                             for row in report.native_notice_collections)
+    if missing_toolchains:
+        inventory.append("::warning title=Rust standard-library notice candidates::" + str(missing_toolchains) +
+                         " source-declared Rust release notice collection(s) unavailable. See the report and retained provenance.")
     for receipt in report.native_notice_collections:
         counts = receipt.get("dependency_notices")
         if counts and (counts["metadata_only"] or counts["unavailable"]):

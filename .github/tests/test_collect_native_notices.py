@@ -312,3 +312,33 @@ def test_uv_entrypoint_enables_cargo_collection(tmp_path, monkeypatch):
     assert calls[0][0][0] == 'uv'
     assert calls[0][1]['cargo_dependencies'] is True
     assert all(not kwargs.get('cargo_dependencies') for _, kwargs in calls[1:])
+
+
+@pytest.mark.parametrize('rust_available', [True, False])
+def test_rust_notice_failure_keeps_existing_uv_notices_and_refresh_removes_stale_text(tmp_path, monkeypatch, rust_available):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+    binary = tmp_path / 'uv'
+    binary.write_bytes(b'installed executable')
+    monkeypatch.setattr(tool, 'identify', lambda *args: '0.7.22')
+    declaration = b'[toolchain]\nchannel="1.88"\n'
+    raw = archive([('uv/LICENSE', b'UV publisher notice'), ('uv/Cargo.lock', b'version=4\n'), ('uv/rust-toolchain.toml', declaration)])
+    monkeypatch.setattr(tool, 'download', lambda *args, **kwargs: raw)
+    monkeypatch.setitem(sys.modules, 'cargo_notice_inventory', SimpleNamespace(collect_cargo_notices=lambda *args: SimpleNamespace(
+        summary=dict(candidates=0, captured=0, metadata_only=0, unavailable=0), records=[], contents={}, inventory=b'{"packages":[]}')))
+    text = b'Original library notice'
+    sha = hashlib.sha256(text).hexdigest()
+    filename = 'LICENSE-' + sha + '.txt'
+    def collect_rust(actual, fetch):
+        assert actual == declaration
+        return ([dict(file=filename, sha256=sha)], {filename: text}, dict(status='release_library_notices_captured')) if rust_available else ([], {}, dict(status='unavailable', error='upstream unavailable'))
+    monkeypatch.setitem(sys.modules, 'rust_notice_inventory', SimpleNamespace(collect_rust_notices=collect_rust))
+    destination = tmp_path / 'notices/uv'
+    destination.mkdir(parents=True)
+    (destination / filename).write_bytes(text)
+    record = tool.collect('uv', binary, [], 'unused', 'astral-sh/uv', '', tmp_path / 'notices', cargo_dependencies=True)
+    assert record['status'] == 'release_notice_candidates_captured'
+    assert record['toolchain_notices']['status'] == ('release_library_notices_captured' if rust_available else 'unavailable')
+    assert (destination / filename).exists() == rust_available
+    assert any((destination / row['file']).read_bytes() == b'UV publisher notice' for row in record['files'])
