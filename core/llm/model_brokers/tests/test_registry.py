@@ -20,11 +20,19 @@ _EXAMPLE_BROKER = ModelBroker(
 )
 _OPENROUTER = next(b for b in MODEL_BROKERS if b.name == "openrouter")
 
+# These fresh-interpreter probes exercise RAPTOR's import graph and model
+# selection, not SDK startup. Model optional SDKs as absent in the child only.
+_WITHOUT_OPTIONAL_SDKS = '''
+import sys
+for name in ("openai", "anthropic", "google.genai", "botocore"):
+    sys.modules[name] = None
+'''
+
 
 @pytest.mark.parametrize("first_import", ["core.config", "core.security.llm_family",
                                         "core.llm.model_brokers"])
 def test_registry_imports_without_sdk_initialisation_or_cycles(first_import):
-    program = f'''
+    program = _WITHOUT_OPTIONAL_SDKS + f'''
 import importlib
 import sys
 importlib.import_module({first_import!r})
@@ -307,7 +315,7 @@ def test_broken_catalog_does_not_block_native_default_selection(entry):
     # Model-family prefixes and other lazy consumers snapshot the catalog at
     # import time. Exercise the broken startup state in its own interpreter;
     # restoring MODEL_BROKERS alone cannot restore those derived globals.
-    program = r'''
+    program = _WITHOUT_OPTIONAL_SDKS + r'''
 import json
 import sys
 from unittest.mock import patch

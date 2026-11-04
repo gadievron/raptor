@@ -3251,8 +3251,19 @@ class TestRefutationGateWirePoint:
         against.
         """
         import core.audit.orchestrator as _orch
+        from core.audit import capabilities
 
         monkeypatch.setattr(_orch, "_run_tool_chain", lambda *a, **k: [])
+
+        monkeypatch.setattr(
+            capabilities, "probe_capabilities",
+            lambda **kwargs: capabilities.AuditCapabilities(),
+        )
+        # Gate wiring has no study assertions. Avoid a background preparation
+        # subprocess for the planted source function.
+        monkeypatch.setattr(
+            "core.concepts.lang_resolve.is_study_supported_path", lambda path: False,
+        )
         monkeypatch.setattr(
             _orch, "_start_joern_server_raw", lambda *a, **k: None,
         )

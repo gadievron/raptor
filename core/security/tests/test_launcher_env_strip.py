@@ -311,14 +311,20 @@ class TestPreSweepWindow(unittest.TestCase):
         self.assertNotIn("bin/cve-diff: line", combined)
 
     def test_preexisting_posix_mode_preserved(self):
-        proc = subprocess.run(
-            ["bash", "-c",
-             f'export POSIXLY_CORRECT=1; bash "{REPO}/bin/cve-diff" --help'
-             ' >/dev/null 2>&1; echo "posix=${POSIXLY_CORRECT:-unset}"'],
-            capture_output=True, text=True, timeout=60,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                 "HOME": os.environ.get("HOME", "/tmp")},
-        )
+        # Observe the launcher's child, rather than the parent shell whose
+        # environment cannot be changed by the launcher. The CVE CLI is outside
+        # this shell-state contract, so use an owned interpreter stand-in.
+        with tempfile.TemporaryDirectory() as td:
+            stub = Path(td) / "python3"
+            stub.write_text('#!/bin/sh\nprintf "posix=%s\\n" "${POSIXLY_CORRECT-unset}"\n')
+            stub.chmod(0o700)
+            proc = subprocess.run(
+                ["bash", str(REPO / "bin/cve-diff"), "--help"],
+                capture_output=True, text=True, timeout=10,
+                env={"PATH": f"{td}:/usr/bin:/bin", "HOME": td,
+                     "POSIXLY_CORRECT": "1"},
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("posix=1", proc.stdout)
 
 

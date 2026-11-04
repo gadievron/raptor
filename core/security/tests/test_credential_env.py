@@ -642,6 +642,7 @@ class TestMakeDefaultDatabaseCrossCheck:
     # tool.
     _BIN_TOKEN_RE = re.compile(rb"\.?[A-Z][A-Z0-9_]{2,40}")
 
+    @pytest.mark.slow  # Full native make universe: up to three child probes per name.
     def test_every_env_expanded_variable_is_covered(self, tmp_path):
         """Behavioral arm for the env-read-only class.
 
