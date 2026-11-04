@@ -69,10 +69,10 @@ def controller(tmp_path, request):
     owner.start = start
     thread = threading.Thread(target=owner.serve, kwargs={"idle_seconds": 60})
     thread.start()
-    assert ready.wait(2)
-    graph_path = tmp_path / "graph.bin"
-    graph_path.write_bytes(b"graph")
     try:
+        assert ready.wait(2)
+        graph_path = tmp_path / "graph.bin"
+        graph_path.write_bytes(b"graph")
         yield owner, JoernCPG(graph_path, tmp_path), workers
     finally:
         for worker in workers:
@@ -80,6 +80,56 @@ def controller(tmp_path, request):
         owner.stopping.set()
         thread.join(3)
         assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("fault", ["readiness", "graph-write"])
+def test_controller_setup_failure_stops_server(tmp_path, monkeypatch, request, fault):
+    from types import SimpleNamespace
+
+    threads = []
+    owners = []
+    real_thread = threading.Thread
+    ready = threading.Event()
+    real_write = Path.write_bytes
+
+    def make_thread(*args, **kwargs):
+        owners.append(kwargs["target"].__self__)
+        thread = real_thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    def wait(timeout):
+        assert ready.wait(timeout), "controlled server did not start"
+        if fault == "readiness":
+            raise TimeoutError("injected readiness failure")
+        return True
+
+    def write(path, data):
+        if path.name == "graph.bin" and fault == "graph-write":
+            raise OSError("injected graph-write failure")
+        return real_write(path, data)
+
+    module = sys.modules[__name__]
+    fixture = controller.__wrapped__(tmp_path, request)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(module, "threading", SimpleNamespace(
+                Thread=make_thread,
+                Event=lambda: SimpleNamespace(set=ready.set, wait=wait),
+            ))
+            patcher.setattr(Path, "write_bytes", write)
+            with pytest.raises(OSError, match="injected .* failure"):
+                next(fixture)
+        assert len(threads) == 1
+        assert not threads[0].is_alive(), "failed setup left its server thread running"
+        assert owners[0].stopping.is_set()
+    finally:
+        # Reclaim the controlled server even when the regression assertion fails.
+        for owner in owners:
+            owner.stopping.set()
+        for thread in threads:
+            thread.join(5)
+        fixture.close()
 
 
 def _lease(owner, graph):
