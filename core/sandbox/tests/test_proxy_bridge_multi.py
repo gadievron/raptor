@@ -214,22 +214,32 @@ class TestForwarderBounds:
             "core.sandbox._proxy_bridge._MAX_PAIRS", 2)
         path = str(short_sock_dir / "cap.sock")
         srv = _unix_hold_echo_server(path)
-        port = _free_port()
+        ready = threading.Event()
+        bound = []
+
+        def on_ready(bridges):
+            bound.extend(bridges)
+            ready.set()
+
         death_r, death_w = os.pipe()
         t = threading.Thread(
-            target=_run_bridges, args=(((port, path),), death_r),
+            target=_run_bridges, args=(((0, path),), death_r),
+            kwargs={"ready_cb": on_ready},
             daemon=True)
         t.start()
         held = []
         try:
-            _wait_listening(port)
+            # A connect-and-close readiness probe can temporarily consume
+            # one of the two slots whose admission this test is measuring.
+            assert ready.wait(5), "bridge listener did not become ready"
+            (port, _), = bound
             for i in range(2):
                 c = socket.create_connection(("127.0.0.1", port),
                                              timeout=5)
+                held.append(c)
                 c.settimeout(5)
                 c.sendall(b"hi%d" % i)
                 assert c.recv(4096) == b"hi%d" % i
-                held.append(c)
             # Third pair is over the cap: accepted then immediately
             # closed — the client reads EOF, no hang, no relay.
             with socket.create_connection(("127.0.0.1", port),
