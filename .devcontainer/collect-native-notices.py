@@ -14,7 +14,8 @@ import tarfile
 import urllib.error
 import urllib.request
 
-MAX_ARCHIVE = 32 * 1024 * 1024
+MAX_ARCHIVE = 64 * 1024 * 1024
+MAX_EXPANDED = 512 * 1024 * 1024
 MAX_SOURCE_SBOM = 4 * 1024 * 1024
 MAX_TEXT = 512 * 1024
 MAX_TOTAL = 8 * 1024 * 1024
@@ -23,31 +24,164 @@ NOTICE = re.compile(r"(?:licen[cs]e|copying|copyright|notice|authors)(?:[._-].*)
 
 def download(url, *, max_bytes=MAX_ARCHIVE):
     with urllib.request.urlopen(url, timeout=45) as response:
+        if not response.geturl().startswith("https://"):
+            raise ValueError("release evidence redirect must remain HTTPS")
         data = response.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ValueError("release archive exceeds byte budget")
     return data
 
 
-def release_notices(data, definitions=()):
+
+def python_notice_sources(sbom, version):
+    """Use the release SBOM's ownership and SHA-256, never a version path guess."""
+    document = json.loads(sbom, object_pairs_hook=_unique)
+    packages = {row["SPDXID"]: row for row in document["packages"] if row["name"] != "CPython"}
+    if len(packages) != sum(row["name"] != "CPython" for row in document["packages"]):
+        raise ValueError("duplicate third-party source package identity")
+    files = {row["SPDXID"]: row for row in document.get("files", [])}
+    if len(files) != len(document.get("files", [])):
+        raise ValueError("duplicate Python source file identity")
+    owners = {}
+    for relation in document.get("relationships", []):
+        owner, target = relation.get("spdxElementId"), relation.get("relatedSpdxElement")
+        if relation.get("relationshipType") == "CONTAINS" and owner in packages and target in files:
+            owners.setdefault(target, set()).add(owner)
+    selected = {}
+    used_packages = set()
+    for identifier, owner_ids in owners.items():
+        file = files[identifier]
+        name = file["fileName"]
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts or str(path) != name:
+            raise ValueError("unsafe Python SBOM source path")
+        if path.suffix.lower() not in {".c", ".h", ".cc", ".cpp", ".hpp", ".py", ".s", ".asm"}:
+            continue
+        hashes = [row["checksumValue"] for row in file.get("checksums", []) if row.get("algorithm") == "SHA256"]
+        if len(hashes) != 1 or not re.fullmatch(r"[a-f0-9]{64}", hashes[0]):
+            raise ValueError("third-party source file has no unique SHA-256")
+        key = f"Python-{version}/" + name
+        if key in selected:
+            raise ValueError("duplicate Python SBOM source path")
+        selected[key] = {"sha256": hashes[0], "packages": sorted(owner_ids)}
+        used_packages.update(owner_ids)
+    return selected, [packages[key] for key in sorted(used_packages)]
+
+
+def source_header(raw, python=False):
+    """Retain exact leading comments/docstrings containing notice language."""
+    position = 3 if raw.startswith(b"\xef\xbb\xbf") else 0
+    end = 0
+    while position < len(raw):
+        while position < len(raw) and raw[position] in b" \t\r\n":
+            position += 1
+        if raw.startswith(b"/*", position):
+            stop = raw.find(b"*/", position + 2)
+            if stop < 0:
+                raise ValueError("source comment exceeds header budget")
+            position = stop + 2
+        elif raw.startswith(b"//", position) or (python and raw.startswith(b"#", position)):
+            stop = raw.find(b"\n", position)
+            position = len(raw) if stop < 0 else stop + 1
+        elif python and raw[position:position + 3] in (b'"""', b"'''"):
+            delimiter = raw[position:position + 3]
+            stop = raw.find(delimiter, position + 3)
+            if stop < 0:
+                raise ValueError("source docstring exceeds header budget")
+            position = stop + 3
+        else:
+            break
+        end = position
+    header = raw[:end]
+    if not re.search(rb"copyright|licen[cs]e|permission is hereby|redistribution and use", header, re.I):
+        return None
+    if b"\x00" in header:
+        raise ValueError("invalid source notice header")
+    header.decode("utf-8")
+    return header
+
+
+def upstream_commit_notices(packages):
+    """Retain publisher-authored root texts for SBOM-pinned GitHub commits."""
+    records, contents, seen = [], {}, set()
+    for package in packages:
+        match = re.fullmatch(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/archive/([a-f0-9]{40})\.(?:zip|tar\.gz)", package.get("downloadLocation", ""))
+        if not match or match.groups() in seen:
+            continue
+        repository, revision = match.groups()
+        seen.add(match.groups())
+        listing = json.loads(download(f"https://api.github.com/repos/{repository}/contents?ref={revision}", max_bytes=MAX_SOURCE_SBOM), object_pairs_hook=_unique)
+        if not isinstance(listing, list) or len(listing) > 1000:
+            raise ValueError("invalid upstream root notice inventory")
+        for item in listing:
+            if not isinstance(item, dict):
+                raise ValueError("invalid upstream root notice entry")
+            name = item.get("name", "")
+            if item.get("type") != "file" or not NOTICE.fullmatch(name):
+                continue
+            if PurePosixPath(name).name != name or not re.fullmatch(r"[a-f0-9]{40}", item.get("sha", "")):
+                raise ValueError("invalid upstream notice identity")
+            url = f"https://raw.githubusercontent.com/{repository}/{revision}/{name}"
+            text = download(url, max_bytes=MAX_TEXT)
+            git_blob = b"blob " + str(len(text)).encode() + b"\x00" + text
+            if hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() != item["sha"] or not text.strip() or b"\x00" in text:
+                raise ValueError("upstream notice content differs from pinned Git blob")
+            text.decode("utf-8")
+            digest = hashlib.sha256(text).hexdigest()
+            filename = "LICENSE-" + digest + ".txt"
+            contents[filename] = text
+            records.append({"file": filename, "sha256": digest, "source_url": url,
+                            "upstream_revision": revision, "source_package": package["SPDXID"],
+                            "git_blob_sha1": item["sha"]})
+    return records, contents
+
+
+def release_notices(data, definitions=(), source_members=None):
     """Inspect bounded regular files without extracting upstream paths."""
     records = []
     contents = {}
     seen = set()
     total = 0
     expanded = 0
+    source_members = source_members or {}
+    seen_sources = set()
     with tarfile.open(fileobj=io.BytesIO(data), mode="r|gz") as archive:
         for index, member in enumerate(archive):
             if index >= 100000:
                 raise ValueError("release archive exceeds entry budget")
             expanded += member.size
-            if expanded > 256 * 1024 * 1024:
+            if expanded > MAX_EXPANDED:
                 raise ValueError("release archive exceeds expansion budget")
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts or member.name in seen:
                 raise ValueError("ambiguous release archive path")
             seen.add(member.name)
             declaration = len(path.parts) == 2 and path.parts[1] in definitions
+            source = source_members.get(member.name)
+            if source is not None:
+                if not member.isfile() or member.size > 8 * 1024 * 1024:
+                    raise ValueError("third-party source is not a bounded regular file")
+                with archive.extractfile(member) as stream:
+                    head = stream.read(min(member.size, 64 * 1024))
+                    hasher = hashlib.sha256(head)
+                    while chunk := stream.read(128 * 1024):
+                        hasher.update(chunk)
+                if hasher.hexdigest() != source["sha256"]:
+                    raise ValueError("third-party source differs from release SBOM")
+                seen_sources.add(member.name)
+                text = source_header(head, path.suffix == ".py")
+                if text is None:
+                    continue
+                total += len(text)
+                if total > MAX_TOTAL:
+                    raise ValueError("release notices exceed byte budget")
+                digest = hashlib.sha256(text).hexdigest()
+                filename = "LICENSE-" + digest + ".txt"
+                contents[filename] = text
+                records.append({"source_member": member.name, "source_sha256": source["sha256"],
+                                "source_packages": source["packages"], "file": filename,
+                                "sha256": digest, "notice_origin": "source_header"})
+                continue
             if not NOTICE.fullmatch(path.name) and not declaration:
                 continue
             if not member.isfile() or member.size > MAX_TEXT:
@@ -67,6 +201,8 @@ def release_notices(data, definitions=()):
             if declaration:
                 record["content_kind"] = "build_declaration"
             records.append(record)
+    if seen_sources != set(source_members):
+        raise ValueError("release archive omits declared third-party source files")
     if not any(row.get("content_kind") != "build_declaration" for row in records):
         raise ValueError("release has no notice candidates")
     return records, contents
@@ -151,7 +287,13 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             sbom = download(record["source_sbom_url"], max_bytes=MAX_SOURCE_SBOM)
             verify_python_source(sbom, version, url, record["source_archive_sha256"])
         definitions = ("Makefile",) if name == "git" else ("build.conf",) if name == "subversion" else ()
-        record["files"], contents = release_notices(archive, definitions if build_inventory else ())
+        members, dependencies = python_notice_sources(sbom, version) if sbom is not None else ({}, [])
+        record["files"], contents = release_notices(archive, definitions if build_inventory else (), members)
+        extra_records, extra_contents = upstream_commit_notices(dependencies)
+        record["files"].extend(extra_records)
+        contents.update(extra_contents)
+        if sum(len(text) for text in contents.values()) > MAX_TOTAL:
+            raise ValueError("release notices exceed byte budget")
         if sbom is not None:
             sha = hashlib.sha256(sbom).hexdigest()
             filename = "NOTICE-SOURCE-SBOM-" + sha + ".json"
@@ -176,7 +318,7 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
                 record["declared_files"] = []
                 record["inventory_gaps"] = [type(exc).__name__ + ": " + str(exc)[:500]]
         record["status"] = "release_notice_candidates_captured"
-    except (OSError, ValueError, UnicodeError, RecursionError, tarfile.TarError, EOFError,
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError, tarfile.TarError, EOFError,
             subprocess.SubprocessError, urllib.error.URLError, http.client.HTTPException) as exc:
         record["error"] = type(exc).__name__ + ": " + str(exc)[:500]
         print("Native notice collection warning; inspect /usr/share/doc/raptor-native-notices.")

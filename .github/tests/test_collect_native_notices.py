@@ -187,3 +187,117 @@ def test_build_definitions_are_retained_and_bound_to_file_claims(tmp_path, monke
     assert result["status"] == "release_notice_candidates_captured"
     assert result["declared_files"][0]["source_definition_sha256"] == [hashlib.sha256(source).hexdigest()]
     assert any(item.get("content_kind") == "build_declaration" for item in result["files"])
+
+
+def bundled_source(version="3.14.10", header=b"/* Copyright contributors. MIT License. */", commit="a" * 40):
+    import hashlib
+    source = header + b"\nint library_code;\n"
+    member = f"Python-{version}/Modules/vendor/code.c"
+    raw = archive([(f"Python-{version}/LICENSE", b"PSF terms"), (member, source)])
+    url = f"https://www.python.org/ftp/python/{version}/Python-{version}.tgz"
+    document = json.loads(python_sbom(version, url, hashlib.sha256(raw).hexdigest()))
+    document["packages"].append({"name": "crypto", "SPDXID": "crypto", "downloadLocation": "https://github.com/example/crypto/archive/" + commit + ".zip"})
+    document["files"] = [{"SPDXID": "source", "fileName": "Modules/vendor/code.c",
+                           "checksums": [{"algorithm": "SHA256", "checksumValue": hashlib.sha256(source).hexdigest()}]}]
+    document["relationships"] = [{"spdxElementId": "crypto", "relationshipType": "CONTAINS", "relatedSpdxElement": "source"}]
+    return raw, document, member, header
+
+
+def test_collects_exact_headers_only_from_checksum_bound_third_party_sources():
+    raw, document, member, header = bundled_source()
+    selected, dependencies = tool.python_notice_sources(json.dumps(document).encode(), "3.14.10")
+    records, contents = tool.release_notices(raw, source_members=selected)
+    notice = next(row for row in records if row.get("notice_origin") == "source_header")
+    assert notice["source_member"] == member and notice["source_packages"] == ["crypto"]
+    assert contents[notice["file"]] == header
+    assert b"library_code" not in contents[notice["file"]]
+    assert dependencies[0]["name"] == "crypto"
+
+
+@pytest.mark.parametrize("fault", ["changed_tail", "missing", "bad_hash", "unsafe_path", "duplicate_file"])
+def test_source_headers_require_complete_unambiguous_sbom_evidence(fault):
+    raw, document, member, header = bundled_source()
+    if fault == "changed_tail":
+        raw = archive([("Python-3.14.10/LICENSE", b"PSF terms"), (member, header + b"\nint changed_code;\n")])
+    elif fault == "missing":
+        raw = archive([("Python-3.14.10/LICENSE", b"PSF terms")])
+    elif fault == "bad_hash":
+        document["files"][0]["checksums"] = []
+    elif fault == "unsafe_path":
+        document["files"][0]["fileName"] = "../code.c"
+    else:
+        document["files"].append(document["files"][0])
+    with pytest.raises(ValueError):
+        selected, _ = tool.python_notice_sources(json.dumps(document).encode(), "3.14.10")
+        tool.release_notices(raw, source_members=selected)
+
+
+def test_header_collection_never_treats_source_code_as_notice_text():
+    assert tool.source_header(b'int code = 1; /* Copyright in implementation */') is None
+    assert tool.source_header(b"/* Copyright holder */\n#define NOT_A_NOTICE 1") == b"/* Copyright holder */"
+    assert tool.source_header(b'# Copyright holder\n"""License and grant."""\nimport code', python=True) == b'# Copyright holder\n"""License and grant."""'
+    with pytest.raises(ValueError, match="header budget"):
+        tool.source_header(b"/* Copyright " + b"x" * (64 * 1024))
+
+
+def test_upstream_notice_is_fetched_at_the_sbom_commit_and_checked_as_git_blob(monkeypatch):
+    import hashlib
+    commit = "a" * 40
+    text = b"Publisher Apache license text"
+    blob = hashlib.sha1(b"blob " + str(len(text)).encode() + b"\x00" + text).hexdigest()
+    requests = []
+    def download(url, **kwargs):
+        requests.append(url)
+        return json.dumps([{"name": "LICENSE", "type": "file", "sha": blob}]).encode() if "/contents?ref=" in url else text
+    monkeypatch.setattr(tool, "download", download)
+    package = {"SPDXID": "crypto", "downloadLocation": "https://github.com/example/crypto/archive/" + commit + ".zip"}
+    records, contents = tool.upstream_commit_notices([package, package])
+    assert len(requests) == 2 and all(commit in url for url in requests)
+    assert records[0]["git_blob_sha1"] == blob and records[0]["source_package"] == "crypto"
+    assert contents[records[0]["file"]] == text
+    monkeypatch.setattr(tool, "download", lambda url, **kwargs: json.dumps([{"name": "LICENSE", "type": "file", "sha": "0" * 40}]).encode() if "/contents?ref=" in url else text)
+    with pytest.raises(ValueError, match="Git blob"):
+        tool.upstream_commit_notices([package])
+
+
+def test_upstream_notice_fetch_never_guesses_a_mutable_branch(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("mutable source reference must not be fetched")
+    monkeypatch.setattr(tool, "download", forbidden)
+    assert tool.upstream_commit_notices([{"downloadLocation": "https://github.com/example/crypto/archive/main.zip"}]) == ([], {})
+
+
+def test_python_version_bump_refreshes_source_headers_and_pinned_upstream_text(tmp_path, monkeypatch):
+    import hashlib
+    binary = tmp_path / "python3"
+    binary.write_bytes(b"interpreter")
+    current = {"version": "3.14.10", "commit": "a" * 40}
+    monkeypatch.setattr(tool, "identify", lambda *args: current["version"])
+    def download(url, **kwargs):
+        raw, document, _, _ = bundled_source(current["version"], b"/* Copyright " + current["version"].encode() + b" */", current["commit"])
+        text = b"Upstream license " + current["version"].encode()
+        blob = hashlib.sha1(b"blob " + str(len(text)).encode() + b"\x00" + text).hexdigest()
+        if url.endswith(".spdx.json"):
+            return json.dumps(document).encode()
+        if "/contents?ref=" in url:
+            assert url.endswith(current["commit"])
+            return json.dumps([{"name": "LICENSE", "type": "file", "sha": blob}]).encode()
+        if "raw.githubusercontent.com" in url:
+            assert current["commit"] in url
+            return text
+        return raw
+    monkeypatch.setattr(tool, "download", download)
+    first = tool.collect("cpython", binary, [], "unused", "python/cpython", "v", tmp_path / "out", python_source=True)
+    assert first["status"] == "release_notice_candidates_captured"
+    old = next(row for row in first["files"] if row.get("notice_origin") == "source_header")
+    current.update(version="3.14.11", commit="b" * 40)
+    second = tool.collect("cpython", binary, [], "unused", "python/cpython", "v", tmp_path / "out", python_source=True)
+    assert second["status"] == "release_notice_candidates_captured"
+    assert not (tmp_path / "out/cpython" / old["file"]).exists()
+    assert any(row.get("upstream_revision") == "b" * 40 for row in second["files"])
+
+
+def test_source_header_scan_keeps_an_expanded_archive_budget(monkeypatch):
+    monkeypatch.setattr(tool, "MAX_EXPANDED", 8)
+    with pytest.raises(ValueError, match="expansion budget"):
+        tool.release_notices(archive([("p/LICENSE", b"twelve bytes")]))

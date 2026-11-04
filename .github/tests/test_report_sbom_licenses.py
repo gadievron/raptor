@@ -176,12 +176,19 @@ def test_missing_executable_inventory_is_unknown(tmp_path):
 
 @pytest.mark.parametrize("status,retain_text", [("unavailable", False), ("release_notice_candidates_captured", True),
                                                ("release_notice_candidates_captured", False)])
-def test_native_collection_receipts_require_captured_text(tmp_path, status, retain_text):
+@pytest.mark.parametrize("origin", ["release_file", "source_header", "upstream_commit"])
+def test_native_collection_receipts_require_captured_text(tmp_path, status, retain_text, origin):
     _, provenance, digest = inputs(tmp_path)
     text = b"upstream release notice"
     text_sha = hashlib.sha256(text).hexdigest()
     receipt = {"name": "uv", "version": "0.7.22", "status": status,
                "files": ([{"file": "LICENSE.txt", "sha256": text_sha}] if status != "unavailable" else [])}
+    if receipt["files"] and origin == "source_header":
+        receipt["files"][0].update(notice_origin="source_header", source_sha256="d" * 64,
+                                   source_packages=["SPDXRef-PACKAGE-component"])
+    elif receipt["files"] and origin == "upstream_commit":
+        receipt["files"][0].update(upstream_revision="d" * 40, git_blob_sha1="e" * 40,
+                                   source_package="SPDXRef-PACKAGE-component")
     raw = json.dumps(receipt).encode()
     receipt_sha = hashlib.sha256(raw).hexdigest()
     directory = tmp_path / "prepared/notices/sha256"
