@@ -59,6 +59,7 @@ import os
 import stat as _stat
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,8 @@ class EvidenceFile:
     finalisation. All appends go through the held fd — writers that
     inherit the fd (the ptrace tracer) share the same open file
     description, so a rename/unlink of the path cannot redirect their
-    appends.
+    appends. An instance lock coordinates parent-thread writes and
+    closure; tracer processes continue using the inherited raw fd.
     """
 
     def __init__(self, fd: int, path: Path, st: os.stat_result) -> None:
@@ -182,6 +184,8 @@ class EvidenceFile:
         self._created_dev = st.st_dev
         self._created_ino = st.st_ino
         self._closed = False
+        self._close_result = False
+        self._io_lock = threading.RLock()
 
     @classmethod
     def open(cls, run_dir, filename: str) -> EvidenceFile:
@@ -262,7 +266,12 @@ class EvidenceFile:
             return False
         try:
             data = line.encode("utf-8")
-            written = os.write(self.fd, data)
+            with self._io_lock:
+                # Encoding and thread scheduling may have allowed close()
+                # to release this descriptor since the fast check above.
+                if self._closed:
+                    return False
+                written = os.write(self.fd, data)
             if written != len(data):
                 # Do not retry fragments: another appender may have
                 # written a record after this partial write.
@@ -322,15 +331,19 @@ class EvidenceFile:
         """Finalise: optionally verify the inode, then close the fd.
 
         Returns the verification result (True when skipped or clean).
-        Idempotent — a second close is a no-op returning True.
+        Repeated closes return the original result. Verification errors
+        propagate after descriptor cleanup and leave a failed result.
         """
-        if self._closed:
-            return True
-        ok = self.verify() if verify else True
-        self._closed = True
-        with contextlib.suppress(OSError):
-            os.close(self.fd)
-        return ok
+        with self._io_lock:
+            if self._closed:
+                return self._close_result
+            self._closed = True
+            try:
+                self._close_result = self.verify() if verify else True
+                return self._close_result
+            finally:
+                with contextlib.suppress(OSError):
+                    os.close(self.fd)
 
 
 # ---------------------------------------------------------------------------
