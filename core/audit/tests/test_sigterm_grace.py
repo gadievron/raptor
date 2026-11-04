@@ -201,6 +201,7 @@ _DRIVER = textwrap.dedent("""\
     from core.audit.orchestrator import (
         OrchestratorConfig, ReviewOutcome, run_orchestrator,
     )
+    from core.audit.tests.test_resume_e2e import _review_loop_only
 
     def review_fn(ctx, config):
         time.sleep(0.6)   # window for the parent's SIGTERM
@@ -225,8 +226,15 @@ _DRIVER = textwrap.dedent("""\
         propagate_constraints=False,
         include_stale=False,
         on_demand_synthesis=False,
+        open_discovery=False,
+        joern_overrides={"enabled": False},
+        iris=False,
+        sage_recall=False,
+        immediate_verify=False,
+        max_refinements=0,
     )
-    result = run_orchestrator(config, review_fn)
+    with _review_loop_only():
+        result = run_orchestrator(config, review_fn)
     print("TERMINATED_BY=" + result.terminated_by, flush=True)
     sys.exit(130 if result.terminated_by == "sigterm" else 0)
 """)
@@ -254,13 +262,6 @@ class TestSigtermE2E:
 
         driver = tmp_path / "driver.py"
         driver.write_text(_DRIVER)
-        child = subprocess.Popen(
-            [sys.executable, str(driver), str(target), str(out),
-             str(_RAPTOR_DIR)],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True,
-        )
-
         journal = out / "review-journal.jsonl"
 
         def _entries() -> int:
@@ -270,26 +271,43 @@ class TestSigtermE2E:
                 1 for line in journal.read_text().splitlines() if line
             )
 
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            if child.poll() is not None:
-                pytest.fail("child finished before SIGTERM window")
-            if _entries() >= 2:
-                break
-            time.sleep(0.1)
-        else:
-            child.kill()
-            pytest.fail("no journal entries in time")
+        # A file cannot fill a PIPE while the parent waits for journal
+        # progress, and preserves diagnostics from early child failures.
+        log_path = tmp_path / "sigterm-child.log"
+        with log_path.open("w+") as log:
+            child = subprocess.Popen(
+                [sys.executable, str(driver), str(target), str(out),
+                 str(_RAPTOR_DIR)],
+                env=env, stdout=log, stderr=subprocess.STDOUT, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 180
+                while time.monotonic() < deadline:
+                    if child.poll() is not None:
+                        pytest.fail(
+                            "child finished before SIGTERM window:\n"
+                            + log_path.read_text()
+                        )
+                    if _entries() >= 2:
+                        break
+                    time.sleep(0.1)
+                else:
+                    pytest.fail("no journal entries in time:\n" + log_path.read_text())
 
-        at_term = _entries()
-        term_sent = time.monotonic()
-        child.send_signal(signal.SIGTERM)
-        try:
-            stdout, _ = child.communicate(timeout=60)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            pytest.fail("child did not drain within 60s of SIGTERM")
-        drain_s = time.monotonic() - term_sent
+                at_term = _entries()
+                term_sent = time.monotonic()
+                child.send_signal(signal.SIGTERM)
+                try:
+                    child.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    pytest.fail("child did not drain within 60s of SIGTERM")
+                drain_s = time.monotonic() - term_sent
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=10)
+            log.seek(0)
+            stdout = log.read()
 
         # Graceful conclusion: exit 130-style, prompt (well under the
         # watchdog's forced-exit bound), stop reason named.
