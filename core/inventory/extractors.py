@@ -3978,9 +3978,9 @@ def extract_items(filepath: str, language: str, content: str,
         # phantom item the correctly-parsing tree-sitter never saw
         # (a reviewable checklist unit over dead text, its span
         # overlapping the real function below the comment).
-        from core.inventory.dead_scope import _c_strip_comments_and_strings
+        from core.source.strip import blank_c_noncode
         regex_funcs = regex_ext.extract(  # type: ignore[attr-defined]
-            filepath, _c_strip_comments_and_strings(content))
+            filepath, blank_c_noncode(content))
         # Reserved-word gate at the merge seam (defense in depth): the
         # recognition fix in CExtractor already refuses reserved words,
         # but this append is where a regression would land — on the

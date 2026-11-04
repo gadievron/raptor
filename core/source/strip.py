@@ -30,6 +30,7 @@ from pathlib import Path
 
 __all__ = [
     "C_FAMILY_SUFFIXES",
+    "blank_c_noncode",
     "strip_c_comments",
     "strip_comments",
     "strip_python_comments",
@@ -64,6 +65,78 @@ def strip_comments(text: str, filename: str) -> str:
 # -------------------------------------------------------------------
 # C-family: //, /* */, respecting " and ' string literals
 # -------------------------------------------------------------------
+
+def blank_c_noncode(content: str, *, allow_digit_separators: bool = False) -> str:
+    """Blank C comments and quoted literals, preserving offsets and newlines.
+
+    The default preserves the inventory scanner's behavior. Expanded C may
+    contain C23 digit separators, which are pp-number content, not quotes.
+    """
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n:
+            if out[i + 1] == "/":
+                while i < n and out[i] != "\n":
+                    out[i] = " "
+                    i += 1
+                continue
+            if out[i + 1] == "*":
+                out[i] = " "
+                out[i + 1] = " "
+                i += 2
+                while i < n:
+                    if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                        out[i] = " "
+                        out[i + 1] = " "
+                        i += 2
+                        break
+                    if out[i] != "\n":
+                        out[i] = " "
+                    i += 1
+                continue
+        if (allow_digit_separators and c in "0123456789"
+                and (i == 0 or not (content[i - 1].isalnum() or content[i - 1] in "_$"))):
+            # Consume a preprocessing number before quote handling. Prefixes
+            # such as u8'a' are identifiers followed by a character literal,
+            # so an embedded digit must not start this branch.
+            i += 1
+            while i < n:
+                value = out[i]
+                if value.isalnum() or value in "._":
+                    i += 1
+                elif value == "'" and i + 1 < n and (out[i + 1].isalnum() or out[i + 1] == "_"):
+                    i += 2
+                elif value in "+-" and out[i - 1] in "eEpP":
+                    i += 1
+                else:
+                    break
+            continue
+        if c in "\"'":
+            quote = c
+            out[i] = " "
+            i += 1
+            while i < n:
+                if out[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if out[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
 
 def strip_c_comments(text: str) -> str:
     """Strip C-family comments while preserving string/char literals."""

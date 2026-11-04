@@ -254,13 +254,14 @@ def test_native_header_macros_reach_compiler_without_exporting_candidates(tmp_pa
     repo = tmp_path / 'repo'
     repo.mkdir()
     (repo / 'copy.h').write_text(
-        '#include <string.h>\n#define alias memcpy\n'
+        '#include <stddef.h>\n#include <string.h>\n#define alias memcpy\n'
+        "#if __STDC_VERSION__ >= 202311L\n#define COPY_BYTES 1'6\n#else\n#define COPY_BYTES 16\n#endif\n"
         '#define lower_copy(d,s,n) alias(d,s,n)\n'
         'static inline void header_only(char *p) { memcpy(p+1,p,8); }\n'
     )
     source = (
         '#include "copy.h"\n'
-        'void overlap(void) { char b[64]={0}; char *p=b+4; lower_copy(p,b,16); }\n'
+        'void overlap(void) { char b[64]={0}; char *p=b+4; int n=COPY_BYTES; lower_copy(p,b,n); }\n'
         'void adjacent(void) { char b[64]={0}; lower_copy(b+16,b,16); }\n'
         'void move(void) { char b[64]={0}; memmove(b+4,b,16); }\n'
         '#if 0\nvoid dead(void) { char b[64]; lower_copy(b+4,b,16); }\n#endif\n'
@@ -290,7 +291,9 @@ def test_native_header_macros_reach_compiler_without_exporting_candidates(tmp_pa
     monkeypatch.setattr(cs, 'run_memcpy_overlap', detector)
     result = cs.scan_target(repo, out_dir=tmp_path / 'out')
     assert result.ok and result.tus_analyzed == 3 and result.tus_failed == 0
-    assert not result.detector_limitations, result.detector_limitations
+    # A raw-parser/version limitation must not disable macro discovery.
+    # Preparation and the compiler-confirmed result below still have to succeed.
+    assert not any('macro' in item['reason'] for item in result.detector_limitations), result.detector_limitations
     assert executions[0].value.candidates == {'macro.c', 'safe.c'}, executions[0]
     overlaps = [d for d in result.findings if d['rule_id'] == memcpy_overlap.OVERLAP_ID]
     assert len(overlaps) == 1, overlaps
@@ -302,5 +305,5 @@ def test_native_header_macros_reach_compiler_without_exporting_candidates(tmp_pa
     preprocessed = [cmd for cmd, kw in calls if kw.get('caller_label') == 'audit-preprocessor-view']
     assert len(preprocessed) == 3 and all(cmd[0] == gcc[0] for cmd in preprocessed)
     semgrep = [cmd for cmd, _ in calls if 'scan' in cmd]
-    assert len(semgrep) == 2  # one raw scan and one batch of prepared views
+    assert len(semgrep) == 1  # Expanded candidates do not depend on Semgrep's C parser.
     assert all(kw['block_network'] for _, kw in calls)

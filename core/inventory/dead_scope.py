@@ -48,6 +48,8 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from core.source.strip import blank_c_noncode
+
 from bisect import bisect_right
 from collections import Counter
 
@@ -301,54 +303,6 @@ _C_NOT_FUNC_NAMES = frozenset({
 })
 
 
-def _c_strip_comments_and_strings(content: str) -> str:
-    """Strip C comments and string/char literals, preserving newlines."""
-    out = list(content)
-    i = 0
-    n = len(out)
-    while i < n:
-        c = out[i]
-        if c == "/" and i + 1 < n:
-            if out[i + 1] == "/":
-                while i < n and out[i] != "\n":
-                    out[i] = " "
-                    i += 1
-                continue
-            if out[i + 1] == "*":
-                out[i] = " "
-                out[i + 1] = " "
-                i += 2
-                while i < n:
-                    if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
-                        out[i] = " "
-                        out[i + 1] = " "
-                        i += 2
-                        break
-                    if out[i] != "\n":
-                        out[i] = " "
-                    i += 1
-                continue
-        if c in "\"'":
-            quote = c
-            out[i] = " "
-            i += 1
-            while i < n:
-                if out[i] == "\\" and i + 1 < n:
-                    out[i] = " "
-                    if out[i + 1] != "\n":
-                        out[i + 1] = " "
-                    i += 2
-                    continue
-                if out[i] == quote:
-                    out[i] = " "
-                    i += 1
-                    break
-                if out[i] != "\n":
-                    out[i] = " "
-                i += 1
-            continue
-        i += 1
-    return "".join(out)
 
 
 # Scan-work budget for _detect_c. A crafted file of thousands of tiny
@@ -366,7 +320,7 @@ _C_MAX_PARAM_SCAN = 16 * 1024
 
 
 def _detect_c(content: str) -> list[DeadRange]:
-    stripped = _c_strip_comments_and_strings(content)
+    stripped = blank_c_noncode(content)
     ranges: list[DeadRange] = []
     offsets: list[int] | None = None
     budget = _C_SCAN_BUDGET_FACTOR * len(stripped)

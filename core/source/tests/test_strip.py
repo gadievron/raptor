@@ -270,3 +270,13 @@ class TestStripComments:
     def test_unknown_extension_unchanged(self):
         src = "hello // world # foo\n"
         assert strip_comments(src, "foo.xyz") == src
+
+
+def test_blank_c_noncode_preserves_source_coordinates():
+    from core.source.strip import blank_c_noncode
+    source = '/* memcpy(x,y,n)\n */ char *s="escaped \\\" memcpy(x,y,n)";\nmemcpy(a,b,n); // memcpy(q,r,n)\n'
+    code = blank_c_noncode(source)
+    assert len(code) == len(source)
+    assert [i for i,c in enumerate(code) if c=='\n'] == [i for i,c in enumerate(source) if c=='\n']
+    assert code.count('memcpy') == 1
+    assert code.index('memcpy') == source.index('memcpy(a,b,n)')
