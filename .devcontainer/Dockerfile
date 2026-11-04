@@ -215,6 +215,7 @@ RUN python3 /usr/local/libexec/prune-windows-helpers.py
 COPY LICENSE /usr/share/doc/raptor/LICENSE
 COPY .devcontainer/native_build_inventory.py /usr/local/libexec/native_build_inventory.py
 COPY .devcontainer/cargo_notice_inventory.py /usr/local/libexec/cargo_notice_inventory.py
+COPY .devcontainer/rust_notice_inventory.py /usr/local/libexec/rust_notice_inventory.py
 COPY .devcontainer/collect-native-notices.py /usr/local/libexec/collect-native-notices.py
 RUN python3 /usr/local/libexec/collect-native-notices.py
 COPY .devcontainer/collect-npm-native-notices.py /usr/local/libexec/collect-npm-native-notices.py
