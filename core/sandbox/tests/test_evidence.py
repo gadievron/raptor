@@ -398,7 +398,11 @@ class TestTracerFdConfigConsumption:
         # confused by fd-number reuse — another open in this process
         # (worker IO threads, capture machinery) may grab the freed
         # number, but it can never alias the pinned config object.
-        keeper = os.dup(cfg_fd)
+        try:
+            keeper = os.dup(cfg_fd)
+        except BaseException:
+            os.close(cfg_fd)
+            raise
         try:
             rc = tracer_mod._cli_main(
                 ["1", str(tmp_path), "3", ev.fd_path(cfg_fd)],
@@ -420,7 +424,15 @@ class TestTracerFdConfigConsumption:
                 "config fd still open in the CLI after parsing"
             )
         finally:
-            os.close(keeper)
+            try:
+                try:
+                    still_config = os.path.sameopenfile(cfg_fd, keeper)
+                except OSError:
+                    still_config = False
+                if still_config:
+                    os.close(cfg_fd)
+            finally:
+                os.close(keeper)
 
     @pytest.mark.linux_native
     def test_trace_falls_back_when_evidence_fd_invalid(

@@ -16,6 +16,7 @@ capture write ends into the test process at creation time.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, suppress
 import sys as _sys
 
 import pytest as _pytest
@@ -37,19 +38,30 @@ def retained_write_ends(monkeypatch):
     holders: list[int] = []
     real = _spawn._open_capture_pipes
 
-    def retaining() -> tuple[int, int, int, int]:
-        out_r, out_w, err_r, err_w = real()
-        holders.append(os.dup(out_w))
-        holders.append(os.dup(err_w))
-        return out_r, out_w, err_r, err_w
-
-    monkeypatch.setattr(_spawn, "_open_capture_pipes", retaining)
-    yield holders
-    for fd in holders:
-        try:
+    def close_retained(fd):
+        with suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
+
+    with ExitStack() as lifetime:
+        def retaining() -> tuple[int, int, int, int]:
+            with ExitStack() as rollback:
+                original = real()
+                for fd in original:
+                    rollback.callback(os.close, fd)
+                retained = []
+                for fd in (original[1], original[3]):
+                    duplicate = os.dup(fd)
+                    rollback.callback(os.close, duplicate)
+                    retained.append(duplicate)
+                for fd in retained:
+                    lifetime.callback(close_retained, fd)
+                holders.extend(retained)
+                # Originals belong to the caller; duplicates to the fixture.
+                rollback.pop_all()
+                return original
+
+        monkeypatch.setattr(_spawn, "_open_capture_pipes", retaining)
+        yield holders
 
 
 def _userns_available() -> bool:
