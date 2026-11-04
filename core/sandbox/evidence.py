@@ -53,6 +53,7 @@ runs (kept for one release).
 from __future__ import annotations
 
 import contextlib
+import errno
 from core.json import dumps_artifact
 import logging
 import os
@@ -354,7 +355,8 @@ def anonymous_fd(data: bytes, *, name: str = "raptor-audit-cfg") -> int:
     """Return a read/write fd holding ``data``, with no filesystem name.
 
     Linux: ``memfd_create`` — the object never touches a filesystem.
-    Elsewhere (macOS): an unlinked temp file — opened, unlinked, then
+    When unavailable (including older kernels) or elsewhere (macOS),
+    use an unlinked temp file — opened, unlinked, then
     written; the fd stays valid but no path exists to discover.
 
     The fd is close-on-exec (Python fds are non-inheritable by
@@ -363,35 +365,38 @@ def anonymous_fd(data: bytes, *, name: str = "raptor-audit-cfg") -> int:
     same-description reader (the ``/dev/fd/N`` dup on macOS) reads
     from the start.
     """
-    if sys.platform.startswith("linux") and hasattr(os, "memfd_create"):
-        fd = os.memfd_create(name)
-    else:
-        fd, path = tempfile.mkstemp(prefix=name + "-")
-        try:
+    fd = None
+    path = None
+    try:
+        if sys.platform.startswith("linux") and hasattr(os, "memfd_create"):
+            try:
+                fd = os.memfd_create(name)
+            except OSError as exc:
+                if exc.errno != errno.ENOSYS:
+                    raise
+                # Python may expose the API on an older running kernel.
+                # The unlinked-file branch has the same no-name contract.
+        if fd is None:
+            fd, path = tempfile.mkstemp(prefix=name + "-")
             os.unlink(path)
-        except OSError:
-            # The unlink is what removes the discoverable path; if it
-            # fails we must not fall through to using a named file.
+            path = None
+
+        remaining = memoryview(data)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "anonymous-fd write made no progress")
+            remaining = remaining[written:]
+        os.lseek(fd, 0, os.SEEK_SET)
+        return fd
+    except BaseException:
+        if fd is not None:
             with contextlib.suppress(OSError):
                 os.close(fd)
-            raise
-    try:
-        written = 0
-        while written < len(data):
-            n = os.write(fd, data[written:])
-            if n <= 0:
-                msg = (
-                    "anonymous-fd write returned 0 bytes — "
-                    "filesystem full or read-only"
-                )
-                raise OSError(msg)
-            written += n
-        os.lseek(fd, 0, os.SEEK_SET)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.close(fd)
+        if path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
         raise
-    return fd
 
 
 def fd_path(fd: int, *, platform: str | None = None) -> str:
