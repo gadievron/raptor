@@ -89,6 +89,7 @@ from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
+from core.detectors.setup import AnalysisSetup
 from core.detectors.memcpy_overlap import OVERLAP_ID, run_memcpy_overlap
 from core.detectors.stack_return import (
     CANDIDATE_ID as STACK_RETURN_ID, RULE_ID as STACK_RETURN_RULE_ID, run_stack_return,
@@ -522,6 +523,7 @@ def scan_target(
     max_tus: int = DEFAULT_MAX_TUS,
     out_dir: Path | None = None,
     max_workers: int = _MAX_WORKERS,
+    setup: AnalysisSetup | None = None,
 ) -> CompilerScanResult:
     """Run the compiler analyzers across every C/C++ TU in *target_path*.
 
@@ -565,7 +567,8 @@ def scan_target(
 
     # Shared only within this scan: a later run must discover header-directory
     # changes. Bound entries and collapse concurrent lookups of the same TU dir.
-    include_dirs_memo: BoundedMemo[list[str]] = BoundedMemo(64)
+    setup = setup if setup is not None else AnalysisSetup()
+    include_dirs_memo = setup.include_dirs_memo
     seen: set[tuple[str, str, int]] = set()
     workers = max(1, min(max_workers, len(tus)))
     with ThreadPoolExecutor(max_workers=workers) as pool:

@@ -278,3 +278,47 @@ def test_additional_detector_limitation_is_reported_on_stderr(tmp_path, monkeypa
     ))
     _scanner.run_compiler_scan_stage(repo, out)
     assert 'additional analyzer limitation' in capsys.readouterr().err
+
+
+def test_stage_uses_callers_setup(tmp_path, monkeypatch):
+    from core.detectors.setup import AnalysisSetup
+    (tmp_path / 'main.c').write_text('int main(void){return 0;}\n')
+    setup = AnalysisSetup()
+    cs = _load_cs()
+    seen = []
+    def scan(target, **kwargs):
+        seen.append(kwargs['setup'])
+        return cs.CompilerScanResult(ok=True)
+    monkeypatch.setattr(cs, 'scan_target', scan)
+    _scanner.run_compiler_scan_stage(tmp_path, tmp_path / 'out', setup=setup)
+    assert seen == [setup]
+
+
+def test_scanner_owns_one_setup_for_compiler_and_expanded_stages():
+    import ast
+    from types import SimpleNamespace
+    from core.detectors.setup import AnalysisSetup
+    tree = ast.parse(_SCANNER_PATH.read_text())
+    main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    # Execute the actual adjacent dispatch statements, without running unrelated
+    # scanners or model analysis. A stage must receive the same run owner.
+    block = next(node for node in ast.walk(main) if isinstance(node, ast.Try)
+                 and any(isinstance(item, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == 'analysis_setup' for t in item.targets)
+                         for item in node.body))
+    start = next(i for i, node in enumerate(block.body) if isinstance(node, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == 'analysis_setup' for t in node.targets))
+    end = next(i for i in range(start, len(block.body)) if isinstance(block.body[i], ast.If)
+               and ast.unparse(block.body[i].test) == 'args.expanded_semgrep')
+    program = ast.fix_missing_locations(ast.Module(body=block.body[start:end+1], type_ignores=[]))
+    calls = []
+    def stage(*a, **kw):
+        calls.append(kw['setup'])
+        return []
+    env = {'AnalysisSetup': AnalysisSetup, 'args': SimpleNamespace(
+        compiler_scan=True, no_compiler_scan=False, compiler_scan_max_tus=None,
+        expanded_semgrep=True, extra_config=[]), 'repo_path': Path('/target'),
+        'out_dir': Path('/output'), 'rules_dirs': [], 'resolved_baseline': [],
+        'run_compiler_scan_stage': stage, 'run_expanded_semgrep_stage': stage}
+    exec(compile(program, '<scanner setup dispatch>', 'exec'), env)
+    assert len(calls) == 2 and calls[0] is calls[1]

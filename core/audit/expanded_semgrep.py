@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import write_bytes_atomically
+from core.detectors.setup import AnalysisSetup
 from core.detectors.semgrep import define_semgrep_detector
 from core.sarif import emit
 from core.source import read_text_capped
@@ -395,6 +396,7 @@ def build_expanded_corpus(
     max_tus: int = _AUGMENT_FILE_CAP,
     macro_config: Any = None,
     out_dir: Path | None = None,
+    setup: AnalysisSetup | None = None,
 ) -> ExpandedCorpus:
     """Expand macro-heavy TUs into *scratch_root* for a corpus scan.
 
@@ -405,6 +407,7 @@ def build_expanded_corpus(
     language detection and result paths stay predictable.  Best-effort
     per file; preprocess failures are counted, never raised.
     """
+    setup = setup if setup is not None else AnalysisSetup()
     target_path = Path(target_path)
     scratch_root = Path(scratch_root)
     scratch_root.mkdir(parents=True, exist_ok=True)
@@ -450,6 +453,7 @@ def build_expanded_corpus(
             file_path=rel,
             macro_config=macro_config,
             out_dir=out_dir,
+            include_dirs_memo=setup.include_dirs_memo,
         )
         if not view.ok:
             corpus.failed += 1
