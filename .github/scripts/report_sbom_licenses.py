@@ -57,6 +57,7 @@ class Report:
     metrics: Metrics | None = None
     issues: list[Issue] = field(default_factory=list)
     source_gaps: list[dict] = field(default_factory=list)
+    source_assessments: list[dict] = field(default_factory=list)
     inventory_candidates: list[dict] = field(default_factory=list)
     inventory_ownership: list[dict] = field(default_factory=list)
     native_identity_matches: list[dict] = field(default_factory=list)
@@ -104,6 +105,23 @@ def match_inventory_ownership(native, candidates):
     return match(native, candidates)
 
 
+
+def _source_assessment(record):
+    check = record.get("source_check") or {}
+    if not isinstance(check, dict) or not isinstance(check.get("files", []), list):
+        raise ValueError("invalid source assessment")
+    status = check.get("status", "unverified")
+    if not isinstance(status, str):
+        raise ValueError("invalid source assessment status")
+    matched = None
+    if status in {"verified_interpreted_source", "verified_source_payload"}:
+        matched = len(check.get("files", []))
+    elif status == "verified_publisher_release_binary" and isinstance(check.get("binary"), dict):
+        matched = 1
+    return {"id": record["id"], "name": record["name"], "version": record.get("version", ""),
+            "status": status, "matched_files": matched, "scope": check.get("scope", ""),
+            "limitations": check.get("limitations", []), "gaps": record["gaps"]}
+
 def collect(audit, image_digest):
     """Accept only complete evidence bound to the exact inventory and image."""
     from core.security.capped_read import read_capped
@@ -149,6 +167,7 @@ def collect(audit, image_digest):
         files.update((item["path"], item["catalogue_layer_diff_id"], item["sha256"])
                      for item in notices.get("unassociated_files", []) if item["content_kind"] == "notice_candidate")
         report.source_gaps = [sources[key] for key in sorted(sources) if sources[key]["gaps"]]
+        report.source_assessments = [_source_assessment(sources[key]) for key in sorted(sources)]
         report.metrics = Metrics(len(artifacts), sum(item.missing_declaration for item in report.issues),
                                  sum(bool(item.notice_gaps) for item in report.issues), len(files), len(report.source_gaps), len(sources))
         evidence_files = list(notices.get("unassociated_files", []))
@@ -238,6 +257,7 @@ def collect(audit, image_digest):
         report.metrics = None
         report.issues = []
         report.source_gaps = []
+        report.source_assessments = []
         report.inventory_candidates = []
         report.inventory_ownership = []
         report.native_identity_matches = []
@@ -277,6 +297,23 @@ def markdown(report):
                 details = (["license declaration"] if issue.missing_declaration else []) + issue.notice_gaps
                 lines.append(f"| {_cell(issue.name)}@{_cell(issue.version)} | {_cell('; '.join(details))} |")
             lines.append("")
+    if report.source_assessments:
+        labels = {"verified_interpreted_source": "Source and metadata matched upstream",
+                  "verified_source_payload": "Python sources and signed driver matched",
+                  "verified_publisher_release_binary": "Binary matches publisher-signed release"}
+        lines += ["### Source and build evidence", "",
+                  "| Package | Version | Evidence | Files matched | Remaining warnings |",
+                  "| --- | --- | --- | ---: | --- |"]
+        rows = sorted(report.source_assessments, key=lambda row: (
+            not bool(row["gaps"]), str(row["name"]), str(row["version"]), row["id"]))
+        for row in rows[:20]:
+            evidence = labels.get(row["status"], "Source correspondence not verified")
+            count = row["matched_files"] if row["matched_files"] is not None else "unknown"
+            warnings = "; ".join(row["gaps"]) or "None recorded"
+            lines.append("| " + " | ".join(_cell(value) for value in (
+                row["name"], row["version"], evidence, count, warnings)) + " |")
+        lines += ["", "Only the listed assessments are shown; these results do not establish build provenance for every catalogued package.",
+                  "Full assessment scopes, limitations and per-file evidence are retained in `prepared/provenance.json`.", ""]
     if report.native_notice_collections:
         lines += ["### Native tool release notices", "", "| Tool | Version | Collection |", "| --- | --- | --- |"]
         for receipt in report.native_notice_collections:
@@ -314,6 +351,12 @@ def annotations(report):
                          " native tool notice collection(s) unavailable. See the report and retained provenance.")
     inventory.extend("::warning title=Container executable inventory::" + _command(error)
                      for error in report.inventory_errors)
+    if report.source_gaps:
+        level = "warning" if any((row.get("source_check") or {}).get("status") == "unverified"
+                                 for row in report.source_gaps) else "notice"
+        inventory.append("::" + level + " title=Container source/build evidence::" +
+                         str(len(report.source_gaps)) +
+                         " assessed package(s) have source/build warnings. See Source and build evidence in the job summary and prepared/provenance.json in the container-sbom artifact.")
     if not report.issues:
         return inventory[:10]
     messages = [f"::warning title=Container license evidence::{len(report.issues)} package(s) have evidence gaps. See the job summary and container-sbom artifact."]

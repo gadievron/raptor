@@ -66,7 +66,9 @@ def test_notice_gaps_and_source_gaps_remain_separate(tmp_path):
     assert report.metrics.source_gap_packages == 1
     assert report.metrics.unresolved_declarations == 0
     assert "missing notice" in tool.markdown(report)
-    assert len(tool.annotations(report)) == 2
+    assert len(tool.annotations(report)) == 3
+    assert any(line.startswith("::notice title=Container source/build evidence") for line in tool.annotations(report))
+    assert "source correspondence unavailable" in tool.markdown(report)
 
 
 @pytest.mark.parametrize("change", ["missing", "wrong_image", "stale_inventory", "omitted", "duplicate", "empty", "hidden_gap", "malformed"])
@@ -417,3 +419,64 @@ def test_report_grades_build_declarations_and_rejects_changed_install_metadata(t
     save(tmp_path, provenance)
     report = tool.collect(tmp_path, digest)
     assert report.metrics.build_declared_executables == 0 and report.metrics.unidentified_executables == 1
+
+
+@pytest.mark.parametrize("status,count,label", [
+    ("verified_interpreted_source", 6, "Source and metadata matched upstream"),
+    ("verified_source_payload", 173, "Python sources and signed driver matched"),
+    ("verified_publisher_release_binary", 1, "Binary matches publisher-signed release"),
+])
+def test_source_assessments_are_visible_without_reclassifying_license_gaps(tmp_path, status, count, label):
+    _, provenance, digest = inputs(tmp_path)
+    row = provenance["packages"][0]
+    row.update(version="1", source_check={"status": status, "files": [{}] * count,
+        "binary": {"path": "/usr/bin/node"}, "scope": "explicit files only", "limitations": ["not a complete build attestation"]})
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.unresolved_declarations == report.metrics.notice_gap_packages == 0
+    assert report.source_assessments[0]["matched_files"] == count
+    assert asdict(report)["source_assessments"][0]["limitations"] == ["not a complete build attestation"]
+    text = tool.markdown(report)
+    assert label in text and str(count) in text
+    assert "prepared/provenance.json" in text
+    assert tool.annotations(report) == []
+
+
+def test_expected_node_build_limit_is_a_notice_without_license_gaps(tmp_path):
+    _, provenance, digest = inputs(tmp_path)
+    provenance["packages"][0].update(gaps=["exact binary-to-source build correspondence is not attested"],
+        source_check={"status": "verified_publisher_release_binary", "binary": {"path": "/usr/bin/node"}})
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.status == "complete_for_catalogued_packages" and not report.issues
+    assert report.metrics.source_gap_packages == 1
+    assert tool.annotations(report)[0].startswith("::notice title=Container source/build evidence")
+    assert "not attested" in tool.markdown(report)
+
+
+def test_failed_source_check_is_an_actionable_warning(tmp_path):
+    _, provenance, digest = inputs(tmp_path)
+    provenance["packages"][0].update(gaps=["source check unavailable"], source_check={"status": "unverified"})
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.source_assessments[0]["matched_files"] is None
+    assert tool.annotations(report)[0].startswith("::warning title=Container source/build evidence")
+    assert "unknown" in tool.markdown(report)
+
+
+def test_source_summary_escapes_package_names_and_warnings():
+    report = tool.Report("sha256:" + "a" * 64, metrics=tool.Metrics(1, 0, 0, 1, 1))
+    report.source_assessments = [{"id": "a", "name": "package|<b>\n", "version": "1", "status": "unverified",
+                                  "matched_files": None, "gaps": ["missing|<script>\rproof"]}]
+    text = tool.markdown(report)
+    assert "<b>" not in text and "<script>" not in text
+    assert "&#124;" in text and "&lt;script&gt;" in text
+
+
+def test_malformed_source_proof_cannot_produce_successful_coverage(tmp_path):
+    _, provenance, digest = inputs(tmp_path)
+    provenance["packages"][0]["source_check"] = "broken"
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics is None and report.status == "unavailable"
+    assert report.source_assessments == []
