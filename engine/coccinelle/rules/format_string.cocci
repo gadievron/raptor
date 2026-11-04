@@ -83,23 +83,15 @@ static char fmt[] = C;
 //   printf, vprintf, wprintf, warn, warnx
 // ---------------------------------------------------------------
 
+// Share the format-expression alternatives across literal callees. Each
+// callee keeps its own @p attachment for the position-exclusion rules.
 @safe_g1@
 constant char [] FMT, FMT2;
 expression COND;
 position p;
 @@
 
-(
-  printf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  wprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  warn@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  warnx@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-)
+\(printf@p\|vprintf@p\|wprintf@p\|warn@p\|warnx@p\)(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 
 @safe_local_g1@
 identifier fmt;
@@ -185,29 +177,7 @@ expression ARG1, COND;
 position p;
 @@
 
-(
-  fprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vfprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  sprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vsprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  dprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  syslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vsyslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  err@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  errx@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  asprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vasprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-)
+\(fprintf@p\|vfprintf@p\|sprintf@p\|vsprintf@p\|dprintf@p\|syslog@p\|vsyslog@p\|err@p\|errx@p\|asprintf@p\|vasprintf@p\)(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 
 @safe_local_g2@
 identifier fmt;
@@ -328,11 +298,7 @@ expression ARG1, ARG2, COND;
 position p;
 @@
 
-(
-  snprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-|
-  vsnprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
-)
+\(snprintf@p\|vsnprintf@p\)(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 
 @safe_local_g3@
 identifier fmt;
