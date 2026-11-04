@@ -38,6 +38,7 @@ on:
       - '.dockerignore'
       - '.gitattributes'
       - '**/.gitattributes'
+      - 'LICENSE'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
