@@ -324,7 +324,7 @@ class FieldCensus:
 _WRITE_RE = re.compile(r"\b(\w+)\s*->\s*(\w+)\s*=(?![=>])")
 _ACCESS_RE = re.compile(r"\b(\w+)\s*->\s*(\w+)\b")
 _LOCAL_ALIAS_RE = re.compile(r"\b(\w+)\s*=\s*(\w+)\s*->\s*(\w+)\s*;")
-_CALL_AFTER_RE = re.compile(r"\A\s*\(")
+_CALL_AFTER_RE = re.compile(r"\s*\(")
 # Bounded windows on the newline-crossing spans. The head class and
 # the params class both cross newlines BY DESIGN (kernel-style
 # ``static void\nname(...)`` declarations and multi-line parameter
@@ -1064,6 +1064,7 @@ def _scan_file_regex(
                 code=code, lock_held=_lock_for(span),
             ))
         alias = _LOCAL_ALIAS_RE.search(text)
+        return_context: bool | None = None
         for m in _ACCESS_RE.finditer(text):
             owner, name = m.group(1), m.group(2)
             if not keep(name) or (owner, name) in written:
@@ -1071,13 +1072,18 @@ def _scan_file_regex(
             if owner in _C_KEYWORDS:
                 continue
             context = "expr"
-            if _CALL_AFTER_RE.match(text[m.end():]):
+            if _CALL_AFTER_RE.match(text, m.end()):
                 context = "invoke"
             elif alias and alias.group(2) == owner and \
                     alias.group(3) == name:
                 context = f"alias_assign:{alias.group(1)}"
-            elif "return" in text.split("->")[0]:
-                context = "return"
+            else:
+                if return_context is None:
+                    # Every access has an arrow. Preserve the existing
+                    # substring rule before the line's first arrow.
+                    return_context = text.find("return", 0, text.find("->")) >= 0
+                if return_context:
+                    context = "return"
             rec = raw.get(name)
             if rec is None:
                 rec = FieldRecord(field=name, tier=TIER_REGEX)
