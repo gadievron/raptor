@@ -366,5 +366,6 @@ def test_expanded_stage_forwards_run_setup(tmp_path, monkeypatch):
         seen.append(kwargs['setup'])
         return FakeCorpus(root=Path(scratch))
     monkeypatch.setattr(es, 'build_expanded_corpus', build)
+    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
     assert _scanner.run_expanded_semgrep_stage(repo, out, [], [], setup=setup) == []
     assert len(seen) == 1 and seen[0] is setup
