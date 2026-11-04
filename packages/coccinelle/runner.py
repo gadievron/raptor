@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,10 @@ _SCRIPT_BLOCK_RE = re.compile(
     r"\b(?:script|initialize|finalize)\s*:",
     re.IGNORECASE,
 )
+
+# Lifecycle blocks export interpreter state across script rules. Separate
+# rule files must not acquire a shared initialization/finalization scope.
+_LIFECYCLE_BLOCK_RE = re.compile(r"\b(?:initialize|finalize)\s*:", re.IGNORECASE)
 
 # Size cap on a .cocci rule body, shared by run_rule and the batched
 # loop. Operator-supplied today, but the cocci_utilization arc
@@ -1074,6 +1079,9 @@ def run_rules_batched(
     Falls back to per-rule run_rule when only one rule is given or
     accepted rules have colliding result IDs (including file-stem
     aliases). Individual execution preserves attribution in that case.
+    Rules with lifecycle scripts (initialize/finalize), or ambiguous
+    lexical structure, execute individually to isolate their interpreter
+    state. The remaining rules can still batch.
     """
     rules = [Path(r).resolve() for r in rules if Path(r).exists()]
     if not rules:
@@ -1106,6 +1114,7 @@ def run_rules_batched(
     refused: dict[str, SpatchResult] = {}
     alias_of: dict[str, str] = {}
     colliding_ids: set[str] = set()
+    isolated_stems: set[str] = set()
     for r in rules:
         # Same per-rule size cap as run_rule (_RULE_MAX_BYTES) — the
         # batched loop is the OTHER read path the OOM defence must
@@ -1165,6 +1174,9 @@ def run_rules_batched(
                 returncode=-1,
             )
             continue
+        view, ambiguous = _lexical_scan(text)
+        if ambiguous or _LIFECYCLE_BLOCK_RE.search(view):
+            isolated_stems.add(r.stem)
         parts.append(f"// --- begin {r.stem} ---\n{text}\n")
         rule_stems.append(r.stem)
         batched_rules.append(r)
@@ -1184,6 +1196,20 @@ def run_rules_batched(
     if not rule_stems:
         return refused
 
+    def _individual_results(selected: list[Path]) -> dict[str, SpatchResult]:
+        return {
+            r.stem: run_rule(
+                target, r,
+                include_dirs=include_dirs,
+                no_includes=no_includes,
+                timeout=timeout,
+                env=env, defines=defines,
+                subprocess_runner=subprocess_runner,
+                allow_scripting=allow_scripting,
+            )
+            for r in selected
+        }
+
     if colliding_ids:
         # A nonce proves that a batch emitted the record, not WHICH
         # rule emitted it. Once IDs overlap, demultiplexing cannot
@@ -1194,20 +1220,30 @@ def run_rules_batched(
             "accepted rules individually to preserve attribution",
             sorted(colliding_ids),
         )
-        out = {
-            r.stem: run_rule(
-                target, r,
-                include_dirs=include_dirs,
-                no_includes=no_includes,
-                timeout=timeout,
-                env=env, defines=defines,
-                subprocess_runner=subprocess_runner,
-                allow_scripting=allow_scripting,
-            )
-            for r in batched_rules
-        }
+        out = _individual_results(batched_rules)
         out.update(refused)
         return out
+
+    if isolated_stems:
+        out = {}
+        # Keep invocation groups in input order. Only contiguous runs
+        # without lifecycle state share a process.
+        for isolated, group in groupby(
+            batched_rules, key=lambda r: r.stem in isolated_stems,
+        ):
+            selected = list(group)
+            if isolated:
+                out.update(_individual_results(selected))
+            else:
+                out.update(run_rules_batched(
+                    target, selected,
+                    include_dirs=include_dirs, no_includes=no_includes,
+                    timeout=timeout, env=env, defines=defines,
+                    subprocess_runner=subprocess_runner,
+                    allow_scripting=allow_scripting,
+                ))
+        out.update(refused)
+        return {r.stem: out[r.stem] for r in rules if r.stem in out}
 
     # Same per-invocation evidence nonce as run_rule (see _make_nonce):
     # one nonce covers the whole batch invocation.
