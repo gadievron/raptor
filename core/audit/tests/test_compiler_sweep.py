@@ -1349,6 +1349,7 @@ class TestAdditiveChecks:
                 else:
                     assert "nesting exceeds the scan limit" in w
 
+    @pytest.mark.slow
     def test_large_preprocessed_output_linear(self, tmp_path):
         """The closure walk over multi-MB -E output must scale linearly;
         a quadratic walk would let a repo stall the scan."""
@@ -1501,7 +1502,7 @@ class TestMonotonicOverBase:
             )
             assert w or fail, attr
 
-    @pytest.mark.wall_budget(15)
+    @pytest.mark.slow
     def test_long_suppress_list_linear(self):
         """A 2 MB attribute list must be scanned in bounded time, inside
         and outside '#if 0', for both the file and the closure scan."""

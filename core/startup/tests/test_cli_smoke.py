@@ -223,8 +223,9 @@ def test_invalid_mode_errors():
 @pytest.mark.parametrize(
     "mode,required_keyword",
     [
-        ("scan", "repo"),
-        ("agentic", "repo"),
+        # Full dispatcher imports and lifecycle teardown belong in slow CI.
+        pytest.param("scan", "repo", marks=pytest.mark.slow),
+        pytest.param("agentic", "repo", marks=pytest.mark.slow),
         ("fuzz", "binary"),
         # Cold CodeQL startup plus lifecycle teardown exceeds the fast-tier
         # budget; preserve this full dispatcher path in slow CI.
@@ -263,6 +264,7 @@ def test_missing_required_arg_errors(mode: str, required_keyword: str):
     )
 
 
+@pytest.mark.slow  # Preserve full cold dispatcher coverage in the slow tier.
 @pytest.mark.parametrize("mode", ["scan", "agentic"])
 def test_missing_repo_errors_even_with_caller_dir(
     mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

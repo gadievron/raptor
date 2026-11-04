@@ -36,6 +36,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
 # parents[2] = .github/tests → .github → repo root. Anchor to this
 # file, not $RAPTOR_DIR, so the test inspects its own worktree.
 REPO = Path(__file__).resolve().parents[2]
@@ -126,31 +128,6 @@ class ShebangRouteTests(unittest.TestCase):
                 "the settings-allowlisted command shapes) need it",
         )
         return str(path)
-
-    def test_pythonpath_sitecustomize_never_loads(self):
-        import tempfile
-        for name in _surface_names():
-            with self.subTest(surface=name), \
-                    tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                tripwire = _tripwire_sitecustomize(tmp)
-                args, fragment = SURFACES[name]
-                proc = _run(
-                    [self._script(name), *args],
-                    _base_env(tmp, PYTHONPATH=str(tmp)),
-                )
-                self.assertEqual(
-                    _tripwire_lines(tripwire), 0,
-                    msg=f"{name}: the shebang route loaded a "
-                        f"PYTHONPATH sitecustomize\n{proc.stderr}",
-                )
-                self.assertIn(name.replace("raptor-", ""), name)  # sanity
-                self.assertIn(
-                    fragment, proc.stdout + proc.stderr,
-                    msg=f"{name}: normal operation broken under the "
-                        f"isolated shebang\nstdout={proc.stdout!r}\n"
-                        f"stderr={proc.stderr!r}",
-                )
 
     @staticmethod
     def _plant_user_site_hook(tmp: Path, env: dict[str, str]) -> Path:
@@ -246,34 +223,6 @@ class PythonRouteTests(unittest.TestCase):
     """`python3 <script>`: the guard re-execs into -I. The hook runs
     once in the discarded first image (honest bound, pinned) and its
     monkeypatches die with it."""
-
-    def test_hook_loads_exactly_once_and_script_still_works(self):
-        """One tripwire line — a second line would mean the re-execed
-        interpreter processed PYTHONPATH again (a guard that re-execs
-        WITHOUT -I fails here); zero would overclaim what this route
-        can do."""
-        import tempfile
-        for name in _surface_names():
-            with self.subTest(surface=name), \
-                    tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                tripwire = _tripwire_sitecustomize(tmp)
-                args, fragment = SURFACES[name]
-                proc = _run(
-                    [sys.executable, str(LIBEXEC / name), *args],
-                    _base_env(tmp, PYTHONPATH=str(tmp)),
-                )
-                self.assertEqual(
-                    _tripwire_lines(tripwire), 1,
-                    msg=f"{name}: expected exactly one hook load "
-                        "(first image only)",
-                )
-                self.assertIn(
-                    fragment, proc.stdout + proc.stderr,
-                    msg=f"{name}: normal operation broken through the "
-                        f"re-exec\nstdout={proc.stdout!r}\n"
-                        f"stderr={proc.stderr!r}",
-                )
 
     def test_execv_neuter_fails_closed(self):
         """The stock attack ON the guard: a hook that no-ops os.execv
@@ -513,6 +462,41 @@ class GuardProbeTests(unittest.TestCase):
             self.assertEqual(data["ttys"], [True, True, True])
             self.assertEqual(data["isolated"], 1)
             self.assertEqual(data["argv"], ["tty-run"])
+
+
+@pytest.mark.parametrize("name", _surface_names())
+def test_pythonpath_sitecustomize_never_loads(name, tmp_path):
+    """Each shipped shebang isolates startup and preserves normal operation."""
+    script = LIBEXEC / name
+    assert os.access(script, os.X_OK), f"{name} lost its exec bit"
+    tripwire = _tripwire_sitecustomize(tmp_path)
+    args, fragment = SURFACES[name]
+    proc = _run([str(script), *args], _base_env(tmp_path, PYTHONPATH=str(tmp_path)))
+    assert _tripwire_lines(tripwire) == 0, (
+        f"{name}: the shebang route loaded a PYTHONPATH sitecustomize\n{proc.stderr}"
+    )
+    assert fragment in proc.stdout + proc.stderr, (
+        f"{name}: normal operation broken through the isolated shebang\n"
+        f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    )
+
+
+@pytest.mark.parametrize("name", _surface_names())
+def test_hook_loads_exactly_once_and_script_still_works(name, tmp_path):
+    """The initial hook loads once; the real re-exec discards its environment."""
+    tripwire = _tripwire_sitecustomize(tmp_path)
+    args, fragment = SURFACES[name]
+    proc = _run(
+        [sys.executable, str(LIBEXEC / name), *args],
+        _base_env(tmp_path, PYTHONPATH=str(tmp_path)),
+    )
+    assert _tripwire_lines(tripwire) == 1, (
+        f"{name}: expected exactly one hook load (first image only)"
+    )
+    assert fragment in proc.stdout + proc.stderr, (
+        f"{name}: normal operation broken through the re-exec\n"
+        f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,13 @@ import pytest
 from packages.describe.cli import describe_main
 
 
+@pytest.fixture(autouse=True)
+def _archive_report_without_host_probes(monkeypatch):
+    # Archive extraction, target detection and rendering remain real; installed
+    # tool readiness is covered by its own tests, not these path/lifetime pins.
+    monkeypatch.setattr("packages.describe.report.check_tool_readiness", lambda shape: [])
+
+
 def _make_c_daemon_source(d: Path) -> None:
     """Synthesise a c.userspace-daemon shape inside ``d``."""
     d.mkdir(parents=True, exist_ok=True)
