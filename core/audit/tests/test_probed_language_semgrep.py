@@ -40,10 +40,14 @@ _VULNERABLE_MOD = (
     "$dir = $_POST['dir'];\n"
     "exec(\"ls \" . $dir);\n"
 )
+# Keep the clean control independent of the engine's treatment of calls
+# beside PHP global declarations: Semgrep 1.177.0 conservatively reports
+# escapeshellarg here, while the rule's integer-cast sanitizer is modeled.
+# This test pins unknown-extension scan coverage, not sanitizer precision.
 _SANITIZED_MOD = (
     "<?php\n"
     "global $app_config;\n"
-    "$dir = escapeshellarg($_POST['dir']);\n"
+    "$dir = (int) $_POST['dir'];\n"
     "exec(\"ls \" . $dir);\n"
 )
 # Unknown extension, C content: must never be scanned as php.
