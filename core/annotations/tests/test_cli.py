@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.processes import reap_on_exit
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"
 
@@ -85,9 +87,10 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
             env=real_env, text=True, start_new_session=setsid,
             **kwargs,
         )
-        send = input_text if kwargs["stdin"] == subprocess.PIPE else None
-        out, err = proc.communicate(input=send, timeout=60)
-        return _Result(proc.returncode, out or "", err or "")
+        with reap_on_exit(proc, process_group=setsid):
+            send = input_text if kwargs["stdin"] == subprocess.PIPE else None
+            out, err = proc.communicate(input=send, timeout=60)
+            return _Result(proc.returncode, out or "", err or "")
     finally:
         if stdin_file is not None:
             stdin_file.close()

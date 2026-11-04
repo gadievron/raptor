@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.processes import reap_on_exit
+
 # parents[3] climbs:
 #   [0] core/startup/tests/  (this file's directory)
 #   [1] core/startup/
@@ -146,20 +148,21 @@ def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProces
         env=env,
         start_new_session=True,
     )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    with reap_on_exit(proc, process_group=True):
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        out, err = proc.communicate()
-        # Preserve subprocess.run's contract: callers distinguish
-        # timeout (argparse accepted, work started) from completion.
-        raise subprocess.TimeoutExpired(
-            cmd, timeout, output=out, stderr=err,
-        ) from None
-    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            out, err = proc.communicate()
+            # Preserve subprocess.run's contract: callers distinguish
+            # timeout (argparse accepted, work started) from completion.
+            raise subprocess.TimeoutExpired(
+                cmd, timeout, output=out, stderr=err,
+            ) from None
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _argparse_accepted(*args: str, timeout: float = 3.0) -> bool:

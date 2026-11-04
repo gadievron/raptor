@@ -26,6 +26,8 @@ import tempfile
 
 import pytest
 
+from core.testing.processes import reap_on_exit
+
 import core.sandbox.proxy as proxy_mod
 
 pytestmark = [
@@ -105,12 +107,13 @@ def _child_connect(path: str) -> tuple[subprocess.Popen, "callable"]:
     """Start the connecting child, paused before its connect."""
     p = subprocess.Popen(
         [sys.executable, "-c", _CHILD, path],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, start_new_session=True,
     )
 
     def go() -> bytes:
-        out, _ = p.communicate(input=b"g", timeout=30)
-        return out
+        with reap_on_exit(p, process_group=True):
+            out, _ = p.communicate(input=b"g", timeout=30)
+            return out
 
     return p, go
 
