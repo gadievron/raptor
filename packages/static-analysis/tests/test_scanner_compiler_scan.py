@@ -321,7 +321,7 @@ def test_scanner_owns_one_setup_for_compiler_and_expanded_stages(compiler, disab
         calls.append(kw['setup'])
         return []
     env = {'AnalysisSetup': AnalysisSetup, 'PreparedViews': PreparedViews, 'args': SimpleNamespace(
-        compiler_scan=compiler, no_compiler_scan=disabled, compiler_scan_max_tus=None,
+        compiler_scan=compiler, no_compiler_scan=disabled, compiler_scan_max_tus=None, compiler_scan_max_seconds=None,
         expanded_semgrep=expanded, extra_config=[]), 'repo_path': Path('/target'),
         'out_dir': Path('/output'), 'rules_dirs': [], 'resolved_baseline': [],
         'run_compiler_scan_stage': stage, 'run_expanded_semgrep_stage': stage}
@@ -329,3 +329,60 @@ def test_scanner_owns_one_setup_for_compiler_and_expanded_stages(compiler, disab
     assert len(calls) == count
     assert all(setup is env["analysis_setup"] for setup in calls)
     assert (env["analysis_setup"].preprocessed_views is not None) == retained
+
+
+def test_stage_forwards_analysis_seconds(tmp_path, monkeypatch):
+    (tmp_path / 'main.c').write_text('int main(void){return 0;}\n')
+    cs = _load_cs()
+    seen = []
+    def scan(target, **kwargs):
+        seen.append(kwargs['max_seconds'])
+        return cs.CompilerScanResult(ok=True)
+    monkeypatch.setattr(cs, 'scan_target', scan)
+    _scanner.run_compiler_scan_stage(tmp_path, tmp_path / 'out', max_seconds=7.5)
+    assert seen == [7.5]
+
+
+@pytest.mark.parametrize('filename,parser_name', [
+    ('packages/static-analysis/scanner.py', 'ap'), ('raptor_agentic.py', 'parser'),
+])
+def test_analysis_budget_cli_accepts_only_positive_finite_values(filename, parser_name):
+    import argparse
+    import ast
+    from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, positive_seconds
+    tree = ast.parse((Path(_REPO_ROOT) / filename).read_text())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_argument'
+             and node.args and isinstance(node.args[0], ast.Constant)
+             and node.args[0].value == '--compiler-scan-max-seconds']
+    assert len(calls) == 1
+    parser = argparse.ArgumentParser()
+    program = ast.fix_missing_locations(ast.Module(body=[ast.Expr(value=calls[0])], type_ignores=[]))
+    exec(compile(program, '<budget CLI>', 'exec'), {parser_name: parser,
+         'DEFAULT_COMPILER_SCAN_SECONDS': DEFAULT_COMPILER_SCAN_SECONDS, 'positive_seconds': positive_seconds})
+    assert parser.parse_args([]).compiler_scan_max_seconds is None
+    assert parser.parse_args(['--compiler-scan-max-seconds', '7.5']).compiler_scan_max_seconds == 7.5
+    for invalid in ('0', '-1', 'nan', 'inf'):
+        with pytest.raises(SystemExit):
+            parser.parse_args(['--compiler-scan-max-seconds', invalid])
+
+
+@pytest.mark.parametrize('enabled,disabled,expected', [
+    (True, False, ['--compiler-scan', '--compiler-scan-max-seconds', '7.5']),
+    (False, False, []), (True, True, []),
+])
+def test_agentic_budget_forwarding_respects_compiler_opt_in(enabled, disabled, expected):
+    import ast
+    from types import SimpleNamespace
+    tree = ast.parse((Path(_REPO_ROOT) / 'raptor_agentic.py').read_text())
+    branches = [node for node in ast.walk(tree) if isinstance(node, ast.If)
+                and ast.unparse(node.test) == 'args.compiler_scan and (not args.no_compiler_scan)']
+    assert len(branches) == 1
+    program = ast.fix_missing_locations(ast.Module(body=branches, type_ignores=[]))
+    command = []
+    exec(compile(program, '<agentic budget forwarding>', 'exec'), {
+        'args': SimpleNamespace(compiler_scan=enabled, no_compiler_scan=disabled,
+                                compiler_scan_max_seconds=7.5, compiler_scan_max_tus=None),
+        'semgrep_cmd': command,
+    })
+    assert command == expected

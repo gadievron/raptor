@@ -33,9 +33,9 @@ to compiler_sweep):
 * A broken compile contributes NO findings — the analyzer never saw
   well-formed code, so its (partial) output proves nothing.  Failed
   TUs are counted and reported, never silently dropped.
-* Bounded: per-TU timeout from compiler_sweep's ``_COMPILE_TIMEOUT_S``
-  and a TU cap (``max_tus``).  Anything skipped by the cap is reported
-  LOUDLY — no silent truncation.
+* Bounded: a shared analysis deadline, per-TU timeout from compiler_sweep's
+  ``_COMPILE_TIMEOUT_S`` and a TU cap (``max_tus``). Unfinished coverage is
+  reported explicitly; completed findings survive deadline exhaustion.
 * Analyzer silence on attacker-authored source is repo-steerable
   (``[[clang::suppress]]``, ``#ifndef __clang_analyzer__``, flag-3
   system-header linemarkers — in the TU or a repo header). Each cleanly
@@ -51,7 +51,6 @@ import logging
 import os
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +88,7 @@ from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
+from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, WorkBudget, bounded_futures, positive_seconds
 from core.detectors.setup import AnalysisSetup
 from core.detectors.memcpy_overlap import OVERLAP_ID, run_memcpy_overlap
 from core.detectors.stack_return import (
@@ -424,7 +424,9 @@ def analyze_tu(
         )
     except CompilerInvocationError as exc:
         if isinstance(exc.error, subprocess.TimeoutExpired):
-            reason = f"analyzer timed out ({_COMPILE_TIMEOUT_S}s)"
+            seconds = exc.error.timeout
+            reason = (f"analyzer timed out ({seconds:g}s)" if isinstance(seconds, (int, float))
+                      else "analyzer timed out")
         else:
             reason = f"analyzer invocation failed: {exc}"
         return TuDiagnostics(rel_path, ok=False, compiler=compiler_name, reason=reason)
@@ -475,6 +477,8 @@ class CompilerScanResult:
     unvetted_tus: list[dict[str, str]] = field(default_factory=list)
 
     detector_limitations: list[dict[str, str]] = field(default_factory=list)
+    tus_skipped_budget: int = 0  # never submitted before the analysis deadline
+    budget_exhausted: bool = False
 
     def summary_line(self) -> str:
         """One-line operator-facing summary (LOUD about skips)."""
@@ -491,6 +495,9 @@ class CompilerScanResult:
                 f"⚠️  {self.tus_skipped_cap} TU(s) SKIPPED by the TU cap "
                 f"— raise --compiler-scan-max-tus to cover them"
             )
+        if self.budget_exhausted:
+            parts.append(f"analysis time budget exhausted; {self.tus_skipped_budget} TU(s) not started; "
+                         "completed findings retained — raise --compiler-scan-max-seconds for more coverage")
         if self.suppressed_tus:
             # The kind labels are presentation only: every listed TU is
             # a coverage limitation regardless of its kind.
@@ -524,14 +531,19 @@ def scan_target(
     out_dir: Path | None = None,
     max_workers: int = _MAX_WORKERS,
     setup: AnalysisSetup | None = None,
+    max_seconds: float = DEFAULT_COMPILER_SCAN_SECONDS,
 ) -> CompilerScanResult:
-    """Run the compiler analyzers across every C/C++ TU in *target_path*.
+    """Run compiler analyzers over capped C/C++ TUs in *target_path*.
 
     Returns a :class:`CompilerScanResult`.  ``ok=False`` (with reason,
     never an exception) when no analyzer is installed or the sandbox is
     unavailable — the scan refuses to run the compiler on untrusted
-    source without isolation.
+    source without isolation. ``max_seconds`` bounds analysis after discovery.
+    Expiry returns ``ok=True`` with ``budget_exhausted=True`` and explicit
+    coverage limitations, preserving completed findings; it is not full coverage.
     """
+    # Discovery precedes the shared analysis window; it keeps its own probe caps.
+    max_seconds = positive_seconds(max_seconds)
     target_path = Path(target_path)
     sandbox_run = _sandbox_runner()
     if sandbox_run is None:
@@ -569,31 +581,25 @@ def scan_target(
     # changes. Bound entries and collapse concurrent lookups of the same TU dir.
     setup = setup if setup is not None else AnalysisSetup()
     include_dirs_memo = setup.include_dirs_memo
+    budget = WorkBudget(max_seconds)
+    sandbox_run = budget.runner(sandbox_run)
     seen: set[tuple[str, str, int]] = set()
     workers = max(1, min(max_workers, len(tus)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                analyze_tu, target_path, rel,
-                sandbox_run=sandbox_run, scratch_root=scratch_root,
-                include_dirs_memo=include_dirs_memo,
-            ): rel
-            for rel in tus
-        }
-        per_tu: dict[str, TuDiagnostics] = {}
-        for fut in as_completed(futures):
-            rel = futures[fut]
-            try:
-                per_tu[rel] = fut.result()
-            except Exception as exc:  # noqa: BLE001 — one bad TU must not kill the scan
-                per_tu[rel] = TuDiagnostics(
-                    rel, ok=False, reason=f"unexpected failure: {exc}",
-                )
+    per_tu: dict[str, TuDiagnostics] = {}
+    def analyze(rel):
+        return analyze_tu(target_path, rel, sandbox_run=sandbox_run, scratch_root=scratch_root,
+                          include_dirs_memo=include_dirs_memo)
+    for rel, future in bounded_futures(tus, analyze, workers=workers, budget=budget):
+        try:
+            per_tu[rel] = future.result()
+        except Exception as exc:  # one failed TU must not erase completed work
+            per_tu[rel] = TuDiagnostics(rel, ok=False, reason=f"unexpected failure: {exc}")
+    result.tus_skipped_budget = len(tus) - len(per_tu)
 
     eligible = tuple(rel for rel in tus
                      if Path(rel).suffix in _C_SUFFIXES and per_tu.get(rel) is not None
                      and per_tu[rel].ok)
-    if eligible:
+    if eligible and budget.remaining() > 0:
         gcc = _gcc_analyzer()
 
         def overlap_request(rel):
@@ -618,7 +624,7 @@ def scan_target(
             extra = run_memcpy_overlap(
                 target_path, eligible, request_for=overlap_request if gcc else None,
                 sandbox_run=sandbox_run, max_workers=workers,
-                include_dirs_memo=include_dirs_memo, setup=setup,
+                include_dirs_memo=include_dirs_memo, setup=setup, budget=budget,
             ).value
             result.detector_limitations.extend({
                 "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
@@ -632,9 +638,12 @@ def scan_target(
                 "tu": "", "reason": f"memcpy overlap detector failed: {type(exc).__name__}",
             })
 
+    elif eligible:
+        budget.mark_exhausted()
+
     stack_seeds = {rel: item.stack_return_candidates for rel, item in per_tu.items()
                    if item.ok and item.compiler == "gcc" and item.stack_return_candidates}
-    if stack_seeds:
+    if stack_seeds and budget.remaining() > 0:
         from core.audit.preprocessor_view import expand_translation_unit
 
         clang = _clang_path()
@@ -669,6 +678,7 @@ def scan_target(
                 target_path=target_path, file_path=tu, out_dir=scratch,
                 preprocessor=(gcc[0], "-fanalyzer", *_union_flags("gcc_flags"), "-E", "-x", "c"),
                 include_dirs_memo=include_dirs_memo, setup=setup,
+                timeout=budget.remaining(),
             )
 
         def stack_request(tu, source):
@@ -686,7 +696,7 @@ def scan_target(
             extra_stack = run_stack_return(
                 target_path, stack_seeds, request_for=stack_request if clang and gcc else None,
                 sandbox_run=sandbox_run, locate=locate_stack, prepare_view=prepare_stack,
-                scratch_root=scratch_root, max_workers=workers,
+                scratch_root=scratch_root, max_workers=workers, budget=budget,
             ).value
             result.detector_limitations.extend({
                 "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
@@ -704,6 +714,17 @@ def scan_target(
                 "tu": "", "reason": f"stack-return detector failed: {type(exc).__name__}",
                 "detector": "stack_return",
             })
+
+    elif stack_seeds:
+        budget.mark_exhausted()
+
+    result.budget_exhausted = budget.exhausted
+    if result.budget_exhausted:
+        result.detector_limitations.append({
+            "tu": "", "detector": "compiler_budget",
+            "reason": f"compiler analysis budget exhausted ({max_seconds:g}s); "
+                      f"{result.tus_skipped_budget} TU(s) not started; completed findings retained",
+        })
 
     # Deterministic aggregation order regardless of completion order.
     for rel in tus:

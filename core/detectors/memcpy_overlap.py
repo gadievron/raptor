@@ -9,7 +9,6 @@ hypothesis. Candidate errors and unsupported compilers limit this pass only.
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +22,7 @@ from core.run.scratch import scratch_dir
 from core.source import read_text_capped
 from core.source.strip import blank_c_noncode
 
+from .budget import WorkBudget, bounded_futures
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
 
@@ -44,6 +44,7 @@ class OverlapAnalysis:
     limitations: list[dict[str, str]] = field(default_factory=list)
     include_dirs_memo: BoundedMemo[list[str]] | None = None
     setup: AnalysisSetup | None = None
+    budget: WorkBudget | None = None
 
 
 def _limited(state: OverlapAnalysis, reason: str, *, tu: str = "") -> None:
@@ -75,6 +76,8 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
         with scratch_dir("memcpy_candidates_", dir=first.scratch_root) as scratch:
             for index, rel in enumerate(files):
                 remaining = deadline - monotonic()
+                if state.budget is not None:
+                    remaining = min(remaining, state.budget.remaining())
                 if index >= _AUGMENT_FILE_CAP or remaining <= 0:
                     skipped = len(files) - index
                     break
@@ -142,9 +145,11 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
             _limited(state, "memcpy candidate input is unavailable or outside the target", tu=rel)
             incomplete = True
     deadline = monotonic() + _CANDIDATE_SECONDS
+    if state.budget is not None:
+        deadline = min(deadline, state.budget.deadline)
     raw_deadline = min(deadline, monotonic() + _RAW_CANDIDATE_SECONDS)
     for path in sorted(paths):
-        if monotonic() >= raw_deadline:
+        if monotonic() >= raw_deadline or (state.budget is not None and state.budget.remaining() <= 0):
             _limited(state, "memcpy source candidate budget exhausted")
             incomplete = True
             break
@@ -167,6 +172,8 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
         del text, spliced, got
     incomplete |= _expanded_candidates(state, paths, deadline)
     if incomplete:
+        if state.budget is not None and state.budget.remaining() <= 0:
+            state.budget.mark_exhausted()
         _limited(state, "memcpy overlap candidate scan was incomplete")
         return StageResult("partial" if state.candidates else "error", "candidate scan incomplete")
 
@@ -203,14 +210,17 @@ def _compile(state: OverlapAnalysis) -> StageResult:
         return [d for d in record["diags"]
                 if d.get("id") == OVERLAP_ID and d.get("kind") == "warning"]
 
-    with ThreadPoolExecutor(max_workers=max(1, min(state.max_workers, len(state.candidates)))) as pool:
-        futures = {pool.submit(one, rel): rel for rel in sorted(state.candidates)}
-        for future in as_completed(futures):
-            rel = futures[future]
-            try:
-                state.diagnostics[rel] = future.result()
-            except Exception as exc:
-                _limited(state, f"memcpy overlap analysis failed: {str(exc)[:200]}", tu=rel)
+    attempted = set()
+    for rel, future in bounded_futures(sorted(state.candidates), one,
+                                      workers=state.max_workers, budget=state.budget):
+        attempted.add(rel)
+        try:
+            state.diagnostics[rel] = future.result()
+        except Exception as exc:
+            _limited(state, f"memcpy overlap analysis failed: {str(exc)[:200]}", tu=rel)
+    skipped = len(state.candidates) - len(attempted)
+    if skipped:
+        _limited(state, f"memcpy analysis budget skipped {skipped} candidate TU(s)")
     state.limitations.sort(key=lambda item: (item["tu"], item["reason"]))
     return StageResult("partial" if state.limitations else "complete")
 
@@ -227,9 +237,11 @@ def run_memcpy_overlap(
     sandbox_run: Callable[..., Any], max_workers: int = 4,
     include_dirs_memo: BoundedMemo[list[str]] | None = None,
     setup: AnalysisSetup | None = None,
+    budget: WorkBudget | None = None,
 ) -> DetectorResult[OverlapAnalysis]:
     """Run only capped, baseline-successful C TUs supplied by the caller."""
     return run_detector(DETECTOR, OverlapAnalysis(
-        target, files, request_for, sandbox_run, max_workers, include_dirs_memo=include_dirs_memo,
-        setup=setup,
+        target, files, request_for, budget.runner(sandbox_run) if budget is not None else sandbox_run,
+        max_workers, include_dirs_memo=include_dirs_memo,
+        setup=setup, budget=budget,
     ))

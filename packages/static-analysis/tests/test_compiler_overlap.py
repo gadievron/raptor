@@ -356,3 +356,29 @@ def test_include_memo_keeps_translation_unit_directories_distinct(tmp_path, harn
         if source.parent == sub:
             expected.append(f'-I{sub}')
         assert [arg for arg in command if arg.startswith('-I')] == expected
+
+
+def test_shared_budget_stops_supplementary_dispatch_and_keeps_completed_findings(tmp_path, harness, monkeypatch):
+    from core.detectors import budget as module
+    now = [0.0]
+    monkeypatch.setattr(module, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(memcpy_overlap, 'monotonic', lambda: now[0])
+    run = cs._sandbox_runner()
+    timeouts = []
+    def timed(command, **kwargs):
+        timeouts.append(kwargs['timeout'])
+        result = run(command, **kwargs)
+        if '-fsyntax-only' in command:
+            now[0] = 1
+        elif '-fno-builtin-memcpy' in command:
+            now[0] = 5
+        return result
+    monkeypatch.setattr(cs, '_sandbox_runner', lambda: timed)
+    result = cs.scan_target(tmp_path, max_workers=1, max_seconds=5)
+    assert result.tus_analyzed == 3 and result.tus_skipped_budget == 0
+    assert result.budget_exhausted
+    overlaps = [f for f in result.findings if f['rule_id'] == memcpy_overlap.OVERLAP_ID]
+    assert len(overlaps) == 1 and overlaps[0]['file'] == 'a.c'
+    assert sum('-fno-builtin-memcpy' in cmd for cmd, _ in harness['calls']) == 1
+    assert timeouts[-1] == 4
+    assert any('skipped 2' in item['reason'] for item in result.detector_limitations)

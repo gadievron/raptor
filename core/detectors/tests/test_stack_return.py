@@ -47,19 +47,22 @@ def setup(tmp_path):
         source = Path(cmd[-1])
         assert source.exists() and kw['target'] == str(source.parent)
         assert kw['block_network'] and kw['cwd'] == kw['output']
-        assert kw['timeout'] == 17
+        assert 0 < kw['timeout'] <= 17
+        state.setdefault('timeouts', []).append(kw['timeout'])
         state['calls'].append((source, Path(kw['output'])))
         if state['raises']:
             raise state['raises']
+        if state.get('advance'):
+            state['advance']()
         return SimpleNamespace(returncode=state['rc'], stderr=json.dumps([{
             'id': state['id'], 'kind': state['kind'], 'file': state['filename'] or str(source),
             'line': state['line'], 'message': state['message'],
         }]))
 
-    def execute(seeds=None, available=True):
+    def execute(seeds=None, available=True, budget=None, workers=2):
         return detector.run_stack_return(root, seeds or {'a.c': [seed()]},
             request_for=request if available else None, sandbox_run=run, locate=locate,
-            prepare_view=prepare, scratch_root=str(tmp_path), max_workers=2)
+            prepare_view=prepare, scratch_root=str(tmp_path), max_workers=workers, budget=budget)
 
     return root, state, seed, execute
 
@@ -148,3 +151,19 @@ def test_incompatible_clang_syntax_is_an_actionable_local_limitation(setup):
     result = run()
     assert result.status == 'partial' and not result.value.diagnostics
     assert "unknown type name '_Float128'" in result.value.limitations[0]['reason']
+
+
+def test_stack_deadline_keeps_completed_corroboration_and_skips_remaining_tu(setup, monkeypatch):
+    from core.detectors import budget as module
+    _, state, seed, execute = setup
+    now = [0.0]
+    monkeypatch.setattr(module, 'monotonic', lambda: now[0])
+    budget = module.WorkBudget(5)
+    def advance():
+        now[0] = 5
+    state['advance'] = advance
+    result = execute({'a.c': [seed()], 'b.c': [seed('b.c')]}, budget=budget, workers=1)
+    assert result.status == 'partial' and budget.exhausted
+    assert set(result.value.diagnostics) == {'a.c'}
+    assert len(state['prepared']) == len(state['calls']) == 1 and state['timeouts'] == [5]
+    assert any('skipped 1' in item['reason'] for item in result.value.limitations)

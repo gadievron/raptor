@@ -1987,6 +1987,7 @@ def run_compiler_scan_stage(
     out_dir: Path,
     max_tus: int | None = None,
     setup: "AnalysisSetup | None" = None,
+    max_seconds: float | None = None,
 ) -> list[str]:
     """Run the compiler-analyzer scan channel and emit ``compiler.sarif``.
 
@@ -2011,6 +2012,8 @@ def run_compiler_scan_stage(
     kwargs: dict[str, Any] = {} if max_tus is None else {"max_tus": max_tus}
     if setup is not None:
         kwargs["setup"] = setup
+    if max_seconds is not None:
+        kwargs["max_seconds"] = max_seconds
     result = cs.scan_target(repo_path, out_dir=out_dir, **kwargs)
 
     if not result.ok:
@@ -2026,7 +2029,7 @@ def run_compiler_scan_stage(
 
     summary = result.summary_line()
     logger.info("%s; SARIF at %s", summary, sarif_path)
-    if (result.tus_skipped_cap or result.tus_failed
+    if (result.tus_skipped_cap or result.tus_failed or result.budget_exhausted
             or result.suppressed_tus or result.unvetted_tus or result.detector_limitations):
         # Cap skips, failed TUs and suppression-limited TUs must reach
         # the operator without log-level spelunking — same posture as
@@ -2946,6 +2949,12 @@ def main() -> None:
              "precedence over --compiler-scan; script-friendly opt-out if "
              "defaults change in future.",
     )
+    from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, positive_seconds
+    ap.add_argument(
+        "--compiler-scan-max-seconds", type=positive_seconds, default=None, metavar="SECONDS",
+        help=f"Shared compiler analysis budget (default {DEFAULT_COMPILER_SCAN_SECONDS:g}s). "
+             "Keeps completed findings and reports unfinished coverage. Discovery and cleanup add overhead.",
+    )
     ap.add_argument(
         "--compiler-scan-max-tus", type=int, default=None, metavar="N",
         dest="compiler_scan_max_tus",
@@ -3470,7 +3479,7 @@ def main() -> None:
         if args.compiler_scan and not args.no_compiler_scan:
             compiler_sarifs = run_compiler_scan_stage(
                 repo_path, out_dir, max_tus=args.compiler_scan_max_tus,
-                setup=analysis_setup,
+                setup=analysis_setup, max_seconds=args.compiler_scan_max_seconds,
             )
 
         # Expanded-view semgrep stage (opt-in). Re-runs the resolved

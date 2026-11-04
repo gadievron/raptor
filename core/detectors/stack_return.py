@@ -8,7 +8,6 @@ Neither compiler's silence is a refutation.
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -19,6 +18,7 @@ from core.run.scratch import scratch_dir
 if TYPE_CHECKING:
     from core.audit.preprocessor_view import ExpandedView
 
+from .budget import WorkBudget, bounded_futures
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
 
@@ -42,6 +42,7 @@ class StackReturnAnalysis:
     candidates: dict[str, set[tuple[str, int]]] = field(default_factory=dict)
     diagnostics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     limitations: list[dict[str, str]] = field(default_factory=list)
+    budget: WorkBudget | None = None
 
 
 def _candidates(state: StackReturnAnalysis) -> StageResult:
@@ -113,16 +114,19 @@ def _corroborate(state: StackReturnAnalysis) -> StageResult:
                     matches.append(mapped)
             return matches
 
-    with ThreadPoolExecutor(max_workers=max(1, min(state.max_workers, len(state.candidates)))) as pool:
-        futures = {pool.submit(one, tu): tu for tu in sorted(state.candidates)}
-        for future in as_completed(futures):
-            tu = futures[future]
-            try:
-                state.diagnostics[tu] = future.result()
-            except Exception as exc:
-                state.limitations.append({
-                    "tu": tu, "reason": f"stack-return corroboration failed: {str(exc)[:200]}",
-                })
+    attempted = set()
+    for tu, future in bounded_futures(sorted(state.candidates), one,
+                                     workers=state.max_workers, budget=state.budget):
+        attempted.add(tu)
+        try:
+            state.diagnostics[tu] = future.result()
+        except Exception as exc:
+            state.limitations.append({
+                "tu": tu, "reason": f"stack-return corroboration failed: {str(exc)[:200]}",
+            })
+    skipped = len(state.candidates) - len(attempted)
+    if skipped:
+        state.limitations.append({"tu": "", "reason": f"stack-return analysis budget skipped {skipped} TU(s)"})
     state.limitations.sort(key=lambda item: (item["tu"], item["reason"]))
     return StageResult("partial" if state.limitations else "complete")
 
@@ -139,8 +143,15 @@ def run_stack_return(
     locate: Callable[[dict[str, Any], str], tuple[str, int] | None],
     prepare_view: Callable[[str, Path], ExpandedView],
     scratch_root: str | None = None, max_workers: int = 4,
+    budget: WorkBudget | None = None,
 ) -> DetectorResult[StackReturnAnalysis]:
-    """Analyze only candidates from capped, baseline-successful GCC C TUs."""
+    """Analyze only candidates from capped, baseline-successful GCC C TUs.
+
+    A supplied prepare_view must honor the shared budget in its blocking tools,
+    as the scan adapter does. Compiler invocations are clipped here.
+    """
     return run_detector(DETECTOR, StackReturnAnalysis(
-        Path(target).resolve(), seeds, request_for, sandbox_run, locate, prepare_view, scratch_root, max_workers,
+        Path(target).resolve(), seeds, request_for,
+        budget.runner(sandbox_run) if budget is not None else sandbox_run,
+        locate, prepare_view, scratch_root, max_workers, budget=budget,
     ))

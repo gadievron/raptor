@@ -2154,6 +2154,12 @@ Examples:
         help="Explicitly disable the compiler-analyzer scan stage. Takes "
              "precedence over --compiler-scan.",
     )
+    from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, positive_seconds
+    parser.add_argument(
+        "--compiler-scan-max-seconds", type=positive_seconds, default=None, metavar="SECONDS",
+        help=f"Shared compiler analysis budget (default {DEFAULT_COMPILER_SCAN_SECONDS:g}s). "
+             "Keeps completed findings and reports unfinished coverage. Discovery and cleanup add overhead.",
+    )
     parser.add_argument(
         "--compiler-scan-max-tus", type=int, default=None, metavar="N",
         help="Cap the number of translation units the compiler-analyzer "
@@ -3548,6 +3554,8 @@ def main() -> int:
         # but resolve here so the child's argv reflects the decision.
         if args.compiler_scan and not args.no_compiler_scan:
             semgrep_cmd.append("--compiler-scan")
+            if args.compiler_scan_max_seconds is not None:
+                semgrep_cmd.extend(["--compiler-scan-max-seconds", str(args.compiler_scan_max_seconds)])
             if args.compiler_scan_max_tus is not None:
                 semgrep_cmd.extend([
                     "--compiler-scan-max-tus",
