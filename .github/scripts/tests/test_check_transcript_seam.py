@@ -442,7 +442,8 @@ class TestRealTree:
     same walk through the pytest surface."""
 
     @pytest.fixture(scope="class")
-    def live_check(self, det):
+    @classmethod
+    def live_check(cls, det):
         """Capture the census made by the real CLI validation once."""
         observed = []
         real_census = det.census
