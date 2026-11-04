@@ -218,11 +218,24 @@ class TestBoundedFridaCalls:
         assert json.loads(
             (tmp_path / "metadata.json").read_text())["ok"] is True
 
-    @pytest.mark.slow  # waits out the real 30s script-load wedge cap
-    def test_wedged_load_fails_the_run_with_metadata(self, tmp_path):
+    @pytest.mark.slow
+    def test_wedged_load_fails_the_run_with_metadata(self, tmp_path, monkeypatch):
         import json
         import time
 
+        # Verify the production caller still requests 30s, then exercise
+        # the real bounded-call machinery with a shorter test-only wait.
+        real_bounded_call = runner_module._bounded_frida_call
+        load_calls = []
+
+        def bounded_call(fn, timeout_s, what):
+            if what == "script-load":
+                assert timeout_s == 30.0
+                load_calls.append(what)
+                timeout_s = 0.1
+            return real_bounded_call(fn, timeout_s, what)
+
+        monkeypatch.setattr(runner_module, "_bounded_frida_call", bounded_call)
         wedge_release = threading.Event()
 
         class _WedgedLoadScript:
@@ -243,12 +256,12 @@ class TestBoundedFridaCalls:
         elapsed = time.monotonic() - start
         assert not result.ok
         assert "load" in (result.error or "")
-        # Healthy path waits out the real 30s load cap; the 300s
-        # wedge park keeps the "cap gone" regression unmistakably
-        # past the assert bound even under heavy load.
+        assert load_calls == ["script-load"]
+        # Keep the real wedge much longer than the deadline: removing
+        # bounded waiting must still fail rather than look like a timeout.
         check_wall_deadline(
-            elapsed, 90.0, code_bound_s=300.0,
-            what="run with a wedged script load (30s cap)",
+            elapsed, 5.0, code_bound_s=300.0,
+            what="run with a wedged script load (0.1s test cap)",
         )
         # The evidence contract survives even a load wedge.
         assert json.loads(

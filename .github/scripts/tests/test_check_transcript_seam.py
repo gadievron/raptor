@@ -441,14 +441,31 @@ class TestRealTree:
     as a gate step on seam-relevant paths; this pair re-checks the
     same walk through the pytest surface."""
 
-    def test_shipped_baseline_matches_the_tree(self, det):
+    @pytest.fixture(scope="class")
+    def live_check(self, det):
+        """Capture the census made by the real CLI validation once."""
+        observed = []
+        real_census = det.census
+
+        def capture(root):
+            assert root == REPO
+            result = real_census(root)
+            observed.append(result)
+            return result
+
+        with patch.object(det, "census", side_effect=capture):
+            status = det.main([])
+        assert len(observed) == 1
+        return status, observed[0]
+
+    def test_shipped_baseline_matches_the_tree(self, live_check):
         """The committed baseline and the real tree agree: the gate
         exits 0 with no NEW/grown sites (stale warns allowed)."""
-        assert det.main([]) == 0
+        assert live_check[0] == 0
 
-    def test_real_tree_census_sees_known_seam_consumers(self, det):
+    def test_real_tree_census_sees_known_seam_consumers(self, live_check):
         """Non-vacuousness against the live tree: the census keys
         include at least one llm_client and one provider arm entry."""
-        observed = det.census(REPO)
+        observed = live_check[1]
         arms = {key.split(":", 1)[0] for key in observed}
         assert {"llm_client", "provider"} <= arms

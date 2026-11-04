@@ -770,7 +770,7 @@ class TestOnRealRepo:
 
     @pytest.fixture(scope="class", autouse=True)
     @staticmethod
-    def _shared_import_graph(repo):
+    def _shared_import_graph(repo, whole_repo_import_graph):
         """Build the whole-repo import graph once for the class.
 
         ``compute_tier_dispatch`` rebuilds the reverse import graph —
@@ -783,14 +783,9 @@ class TestOnRealRepo:
         in each test.
         """
         import test_scope as _ts
-        references = {
-            literal: set() for root in (repo / "bin", repo / "libexec")
-            for script in root.rglob("*") if script.is_file()
-            for literal in (str(script.relative_to(repo)), script.name)
-        }
-        cached = _ts.build_graph(
-            _ts.discover_py_files(repo), repo, literal_references=references,
-        )
+        assert whole_repo_import_graph[4] == repo
+        references = whole_repo_import_graph[3]
+        cached = (whole_repo_import_graph[1], whole_repo_import_graph[2])
         real_build_graph = _ts.build_graph
 
         def _build_graph_cached(all_py, repo_arg, **kwargs):
