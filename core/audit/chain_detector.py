@@ -308,7 +308,7 @@ def evaluate_weakness_chains(
 # attempts to close the gap by synthesising a Semgrep taint-mode rule
 # that captures the *composition* — the cross-function flow from source
 # to sink — and running it against the target.  A positive hit earns
-# a ``checker_synthesis`` receipt; the orchestrator can then promote.
+# a ``semgrep:chain-checker`` receipt; the orchestrator can then promote.
 
 _PRIMITIVE_TO_CWE: dict[str, str] = {
     "write": "CWE-120",
