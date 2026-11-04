@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import io
 import json
 import logging
 import math
@@ -1074,12 +1075,14 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                 planted_object = f"oversized ({st.st_size} bytes)"
             else:
                 chunks = []
+                bytes_read = 0
                 while True:
                     chunk = os.read(fd, 1 << 20)
                     if not chunk:
                         break
                     chunks.append(chunk)
-                    if sum(len(c) for c in chunks) > _MAX_DENIALS_BYTES:
+                    bytes_read += len(chunk)
+                    if bytes_read > _MAX_DENIALS_BYTES:
                         planted_object = "grew past the size bound mid-read"
                         chunks = []
                         break
@@ -1101,7 +1104,9 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             except OSError:
                 pass
 
-    for line in raw.decode("utf-8", errors="replace").splitlines():
+    # File newline rules preserve Unicode separators inside JSON strings.
+    # Iteration also avoids allocating a second list containing every line.
+    for line in io.StringIO(raw.decode("utf-8", errors="replace"), newline=None):
         line = line.strip()
         if not line:
             # Honest writers emit exactly one JSON object per line —
