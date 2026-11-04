@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from core.audit.claim_verification import ClaimVerification
+from core.audit.verification_results import ToolChainResult
 
 from core.audit.orchestrator import (
     AtomicSynthesisCounter,
@@ -237,15 +238,21 @@ class TestVerifyImmediate:
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
     @patch("core.audit.orchestrator._gather_library_candidates")
     def test_all_refuted_becomes_clean(
-        self, mock_lib, mock_corr, mock_chain, mock_run,
+        self, mock_lib, mock_corr, mock_chain, mock_run, tmp_path,
     ):
         mock_corr.return_value = None
         mock_lib.return_value = []
         mock_chain.return_value = [
             {"type": "smt", "config": {"verb": "check-oob"}},
         ]
-        mock_run.return_value = []  # no confirmations
-        cfg = _Config()
+        def negative_result(chain, **kwargs):
+            result = ToolChainResult(file=kwargs["file_path"], function=kwargs["function_name"],
+                                     line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"])
+            result.observe("smt", "refuted", "check-oob", "no out-of-bounds path")
+            return result
+
+        mock_run.side_effect = negative_result
+        cfg = _Config(out_dir=tmp_path)
         o = self._make_outcome()
         result = _Result()
         out = _verify_hypotheses_immediate(o, cfg, result)

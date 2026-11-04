@@ -55,6 +55,7 @@ from packages.checker_synthesis.library import RuleLibrary
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
+from .verification_results import ToolChainResult
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
 )
@@ -22065,13 +22066,16 @@ def _run_tool_chain(
     early_exit_check: Callable[[str], bool] | None = None,
     skipped_types: set | None = None,
     inconclusive_types: set | None = None,
-) -> list[str]:
-    """Run tools from *chain* in order, collecting all confirmations.
+) -> ToolChainResult:
+    """Run tools from *chain*, retaining confirmations and checker outcomes.
 
     Returns a list of confirming tool IDs (e.g. ``["smt:check-oob",
     "coccinelle:missing_bounds_check"]``).  A tool that errors or
     whose dependency is missing is skipped (logged at debug) and the
     next tool in the chain is tried — this is the fallback behaviour.
+    The returned object remains list-compatible; its scoped outcomes
+    retain each checker's explicit verdict. An empty confirmation
+    list alone is never a refutation.
     When *errored_types* is provided, the step types that errored are
     collected into it so callers can record per-function tool failures
     (a channel that errored did not meaningfully run).
@@ -22102,7 +22106,21 @@ def _run_tool_chain(
     lines proves nothing about this claim.
     """
     effective_target = target_path_override or config.target_path
-    confirmed: list[str] = []
+    confirmed = ToolChainResult(
+        file=file_path, function=function_name, line_start=line_start,
+        hypothesis=hypothesis,
+    )
+
+    def _observe_sweep(sweep_result) -> str:
+        verdict = _classify_sweep_outcome(sweep_result)
+        if verdict == "refuted" and getattr(sweep_result, "errors", None):
+            verdict = "error"  # partial/failed analysis cannot establish absence
+        details = getattr(sweep_result, "details", None) or {}
+        rule = (getattr(sweep_result, "rule_id", None)
+                or tool_cfg.get("rule") or tool_cfg.get("verb") or tool_type)
+        reason = details.get("reason") or getattr(sweep_result, "reason", "") or ""
+        confirmed.observe(tool_type, verdict, str(rule), str(reason))
+        return verdict
     # Per-type entry counts for *inconclusive_types*: every leg books
     # its inconclusive branch through _book_inconclusive (pinned by
     # the tripwire in test_silence_admissibility).
@@ -22349,7 +22367,7 @@ def _run_tool_chain(
                 # refuted may reach the refuted counter — a skipped
                 # (did not look) or novel outcome falling into a bare
                 # else would be silently miscounted as refutation.
-                _sg_oc = _classify_sweep_outcome(sweep)
+                _sg_oc = _observe_sweep(sweep)
                 if _sg_oc == "confirmed":
                     confirmed.append(f"semgrep:{sweep.rule_id or 'hypothesis'}")
                     if tier_counters:
@@ -22413,7 +22431,7 @@ def _run_tool_chain(
                         target_path=str(effective_target),
                     ),
                 )
-                _smt_oc = _classify_sweep_outcome(smt_result)
+                _smt_oc = _observe_sweep(smt_result)
                 if _smt_oc == "confirmed":
                     confirmed.append(f"smt:{tool_cfg['verb']}")
                     if tier_counters:
@@ -22502,7 +22520,7 @@ def _run_tool_chain(
                 _record_api_boundary_receipt(
                     config, file_path, function_name, ab_res,
                 )
-                _ch_oc = _classify_sweep_outcome(ab_res)
+                _ch_oc = _observe_sweep(ab_res)
                 if _ch_oc == "confirmed":
                     confirmed.append("api_boundary:caller-contract")
                     logger.info(
@@ -22593,7 +22611,7 @@ def _run_tool_chain(
                 _record_fail_open_receipt(
                     config, file_path, function_name, fo_res,
                 )
-                _ch_oc = _classify_sweep_outcome(fo_res)
+                _ch_oc = _observe_sweep(fo_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(fo_res.rule_id)
                     logger.info(
@@ -22744,7 +22762,7 @@ def _run_tool_chain(
                 _record_consistency_receipt(
                     config, file_path, function_name, cs_res,
                 )
-                _ch_oc = _classify_sweep_outcome(cs_res)
+                _ch_oc = _observe_sweep(cs_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(cs_res.rule_id)
                     logger.info(
@@ -22825,7 +22843,7 @@ def _run_tool_chain(
                     config, "ptr_lifecycle_check", file_path,
                     function_name, pl_res,
                 )
-                _ch_oc = _classify_sweep_outcome(pl_res)
+                _ch_oc = _observe_sweep(pl_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(pl_res.rule_id)
                     logger.info(
@@ -22906,7 +22924,7 @@ def _run_tool_chain(
                     config, "lock_region_check", file_path,
                     function_name, lr_res,
                 )
-                _ch_oc = _classify_sweep_outcome(lr_res)
+                _ch_oc = _observe_sweep(lr_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(lr_res.rule_id)
                     logger.info(
@@ -23003,7 +23021,7 @@ def _run_tool_chain(
                     config, "resource_bounds_check", file_path,
                     function_name, rb_res,
                 )
-                _ch_oc = _classify_sweep_outcome(rb_res)
+                _ch_oc = _observe_sweep(rb_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(rb_res.rule_id)
                     logger.info(
@@ -23092,7 +23110,7 @@ def _run_tool_chain(
                     config, "release_order_check", file_path,
                     function_name, ro_res,
                 )
-                _ch_oc = _classify_sweep_outcome(ro_res)
+                _ch_oc = _observe_sweep(ro_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(ro_res.rule_id)
                     logger.info(
@@ -23184,7 +23202,7 @@ def _run_tool_chain(
                     config, "protocol_state_check", file_path,
                     function_name, ps_res,
                 )
-                _ch_oc = _classify_sweep_outcome(ps_res)
+                _ch_oc = _observe_sweep(ps_res)
                 if _ch_oc == "confirmed":
                     confirmed.append(ps_res.rule_id)
                     logger.info(
@@ -23245,6 +23263,11 @@ def _run_tool_chain(
                 )
                 _record_invariant_receipt(
                     config, file_path, function_name, inv_res,
+                )
+                confirmed.observe(
+                    tool_type,
+                    {"violable": "confirmed", "preserved": "refuted"}.get(inv_res.outcome, "inconclusive"),
+                    "smt:invariant-preservation", inv_res.reason,
                 )
                 if inv_res.outcome == "violable":
                     # A model breaks the stated invariant at a concrete
@@ -23438,7 +23461,7 @@ def _run_tool_chain(
                         # result; cached backing objects remain isolated.
                         copy_result=False,
                     )
-                _cc_oc = _classify_sweep_outcome(cocci_result)
+                _cc_oc = _observe_sweep(cocci_result)
                 if _cc_oc == "confirmed":
                     confirmed.append(f"coccinelle:{Path(tool_cfg['rule']).stem}")
                     if tier_counters:
@@ -23744,7 +23767,7 @@ def _run_tool_chain(
                         memo=getattr(config, "codeql_memo", None),
                     ),
                 )
-                _cq_oc = _classify_sweep_outcome(codeql_result)
+                _cq_oc = _observe_sweep(codeql_result)
                 if _cq_oc == "confirmed":
                     confirmed.append(f"codeql:{Path(tool_cfg['query']).stem}")
                     if tier_counters:
@@ -23827,7 +23850,7 @@ def _run_tool_chain(
                         ),
                     ),
                 )
-                _cp_oc = _classify_sweep_outcome(comp_result)
+                _cp_oc = _observe_sweep(comp_result)
                 if _cp_oc == "confirmed":
                     confirmed.append(comp_result.rule_id or "compiler:analyzer")
                     if tier_counters:
@@ -23946,7 +23969,7 @@ def _run_tool_chain(
                                 getattr(config, "out_dir", None),
                             ),
                         )
-                    _jv_oc = _classify_sweep_outcome(jv_result)
+                    _jv_oc = _observe_sweep(jv_result)
                     if _jv_oc == "confirmed":
                         confirmed.append(jv_result.rule_id or f"joern:{tool_type}")
                         _record_joern_outcome(config, error=False)
@@ -24008,7 +24031,7 @@ def _run_tool_chain(
                     line_end=None,
                     language=_inventory_language_hint(config, file_path),
                 )
-                _cf_oc = _classify_sweep_outcome(cf_result)
+                _cf_oc = _observe_sweep(cf_result)
                 if _cf_oc == "confirmed":
                     template_id = (cf_result.rule_id or "cocci-flow").split(":")[-1]
                     confirmed.append(f"coccinelle:flow-{template_id}")
@@ -24102,7 +24125,7 @@ def _run_tool_chain(
                         xref_source=_xref_src,
                     )
 
-                _bc_oc = _classify_sweep_outcome(_bc_res)
+                _bc_oc = _observe_sweep(_bc_res)
                 if _bc_oc == "confirmed":
                     confirmed.append(
                         f"{tool_type}:{_bc_res.rule_id}")
@@ -24162,7 +24185,7 @@ def _run_tool_chain(
                     config, "sanwit_check", file_path, function_name,
                     sw_res,
                 )
-                _sw_oc = _classify_sweep_outcome(sw_res)
+                _sw_oc = _observe_sweep(sw_res)
                 if _sw_oc == "confirmed":
                     confirmed.append(sw_res.rule_id)
                     logger.info(
@@ -24235,7 +24258,7 @@ def _run_tool_chain(
                     config, "gadget_oracle_check", file_path,
                     function_name, go_res,
                 )
-                _go_oc = _classify_sweep_outcome(go_res)
+                _go_oc = _observe_sweep(go_res)
                 if _go_oc == "confirmed":
                     confirmed.append(go_res.rule_id)
                     logger.info(
@@ -24313,7 +24336,7 @@ def _run_tool_chain(
                     out_dir=config.out_dir,
                     cwe=cwe,
                 )
-                _sym_oc = _classify_sweep_outcome(sym_res)
+                _sym_oc = _observe_sweep(sym_res)
                 if _sym_oc == "confirmed":
                     confirmed.append(
                         f"symbolic:{sym_res.rule_id or 'witness'}",
@@ -24359,6 +24382,11 @@ def _run_tool_chain(
                     _increment_tier_dict(
                         tier_counters, "symbolic", "refuted",
                     )
+
+            else:
+                confirmed.observe(tool_type, "skipped", tool_type, "no dispatch handler")
+                if skipped_types is not None:
+                    skipped_types.add(tool_type)
 
         except Exception as exc:  # noqa: BLE001
             logger.debug(
@@ -24745,10 +24773,18 @@ def _verify_hypotheses_immediate(
                 file_path, function_name,
                 mechanism[:60], tools_confirmed,
             )
-        else:
-            _ran_clean = _dispatched - _errored - _inconclusive
-            if _ran_clean:
-                verifications[-1] = ClaimVerification(hyp, refuted=True)
+        elif isinstance(tools_confirmed, ToolChainResult):
+            record = tools_confirmed.refutation_record(
+                file=file_path, function=function_name,
+                line_start=outcome.line, hypothesis=mechanism,
+            )
+            if record is not None:
+                try:
+                    append_audit_log(Path(config.out_dir), record)
+                except Exception as exc:
+                    logger.warning("ihv: could not persist refutation for %s:%s: %s", file_path, function_name, exc)
+                else:
+                    verifications[-1] = ClaimVerification(hyp, refuted=True)
 
     # Step 4: aggregate (context gates run inside)
     return _aggregate_ihv_verdicts(
