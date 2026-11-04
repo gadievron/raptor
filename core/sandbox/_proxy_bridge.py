@@ -282,8 +282,14 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                 if partner is None:
                     _close_pair(fd)
                     continue
+                capacity = _MAX_PENDING_BYTES - len(pending[partner])
+                if capacity <= 0:
+                    continue
                 try:
-                    data = os.read(fd, _BUF_SIZE)
+                    # A readable snapshot does not reserve buffer
+                    # space. Never accept more than the partner can
+                    # queue, even when it cannot drain any bytes.
+                    data = os.read(fd, min(_BUF_SIZE, capacity))
                 except OSError as e:
                     if e.errno == errno.EAGAIN:
                         continue
