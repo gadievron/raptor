@@ -403,13 +403,22 @@ def _cap_evidence(items: list[str]) -> list[str]:
     from core.security.log_sanitisation import escape_nonprintable
     # Items outside the display cap contribute only to the elision count.
     # Avoid escaping and allocating strings that will immediately be dropped.
-    escaped = [escape_nonprintable(item) for item in items[:_MAX_EVIDENCE_ITEMS]]
-    capped = [
-        item if len(item) <= _MAX_EVIDENCE_ITEM_LEN
-        else item[:_MAX_EVIDENCE_ITEM_LEN]
-        + f"...[+{len(item) - _MAX_EVIDENCE_ITEM_LEN} chars]"
-        for item in escaped
-    ]
+    capped = []
+    for item in items[:_MAX_EVIDENCE_ITEMS]:
+        prefix = []
+        escaped_len = 0
+        # Escaping is character-local. Count the complete escaped length in
+        # bounded chunks, retaining only the prefix that will be displayed.
+        for offset in range(0, len(item), 4096):
+            chunk = escape_nonprintable(item[offset:offset + 4096])
+            room = _MAX_EVIDENCE_ITEM_LEN - escaped_len
+            if room > 0:
+                prefix.append(chunk[:room])
+            escaped_len += len(chunk)
+        value = "".join(prefix)
+        if escaped_len > _MAX_EVIDENCE_ITEM_LEN:
+            value += f"...[+{escaped_len - _MAX_EVIDENCE_ITEM_LEN} chars]"
+        capped.append(value)
     if len(items) > _MAX_EVIDENCE_ITEMS:
         dropped = len(items) - _MAX_EVIDENCE_ITEMS
         capped.append(f"...[+{dropped} more]")
