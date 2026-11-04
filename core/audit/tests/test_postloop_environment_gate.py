@@ -1013,6 +1013,21 @@ def _binding_run(tmp_path, monkeypatch, *, before_run=None,
     # unrelated native detectors before fake reviews can reach them.
     monkeypatch.setattr(_orch, "_run_mechanical_detectors",
                         lambda *a, **k: ({}, set()))
+    from core.audit import capabilities
+
+    monkeypatch.setattr(capabilities, "probe_capabilities",
+                        lambda *a, **k: capabilities.AuditCapabilities())
+    monkeypatch.setattr(_orch, "_study_consumer", lambda *a, **k: None)
+    unexpected_calls: list[bool] = []
+
+    def unexpected_model_call(*args, **kwargs):
+        unexpected_calls.append(True)
+        pytest.fail("gate binding tests must use their fake reviewer")
+
+    monkeypatch.setattr(
+        _orch, "_run_llm_client",
+        lambda cfg: SimpleNamespace(generate=unexpected_model_call),
+    )
     guard_cls.last = None
     target, out = _binding_target(tmp_path)
 
@@ -1026,10 +1041,13 @@ def _binding_run(tmp_path, monkeypatch, *, before_run=None,
         target_path=target, out_dir=out, resume=False,
         # The dispatch gate is exercised with fake reviews, without a JVM.
         joern_overrides={"enabled": False},
+        iris=False, sage_recall=False, immediate_verify=False,
+        validate=False, sweep_validate_findings=False, max_refinements=0,
     )
     if before_run is not None:
         before_run(config)
     result = run_orchestrator(config, review_fn)
+    assert not unexpected_calls
     guard = guard_cls.last
     assert guard is not None  # the run constructed its guard
     return result, guard
