@@ -43,10 +43,11 @@ from __future__ import annotations
 import logging
 import re
 import time
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from core.json import load_json, save_json
 from core.source.lines import split_lines
@@ -889,6 +890,36 @@ def _span_for_line(spans: list[FunctionSpan],
     return None
 
 
+# Keep the linear path where a short scan is cheaper than indexing.
+_SPAN_LOOKUP_MIN_SPANS = 16
+
+
+def _span_lookup(
+    spans: list[FunctionSpan],
+) -> Callable[[int], FunctionSpan | None]:
+    """Index one scan's spans, preserving the first containing span.
+
+    Starts are ordered in both extractors. Prefix-maximum ends let us
+    find the earliest possible containing span even when spans overlap.
+    Keep the linear behavior for an unusually unordered span list.
+    """
+    ends: list[int] = []
+    previous_start: int | None = None
+    for span in spans:
+        if previous_start is not None and span.start < previous_start:
+            return lambda line: _span_for_line(spans, line)
+        ends.append(max(ends[-1], span.end) if ends else span.end)
+        previous_start = span.start
+
+    def lookup(line: int) -> FunctionSpan | None:
+        index = bisect_left(ends, line)
+        if index < len(spans) and spans[index].start <= line:
+            return spans[index]
+        return None
+
+    return lookup
+
+
 def _scan_file_ts(
     tree: Any,
     source: str,
@@ -898,6 +929,9 @@ def _scan_file_ts(
 ) -> list[FunctionSpan]:
     src = source.encode("utf-8", errors="replace")
     spans = _function_spans_ts(tree, source)
+    span_for_line = (
+        _span_lookup(spans) if len(spans) >= _SPAN_LOOKUP_MIN_SPANS else None
+    )
     lines = split_lines(source)
     lock_cache: dict[str, str] = {}
 
@@ -931,7 +965,8 @@ def _scan_file_ts(
         if not name or not keep(name):
             continue
         line = node.start_point[0] + 1
-        span = _span_for_line(spans, line)
+        span = (span_for_line(line) if span_for_line is not None
+                else _span_for_line(spans, line))
         function = span.name if span else ""
         params = span.params if span else ()
         code = lines[line - 1].strip() if 1 <= line <= len(lines) else ""
@@ -970,6 +1005,9 @@ def _scan_file_regex(
     keep: Any,
 ) -> list[FunctionSpan]:
     spans = function_spans_regex(source)
+    span_for_line = (
+        _span_lookup(spans) if len(spans) >= _SPAN_LOOKUP_MIN_SPANS else None
+    )
     lines = source.splitlines()
     lock_cache: dict[str, str] = {}
 
@@ -982,7 +1020,8 @@ def _scan_file_regex(
         return lock_cache[span.name]
 
     for lineno, text in enumerate(split_lines(source), 1):
-        span = _span_for_line(spans, lineno)
+        span = (span_for_line(lineno) if span_for_line is not None
+                else _span_for_line(spans, lineno))
         function = span.name if span else ""
         params = span.params if span else ()
         code = text.strip()
