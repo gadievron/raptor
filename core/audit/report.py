@@ -1095,14 +1095,16 @@ def _as_line(value: Any) -> int:
     return n if n > 0 else 0
 
 
-def _site_covers(site: dict[str, Any], line: int) -> bool:
+def _site_covers(
+    site: dict[str, Any], line: int, *, _start: int | None = None,
+) -> bool:
     """True when the journal site's span contains ``line``.
 
     A positioned site without a usable ``line_end`` matches only an
     exact ``line_start`` hit — the span's extent is unknown, so
     containment cannot be claimed.
     """
-    start = _as_line(site.get("line_start"))
+    start = _as_line(site.get("line_start")) if _start is None else _start
     if not start:
         return False
     end = _as_line(site.get("line_end"))
@@ -1138,19 +1140,28 @@ def _match_journal_site(
     if not sites:
         return None
     line = _as_line(finding.get("line"))
-    positioned = [s for s in sites if _as_line(s.get("line_start"))]
+    positioned = False
+    best = None
+    best_start = 0
+    for site in sites:
+        start = _as_line(site.get("line_start"))
+        if not start:
+            continue
+        positioned = True
+        if not line:
+            continue
+        if _site_covers(site, line, _start=start) and start > best_start:
+            # Strict comparison preserves max()'s first-wins tie rule.
+            best, best_start = site, start
     if line and positioned:
-        covering = [s for s in positioned if _site_covers(s, line)]
-        if not covering:
-            return None
-        # Nested spans: the innermost (largest line_start) is the
-        # most specific review subject for this line.
-        return max(covering, key=lambda s: _as_line(s.get("line_start")))
-    non_benign = [
-        s for s in sites if s.get("status") not in _BENIGN_VERDICTS
-    ]
-    pool = non_benign or sites
-    return pool[-1]
+        return best
+    # The legacy coarse join picks the LAST non-benign row, or the
+    # last row overall if all are benign. No candidate lists needed.
+    last_non_benign = None
+    for site in sites:
+        if site.get("status") not in _BENIGN_VERDICTS:
+            last_non_benign = site
+    return last_non_benign if last_non_benign is not None else sites[-1]
 
 
 def _apply_journal_verdict_overrides(
