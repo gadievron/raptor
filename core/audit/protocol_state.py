@@ -190,7 +190,7 @@ _CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 # ``*=`` ``/=`` ``%=`` included; their omission read multiplicative
 # updates as pure reads) and postfix ``++``/``--``.  Prefix
 # ``++``/``--`` is detected from the text before the chain.
-_WRITE_TAIL_RE = re.compile(r"^\s*(\+\+|--|(?:[+\-*/%|&^]|<<|>>)?=(?!=))")
+_WRITE_TAIL_RE = re.compile(r"\s*(\+\+|--|(?:[+\-*/%|&^]|<<|>>)?=(?!=))")
 _BACKTICK_IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)\s*(?:\(\s*\))?`")
 _IDENT_RE = re.compile(r"\b([A-Za-z_]\w{2,})\b")
 _COND_LABEL_RE = re.compile(r"^(?:If|While|ElIf)\s*\((.+)\)$",
@@ -390,15 +390,17 @@ def build_state_field_index(
 
         for line_no, raw in enumerate(split_lines(source), start=1):
             code = raw.split("//", 1)[0]
+            site_code: str | None = None
             for m in (*_FIELD_CHAIN_RE.finditer(code),
                       *_FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):
-                idents = _CHAIN_IDENT_RE.findall(m.group(0))
-                tail = code[m.end():]
-                wm = _WRITE_TAIL_RE.match(tail)
+                idents = _CHAIN_IDENT_RE.findall(code, m.start(), m.end())
+                wm = _WRITE_TAIL_RE.match(code, m.end())
                 # Prefix increment/decrement writes the terminal field
                 # with no assignment tail (``++conn->pkt_count;``).
-                prefix_incdec = code[:m.start()].rstrip() \
-                    .endswith(("++", "--"))
+                prefix_end = m.start()
+                while prefix_end > 0 and code[prefix_end - 1].isspace():
+                    prefix_end -= 1
+                prefix_incdec = code.endswith(("++", "--"), 0, prefix_end)
                 func, _params = _function_at(line_no)
                 # idents[0] is the base identifier; every following
                 # segment is a field.  Non-terminal segments are READS
@@ -413,11 +415,13 @@ def build_state_field_index(
                     bucket = fields.setdefault(
                         fld, {"writes": [], "reads": []},
                     )
+                    if site_code is None:
+                        site_code = raw.strip()[:200]
                     site: dict[str, Any] = {
                         "file": fp,
                         "line": line_no,
                         "function": func,
-                        "code": raw.strip()[:200],
+                        "code": site_code,
                         "base": idents[depth - 1],
                         "field": fld,
                     }
@@ -425,7 +429,10 @@ def build_state_field_index(
                     if terminal and wm:
                         kind = "writes"
                         op = wm.group(1)
-                        rhs = tail[wm.end():].split(";", 1)[0].strip()
+                        rhs_end = code.find(";", wm.end())
+                        if rhs_end < 0:
+                            rhs_end = len(code)
+                        rhs = code[wm.end():rhs_end].strip()
                         site["rhs"] = rhs[:200]
                         site["rhs_class"] = (
                             "unknown" if op in ("++", "--")
