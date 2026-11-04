@@ -324,3 +324,42 @@ def test_larger_upstream_sbom_is_bounded_separately_from_notice_text(tmp_path, k
     report = tool.collect(tmp_path, digest)
     assert bool(report.native_notice_collections) == (kind == "source_sbom")
     assert bool(report.inventory_errors) == (kind != "source_sbom")
+
+
+def test_report_matches_native_receipt_only_after_notice_bytes_are_validated(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    binary_sha = "a" * 64
+    native["files"] = [{"location": {"path": path, "layerID": "layer"},
+                        "metadata": {"type": "RegularFile"},
+                        "digests": [{"algorithm": "sha256", "value": binary_sha}],
+                        "unknowns": ["no package identified"]}
+                       for path in ("/usr/local/bin/git", "/usr/local/bin/git-upload-pack")]
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    notice = b"upstream release notice"
+    notice_sha = hashlib.sha256(notice).hexdigest()
+    receipt = {"name": "git", "version": "2.56.0", "binary": "/usr/local/bin/git", "binary_sha256": binary_sha,
+               "status": "release_notice_candidates_captured", "files": [{"file": "LICENSE.txt", "sha256": notice_sha}]}
+    raw_receipt = json.dumps(receipt).encode()
+    receipt_sha = hashlib.sha256(raw_receipt).hexdigest()
+    directory = tmp_path / "prepared/notices/sha256"
+    directory.mkdir(parents=True)
+    (directory / receipt_sha).write_bytes(raw_receipt)
+    (directory / notice_sha).write_bytes(notice)
+    prefix = "/usr/share/doc/raptor-native-notices/git/"
+    provenance["notice_evidence"]["unassociated_files"] = [
+        {"path": prefix + "NOTICE-PROVENANCE.json", "sha256": receipt_sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"},
+        {"path": prefix + "LICENSE.txt", "sha256": notice_sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": "layer"}]
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.scanner_unidentified_executables == 2
+    assert report.metrics.native_identity_matched_executables == 2
+    assert report.metrics.unidentified_executables == 0
+    assert len(report.native_identity_matches) == 2
+    assert report.metrics.checksum_matched_executables == 0
+    (directory / notice_sha).write_bytes(b"changed notice")
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.native_identity_matched_executables == 0
+    assert report.metrics.unidentified_executables == 2
+    assert report.inventory_errors

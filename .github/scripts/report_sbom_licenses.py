@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from dataclasses import asdict, dataclass, field
 import hashlib
 import html
 import json
 from pathlib import Path
-import posixpath
 import re
 import sys
 
@@ -35,6 +33,7 @@ class Metrics:
     unidentified_executables: int | None = None
     scanner_unidentified_executables: int | None = None
     checksum_matched_executables: int | None = None
+    native_identity_matched_executables: int | None = None
 
 
 @dataclass
@@ -57,6 +56,7 @@ class Report:
     source_gaps: list[dict] = field(default_factory=list)
     inventory_candidates: list[dict] = field(default_factory=list)
     inventory_ownership: list[dict] = field(default_factory=list)
+    native_identity_matches: list[dict] = field(default_factory=list)
     inventory_errors: list[str] = field(default_factory=list)
     native_notice_collections: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -96,92 +96,8 @@ def _records(rows, identifiers, *, complete=True):
 
 
 def match_inventory_ownership(native, candidates):
-    """Resolve exact same-layer paths only when package and file SHA-256 agree.
-
-    Package records establish file membership, not dependency or license
-    completeness. Directory context, filenames and versions alone never resolve
-    candidates. Conflicting or missing evidence remains inspectable.
-    """
-    keys = {(row["path"], row["layer_id"]) for row in candidates}
-    claims = {}
-    for artifact in native["artifacts"]:
-        kind = artifact["type"]
-        if kind not in {"python", "deb"}:
-            continue
-        for location in artifact.get("locations", []):
-            path = location["path"]
-            layer = location.get("layerID")
-            if not layer:
-                continue
-            if kind == "python":
-                directory = posixpath.dirname(path)
-                if (posixpath.basename(path) not in {"METADATA", "PKG-INFO"}
-                        or not directory.endswith((".dist-info", ".egg-info"))):
-                    continue
-                root = posixpath.dirname(directory)
-            else:
-                root = "/"
-            for entry in (artifact.get("metadata") or {}).get("files", []):
-                relative = entry.get("path")
-                if not isinstance(relative, str) or "\x00" in relative:
-                    continue
-                member = posixpath.normpath(posixpath.join(root, relative))
-                key = member, layer
-                if key not in keys:
-                    continue
-                digest = entry.get("digest") or {}
-                if digest.get("algorithm", "").lower() != "sha256":
-                    continue
-                value = digest.get("value", "")
-                if not isinstance(value, str):
-                    continue
-                if kind == "python":
-                    if not re.fullmatch(r"[A-Za-z0-9_-]{43}=?", value):
-                        continue
-                    decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
-                    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).rstrip(b"=").decode() != value.rstrip("="):
-                        continue
-                    value = decoded.hex()
-                elif not re.fullmatch(r"[a-fA-F0-9]{64}", value):
-                    continue
-                owner = {"package_id": artifact["id"], "name": artifact["name"],
-                         "version": artifact.get("version", ""), "expected_sha256": value.lower()}
-                claims.setdefault(key, {})[(artifact["id"], value.lower())] = owner
-    indexed = {}
-    for entry in native["files"]:
-        key = entry["location"]["path"], entry["location"].get("layerID")
-        if key in keys:
-            indexed.setdefault(key, []).append(entry)
-    resolved, pending = [], []
-    for candidate in candidates:
-        key = candidate["path"], candidate["layer_id"]
-        owners = list(claims.get(key, {}).values())
-        rows = indexed.get(key, [])
-        reason = "no_sha256_package_file_record"
-        actual = set()
-        for row in rows:
-            for digest in row.get("digests", []):
-                if digest.get("algorithm", "").lower() == "sha256":
-                    value = digest.get("value", "")
-                    if isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value):
-                        actual.add(value.lower())
-        if owners:
-            if len(owners) != 1:
-                reason = "ambiguous_package_file_records"
-            elif len(rows) != 1 or len(actual) > 1:
-                reason = "ambiguous_file_inventory"
-            elif (rows[0].get("metadata") or {}).get("type") not in {None, "RegularFile"}:
-                reason = "non_regular_file_requires_identity_verification"
-            elif not actual:
-                reason = "file_sha256_unavailable"
-            elif owners[0]["expected_sha256"] not in actual:
-                reason = "package_file_checksum_mismatch"
-            else:
-                resolved.append({**candidate, **owners[0], "sha256": next(iter(actual)),
-                                 "method": "same_layer_package_file_sha256"})
-                continue
-        pending.append({**candidate, "ownership_gap": reason, "package_file_claims": owners})
-    return resolved, pending
+    from core.oci.file_ownership import match_inventory_ownership as match
+    return match(native, candidates)
 
 
 def collect(audit, image_digest):
@@ -235,6 +151,7 @@ def collect(audit, image_digest):
         for record in records.values():
             evidence_files.extend(record["files"])
         seen_receipts = set()
+        native_identities = []
         for evidence in evidence_files:
             path = evidence["path"]
             if (not path.startswith("/usr/share/doc/raptor-native-notices/")
@@ -271,6 +188,12 @@ def collect(audit, image_digest):
                         if hashlib.sha256(text).hexdigest() != sha:
                             raise ValueError("native release notice hash mismatch")
                 report.native_notice_collections.append(receipt)
+                if (receipt["status"] == "release_notice_candidates_captured"
+                        and any(item.get("content_kind") != "source_sbom" for item in receipt["files"])):
+                    native_identities.append({"name": receipt["name"], "version": receipt.get("version"),
+                                              "anchor_path": receipt.get("binary"), "sha256": receipt.get("binary_sha256"),
+                                              "layer_id": evidence["catalogue_layer_diff_id"],
+                                              "evidence_path": path, "evidence_sha256": digest})
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 report.inventory_errors.append("Native notice receipt unavailable: " + str(exc))
         indexed_files = native.get("files")
@@ -290,6 +213,10 @@ def collect(audit, image_digest):
                                         "reasons": entry["unknowns"]}
             raw_candidates = [candidates[key] for key in sorted(candidates)]
             report.inventory_ownership, report.inventory_candidates = match_inventory_ownership(native, raw_candidates)
+            from core.oci.file_ownership import match_native_identities
+            report.native_identity_matches, report.inventory_candidates = match_native_identities(
+                native, report.inventory_candidates, native_identities)
+            report.metrics.native_identity_matched_executables = len(report.native_identity_matches)
             report.metrics.scanner_unidentified_executables = len(raw_candidates)
             report.metrics.checksum_matched_executables = len(report.inventory_ownership)
             report.metrics.unidentified_executables = len(report.inventory_candidates)
@@ -301,6 +228,7 @@ def collect(audit, image_digest):
         report.source_gaps = []
         report.inventory_candidates = []
         report.inventory_ownership = []
+        report.native_identity_matches = []
         report.inventory_errors = []
         report.native_notice_collections = []
         report.errors = [str(exc)]
@@ -326,6 +254,7 @@ def markdown(report):
                   f"| Recorded source/build warnings | {metrics.source_gap_packages} |",
                   f"| Executables without scanner package identification | {metrics.scanner_unidentified_executables if metrics.scanner_unidentified_executables is not None else 'unknown'} |",
                   f"| Files matched to package records by SHA-256 | {metrics.checksum_matched_executables if metrics.checksum_matched_executables is not None else 'unknown'} |",
+                  f"| Files matched to collected native identities by SHA-256 | {metrics.native_identity_matched_executables if metrics.native_identity_matched_executables is not None else 'unknown'} |",
                   f"| Executable files needing ownership checks | {metrics.unidentified_executables if metrics.unidentified_executables is not None else 'unknown'} |", ""]
         if report.issues:
             lines += ["| Package | Missing evidence |", "| --- | --- |"]
@@ -344,7 +273,7 @@ def markdown(report):
                   "These files need ownership checks; they are not necessarily separate packages or missing licenses.", "",
                   "| Path |", "| --- |"]
         lines.extend("| " + _cell(row["path"]) + " |" for row in report.inventory_candidates[:20])
-        lines += ["", "The JSON report contains unresolved candidates and checksum-matched ownership evidence. Package membership does not establish bundled dependency completeness.", ""]
+        lines += ["", "The JSON report contains unresolved candidates, package ownership proofs and native binary identity matches. File identity and package membership do not establish bundled dependency completeness.", ""]
     lines.extend("- " + _cell(error) for error in report.inventory_errors)
     lines += ["Download the **container-sbom** artifact for `license-report.json`, this report, paired SBOMs,",
               "provenance, original inventories, and the collected license and notice files.", ""]
@@ -363,7 +292,7 @@ def annotations(report):
     if report.inventory_candidates:
         inventory.append("::warning title=Container executable inventory::" +
                          str(len(report.inventory_candidates)) +
-                         " executable file(s) remain unexplained after package checksum matching; ownership and bundled notices need checking. See container-sbom/license-report.json.")
+                         " executable file(s) remain unexplained after package and native-identity checksum matching; ownership and bundled notices need checking. See container-sbom/license-report.json.")
     failed_collections = sum(row["status"] == "unavailable" for row in report.native_notice_collections)
     if failed_collections:
         inventory.append("::warning title=Native tool release notices::" + str(failed_collections) +
