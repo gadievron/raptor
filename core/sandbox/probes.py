@@ -10,10 +10,13 @@ respectively, because those tests are syscall-level (ctypes) rather than
 subprocess-level.
 """
 
+import errno
 import functools
 import logging
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from . import state
@@ -181,6 +184,103 @@ def unshare_supports_cgroup() -> bool:
         return False
 
 
+_PROBE_CHILD_TIMEOUT_S = 5.0
+_PROBE_CHILD_REAP_TIMEOUT_S = 5.0
+_PROBE_CHILD_POLL_S = 0.01
+
+
+def _poll_probe_child_exit(pid: int, deadline: float) -> int:
+    """Collect a terminal child status without an unbounded waitpid."""
+    while True:
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("capability probe child wait timed out") from None
+            continue
+        if waited == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+            return status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("capability probe child wait timed out")
+        time.sleep(min(_PROBE_CHILD_POLL_S, remaining))
+
+
+def _cleanup_probe_child(pid: int, label: str, *, pidfd: int | None = None) -> None:
+    """Kill and reap a private probe child while ownership is still known."""
+    deadline = time.monotonic() + _PROBE_CHILD_REAP_TIMEOUT_S
+    if pidfd is None:
+        # Cancellation may have hidden an already-collected wait result.
+        # Recheck before signalling, never treat a lost child as a live PID.
+        while True:
+            try:
+                waited, status = os.waitpid(pid, os.WNOHANG)
+                break
+            except InterruptedError:
+                if time.monotonic() >= deadline:
+                    logger.warning("%s probe: could not verify child %d for cleanup", label, pid)
+                    return
+            except OSError as exc:
+                if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
+                    logger.warning("%s probe: child ownership check failed: %s", label, exc)
+                return
+        if waited == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+            return
+        if waited not in (0, pid):
+            return
+    try:
+        if pidfd is not None:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        logger.warning("%s probe: child %d kill failed: %s", label, pid, exc)
+    try:
+        _poll_probe_child_exit(pid, deadline)
+    except TimeoutError:
+        logger.warning("%s probe: child %d did not reap within cleanup budget", label, pid)
+    except OSError as exc:
+        if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
+            logger.warning("%s probe: child cleanup wait failed: %s", label, exc)
+
+
+def _wait_for_probe_child(pid: int, label: str) -> int | None:
+    """Wait for a private probe that creates no descendants; clean up on failure."""
+    if pid <= 1:
+        return None
+    owned = True
+    pidfd = None
+    try:
+        if hasattr(signal, "pidfd_send_signal"):
+            try:
+                pidfd = os.pidfd_open(pid)
+            except (AttributeError, OSError):
+                pass
+        status = _poll_probe_child_exit(pid, time.monotonic() + _PROBE_CHILD_TIMEOUT_S)
+        owned = False
+        return status
+    except TimeoutError:
+        logger.warning("%s capability probe timed out", label)
+        return None
+    except OSError as exc:
+        if isinstance(exc, ChildProcessError) or exc.errno == errno.ECHILD:
+            owned = False
+        logger.debug("%s capability probe wait failed: %s", label, exc)
+        return None
+    finally:
+        try:
+            if owned:
+                _cleanup_probe_child(pid, label, pidfd=pidfd)
+        finally:
+            if pidfd is not None:
+                try:
+                    os.close(pidfd)
+                except OSError:
+                    pass
+
+
 def _staged_pidns_selftest() -> bool:
     """Fork a child that runs the spawn backend's exact two-step
     namespace pattern: ``os.unshare(CLONE_NEWUSER)`` then a SECOND
@@ -206,7 +306,11 @@ def _staged_pidns_selftest() -> bool:
             "ignore", category=DeprecationWarning,
             message=r".*fork.*may lead to deadlocks.*",
         )
-        pid = os.fork()
+        try:
+            pid = os.fork()
+        except OSError as exc:
+            logger.debug("staged PID namespace probe fork failed: %s", exc)
+            return False
     if pid == 0:
         try:
             os.unshare(_CLONE_NEWUSER)
@@ -219,9 +323,8 @@ def _staged_pidns_selftest() -> bool:
         except BaseException:
             os._exit(250)
         os._exit(0)
-    try:
-        _, status = os.waitpid(pid, 0)
-    except ChildProcessError:
+    status = _wait_for_probe_child(pid, "staged PID namespace")
+    if status is None:
         return False
     if not os.WIFEXITED(status):
         return False
@@ -747,7 +850,11 @@ def _mount_ns_functional_selftest() -> bool:
             "ignore", category=DeprecationWarning,
             message=r".*fork.*may lead to deadlocks.*",
         )
-        pid = os.fork()
+        try:
+            pid = os.fork()
+        except OSError as exc:
+            logger.debug("mount namespace probe fork failed: %s", exc)
+            return False
     if pid == 0:
         try:
             os.unshare(_CLONE_NEWUSER | _CLONE_NEWNS)
@@ -762,9 +869,8 @@ def _mount_ns_functional_selftest() -> bool:
         except BaseException:
             os._exit(4)
         os._exit(0)
-    try:
-        _, status = os.waitpid(pid, 0)
-    except ChildProcessError:
+    status = _wait_for_probe_child(pid, "mount namespace")
+    if status is None:
         return False
     return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
 
