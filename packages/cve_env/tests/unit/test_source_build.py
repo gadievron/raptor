@@ -1845,7 +1845,7 @@ class TestCodeloadTagShape:
 
         monkeypatch.setattr(sb, "_http_get_bytes", _fetch)
         builder = sb.SourceBuilder()
-        assert builder._download_tarball("owner", "repo", "v1.2.3+build", tmp_path) is False
+        assert builder._download_tarball("owner", "repo", "v1.2.3+build", tmp_path / "checkout") is False
         assert seen["url"].endswith("/tar.gz/refs/tags/v1.2.3%2Bbuild")
 
 
