@@ -1,0 +1,15 @@
+"""Descriptor snapshots for tests that temporarily redirect standard I/O."""
+
+from contextlib import contextmanager, ExitStack
+import os
+
+
+@contextmanager
+def preserved_fds(*fds):
+    """Restore and close every snapshot, even if another cleanup raises."""
+    with ExitStack() as cleanup:
+        for fd in fds:
+            saved = os.dup(fd)
+            cleanup.callback(os.close, saved)
+            cleanup.callback(os.dup2, saved, fd)
+        yield
