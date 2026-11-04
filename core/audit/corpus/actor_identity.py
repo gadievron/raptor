@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 from time import perf_counter
 
 from core.json import load_json, save_json
@@ -35,6 +36,13 @@ Give a concise explanation. This is a diagnostic, not tool confirmation."""
 
 def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def normalize_quote(text: str) -> str:
+    """Fold layout whitespace without changing quoted literal contents."""
+    parts = re.split(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', text)
+    return "".join(part if i % 2 else re.sub(r"\s+", " ", part)
+                   for i, part in enumerate(parts)).strip()
 
 
 def load_cases(path: Path) -> list[dict]:
@@ -98,6 +106,8 @@ def build_request(case: dict) -> tuple[str, dict]:
 def grade(case: dict, response: dict) -> dict:
     errors = []
     expected = case["expected"]
+    if not isinstance(response.get("explanation"), str) or not response["explanation"].strip():
+        errors.append("missing explanation")
     for key in ("verdict", "logical_actor", "state_actor"):
         if response.get(key) != expected[key]:
             errors.append(f"wrong {key}")
@@ -105,17 +115,21 @@ def grade(case: dict, response: dict) -> dict:
     if not isinstance(evidence, list) or not evidence:
         errors.append("missing evidence")
         evidence = []
+    if len(evidence) > 5:
+        errors.append("too many evidence items")
     valid = []
     for item in evidence:
-        if not isinstance(item, dict) or not isinstance(item.get("quote"), str) or not item["quote"]:
+        if (not isinstance(item, dict) or not isinstance(item.get("quote"), str)
+                or not item["quote"].strip() or len(item["quote"]) > 400):
             errors.append("invalid evidence")
             continue
-        if item["quote"] not in case["sources"].get(item.get("source"), ""):
+        if normalize_quote(item["quote"]) not in normalize_quote(case["sources"].get(item.get("source"), "")):
             errors.append("unanchored evidence")
             continue
         valid.append(item)
     for required in expected.get("required_evidence", []):
-        if not any(item["source"] == required["source"] and required["quote"] in item["quote"] for item in valid):
+        if not any(item["source"] == required["source"] and normalize_quote(required["quote"])
+                   in normalize_quote(item["quote"]) for item in valid):
             errors.append("missing mechanism evidence: " + required["quote"])
     return {"match": not errors, "errors": errors}
 
@@ -164,8 +178,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixtures", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--split", choices=["all", "development", "heldout"], default="all")
-    parser.add_argument("--run", action="store_true", help="Opt in to paid provider calls")
-    parser.add_argument("--model", default="haiku")
+    execution = parser.add_mutually_exclusive_group()
+    execution.add_argument("--run", action="store_true", help="Opt in to paid provider calls")
+    execution.add_argument("--regrade", type=Path, help="Regrade matching captured responses offline")
+    parser.add_argument("--model", default=None)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args(argv)
@@ -173,14 +189,35 @@ def main(argv=None) -> int:
     cases = [c for c in cases if args.split == "all" or c["split"] == args.split]
     if not cases:
         parser.error("selection is empty")
+    def progress(report):
+        if args.output:
+            save_json(args.output, report)
+        row = report["cases"][-1]
+        print(f"{row['id']}: {'PASS' if row['match'] else 'FAIL'} "
+              f"{row.get('errors', row.get('error', ''))}", flush=True)
+
+    if args.regrade:
+        prior = load_json(args.regrade)
+        if args.model and args.model != prior["model"]:
+            parser.error("offline regrade model must match the recorded resolved model")
+
+        def unavailable(prompt, schema):
+            raise ValueError("no matching captured response; a fresh provider call is required")
+
+        report = run_cases(cases, unavailable, model=prior["model"], prior=prior, on_result=progress)
+        print(f"Offline actor identity: {report['passed']}/{report['total']} strict passes; no provider calls")
+        return 0 if report["passed"] == report["total"] else 1
     if not args.run:
         print(f"Validated {len(cases)} actor-identity cases; no provider calls")
         return 0
+    from core.config import pin_raptor_dir_in_environ
+
+    pin_raptor_dir_in_environ()
     from core.audit.pipeline import AuditPipelineOpts, _make_llm_client
     from core.llm.structured_call import unwrap_structured_response
 
     client, _, model = _make_llm_client(AuditPipelineOpts(
-        models=[args.model], max_cost_usd=1.0, max_calls=len(cases), max_seconds=300,
+        models=[args.model or "haiku"], max_cost_usd=1.0, max_calls=len(cases), max_seconds=300,
     ))
     client.config.enable_caching = False
 
@@ -191,15 +228,8 @@ def main(argv=None) -> int:
         ), empty_result={})
         return response.result, response.cost, response.model or model
 
-    def progress(report):
-        if args.output:
-            save_json(args.output, report)
-        row = report["cases"][-1]
-        print(f"{row['id']}: {'PASS' if row['match'] else 'FAIL'} "
-              f"{row.get('errors', row.get('error', ''))}", flush=True)
-
     prior = load_json(args.resume) if args.resume else None
-    report = run_cases(cases, generate, model=model or args.model, prior=prior, on_result=progress)
+    report = run_cases(cases, generate, model=model or args.model or "haiku", prior=prior, on_result=progress)
     print(f"Actor identity: {report['passed']}/{report['total']} strict passes; "
           f"${report['new_cost_usd']:.4f} new spend; {report['reused']} reused")
     return 0 if report["passed"] == report["total"] else 1

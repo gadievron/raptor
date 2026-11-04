@@ -56,6 +56,27 @@ def test_invented_evidence_is_rejected():
     assert "unanchored evidence" in bench.grade(case, response)["errors"]
 
 
+def test_source_layout_whitespace_can_fold_but_literals_cannot_change():
+    case = cases()[0]
+    response = answer(case)
+    response["evidence"].append({"source": "implementation", "quote":
+        "struct account *account = running_account(); lock(&account->mutex); account->pending = 0;"})
+    assert bench.grade(case, response)["match"]
+    case["sources"]["implementation"] += '\nchar *name = "a  b";\n'
+    response["evidence"].append({"source": "implementation", "quote": 'char *name = "a b";'})
+    assert "unanchored evidence" in bench.grade(case, response)["errors"]
+
+
+def test_locally_enforce_provider_schema_limits():
+    case = cases()[0]
+    response = answer(case)
+    response["evidence"] *= 2
+    assert "too many evidence items" in bench.grade(case, response)["errors"]
+    response = answer(case)
+    response["evidence"].append({"source": "implementation", "quote": "   "})
+    assert "invalid evidence" in bench.grade(case, response)["errors"]
+
+
 def test_explicit_reuse_regrades_without_provider_call():
     case = cases()[0]
     prior = bench.run_cases([case], lambda p, s: (answer(case), 0.01), model="test")
@@ -103,6 +124,16 @@ def test_missing_provider_result_is_a_failed_case():
 def test_dry_run_needs_no_provider(capsys):
     assert bench.main([]) == 0
     assert "9 actor-identity cases; no provider calls" in capsys.readouterr().out
+
+
+def test_offline_regrade_does_not_need_a_client(tmp_path, capsys):
+    fixtures = cases()[:2]
+    by_prompt = {bench.build_request(case)[0]: case for case in fixtures}
+    prior = bench.run_cases(fixtures, lambda p, s: (answer(by_prompt[p]), 0.01), model="offline")
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(prior))
+    assert bench.main(["--split", "development", "--regrade", str(path)]) == 0
+    assert "no provider calls" in capsys.readouterr().out
 
 
 def test_pin_drift_in_synthetic_evidence_is_rejected(tmp_path):
