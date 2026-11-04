@@ -534,6 +534,15 @@ class TestBatchedPassBudgetTerminal:
             tmp_path, n_files=6, fns_per_file=4,
         )
         import core.audit.orchestrator as orch
+        from core.audit import capabilities
+
+        # The eight-second watchdog bounds cancellation/harvest, not
+        # unrelated host-tool discovery or background model study.
+        monkeypatch.setattr(
+            capabilities, "probe_capabilities",
+            lambda *a, **kw: capabilities.AuditCapabilities(),
+        )
+        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **kw: None)
         monkeypatch.setattr(
             orch, "_run_mechanical_detectors",
             lambda *args, **kwargs: ({}, set()),
@@ -596,6 +605,11 @@ class TestBatchedPassBudgetTerminal:
             # dominates wallclock on joern-equipped hosts; the
             # watchdog below needs the healthy run to be fast.
             joern_overrides={"enabled": False},
+            iris=False,
+            sage_recall=False,
+            immediate_verify=False,
+            sweep_validate_findings=False,
+            max_refinements=0,
         )
 
         box: list = []
@@ -608,6 +622,7 @@ class TestBatchedPassBudgetTerminal:
         runner.join(timeout=8.0)
         if runner.is_alive():
             queue_drained.set()  # unwedge the held worker before failing
+            runner.join(timeout=1.0)
             pytest.fail(
                 "batched pass hung after budget exhaustion with queued "
                 "batches — the harvest loop never terminated on the "
