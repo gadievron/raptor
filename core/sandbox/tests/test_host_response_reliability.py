@@ -129,9 +129,9 @@ def test_high_numbered_reply_descriptor_is_supported():
     try:
         if soft != resource.RLIM_INFINITY and soft <= 2048:
             resource.setrlimit(resource.RLIMIT_NOFILE, (2049, hard))
-        high = fcntl.fcntl(host._read_fd, fcntl.F_DUPFD, 2048)
-        os.close(host._read_fd)
-        host._read_fd = high
+        old_read = host._read_fd
+        host._read_fd = fcntl.fcntl(old_read, fcntl.F_DUPFD, 2048)
+        os.close(old_read)
         assert host._rpc({"cmd": "ping"}, timeout=2) == {"ok": True}
     finally:
         try:
