@@ -10,7 +10,7 @@ CORE = Path(__file__).resolve().parents[2]
 ENGINE_MODULES = (
     "audit/orchestrator.py", "audit/refutation.py", "audit/receipt_resolution.py",
     "audit/context.py", "audit/caller_context.py", "audit/go_type_context.py",
-    "audit/llm_review.py",
+    "audit/llm_review.py", "audit/sweep.py",
     "analysis/reachability.py", "analysis/_included_c.py",
 )
 

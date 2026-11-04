@@ -818,6 +818,7 @@ def run_semgrep_sweep(
     line_end: int = 0,
     hypothesis: str = "",
     rule_keyword: str = "",
+    presence_only: bool = False,
     language: str | None = None,
 ) -> SweepResult:
     """Run a semgrep rule against a single file and classify matches.
@@ -839,6 +840,9 @@ def run_semgrep_sweep(
             the keyword's guarded fixture is a presence detector and is
             capped at "inconclusive" — and makes the rule confirm-only:
             its scanned zero-match is "inconclusive", never "refuted".
+        presence_only: The generated query establishes only a syntactic
+            shape, not the claimed defect. Retain matches as leads, but
+            return inconclusive even when no negative control exists.
         language: The file's canonical language when the caller already
             knows it (inventory-stamped; content-probed for extensions
             no table maps). When the probe licenses a semgrep language
@@ -947,9 +951,11 @@ def run_semgrep_sweep(
         # path, so the confirm/refute logic always sees exactly the
         # unbatched inputs.
         batch: tuple[Path, tuple, list[Any], list[Any]] | None = None
-        batched_fixture, batched_cache_key = _negative_control_batch_plan(
-            rule_keyword, file_path, full_path,
-        )
+        batched_fixture, batched_cache_key = (None, None)
+        if not presence_only:
+            batched_fixture, batched_cache_key = _negative_control_batch_plan(
+                rule_keyword, file_path, full_path,
+            )
         if batched_fixture is not None:
             result = run_semgrep_rule(
                 full_path, rule_config, timeout=120,
@@ -1055,6 +1061,8 @@ def run_semgrep_sweep(
                 in_function.append(finding)
 
         capped_reason: str | None = None
+        if presence_only:
+            capped_reason = "presence-only query: matches do not establish the claimed defect"
         witness_cov: Coverage | None = None
         if in_function and hypothesis:
             named = _hypothesis_identifiers(hypothesis)
@@ -5321,11 +5329,10 @@ def run_joern_pre_sweep(
 # pattern silently degenerates to just its code lines (the old
 # ``// ERROR: …`` annotation lines turned every entry into a bare
 # presence matcher while READING like a constraint). These shapes are
-# presence-level BY CONSTRUCTION — they only ever run with the
-# keyword threaded through the chain config so the consumer arms the
-# identifier-consistency and negative-control caps
-# (run_semgrep_sweep); an uncapped presence match must never stamp
-# promotion-grade evidence.
+# presence-level BY CONSTRUCTION. The chain carries presence_only
+# so their evidence limit does not depend on a negative-control
+# fixture existing for the keyword/language. Matches stay available
+# to the reviewer, but never stamp promotion-grade evidence.
 _MECHANICAL_CHECK_PATTERNS: dict[str, str] = {
     "unchecked return": "$X = $FUNC(...);",
     "missing null check": "$X = $FUNC(...);",
