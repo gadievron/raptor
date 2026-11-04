@@ -516,3 +516,29 @@ def test_static_detection_ignores_large_unicode_body(qualifier):
     assert set(span.params) == {"obj", "cb"}
     assert span.is_static is bool(qualifier)
     assert (span.start, span.end) == (1, 2003)
+
+
+@requires_ts
+def test_field_scan_preserves_custom_source_encoding_behavior():
+    from core.audit.callsite_consistency import parse_source_cached
+
+    class ChangingEncoding(str):
+        calls = 0
+
+        def encode(self, *args, **kwargs):
+            self.calls += 1
+            value = str(self)
+            if self.calls == 2:
+                value = value.replace("first", "other")
+            return value.encode(*args, **kwargs)
+
+    source = ChangingEncoding(
+        "void first(struct Obj *obj) { obj->target = 1; }\n",
+    )
+    tree, _ = parse_source_cached("custom.c", str(source))
+    assert tree is not None
+    raw = {}
+    spans = fc._scan_file_ts(tree, source, "custom.c", raw, lambda name: True)
+    assert source.calls == 2
+    assert [span.name for span in spans] == ["other"]
+    assert [site.function for site in raw["target"].writes] == ["other"]
