@@ -27,6 +27,7 @@ import pytest
 
 from core.sandbox import proxy as proxy_mod
 from core.sandbox.proxy import _parse_tls_client_hello_sni
+from core.sandbox.tests.socket_server import SocketServer
 
 
 def _client_hello(sni: str | None) -> bytes:
@@ -54,20 +55,19 @@ class _Backend:
 
     def __init__(self, reply: bytes = b""):
         self._srv = socket.socket()
-        self._srv.bind(("127.0.0.1", 0))
-        self._srv.listen(1)
-        self.port = self._srv.getsockname()[1]
-        self.received = b""
-        self.accepted = threading.Event()
-        self._reply = reply
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
-
-    def _serve(self):
         try:
-            conn, _ = self._srv.accept()
-        except OSError:
-            return
+            self._srv.bind(("127.0.0.1", 0))
+            self._srv.listen(1)
+            self.port = self._srv.getsockname()[1]
+            self.received = b""
+            self.accepted = threading.Event()
+            self._reply = reply
+            self._server = SocketServer(self._srv, self._serve)
+        except BaseException:
+            self._srv.close()
+            raise
+
+    def _serve(self, conn):
         self.accepted.set()
         conn.settimeout(5)
         try:
@@ -81,12 +81,9 @@ class _Backend:
                     self._reply = b""
         except OSError:
             pass
-        finally:
-            conn.close()
 
     def close(self):
-        self._srv.close()
-        self._thread.join(timeout=5)
+        self._server.close()
 
 
 @pytest.fixture
@@ -150,20 +147,20 @@ class TestSniMismatchDenied:
     def test_fronted_client_hello_closes_tunnel(
         self, reset_proxy, loopback_ok,
     ):
-        backend = _Backend()
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend()
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             token = proxy.register_sandbox(caller_label="t")
             s = _open_tunnel(proxy.port, f"127.0.0.1:{backend.port}")
+            cleanup.callback(s.close)
             fronted = _client_hello("other-tenant.example")
             s.sendall(fronted)
             # Tunnel must be closed on the client side...
             assert _recv_until_eof(s) == b""
             s.close()
             events = proxy.unregister_sandbox(token)
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         # ...with a recorded denial event...
         denied = [e for e in events if e["result"] == "denied_sni"]
         assert len(denied) == 1, f"expected one denied_sni event: {events}"
@@ -175,18 +172,18 @@ class TestSniMismatchDenied:
         assert not [e for e in events if e["result"] == "allowed"]
 
     def test_sni_match_is_case_insensitive(self, reset_proxy, loopback_ok):
-        backend = _Backend(reply=b"SRV")
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"localhost"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend(reply=b"SRV")
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"localhost"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             s = _open_tunnel(proxy.port, f"localhost:{backend.port}")
+            cleanup.callback(s.close)
             hello = _client_hello("LOCALHOST")
             s.sendall(hello)
             s.settimeout(5)
             assert s.recv(3) == b"SRV"
             s.close()
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         assert backend.received == hello
 
 
@@ -195,10 +192,13 @@ class TestPassThroughUnchanged:
     def test_matching_sni_tunnel_is_byte_identical(
         self, reset_proxy, loopback_ok,
     ):
-        backend = _Backend(reply=b"PONG")
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend(reply=b"PONG")
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             s = _open_tunnel(proxy.port, f"127.0.0.1:{backend.port}")
+            cleanup.callback(s.close)
             hello = _client_hello("127.0.0.1")
             s.sendall(hello)
             s.settimeout(5)
@@ -211,9 +211,6 @@ class TestPassThroughUnchanged:
                 time.sleep(0.1)
                 deadline -= 1
             s.close()
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         assert backend.received == hello + b"MORE-APP-BYTES", (
             "peeked bytes were not forwarded byte-identically"
         )
@@ -221,35 +218,35 @@ class TestPassThroughUnchanged:
     def test_non_tls_first_bytes_pass_through(
         self, reset_proxy, loopback_ok,
     ):
-        backend = _Backend(reply=b"HTTP/1.0 200 OK\r\n\r\n")
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend(reply=b"HTTP/1.0 200 OK\r\n\r\n")
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             s = _open_tunnel(proxy.port, f"127.0.0.1:{backend.port}")
+            cleanup.callback(s.close)
             payload = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"
             s.sendall(payload)
             s.settimeout(5)
             assert s.recv(8) == b"HTTP/1.0"
             s.close()
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         assert backend.received == payload
 
     def test_sni_less_client_hello_passes_through(
         self, reset_proxy, loopback_ok,
     ):
-        backend = _Backend(reply=b"OK")
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend(reply=b"OK")
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             s = _open_tunnel(proxy.port, f"127.0.0.1:{backend.port}")
+            cleanup.callback(s.close)
             hello = _client_hello(None)
             s.sendall(hello)
             s.settimeout(5)
             assert s.recv(2) == b"OK"
             s.close()
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         assert backend.received == hello
 
     def test_inconclusive_fragment_passes_after_peek_deadline(
@@ -259,18 +256,18 @@ class TestPassThroughUnchanged:
         after the peek deadline the bytes must be forwarded and the
         tunnel proceed unchecked — the layer never blocks on doubt."""
         monkeypatch.setattr(proxy_mod, "_TLS_PEEK_TIMEOUT_S", 0.3)
-        backend = _Backend(reply=b"ACK")
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
-        try:
+        with ExitStack() as cleanup:
+            backend = _Backend(reply=b"ACK")
+            cleanup.callback(backend.close)
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
+            cleanup.callback(proxy.stop, drain_timeout=0)
             s = _open_tunnel(proxy.port, f"127.0.0.1:{backend.port}")
+            cleanup.callback(s.close)
             fragment = _client_hello("whatever.example")[:7]
             s.sendall(fragment)
             s.settimeout(5)
             assert s.recv(3) == b"ACK"
             s.close()
-        finally:
-            proxy.stop(drain_timeout=0)
-            backend.close()
         assert backend.received == fragment
 
 
