@@ -285,10 +285,11 @@ class TestScopedSlotPruning:
         scoped_left = [
             n for n in remaining if n.startswith(_CPG_SLOT_SCOPED_PREFIX)
         ]
-        assert len(scoped_left) <= _CPG_SCOPED_SLOTS_KEEP + 1
-        # Newest N all survive.
-        for n in names[-_CPG_SCOPED_SLOTS_KEEP:]:
-            assert n in remaining
+        assert len(scoped_left) == _CPG_SCOPED_SLOTS_KEEP
+        # The active slot consumes one place in the pool budget, even
+        # when it is older than every other slot.
+        newest = names[-(_CPG_SCOPED_SLOTS_KEEP - 1):]
+        assert remaining == {_CPG_SLOT_UNSCOPED, active, *newest}
 
     def test_target_and_scoped_pools_pruned_separately(self, tmp_path):
         # A burst of scoped runs must not evict every project's
