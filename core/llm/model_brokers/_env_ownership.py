@@ -17,7 +17,6 @@ from core.source.gated import read_bytes_gated
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
 _CREDENTIAL_NAME = re.compile(r"\b[A-Z][A-Z0-9_]*_API_(?:KEY|TOKEN)\b")
-_LITERAL_CANDIDATE = re.compile(rb'''["'][A-Z][A-Z0-9_]*_API_(?:KEY|TOKEN)["']''')
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _SKIP_DIRS = frozenset({"tests", "test", "fixtures", "__pycache__", "node_modules"})
 
@@ -62,7 +61,7 @@ def python_credential_declarations(root: Path = _SOURCE_ROOT) -> tuple[tuple[str
             first = text.split(b"\n", 1)[0]
             if not first.startswith(b"#!") or b"python" not in first:
                 continue
-        if not _LITERAL_CANDIDATE.search(text):
+        if b"_API_KEY" not in text and b"_API_TOKEN" not in text:
             continue
         try:
             tree = ast.parse(text, filename=str(path))
