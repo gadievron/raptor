@@ -401,16 +401,18 @@ def _cap_evidence(items: list[str]) -> list[str]:
     BEFORE capping so the length bound holds on what is actually
     emitted."""
     from core.security.log_sanitisation import escape_nonprintable
-    escaped = [escape_nonprintable(item) for item in items]
+    # Items outside the display cap contribute only to the elision count.
+    # Avoid escaping and allocating strings that will immediately be dropped.
+    escaped = [escape_nonprintable(item) for item in items[:_MAX_EVIDENCE_ITEMS]]
     capped = [
         item if len(item) <= _MAX_EVIDENCE_ITEM_LEN
         else item[:_MAX_EVIDENCE_ITEM_LEN]
         + f"...[+{len(item) - _MAX_EVIDENCE_ITEM_LEN} chars]"
         for item in escaped
     ]
-    if len(capped) > _MAX_EVIDENCE_ITEMS:
-        dropped = len(capped) - _MAX_EVIDENCE_ITEMS
-        capped = capped[:_MAX_EVIDENCE_ITEMS] + [f"...[+{dropped} more]"]
+    if len(items) > _MAX_EVIDENCE_ITEMS:
+        dropped = len(items) - _MAX_EVIDENCE_ITEMS
+        capped.append(f"...[+{dropped} more]")
     return capped
 
 
