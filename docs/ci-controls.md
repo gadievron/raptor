@@ -188,6 +188,7 @@ This page is split into:
 | [`nightly-self-test.yml`](../.github/workflows/nightly-self-test.yml) | Runs the tier-0 self-test suite — process/kernel/filesystem/network boundary cases over the full command surface with all LLM paths unrouted (no API cost); a refuse step reddens the run when the gcc/radare2 install silently failed so a toolchain-less night cannot read as green | Daily | `self-test-results.json` artifact and workflow logs |
 | [`wsl.yml`](../.github/workflows/wsl.yml) | Real-WSL2 live leg on a `windows-2022` runner (first-party `.github/actions/wsl-setup` composite, sha256-pinned rootfs): runs the `[verify-live]` checklist (`.github/scripts/wsl_verify_live.py` — environment facts recorded, expected values asserted), `pytest -m wsl` plus the CRLF fixture set on ext4 / autocrlf-twin / drvfs checkouts, the consent-ceremony and sandbox-profile live probes, and a WSL1 capture job. An availability probe gates the WSL2 jobs and reports a detected skip when the runner image cannot host WSL2 | Daily (and on demand via dispatch) | Per-section checklist JSON artefacts (`wsl-verify-*`, 14-day retention) and workflow logs |
 | [`weekly_corpus.yml`](../.github/workflows/weekly_corpus.yml) | Corpus-scale binary-oracle precision drivers (`-m corpus`): clone + build + coverage over real third-party projects to re-derive the published precision numbers | Weekly (and on demand via dispatch) | Workflow logs and junit artifact |
+| [`macos-runner-recovery.yml`](../.github/workflows/macos-runner-recovery.yml) | Retries one unallocated macOS job and its dependents after GitHub confirms a runner-acquisition failure; executed failures and stale runs remain untouched | Failed/timed-out first attempts of Test Suite, wrapper acceptance, Nightly and CodeQL; a short Ubuntu inspection job only | Recovery decision in the job summary; original run retains attempt history |
 | [`sandbox-wrappers.yml`](../.github/workflows/sandbox-wrappers.yml) | Registered wrapper dispatch contracts and native confinement suites on Linux and macOS; required cases fail on skips or count drift. rr hardware and vendor-dependent cells remain explicit operator acceptance | Source/tooling PRs and main pushes, merge queue, daily and on demand | Per-platform contract/native JUnit, logs, execution plans and exclusions |
 | [`sandbox-matrix.yml`](../.github/workflows/sandbox-matrix.yml) | Full sandbox feature matrix: both runner-shaped images, all five degradation lanes, fresh image builds — the unfiltered backstop behind the PR-time two-lane subset | Weekly (and on demand via dispatch) | `matrix.md` / `matrix.json` / per-lane probe + pytest artefacts |
 | [`ubuntu26-canary.yml`](../.github/workflows/ubuntu26-canary.yml) | Runs the sandbox empirical feature probe and the sandbox fast tier on the explicit `ubuntu-26.04` runner label ahead of the `ubuntu-latest` migration to Ubuntu 26.04 (actions/runner-images#14748, rolling out 2026-10-19 → 2026-11-19). Asserts the ubuntu-24.04 capability baseline (Landlock present, unprivileged userns, mount + fresh procfs in a userns) still holds on the new runner VM's kernel/AppArmor policy — degraded lanes only SKIP in pytest, so the probe-shape assertion is the loud failure. Retire after the migration completes green | Weekly (and on demand via dispatch) | Probe JSON artefacts (stock image + userns-enabled) and workflow logs |
@@ -276,3 +277,24 @@ stops queued families; active families finish and clean up. Contract cases remai
 in one group, and skipped cases or execution-count drift still fail acceptance.
 `sandbox-wrappers-passed` reports selection and acceptance failures even
 when unrelated platform jobs are skipped.
+
+### macOS runner allocation recovery
+
+Queue waits happen before steps run, so step retries cannot reduce them.
+The recovery workflow gives a confirmed acquisition failure one new allocation
+attempt after the source workflow completes. It requires an empty step list,
+no assigned runner, the expected macOS job and label, and GitHub's specific
+runner-acquisition failure annotation. Setup failures, test failures, test
+timeouts, successful runs and cancelled workflows are not retried.
+
+Recovery checks the latest run and live PR/ref metadata, refusing superseded
+runs, closed or updated PRs and deleted queue refs. Scheduled/manual snapshots
+remain eligible until a newer matching run supersedes them. Only the failed
+macOS job and its dependent gates are rerun; successful unrelated jobs are kept.
+A second attempt is never automatically retried.
+
+The inspector runs on Ubuntu with limited job permissions and loads only its
+trusted default-branch revision. It reads GitHub metadata, never source-run
+artifacts or PR code. Decisions appear in its step summary, and test failures
+remain visible in the source workflow. This recovers failed allocations; it
+does not shorten a job that is still waiting in GitHub's queue.
