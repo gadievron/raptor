@@ -234,6 +234,7 @@ def _cleanup_probe_child(pid: int, label: str, *, pidfd: int | None = None) -> N
                 return
         try:
             if use_pidfd:
+                assert pidfd is not None  # The pidfd phase exists only for an opened fd.
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
             else:
                 os.kill(pid, signal.SIGKILL)
