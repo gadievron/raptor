@@ -474,7 +474,7 @@ class TestPhraseDecidesNothing:
         ("all-refuted", "finding", ("clean", 0)),
         ("adversarial-refuted", "suspicious", ("clean", 0)),
         ("adversarial-stands", "suspicious", ("suspicious", 1)),
-        ("joern-up-covered", "finding", ("clean", 0)),
+        ("joern-up-covered", "finding", ("dark", 1)),
         ("joern-down-covered", "suspicious", ("suspicious", 1)),
         ("tool-evidenced", "finding", ("finding", 1)),
     ])
@@ -482,7 +482,7 @@ class TestPhraseDecidesNothing:
                                     status, expect):
         # Anti-vacuity: the pipeline actually routes differently per
         # scenario (an evidence-free finding meets G2 and is resolved
-        # by silence admissibility; a tool-evidenced one stays a finding).
+        # by scoped-refutation admissibility; dispatch alone proves nothing).
         # These are base behaviours of the lanes, identical with or
         # without the phrase (tests above).
         """Each scenario must actually route differently, for example a bare

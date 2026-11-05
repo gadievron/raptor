@@ -217,6 +217,9 @@ class TestOrchestratorLegMembershipSkip:
     must announce with the membership reason."""
 
     def _config(self, tmp_path, db, checklist_file):
+        source = tmp_path / checklist_file
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("void f(void) {}\n")
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=None, codeql_db_path=None,
         )
