@@ -361,3 +361,49 @@ def test_metrics_rule_counts_match_validated_import_identity(tmp_path, run, refe
     assert metrics['findings_by_rule'] == {expected: 1}
     assert (finding['rule_id'] or 'unknown') == expected
     assert metrics['findings_by_severity'][finding['level']] == 1
+
+
+@pytest.mark.parametrize('identity', ['location', 'partial-fingerprint', 'tool-fingerprint'])
+def test_established_identity_does_not_copy_unused_result_payload(monkeypatch, identity):
+    import tracemalloc
+    from pathlib import Path
+    import core.sarif.parser as parser
+
+    result = {'ruleId': 'rule-a', 'message': {'text': 'finding'},
+              'properties': {'tool_details': 'x' * (2 * 1024 * 1024)}}
+    if identity == 'location':
+        result['locations'] = [{'physicalLocation': {
+            'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+        }}]
+    elif identity == 'partial-fingerprint':
+        result['partialFingerprints'] = {'primaryLocationLineHash': 'line-hash'}
+    else:
+        result['fingerprints'] = {'matchBasedId/v1': 'tool-fingerprint'}
+    report = {'runs': [{'tool': {'driver': {'name': 'tool'}}, 'results': [result]}]}
+    # Isolate import work after the bounded loader; the caller-owned raw
+    # document is already resident and must not be duplicated for identity.
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: report)
+    parser.parse_sarif_findings(Path('unused.sarif'))  # Warm imports/caches.
+    tracemalloc.start()
+    try:
+        findings = parser.parse_sarif_findings(Path('unused.sarif'))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(findings) == 1
+    assert findings[0]['message'] == 'finding'
+    assert peak < 1024 * 1024, f'identity copied unused raw payload: {peak} bytes'
+
+
+def test_content_identity_fallback_retains_exact_digest(tmp_path):
+    import hashlib
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    result = {'ruleId': 'rule-a', 'message': {'text': 'locationless finding'},
+              'properties': {'details': 'non-ASCII: λ'}}
+    expected = hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode('utf-8')).hexdigest()
+    path = tmp_path / 'content-identity.sarif'
+    for row in [result, dict(reversed(list(result.items())))]:
+        path.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'tool'}}, 'results': [row]}]}))
+        assert parse_sarif_findings(path)[0]['finding_id'] == expected

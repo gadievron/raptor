@@ -1047,11 +1047,6 @@ def parse_sarif_findings(
             # `hash()` is randomised per-process (PYTHONHASHSEED) and
             # unsorted dumps depend on dict insertion order, so
             # neither is stable across invocations.
-            try:
-                canonical = json.dumps(result, sort_keys=True, default=str)
-            except (TypeError, ValueError):
-                canonical = repr(sorted(result.items()))
-            sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             rule_id = _result_rule_id(result, rule)
             fingerprint = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
             if isinstance(fingerprint, str) and fingerprint:
@@ -1070,7 +1065,14 @@ def parse_sarif_findings(
                         "\x1f".join(str(part) for part in key).encode("utf-8")
                     ).hexdigest()
                 else:
-                    finding_id = sha
+                    # Full result serialization is needed only for the
+                    # locationless, fingerprintless fallback. Tool-specific
+                    # payloads can dwarf the identity material above.
+                    try:
+                        canonical = json.dumps(result, sort_keys=True, default=str)
+                    except (TypeError, ValueError):
+                        canonical = repr(sorted(result.items()))
+                    finding_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
             locs = result.get("locations")
             first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
