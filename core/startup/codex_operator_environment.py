@@ -15,6 +15,9 @@ _SESSION_KEYS = frozenset({
 })
 _NAMES = frozenset({
     'RAPTOR_CONFIG',
+    # Service scratch must outlive individual frontend/run scratch roots.
+    # These launcher-selected bases are already in the shared safe policy.
+    '_RAPTOR_JOERN_TMP_BASE', '_RAPTOR_SERVICE_TMP_BASE',
     *(key for key in RaptorConfig.SAFE_ENV_ALLOWLIST
       if key.startswith('RAPTOR_') and key not in _SESSION_KEYS),
     *RaptorConfig.LLM_API_KEY_VARS,

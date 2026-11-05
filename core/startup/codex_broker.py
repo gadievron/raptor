@@ -33,7 +33,7 @@ def _address(session_id):
     return _IPC_ROOT.resolve(strict=True) / f'raptor-codex-env-{os.getuid()}' / key
 
 
-def request(session_id, message):
+def request(session_id, message, *, timeout=3):
     context = environment.read_context(session_id)
     session_id = context['session_id']
     message = dict(message, capability=context['broker_key'])
@@ -41,7 +41,7 @@ def request(session_id, message):
     with environment._directory(_address(session_id)) as directory:
         environment._atomic(directory, name + '.request', json.dumps(message))
         try:
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 try:
                     result = json.loads(environment._read(directory, name + '.response'))
@@ -111,7 +111,9 @@ def start(session_id, pid):
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                start_new_session=True)
     try:
-        result = request(session_id, {'op': 'environment'})
+        # Interpreter/config startup can exceed the ordinary IPC budget on
+        # a loaded host. Keep normal requests fast, but allow bounded startup.
+        result = request(session_id, {'op': 'environment'}, timeout=10)
         if result['environment']['RAPTOR_SESSION_PID'] == str(pid):
             return
     except (OSError, ValueError):

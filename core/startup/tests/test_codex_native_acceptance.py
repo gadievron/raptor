@@ -223,4 +223,9 @@ def test_native_sandbox_can_run_a_benign_command(native):
             pytest.skip('native sandbox blocked: this execution environment denies user namespaces')
         raise
     assert 'error' not in reply, reply.get('error')
-    assert reply['result']['exitCode'] == 0
+    result = reply['result']
+    if result['exitCode'] != 0 and (
+            'sandbox uses bubblewrap and needs access to create user namespaces'
+            in client.stderr_path.read_text(errors='replace')):
+        pytest.skip('native sandbox blocked: this execution environment denies user namespaces')
+    assert result['exitCode'] == 0, result

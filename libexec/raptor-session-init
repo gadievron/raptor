@@ -140,6 +140,20 @@ def _seed_codex_session(session_id=None) -> tuple[str, str] | None:
     if result is None:
         return None
     if launcher_seed is not None:
+        # Scratch lifetime belongs to the launcher, independent of the logical
+        # chat credential. Preserve its verified metadata before retiring the
+        # base row so filtered Codex shells can recover the same private tmp.
+        metadata = launcher_seed.get("scratch_metadata")
+        if metadata:
+            with sessions._ledger_lock(pid):
+                entry = sessions._sessions_dir() / str(pid)
+                fields = sessions._parse_entry(entry)
+                if fields.get("token") != result[1]:
+                    return None
+                if fields.get("scratch_metadata") not in (None, metadata):
+                    return None
+                fields["scratch_metadata"] = metadata
+                sessions._atomic_write(entry, sessions._entry_content(fields["project"], fields, preserve_since=True))
         # Retire the temporary launcher row only after scoped publication.
         # Keep the lock file: unlinking a held lock would split serialization.
         # A changed binding/credential is not ours to remove; fail startup
