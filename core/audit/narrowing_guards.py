@@ -43,6 +43,8 @@ def _unwrap(node):
 
 
 class NarrowingGuardContext:
+    """One bounded source parse shared by initializer and guard checks."""
+
     def __init__(self, source: str):
         self.source = source
         self.lines = source.split("\n")
@@ -283,9 +285,7 @@ class NarrowingGuardContext:
                 interval = source_range
         return None
 
-    def protects(self, variable, line, column, source_range, dest_range, source_type):
-        if source_range is None or dest_range is None:
-            return False
+    def _initializer_at(self, line, column):
         if not self.loaded:
             self.loaded = True
             try:
@@ -298,11 +298,29 @@ class NarrowingGuardContext:
             except Exception:
                 self.root = None
         if self.root is None or self.root.has_error:
-            return False
+            return None
         offset = self.offsets[line] + len(self.lines[line][:column].encode("utf-8"))
         target = self.root.descendant_for_byte_range(offset, offset)
         while target is not None and target.type != "init_declarator":
             target = target.parent
+        return target
+
+    def may_use_value(self, variable, line, column):
+        target = self._initializer_at(line, column)
+        if target is None:
+            return True  # missing syntax cannot prove that a use is argument-only
+        from .initializer import initializer_may_use_value
+
+        return initializer_may_use_value(
+            target.child_by_field_name("value"),
+            self.data,
+            variable,
+        )
+
+    def protects(self, variable, line, column, source_range, dest_range, source_type):
+        if source_range is None or dest_range is None:
+            return False
+        target = self._initializer_at(line, column)
         if target is None:
             return False
         value = _unwrap(target.child_by_field_name("value"))

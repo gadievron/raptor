@@ -1,4 +1,4 @@
-"""Bound declaration initializers in a sanitized C-family source line."""
+"""C initializer boundaries and syntax-aware integer-value uses."""
 
 
 def initializer_text(text: str) -> str:
@@ -19,3 +19,82 @@ def initializer_text(text: str) -> str:
         elif char in ",;" and not stack:
             return text[:index]
     return text
+
+
+def initializer_may_use_value(value, source: bytes, variable: str) -> bool:
+    """Whether a C initializer may convert this variable's integer value.
+
+    Grouping and casts preserve value uses. Call arguments, scalar sizeof,
+    boolean results, indices and conditional selectors do not themselves
+    supply the wide integer being converted. This is candidate extraction,
+    not callee-return typing or a proof of the expression's range.
+    """
+    if value is None:
+        return True
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        kind = node.type
+        if kind in {"call_expression", "alignof_expression", "type_descriptor"}:
+            continue
+        if kind == "identifier":
+            if source[node.start_byte : node.end_byte].decode("utf-8") == variable:
+                return True
+            continue
+        if kind == "sizeof_expression":
+            # Scalar operands are unevaluated. A VLA type can depend on
+            # runtime dimensions, so retain possible value uses there.
+            type_node = node.child_by_field_name("type")
+            if type_node is not None:
+                stack.extend(type_node.named_children)
+            continue
+        if kind == "generic_expression":
+            # The controlling expression is unevaluated; result arms may
+            # supply a value. Selecting an arm requires type resolution.
+            stack.extend(node.named_children[1:])
+            continue
+        if kind in {"binary_expression", "unary_expression", "pointer_expression"}:
+            operator = node.child_by_field_name("operator")
+            op = (
+                source[operator.start_byte : operator.end_byte].decode("utf-8")
+                if operator is not None
+                else ""
+            )
+            if (
+                (
+                    kind == "binary_expression"
+                    and op in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}
+                )
+                or (kind == "unary_expression" and op == "!")
+                or (kind == "pointer_expression" and op == "&")
+            ):
+                continue
+        if kind in {
+            "cast_expression",
+            "assignment_expression",
+            "comma_expression",
+            "subscript_expression",
+        }:
+            field = {
+                "cast_expression": "value",
+                "assignment_expression": "right",
+                "comma_expression": "right",
+                "subscript_expression": "argument",
+            }[kind]
+            child = node.child_by_field_name(field)
+            if child is None:
+                return True  # grammar drift must not erase a candidate
+            stack.append(child)
+            continue
+        if kind == "conditional_expression":
+            # The GNU omitted-middle form reuses its condition as a value.
+            consequence = node.child_by_field_name(
+                "consequence"
+            ) or node.child_by_field_name("condition")
+            alternative = node.child_by_field_name("alternative")
+            if consequence is None or alternative is None:
+                return True
+            stack.extend((consequence, alternative))
+            continue
+        stack.extend(node.named_children)
+    return False
