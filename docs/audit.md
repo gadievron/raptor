@@ -1070,3 +1070,31 @@ Pointers, array parameters, variable extents, unresolved aliases, writes,
 mutation, calls, and unsupported control flow remain inconclusive. Ordinary
 bounds dispatch prefers this source obligation when it can bind the access;
 the existing supplied numeric-model check remains diagnostic fallback.
+
+### Source integer proof boundaries
+
+Source-bound overflow checks use the same explicit function-entry scope as
+array reads. Integer terms, including names used only in guards, must bind
+to builtin parameter inputs. A declaration supplies a type, not a symbolic
+value: local initializers, static storage, aliases, and mutable value flow
+need additional obligations and cannot become unconstrained parameters.
+Earlier unmodeled arithmetic or memory reads also block source proof credit.
+
+The overflow backend supports signed and unsigned addition, subtraction,
+and multiplication. For a SAT source query, a separate Python-integer
+checker validates storage domains and all reaching guards, then evaluates
+the exact operation without wrapping. The artifact retains the checked
+assignment, mathematical result, promoted result range, and assumptions.
+Partial encodings and invalid counterexamples remain inconclusive. UNSAT
+establishes only the admitted operation's overflow obligation under its
+source premises; it does not prove an entire function safe.
+
+Both source parsing and direct SMT obligations have budgets. Exceeding one
+refuses the complete query; constraints are never discarded to earn a
+verdict. Small-width exhaustive differential tests check the arithmetic
+predicates against ordinary integer math, and native worker tests cover
+the confined JSON boundary without executing the supplied C/C++ code.
+
+Caller reachability remains separate. In particular, the existing generic
+`bounded` caller contract carries no numeric interval and cannot establish
+that a particular array or arithmetic counterexample reaches the callee.

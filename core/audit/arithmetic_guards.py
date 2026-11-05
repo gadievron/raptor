@@ -92,14 +92,31 @@ def guards_for_operation(body, target, data, operands):
         for item in _nodes(node):
             if item.type == "call_expression":
                 return True  # aliases and globals are not summarized here
+            if item != target and item.type in {"subscript_expression", "pointer_expression", "field_expression"}:
+                return True  # a preceding read may itself require a safety obligation
+            if item.type == "binary_expression" and item != target and text(item.child_by_field_name("operator")) in {
+                "+", "-", "*", "/", "%", "<<", ">>",
+            }:
+                return True  # arithmetic definedness/value flow is not encoded
+            if item.type == "unary_expression" and text(item.child_by_field_name("operator")) in {"*", "-"}:
+                return True
             if item.type in {"assignment_expression", "update_expression", "new_expression", "delete_expression"}:
                 return True  # no alias/evaluation-order model, including C++ references
             if item.type == "declaration":
+                type_node = item.child_by_field_name("type")
+                if type_node is None or type_node.type not in {"primitive_type", "sized_type_specifier"}:
+                    return True  # an implicit C++ constructor may throw or mutate state
                 for decl in item.children_by_field_name("declarator"):
+                    if decl.type == "identifier":
+                        return True  # later indeterminate reads have no value-flow model
                     if decl.type == "init_declarator":
                         decl = decl.child_by_field_name("declarator")
                     if decl is not None and names(decl) & watched:
                         return True  # includes shadowing and reference declarators
+            if item.type == "array_declarator":
+                size = item.child_by_field_name("size")
+                if size is None or size.type != "number_literal" or not _INTEGER_LITERAL_RE.fullmatch(text(size)):
+                    return True  # variable extents need allocation/definedness facts
         return False
 
     def watched(facts):

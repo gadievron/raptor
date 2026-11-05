@@ -24,9 +24,8 @@ ops aren't covered by this verb — use raptor-smt-validate-path directly.)
 (most common CWE-190 case).  Must match ``--kind``: unsigned_wrap requires
 an unsigned profile; signed_wrap a signed one.
 
-``--kind`` is ``unsigned_wrap`` (default) or ``signed_wrap``.  signed_wrap
-is supported for ``+`` and ``*`` only — signed-minus overflow shape is
-too narrow for this verb's binary template.
+``--kind`` is ``unsigned_wrap`` (default) or ``signed_wrap``. Both kinds
+support ``+``, ``-`` and ``*``; signed predicates check both directions.
 
 ``--guard`` is repeatable — one visible source-level guard each.  If a
 guard was bypassed on the dangerous path, pre-negate it manually:

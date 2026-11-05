@@ -151,19 +151,10 @@ def truncation_loses_bits(bv: Any, to_width: int, to_signed: bool) -> Any:
 # ---------------------------------------------------------------------------
 
 def uadd_overflows(a: Any, b: Any) -> Any:
-    """Unsigned addition wraps around (result < BOTH operands).
+    """Unsigned mathematical sum exceeds the representable maximum.
 
-    Pre-fix the docstring read `(result < either operand)`.
-    "Either" in English is ambiguous between "at least one of"
-    and "any one of"; the correct mathematical condition for
-    unsigned-add overflow is `result < a AND result < b`
-    (when wrap occurs the sum is smaller than EVERY input).
-    Reading the loose form as "at least one" gives a strictly
-    weaker condition that doesn't characterise overflow —
-    `a + b < a` alone is true when `b > UINT_MAX/2` even
-    without overflow on some bit widths. The Z3 implementation
-    (`Not(BVAddNoOverflow)`) is correct; only the docstring
-    wording was confusable.
+    Equivalently, the modular result is less than either input under
+    unsigned comparison: each individual comparison characterizes wrap.
     """
     return z3.Not(z3.BVAddNoOverflow(a, b, signed=False))
 

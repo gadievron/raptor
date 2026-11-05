@@ -120,6 +120,11 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
         if record is None or record[0] is None:
             return ArithmeticModel("unavailable")
         spelling, declaration = record
+        # A type is not a value definition. Local initializers, globals and
+        # static storage require value-flow facts before they may range over
+        # an unconstrained entry domain. Parameters are entry inputs.
+        if declaration.type != "parameter_declaration":
+            return ArithmeticModel("unavailable")
         type_node = declaration.child_by_field_name("type")
         if not has_builtin_integer_type(type_node, spelling, language):
             return ArithmeticModel("unavailable")
@@ -150,8 +155,7 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
 
 
 def model_for_operation(target, data, operands, operator, premises, integer_abi=None, *, language=None):
-    """Integer facts plus the overflow oracle's supported-operation boundary."""
-    model = model_for_integer_terms(target, data, operands, premises, integer_abi, language=language)
-    if model.profile.startswith("int") and operator == "-":
-        return ArithmeticModel("unavailable")  # backend has no signed-subtract oracle
-    return model
+    """Integer facts for a supported atomic arithmetic operation."""
+    if operator not in {"+", "-", "*"}:
+        return ArithmeticModel("unavailable")
+    return model_for_integer_terms(target, data, operands, premises, integer_abi, language=language)
