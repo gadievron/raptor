@@ -24,9 +24,13 @@ _TABLE_IDS = codeql_query_ids_by_pack()
 
 @pytest.fixture(autouse=True)
 def _fresh_resolver_cache():
-    resolver.clear_cache()
-    yield
-    resolver.clear_cache()
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        resolver, {"_PACK_INDEX_CACHE": {}, "_PACK_LOCKS": {}},
+        lock=resolver._CACHE_LOCK,
+    ):
+        yield
 
 
 class TestTableIdShape:

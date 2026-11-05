@@ -14,7 +14,7 @@ import pytest
 
 import core.audit.codeql_query_resolver as resolver
 import core.audit.orchestrator as orch
-from core.audit.codeql_query_resolver import clear_cache, resolve_query_id
+from core.audit.codeql_query_resolver import resolve_query_id
 from core.audit.orchestrator import _cwe_fallback_chain
 
 
@@ -38,10 +38,19 @@ def _fake_pack(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _fresh_caches(monkeypatch):
-    clear_cache()
-    monkeypatch.setattr(orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
-    yield
-    clear_cache()
+    from contextlib import ExitStack
+
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(
+            resolver, {"_PACK_INDEX_CACHE": {}, "_PACK_LOCKS": {}},
+            lock=resolver._CACHE_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            orch, {"_CODEQL_UNSUPPORTED_IDS_LOGGED": set()},
+        ))
+        yield
 
 
 class TestResolution:

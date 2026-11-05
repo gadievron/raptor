@@ -42,9 +42,12 @@ needs_git = pytest.mark.skipif(not HAVE_GIT, reason="git not installed")
 
 @pytest.fixture(autouse=True)
 def _fresh_cache():
-    git_oracle._reset_cache()
-    yield
-    git_oracle._reset_cache()
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        git_oracle, {"_FILE_CACHE": {}}, lock=git_oracle._CACHE_LOCK,
+    ):
+        yield
 
 
 @pytest.fixture
