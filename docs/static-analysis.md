@@ -503,6 +503,11 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Imported SARIF findings and scan metrics inherit missing severity from each
+report’s referenced rule, including indexed and extension rules. CWE labels
+come from that same descriptor unless the result supplies its own CWE.
+Ambiguous or conflicting references cannot borrow another rule’s metadata.
+
 Each Semgrep pack (local + registry + extra-config) produces its own
 SARIF file. The Coccinelle stage produces one SARIF file. When CodeQL
 is enabled via `--codeql`, per-language CodeQL SARIF files are added.
@@ -510,10 +515,13 @@ is enabled via `--codeql`, per-language CodeQL SARIF files are added.
 All per-tool SARIFs are merged via `core.sarif.parser.merge_sarif()`
 into a single `combined.sarif`:
 
-- Runs are grouped by tool name.
-- Per-tool deduplication by `(ruleId, uri, startLine, endLine,
+- ID-only runs are grouped by tool name.
+- ID-only reports deduplicate by `(ruleId, uri, startLine, endLine,
   startColumn, fingerprint)` -- latest occurrence wins on collision.
-- `tool.driver.rules` are unioned across same-tool runs.
+- ID-only runs union their `tool.driver.rules` across the tool.
+- Indexed or component-qualified reports retain their owning run metadata.
+  Runs with identical metadata can combine exact duplicate reports without
+  changing rule-table positions.
 
 ### Filtering
 
