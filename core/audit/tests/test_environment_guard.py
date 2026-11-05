@@ -536,17 +536,19 @@ class TestFaultDirHintContainment:
             g.note_dispatch_failure(f"a.py:f{i}", exc)
 
     def _probed_dirs(self, monkeypatch) -> list:
-        import tempfile as _tempfile
+        from contextlib import contextmanager
+        import core.audit.environment as env_mod
 
         recorded: list = []
-        real = _tempfile.mkstemp
+        real = env_mod.temporary_text
 
+        @contextmanager
         def rec(*args: Any, **kwargs: Any):
-            if kwargs.get("dir") is not None:
-                recorded.append(Path(str(kwargs["dir"])).resolve())
-            return real(*args, **kwargs)
+            with real(*args, **kwargs) as path:
+                recorded.append(path.parent.resolve())
+                yield path
 
-        monkeypatch.setattr(_tempfile, "mkstemp", rec)
+        monkeypatch.setattr(env_mod, "temporary_text", rec)
         return recorded
 
     def test_chained_context_target_path_is_ignored(self, tmp_path):
