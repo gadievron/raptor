@@ -295,18 +295,28 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
 def _definition_line_lookup(text: str) -> Callable[[int], int]:
     """Map joined-text offsets to original lines, indexing on demand.
 
-    Each query grows the indexes only as far as needed. Stored offsets
-    remain sorted, so later queries can visit earlier positions too.
-    All state belongs to this immutable file text, never a path cache.
+    Continuation offsets grow only as far as queried. Native text uses
+    a count cursor for ordered line queries, switching to the original
+    lazy line index when cumulative rescanning exceeds a bounded budget.
+    Queries can still visit earlier positions. All state belongs to this
+    immutable file text, never a path cache.
     """
     joined_cont_offsets: list[int] = []
     line_starts = [0]
     next_continuation = -1
     next_newline = -1
     initialized = False
+    use_counts = type(text) is str
+    source_length = len(text) if use_counts else 0
+    count_budget = max(64 * 1024, source_length * 4)
+    count_work = 0
+    count_pos = 0
+    count_line = 1
+    max_count_pos = 0
 
     def lookup(joined_pos: int) -> int:
         nonlocal initialized, next_continuation, next_newline
+        nonlocal use_counts, count_work, count_pos, count_line, max_count_pos
         if not initialized:
             next_continuation = text.find("\\\n")
             next_newline = text.find("\n")
@@ -319,6 +329,31 @@ def _definition_line_lookup(text: str) -> Callable[[int], int]:
             next_continuation = text.find("\\\n", next_continuation + 2)
         extra = bisect.bisect_right(joined_cont_offsets, joined_pos)
         original_pos = joined_pos + extra
+        # Ordered passes need only a count cursor. Bound cumulative scans
+        # so repeated backward queries fall back to the original index.
+        if use_counts and type(original_pos) is int:
+            if original_pos < 0:
+                return 0
+            stop = min(original_pos, source_length)
+            if stop >= count_pos:
+                scan_start, base_line = count_pos, count_line
+            else:
+                scan_start, base_line = 0, 1
+            next_work = count_work + stop - scan_start
+            if next_work <= count_budget:
+                count_line = base_line + text.count("\n", scan_start, stop)
+                count_pos = stop
+                count_work = next_work
+                max_count_pos = max(max_count_pos, stop)
+                return count_line
+        use_counts = False
+        # Recreate the prior high-water mark before servicing unusual query
+        # types or switching modes, preserving even legacy bisect behavior.
+        if max_count_pos:
+            while next_newline >= 0 and next_newline + 1 <= max_count_pos:
+                line_starts.append(next_newline + 1)
+                next_newline = text.find("\n", next_newline + 1)
+            max_count_pos = 0
         # Likewise, no unindexed line start may precede original_pos.
         while next_newline >= 0 and next_newline + 1 <= original_pos:
             line_starts.append(next_newline + 1)
