@@ -226,7 +226,10 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
         "quarantined_to": quarantined_to,
         "pid": os.getpid(),
     }
-    line = json.dumps(record, sort_keys=True) + "\n"
+    # Each append resynchronises a predecessor left partial by an I/O
+    # failure or interrupted writer, even across processes. Keep the
+    # separator and record in one write; never retry partial fragments.
+    line = "\n" + json.dumps(record, sort_keys=True) + "\n"
     try:
         fd = os.open(
             tamper_marker_path(),
