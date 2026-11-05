@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.json import load_json
+
+from core.testing.logging_state import owned_log_handler
 from core.project.sessions import (
     _walk_session_pid as _REAL_WALK_SESSION_PID,
 )
@@ -2138,13 +2140,11 @@ class PromoteChecklistFrameGateTest(unittest.TestCase):
             cl.write_text(_json.dumps(on_disk))  # valid-stamp-then-edited
 
             records = []
+            logger = logging.getLogger("core.inventory")
             handler = logging.Handler()
             handler.emit = records.append
-            logging.getLogger("core.inventory").addHandler(handler)
-            try:
+            with owned_log_handler(logger, handler):
                 _promote_checklist(proj)
-            finally:
-                logging.getLogger("core.inventory").removeHandler(handler)
 
             # Fail-closed: the only candidate was refused — nothing
             # promoted, the planted content never reaches the project

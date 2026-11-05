@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.logging_state import owned_log_handler
+
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -77,19 +79,16 @@ class TestMainThreadGuard:
         agentic = _import_agentic()
         result: list = []
         records: list = []
+        raptor_logger = logging.getLogger("raptor")
         handler = logging.Handler()
         handler.emit = lambda r: records.append(r)
-        raptor_logger = logging.getLogger("raptor")
-        raptor_logger.addHandler(handler)
-        try:
+        with owned_log_handler(raptor_logger, handler):
             t = threading.Thread(
                 target=lambda: result.append(
                     agentic._parent_death_preexec()),
             )
             t.start()
             t.join(timeout=10)
-        finally:
-            raptor_logger.removeHandler(handler)
         assert result == [None]
         assert any("non-main thread" in r.getMessage() for r in records)
 
@@ -100,11 +99,10 @@ class TestMainThreadGuard:
         agentic = _import_agentic()
         out: list = []
         records: list = []
+        raptor_logger = logging.getLogger("raptor")
         handler = logging.Handler()
         handler.emit = lambda r: records.append(r)
-        raptor_logger = logging.getLogger("raptor")
-        raptor_logger.addHandler(handler)
-        try:
+        with owned_log_handler(raptor_logger, handler):
             t = threading.Thread(
                 target=lambda: out.append(agentic.run_command_streaming(
                     [sys.executable, "-c", _PDEATHSIG_PROBE],
@@ -113,8 +111,6 @@ class TestMainThreadGuard:
             )
             t.start()
             t.join(timeout=60)
-        finally:
-            raptor_logger.removeHandler(handler)
         assert out and out[0][0] == 0
         assert any("non-main thread" in r.getMessage() for r in records)
 

@@ -40,6 +40,7 @@ from core.sandbox import (  # noqa: E402
 from core.sandbox import (  # noqa: E402
     run as sandbox_run,
 )
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler  # noqa: E402
 from core.sandbox.tests.capability import (  # noqa: E402
     own_pid_collides_with_sandbox_pidns,
     pidns_isolation_available,
@@ -1086,6 +1087,7 @@ class TestE2EEgressProxy(unittest.TestCase):
                 )
             self.assertIn("shell=True", str(ctx.exception))
 
+    @isolated_cli_logging(logger_names=("core.sandbox.context",))
     def test_cmd_display_sanitises_control_chars_in_argv(self):
         """Filename args from a target repo reach logger.info via cmd_display.
 
@@ -1099,14 +1101,11 @@ class TestE2EEgressProxy(unittest.TestCase):
         """
         import io
         import logging
-        handler_buf = io.StringIO()
-        handler = logging.StreamHandler(handler_buf)
-        handler.setLevel(logging.DEBUG)
         ctx_logger = logging.getLogger("core.sandbox.context")
-        prior_level = ctx_logger.level
-        ctx_logger.setLevel(logging.DEBUG)
-        ctx_logger.addHandler(handler)
-        try:
+        with io.StringIO() as handler_buf, owned_log_handler(
+            ctx_logger, logging.StreamHandler(handler_buf), level=logging.DEBUG,
+        ):
+            ctx_logger.setLevel(logging.DEBUG)
             with TemporaryDirectory() as out:
                 evil = f"{out}/evil\x1b[31m_name.txt"
                 # The command will fail (file doesn't exist) but we just
@@ -1121,10 +1120,8 @@ class TestE2EEgressProxy(unittest.TestCase):
                              "cmd_display leaked a raw ESC into logger output")
             self.assertIn("\\x1b", logged,
                           "expected ESC to be escaped as \\x1b in log output")
-        finally:
-            ctx_logger.removeHandler(handler)
-            ctx_logger.setLevel(prior_level)
 
+    @isolated_cli_logging(logger_names=("core.sandbox.observe",))
     def test_asan_bug_type_sanitises_control_chars(self):
         """ASAN `bug_type` field comes from attacker-influenced stderr —
         crafted output `ERROR: AddressSanitizer: \\x1b[31mtype` would
@@ -1137,14 +1134,11 @@ class TestE2EEgressProxy(unittest.TestCase):
 
         from core.sandbox.observe import _interpret_result
 
-        handler_buf = io.StringIO()
-        handler = logging.StreamHandler(handler_buf)
-        handler.setLevel(logging.DEBUG)
         obs_logger = logging.getLogger("core.sandbox.observe")
-        prior_level = obs_logger.level
-        obs_logger.setLevel(logging.DEBUG)
-        obs_logger.addHandler(handler)
-        try:
+        with io.StringIO() as handler_buf, owned_log_handler(
+            obs_logger, logging.StreamHandler(handler_buf), level=logging.DEBUG,
+        ):
+            obs_logger.setLevel(logging.DEBUG)
             # Fake a CompletedProcess with ASAN-looking stderr that
             # contains an ESC in the bug type.
             fake = subprocess.CompletedProcess(
@@ -1159,9 +1153,6 @@ class TestE2EEgressProxy(unittest.TestCase):
             # Also check the evidence_items entry
             self.assertIn("\\x1b", fake.sandbox_info["evidence"],
                           "evidence field should have escaped the ESC")
-        finally:
-            obs_logger.removeHandler(handler)
-            obs_logger.setLevel(prior_level)
 
     def test_proxy_rejects_control_chars_in_connect_target(self):
         """Reject CONNECT targets containing control characters.
