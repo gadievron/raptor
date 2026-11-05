@@ -4,13 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SCRIPTS))
-import ci_change_scope as changes
-import dockerhub_scope as image
+with patch.object(sys, "path", sys.path.copy()), patch.dict(sys.modules):
+    sys.path.insert(0, str(SCRIPTS))
+    import ci_change_scope as changes
+    import dockerhub_scope as image
 
 
 def git(repo, *args):

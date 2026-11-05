@@ -5,15 +5,17 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("update_published_image_docs", SCRIPTS / "update_published_image_docs.py")
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-sys.path.insert(0, str(SCRIPTS))
-spec.loader.exec_module(module)
+with patch.object(sys, "path", sys.path.copy()), patch.dict(sys.modules):
+    sys.path.insert(0, str(SCRIPTS))
+    spec = importlib.util.spec_from_file_location("update_published_image_docs", SCRIPTS / "update_published_image_docs.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
 
 
 def publication(**changes):
@@ -158,3 +160,18 @@ def test_push_race_preserves_new_main_changes_and_uses_fast_forward(repo, tmp_pa
     before = command(remote, "rev-parse", "main")
     module.sync_main(repo, publication())
     assert command(remote, "rev-parse", "main") == before
+
+
+@pytest.mark.parametrize("filename", ["test_update_published_image_docs.py", "test_ci_publish_scope.py"])
+def test_test_collection_restores_import_state(filename):
+    path_object = sys.path
+    path_values = list(sys.path)
+    missing = object()
+    names = ("update_published_image_docs", "dockerhub_scope", "ci_change_scope")
+    before = {name: sys.modules.get(name, missing) for name in names}
+    loader = importlib.util.spec_from_file_location("publication_collection_probe", SCRIPTS / "tests" / filename)
+    probe = importlib.util.module_from_spec(loader)
+    loader.loader.exec_module(probe)
+    assert sys.path is path_object
+    assert sys.path == path_values
+    assert all(sys.modules.get(name, missing) is value for name, value in before.items())
