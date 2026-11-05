@@ -144,7 +144,7 @@ class TestSerialParallelEquivalence:
 
         assert _snapshot(serial) == _snapshot(parallel)
         for o in parallel.outcomes:
-            expected = "finding" if o.function in confirm else "clean"
+            expected = "finding" if o.function in confirm else "dark"
             assert o.status == expected
 
         s_recs = json.loads(
@@ -339,7 +339,7 @@ class TestSerialFallback:
         result = _result([_outcome(0), _outcome(1)])
         _run(result, _config(tmp_path), workers=1)
         assert result.outcomes[0].status == "finding"
-        assert result.outcomes[1].status == "clean"
+        assert result.outcomes[1].status == "dark"
 
     def test_single_item_takes_serial_path(self, tmp_path, monkeypatch):
         _stub_execute(monkeypatch, {"f0"})

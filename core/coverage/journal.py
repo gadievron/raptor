@@ -43,7 +43,7 @@ JOURNAL_FILENAME = "review-journal.jsonl"
 #: ``ReviewJournalEntry.clean_basis`` values — what a clean was minted
 #: from. Only the bases in :data:`CLEAN_BASIS_NOT_REUSABLE` (silence-
 #: derived, or unknown) are refused by cross-run reuse and never graded
-#: tool_backed; ``verdict`` and ``dark_verify_refuted`` stay reusable.
+#: tool_backed; only ``verdict`` stays reusable.
 CLEAN_BASIS_GATE_RESOLVED = "gate_resolved"
 CLEAN_BASIS_PROPAGATED = "propagated"
 CLEAN_BASIS_SARIF_CLEAN = "sarif_clean"
@@ -55,7 +55,7 @@ CLEAN_BASIS_VERDICT = "verdict"
 CLEAN_BASIS_UNKNOWN = "unknown"
 CLEAN_BASIS_SILENCE: frozenset[str] = frozenset({
     CLEAN_BASIS_GATE_RESOLVED, CLEAN_BASIS_PROPAGATED,
-    CLEAN_BASIS_SARIF_CLEAN,
+    CLEAN_BASIS_SARIF_CLEAN, CLEAN_BASIS_DARK_VERIFY_REFUTED,
 })
 #: Bases cross-run reuse refuses (re-review) and evidence grading never
 #: calls tool_backed: the silence-derived ones plus "unknown".

@@ -215,10 +215,9 @@ class TestProducersStampTheBasis:
         # The trusted source keeps its own (reviewed) basis.
         assert _basis(callee) is None
 
-    def test_dark_verify_refuted_clean_is_stamped(self, tmp_path,
+    def test_dark_nonreproduction_keeps_dark(self, tmp_path,
                                                   monkeypatch):
-        """Additive provenance only: the single-witness policy itself is
-        unchanged (the row still resolves clean and stays reusable)."""
+        """One failed witness prediction does not mint a clean verdict."""
         import core.audit.dark_verify as dv
 
         (tmp_path / "math_util.py").write_text(
@@ -243,8 +242,8 @@ class TestProducersStampTheBasis:
                 "args": [1, 2], "expected_exception": "OverflowError",
                 "rationale": "overflow"}),
         )
-        assert result.outcomes[0].status == "clean"
-        assert _basis(result.outcomes[0]) == "dark_verify_refuted"
+        assert result.outcomes[0].status == "dark"
+        assert _basis(result.outcomes[0]) is None
 
 
 # ------------------------------------------------------------- journal
@@ -309,8 +308,7 @@ class TestJournalCarriesTheBasis:
 
 class TestReuseRefusesSilenceDerivedCleans:
     """Cross-run verdict reuse must refuse cleans that came from tool silence
-    and send them back for review, while still reusing reviewed and
-    witness-refuted cleans. Without this, a silence-derived clean would be
+    and send them back for review, while still reusing reviewed cleans. Without this, a silence-derived clean would be
     re-imported at no cost on every run of unchanged source."""
 
     @pytest.mark.parametrize("basis, body", [
@@ -318,8 +316,9 @@ class TestReuseRefusesSilenceDerivedCleans:
         ("gate_resolved", "[suspicious-resolution: no verification "
                           "evidence]\n\n" + _PROSE),
         ("propagated", _PROSE),
+        ("dark_verify_refuted", _PROSE),
         ("gate_resolved", "short"),
-    ], ids=["gate_long", "suspicious_resolution_long", "propagated",
+    ], ids=["gate_long", "suspicious_resolution_long", "propagated", "dark_witness",
             "gate_short"])
     def test_silence_derived_clean_resurfaces(self, tmp_path, basis, body):
         """Gate-resolved and propagated cleans, short or long, must be refused
@@ -332,12 +331,11 @@ class TestReuseRefusesSilenceDerivedCleans:
         assert why == "silence_derived_clean"
         assert resurfaced
 
-    @pytest.mark.parametrize("basis", ["verdict", "dark_verify_refuted"])
+    @pytest.mark.parametrize("basis", ["verdict"])
     def test_control_reviewed_and_witness_cleans_still_reused(
         self, tmp_path, basis,
     ):
-        """Reviewed cleans and cleans refuted by an executed witness must still
-        be reused. This guards against the silence-derived refusal being so
+        """Reviewed cleans must still be reused. This guards against the silence-derived refusal being so
         broad that it forces costly re-review of trustworthy verdicts."""
         _, reused, why, resurfaced = _journal_then_fold(
             tmp_path,
@@ -351,8 +349,8 @@ class TestReuseRefusesSilenceDerivedCleans:
         """outcome_from_entry carries the basis, so the reused row's
         own re-journal never launders it into a fresh 'verdict'."""
         _, reused, _, _ = _journal_then_fold(
-            tmp_path, _clean("witness", basis="dark_verify_refuted"))
-        assert _basis(outcome_from_entry(reused)) == "dark_verify_refuted"
+            tmp_path, _clean("reviewed", basis="verdict"))
+        assert _basis(outcome_from_entry(reused)) == "verdict"
 
 
 class TestLegacyRowsFailClosed:

@@ -3129,7 +3129,7 @@ class TestRunDarkVerification:
         assert result.findings == 1
         assert result.dormant == 0
 
-    def test_refuted_witness_downgrades_to_clean(self, tmp_path):
+    def test_unreproduced_witness_keeps_dark(self, tmp_path):
         from core.audit.orchestrator import (
             OrchestratorConfig,
             _run_dark_verification,
@@ -3155,14 +3155,12 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].status == "clean"
-        assert result.clean == 1
-        assert result.dormant == 0
+        assert result.outcomes[0].status == "dark"
+        assert result.clean == 0
+        assert result.dormant == 1
 
     def test_refuted_witness_never_demotes_tool_backed_finding(self, tmp_path):
-        """Tool-backed floor: a refuted witness (one LLM-guessed input)
-        caps a verification-grade finding at suspicious — it never
-        erases an SMT/Coccinelle/Semgrep receipt to clean."""
+        """A failed sample cannot demote a verification-grade finding."""
         from core.audit.orchestrator import (
             OrchestratorConfig,
             _run_dark_verification,
@@ -3190,16 +3188,15 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].status == "suspicious"
+        assert result.outcomes[0].status == "finding"
         assert "smt:check-overflow" in result.outcomes[0].evidence_tool
-        assert "dark_verify:refuted" in result.outcomes[0].evidence_tool
-        assert result.findings == 0
-        assert result.suspicious == 1
+        assert "dark_verify:refuted" not in result.outcomes[0].evidence_tool
+        assert result.findings == 1
+        assert result.suspicious == 0
         assert result.clean == 0
 
-    def test_refuted_witness_demotes_llm_claimed_finding(self, tmp_path):
-        """llm-claimed stamps are not verification-grade — the refute
-        demotes to clean as before."""
+    def test_unreproduced_witness_keeps_llm_claimed_finding(self, tmp_path):
+        """A failed sample does not refute a model claim either."""
         from core.audit.orchestrator import (
             OrchestratorConfig,
             _run_dark_verification,
@@ -3227,10 +3224,10 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].status == "clean"
-        assert result.outcomes[0].evidence_tool == "dark_verify:refuted"
-        assert result.findings == 0
-        assert result.clean == 1
+        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].evidence_tool == "llm-claimed:smt"
+        assert result.findings == 1
+        assert result.clean == 0
 
     def test_clean_outcome_in_expanded_cwe_not_eligible(self, tmp_path):
         """The expanded CWE families carry a status filter: a clean
