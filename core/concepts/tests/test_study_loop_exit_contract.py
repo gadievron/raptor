@@ -19,6 +19,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
+import pytest
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 STUDY_LOOP = str(RAPTOR_DIR / "libexec" / "raptor-study-loop")
 
@@ -30,7 +32,10 @@ def _load_loop_module() -> ModuleType:
         "raptor_study_loop_contract", STUDY_LOOP, loader=loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+            spec.loader.exec_module(mod)
     return mod
 
 
