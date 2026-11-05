@@ -3212,32 +3212,42 @@ class IntegerNarrowingResult:
         return d
 
 
-def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
-    """Detect implicit integer narrowing without bounds checking."""
+def check_integer_narrowing(
+    source: str, *, function_name: str | None = None, language: str | None = None,
+) -> IntegerNarrowingResult:
+    """Collect narrowing candidates, optionally for one named function.
+
+    Named probes require a unique parsed definition. An unresolved scope
+    supplies no observation and cannot refute a source-level claim.
+    """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
-    is_go = any(
-        "func " in ln or "package " in ln
-        for ln in lines[:30]
-    )
-
-    if is_go:
-        result = _check_integer_narrowing_go(lines)
-        if result.narrowing_found:
-            return result
-
-    # Declarations, uses and guards must all see the same code-only view.
-    # A comment mentioning a wide variable is neither an initializer nor
-    # a range check; preserve positions for the resulting observation.
     from .source_view import sanitized_view
     from .initializer import initializer_text
     from .narrowing_guards import NarrowingGuardContext, integer_range
 
-    source = sanitized_view(source, language="c")
+    if language is None:
+        go_view = sanitized_view(source, language="go")
+        language = "go" if any(re.match(r"\s*(?:package|func)\b", line)
+                                  for line in go_view.split("\n")[:30]) else "c"
+    if language not in {"c", "cpp", "go"}:
+        return IntegerNarrowingResult(reasoning="unsupported narrowing source language")
+    source = sanitized_view(source, language=language)
+    if language == "go":
+        if function_name is not None:
+            from .probe_function_scope import go_function_scope
+            scope = go_function_scope(source, function_name)
+            if scope.status != "selected":
+                return IntegerNarrowingResult(reasoning=f"requested function scope {scope.status}")
+            source = scope.source_span(source)
+        return _check_integer_narrowing_go(source.split("\n"))
+
     lines = source.split("\n")
-    guards = NarrowingGuardContext(source)
+    guards = NarrowingGuardContext(source, language=language)
+    scope = guards.function_scope(function_name) if function_name is not None else None
+    if scope is not None and scope.status != "selected":
+        return IntegerNarrowingResult(reasoning=f"requested function scope {scope.status}")
     fallback_types = None
 
     for i, line in enumerate(lines):
@@ -3246,6 +3256,8 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
             continue
 
         for m in _NARROWING_ASSIGN_RE.finditer(line):
+            if scope is not None and not guards.in_function(i, m.end(), scope):
+                continue
             dest_type = m.group(1).strip()
             dest_var = m.group(2)
             dest_width = _type_to_width(dest_type)
