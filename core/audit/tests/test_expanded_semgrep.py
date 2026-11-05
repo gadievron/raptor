@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_state import isolated_module_state
+
 from core.audit import expanded_semgrep as es
 from core.audit import preprocessor_view as pv
 from core.audit.expanded_semgrep import (
@@ -33,8 +35,8 @@ from core.audit.tests._live_transport import (
     skip_if_expanded_view_transport_degraded,
 )
 
-pv._reset_probe_cache()
-HAVE_CPP = pv._preprocessor_for(False) is not None
+with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+    HAVE_CPP = pv._preprocessor_for(False) is not None
 HAVE_SEMGREP = shutil.which("semgrep") is not None
 
 needs_cpp = pytest.mark.skipif(
@@ -84,9 +86,8 @@ def _skip_unless_semgrep_runnable() -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
-    pv._reset_probe_cache()
-    yield
-    pv._reset_probe_cache()
+    with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+        yield
 
 
 @pytest.fixture

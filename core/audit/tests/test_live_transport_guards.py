@@ -599,12 +599,17 @@ class TestCompilerMintedIdentities:
     @pytest.fixture(autouse=True)
     def _fresh_compiler_caches(self):
         from core.audit import compiler_sweep as cs
+        from core.audit.run_memo import BoundedMemo
+        from core.testing.module_state import isolated_module_state
 
-        cs._reset_probe_cache()
-        cs._reset_tu_cache()
-        yield
-        cs._reset_probe_cache()
-        cs._reset_tu_cache()
+        with isolated_module_state(
+            cs, {
+                "_PROBE_CACHE": {},
+                "_tu_cache": BoundedMemo(cs._TU_CACHE_MAX_ENTRIES),
+                "_include_dirs_memo": BoundedMemo(cs._TU_CACHE_MAX_ENTRIES),
+            }, lock=cs._PROBE_LOCK,
+        ):
+            yield
 
     def _run_real_sweep(
         self,
@@ -1126,9 +1131,10 @@ class TestCppMintedIdentities:
 
     @pytest.fixture(autouse=True)
     def _fresh_cpp_probe_cache(self):
-        pv._reset_probe_cache()
-        yield
-        pv._reset_probe_cache()
+        from core.testing.module_state import isolated_module_state
+
+        with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+            yield
 
     def _run_real_expand(
         self,
