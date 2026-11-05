@@ -245,7 +245,7 @@ def _close_safely(fd: int) -> None:
 
 def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
     """TERM then KILL an owned child, with bounded waits for each phase."""
-    if pid <= 0:
+    if type(pid) is not int or not 0 < pid <= 0x7fffffff:
         return
     pidfd = None
     if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
@@ -270,23 +270,28 @@ def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
     try:
         for sig in (signal.SIGTERM, signal.SIGKILL):
             deadline = time.monotonic() + max(0.0, timeout_s)
-            state = finished()
-            while state is None:
-                if time.monotonic() >= deadline:
-                    logger.warning("audit cleanup: could not verify child %d", pid)
-                    return
+            for use_pidfd in ((True, False) if pidfd is not None else (False,)):
+                # Every bare-PID fallback gets a fresh ownership check after
+                # the failed pidfd call, within the same phase deadline.
                 state = finished()
-            if state:
-                return
-            try:
-                if pidfd is not None:
-                    signal.pidfd_send_signal(pidfd, sig)
-                else:
-                    os.kill(pid, sig)
-            except ProcessLookupError:
-                pass  # The wait below must still collect any terminal status.
-            except OSError as exc:
-                logger.warning("audit cleanup: child %d signal failed: %s", pid, exc)
+                while state is None:
+                    if time.monotonic() >= deadline:
+                        logger.warning("audit cleanup: could not verify child %d", pid)
+                        return
+                    state = finished()
+                if state:
+                    return
+                try:
+                    if use_pidfd:
+                        signal.pidfd_send_signal(pidfd, sig)
+                    else:
+                        os.kill(pid, sig)
+                except (AttributeError, OSError) as exc:
+                    if use_pidfd and getattr(exc, "errno", None) != errno.ESRCH:
+                        continue
+                    if getattr(exc, "errno", None) != errno.ESRCH:
+                        logger.warning("audit cleanup: child %d signal failed: %s", pid, exc)
+                break
             while True:
                 if finished():
                     return
