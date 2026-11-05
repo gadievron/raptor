@@ -59,6 +59,12 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_REGION_LOCK_PUNCT_RE = re.compile(r"[\s&()]")
+_REGION_CALL_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_REGION_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+_REGION_COMMENT_KEYWORD_RE = re.compile(r"lock|callback|reentr|deadlock", re.IGNORECASE)
+_REGION_LOCK_CALL_RE = re.compile(r"\b\w+_lock\s*\(")
+
 RULE_CALLBACK_UNDER_LOCK = "lock_region:callback-under-lock"
 DETECTION_VARIANT_SUFFIX = "-naming"
 
@@ -217,7 +223,7 @@ def _scan_lines_cached(source: str) -> tuple[str, ...]:
 
 
 def _normalize_lock_var(arg: str) -> str:
-    return re.sub(r"[\s&()]", "", arg)
+    return _REGION_LOCK_PUNCT_RE.sub("", arg)
 
 
 # ── receipts ────────────────────────────────────────────────────────
@@ -295,7 +301,7 @@ def _find_regions(
 
     stem_acquires: list[tuple[str, int, str]] = []
     for offset, text in enumerate(segment):
-        for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", text):
+        for m in _REGION_CALL_NAME_RE.finditer(text):
             name = m.group(1)
             if name in _C_KEYWORDS:
                 continue
@@ -424,7 +430,7 @@ def _registered_callback_names(source: str, vocab: Any) -> set[str]:
                 continue
             for arg in args_text.split(","):
                 arg = _strip_wrapping_parens(arg.strip())
-                if re.fullmatch(r"[A-Za-z_]\w*", arg) and \
+                if _REGION_IDENT_RE.fullmatch(arg) and \
                         arg not in _C_KEYWORDS:
                     names.add(arg)
     return names
@@ -499,7 +505,7 @@ def _in_region_invocations(
                 "line": start_line + offset,
                 "code": _code(offset),
             })
-        for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", text):
+        for m in _REGION_CALL_NAME_RE.finditer(text):
             name = m.group(1)
             if name in cancel_set:
                 cancels.append({
@@ -554,8 +560,7 @@ def _region_comment(segment: list[str], start_line: int,
     hi = region.release_line - start_line
     for offset in range(max(lo, 0), min(hi + 1, len(segment))):
         m = _COMMENT_RE.search(segment[offset])
-        if m and re.search(r"lock|callback|reentr|deadlock",
-                           m.group(1), re.IGNORECASE):
+        if m and _REGION_COMMENT_KEYWORD_RE.search(m.group(1)):
             return m.group(1).strip().rstrip("*/").strip()
     return ""
 
@@ -706,10 +711,7 @@ def _adjudicate_function(
     rel_name = un["release"]
     # Loop-invariant: the candidate's callee set does not depend on
     # the file being rescanned.
-    callee_names = set(re.findall(
-        r"\b([A-Za-z_]\w*)\s*\(",
-        "\n".join(segment),
-    )) - _C_KEYWORDS
+    callee_names = set(_REGION_CALL_NAME_RE.findall("\n".join(segment))) - _C_KEYWORDS
     rel_re = re.compile(rf"\b{re.escape(rel_name)}\s*\(")
     for other_file, other_src in sorted(source_texts.items()):
         other_lines = _lines_cached(other_src)
@@ -916,7 +918,7 @@ def run_lock_region_prepass(
             continue
         if not (
             any(a in source for a in acquire_names)
-            or re.search(r"\b\w+_lock\s*\(", source)
+            or _REGION_LOCK_CALL_RE.search(source)
         ):
             continue
         lines = split_lines(source)
@@ -934,7 +936,7 @@ def run_lock_region_prepass(
                 continue
             if not (
                 any(a in segment for a in acquire_names)
-                or re.search(r"\b\w+_lock\s*\(", segment)
+                or _REGION_LOCK_CALL_RE.search(segment)
             ):
                 continue
             telemetry["candidates"] += 1

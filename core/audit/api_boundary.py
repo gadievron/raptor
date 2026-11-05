@@ -61,6 +61,19 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_API_PARAM_ARRAY_RE = re.compile(r"\[[^\]]{0,256}\]")
+_API_DEFINITION_START_RE = re.compile(r"[A-Za-z_{]")
+_API_NULL_LITERAL_RE = re.compile(r"(?:NULL|nullptr|0)")
+_API_UNSIGNED_DECIMAL_RE = re.compile(r"\d+[uUlL]*")
+_API_NEGATIVE_DECIMAL_RE = re.compile(r"-\s*\d+[uUlL]*")
+_API_UNSIGNED_CAST_RE = re.compile(r"\(\s*(?:unsigned|size_t|uint\d+_t)\b")
+_API_INTEGER_LITERAL_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*")
+_API_SIZEOF_CALL_RE = re.compile(r"sizeof\s*\(")
+_API_GOTO_RE = re.compile(r"\bgoto\b")
+_API_LOOP_KEYWORD_RE = re.compile(r"\b(?:for|while|do)\b")
+_API_WHITESPACE_RE = re.compile(r"\s+")
+_API_ASSIGNMENT_TAIL_RE = re.compile(r"\s*=(?!=)\s*([^;,\n]*)")
+
 RULE_ID = "api_boundary:caller-contract"
 
 #: Evidence marker for a bounded-contract site whose argument is a
@@ -416,7 +429,7 @@ def _param_names_from_list(params_text: str) -> list[str]:
         # identifier as the name. The suffix window is bounded: an
         # unbounded `[^\]]*` re-scans a hostile bracket run from
         # every '[' — quadratic; a real array suffix is tiny.
-        param = re.sub(r"\[[^\]]{0,256}\]", "", param)
+        param = _API_PARAM_ARRAY_RE.sub("", param)
         idents = re.findall(_IDENT, param)
         if idents:
             names.append(idents[-1])
@@ -546,7 +559,7 @@ def _definition_extents(
     n = len(view_lines)
     i = 0
     while i < n:
-        if depths[i] != 0 or not re.match(r"[A-Za-z_{]", view_lines[i] or ""):
+        if depths[i] != 0 or not _API_DEFINITION_START_RE.match(view_lines[i] or ""):
             i += 1
             continue
         end_idx = None
@@ -1064,7 +1077,7 @@ def _check_site(
     window = site.get("window", "")
 
     if contract.kind == "null":
-        if re.fullmatch(r"(?:NULL|nullptr|0)", stripped):
+        if _API_NULL_LITERAL_RE.fullmatch(stripped):
             check.verdict = "unguarded"
             check.evidence = (
                 "literal NULL passed where the contract forbids it"
@@ -1101,19 +1114,17 @@ def _check_site(
         return check
 
     if contract.kind == "negative":
-        if re.fullmatch(r"\d+[uUlL]*", stripped):
+        if _API_UNSIGNED_DECIMAL_RE.fullmatch(stripped):
             check.verdict = "guarded"
             check.evidence = "non-negative integer literal"
             return check
-        if re.fullmatch(r"-\s*\d+[uUlL]*", stripped):
+        if _API_NEGATIVE_DECIMAL_RE.fullmatch(stripped):
             check.verdict = "unguarded"
             check.evidence = (
                 "negative literal passed where the contract forbids it"
             )
             return check
-        if _UNSIGNED_VALUED_RE.search(arg) or re.search(
-            r"\(\s*(?:unsigned|size_t|uint\d+_t)\b", arg,
-        ):
+        if _UNSIGNED_VALUED_RE.search(arg) or _API_UNSIGNED_CAST_RE.search(arg):
             check.verdict = "guarded"
             check.evidence = "unsigned-valued argument"
             return check
@@ -1149,7 +1160,7 @@ def _check_site(
         # with a constant-specific receipt, and the kind never
         # returns "unguarded" — the aggregate can refute
         # (sizeof-bounded sites) or decline, never confirm.
-        if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*", stripped):
+        if _API_INTEGER_LITERAL_RE.fullmatch(stripped):
             check.evidence = (
                 f"operand {BOUNDED_CONST_EVIDENCE_MARKER} {stripped} "
                 "— no numeric bound available to adjudicate"
@@ -1157,7 +1168,7 @@ def _check_site(
             return check
         # Tested on the raw argument: the cast-stripper reads a
         # parenthesised type operand ("sizeof(int)") as a cast.
-        if re.match(r"sizeof\s*\(", arg):
+        if _API_SIZEOF_CALL_RE.match(arg):
             check.verdict = "guarded"
             check.evidence = (
                 "sizeof-valued argument — bounded by an in-repo "
@@ -1266,12 +1277,12 @@ def _single_call_precall_risk(
             "pre-call region too large to adjudicate structurally"
         )
     after = site.get("after_window", "") or ""
-    if re.search(r"\bgoto\b", before) or re.search(r"\bgoto\b", after):
+    if _API_GOTO_RE.search(before) or _API_GOTO_RE.search(after):
         return (
             "goto in the enclosing definition — the call may execute "
             "more than once"
         )
-    if re.search(r"\b(?:for|while|do)\b", before):
+    if _API_LOOP_KEYWORD_RE.search(before):
         return (
             "loop construct before the call — the call may execute "
             "more than once"
@@ -1337,7 +1348,7 @@ def _check_single_call_site(
     # Confirm lane: exact-argument re-pass to the same callee.  Runs
     # on the visible (possibly truncated) prefix — a straight-line
     # re-pass found before any truncation point is real.
-    arg_norm = re.sub(r"\s+", "", arg)
+    arg_norm = _API_WHITESPACE_RE.sub("", arg)
     if callee and arg_norm:
         for rm in re.finditer(
             rf"(?<![\w.>]){re.escape(callee)}\s*\(", after,
@@ -1347,7 +1358,7 @@ def _check_single_call_site(
             if inner is None:
                 continue
             re_args = [
-                re.sub(r"\s+", "", a) for a in _split_top_level(inner)
+                _API_WHITESPACE_RE.sub("", a) for a in _split_top_level(inner)
             ]
             if arg_norm not in re_args:
                 continue
@@ -1417,7 +1428,7 @@ def _check_single_call_site(
         )
         return check
     occ_tail = after[occ.end():]
-    assign = re.match(r"\s*=(?!=)\s*([^;,\n]*)", occ_tail)
+    assign = _API_ASSIGNMENT_TAIL_RE.match(occ_tail)
     if assign:
         risk = _single_call_precall_risk(site, base) if complete else None
         if risk:
@@ -1427,7 +1438,7 @@ def _check_single_call_site(
         check.verdict = "guarded"
         if not complete:
             check.grade = "lexical"
-        if re.fullmatch(r"(?:NULL|nullptr|0)", rhs):
+        if _API_NULL_LITERAL_RE.fullmatch(rhs):
             check.evidence = (
                 f"{base} nulled immediately after the call "
                 f"({base} = {rhs})"

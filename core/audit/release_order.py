@@ -58,6 +58,9 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_RELEASE_DEST_ARG_RE = re.compile(r"[&*(]*\s*([A-Za-z_]\w*)")
+_RELEASE_HEADER_PARAM_RE = re.compile(r"[\w\*\s]\b([A-Za-z_]\w*)\s*[,)]")
+
 RULE_RELEASE_BEFORE_VERIFY = "release_order:release-before-verify"
 
 DETECTION_VARIANT_SUFFIX = "-naming"
@@ -363,7 +366,7 @@ def _dest_arg_base(code: str, callee: str) -> str:
     pos = _DEST_ARG_POSITION.get(callee, 1)
     if len(args) < pos:
         return ""
-    m2 = re.match(r"[&*(]*\s*([A-Za-z_]\w*)", args[pos - 1].strip())
+    m2 = _RELEASE_DEST_ARG_RE.match(args[pos - 1].strip())
     return m2.group(1) if m2 else ""
 
 
@@ -635,8 +638,7 @@ def _adjudicate_function(
         cfg = None
     if not params:
         header = segment_lines[0] if segment_lines else ""
-        params = tuple(re.findall(r"[\w\*\s]\b([A-Za-z_]\w*)\s*[,)]",
-                                  header))
+        params = tuple(_RELEASE_HEADER_PARAM_RE.findall(header))
 
     release_sites: list[dict[str, Any]] = []
     internal_sites: list[dict[str, Any]] = []

@@ -34,6 +34,8 @@ from core.source.lines import join_lf_slice
 
 logger = logging.getLogger(__name__)
 
+_AUTH_NULL_RETURN_RE = re.compile(r"\breturn\s+null\s*;")
+
 _SYNC_RE = re.compile(r"^\s*synchronized\s*[({]")
 # record binding from a keyed collection inside the block
 # \b-pinned to a word start: unanchored, a bare `\w+` re-scans a
@@ -150,7 +152,7 @@ def _nullable_getters(file_source: str) -> set[str]:
         # crude body scan: from the decl to the next top-level-ish
         # closing brace, look for a bare `return null`
         tail = file_source[m.end():m.end() + 4000]
-        if re.search(r"\breturn\s+null\s*;", tail.split("\n    }")[0]):
+        if _AUTH_NULL_RETURN_RE.search(tail.split("\n    }")[0]):
             out.add(m.group("name"))
     return out
 

@@ -108,6 +108,10 @@ from core.source import read_text_capped
 
 logger = logging.getLogger(__name__)
 
+_MACRO_DEFINE_NAME_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)")
+_MACRO_ASCII_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_MACRO_FUNCTION_DIRECTIVE_RE = re.compile(r"^[^\S\n]*#", re.MULTILINE)
+
 # ---------------------------------------------------------------------------
 # Caps.  Exceeding any of them refuses the proof.
 # ---------------------------------------------------------------------------
@@ -326,7 +330,7 @@ def _join_continuations(text: str) -> list[str]:
 def _parse_define(rest: str, path: str) -> MacroDef | None:
     """Parse the text after ``#define``.  None = unparseable (the name,
     if extractable, is poisoned by the caller)."""
-    m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", rest)
+    m = _MACRO_DEFINE_NAME_RE.match(rest)
     if m is None:
         return None
     name = m.group(1)
@@ -354,7 +358,7 @@ def _parse_define(rest: str, path: str) -> MacroDef | None:
                 continue
             if p == "...":
                 variadic = True
-            elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", p):
+            elif _MACRO_ASCII_IDENT_RE.fullmatch(p):
                 plist.append(p)
             else:
                 # GNU named variadics and anything fancier are
@@ -481,7 +485,7 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
             if directive == "define":
                 parsed = _parse_define(rest, str(path))
                 if parsed is None:
-                    nm = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", rest)
+                    nm = _MACRO_DEFINE_NAME_RE.match(rest)
                     if nm is not None:
                         # Unparseable definition: poison the name so
                         # any invocation refuses.
@@ -1981,11 +1985,11 @@ def check_definite_assignment(
             proven=False, variable=variable, reason=reason, **extra,
         )
 
-    if not variable or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable):
+    if not variable or not _MACRO_ASCII_IDENT_RE.fullmatch(variable):
         return refusal(f"not a C identifier: {variable!r}")
     if not func_source or len(func_source) > _MAX_SOURCE_BYTES:
         return refusal("function source empty or too large")
-    if re.search(r"^[^\S\n]*#", func_source, re.MULTILINE):
+    if _MACRO_FUNCTION_DIRECTIVE_RE.search(func_source):
         return refusal(
             "preprocessor directive inside the function source"
         )

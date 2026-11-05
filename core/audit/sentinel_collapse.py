@@ -28,6 +28,11 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_SENTINEL_PY_DEF_RE = re.compile(r"\s*(?:async\s+)?def\s+(\w+)\s*\(")
+_SENTINEL_GO_DEF_RE = re.compile(r"\s*func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(")
+_SENTINEL_GO_NIL_PAIR_RE = re.compile(r"return\s+nil\s*,\s*nil\b")
+_SENTINEL_PY_INDENT_DEF_RE = re.compile(r"(\s*)(?:async\s+)?def\s+(\w+)\s*\(")
+
 
 @dataclass
 class SentinelCollapse:
@@ -88,7 +93,7 @@ def _detect_falsy_coercion(
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
-        func_match = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", line)
+        func_match = _SENTINEL_PY_DEF_RE.match(line)
         if func_match:
             current_func = func_match.group(1)
             continue
@@ -200,7 +205,7 @@ def _detect_cache_sentinel(
             ))
 
     for lineno, line in enumerate(lines, 1):
-        func_match = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", line)
+        func_match = _SENTINEL_PY_DEF_RE.match(line)
         if func_match:
             _flush()
             current_func = func_match.group(1)
@@ -274,7 +279,7 @@ def _detect_go_sentinel(
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
-        fm = re.match(r"\s*func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(", line)
+        fm = _SENTINEL_GO_DEF_RE.match(line)
         if fm:
             current_func = fm.group(1)
             continue
@@ -303,7 +308,7 @@ def _detect_go_sentinel(
     if ts_returns is None:
         func_starts: list[tuple[str, int]] = []
         for lineno_0, line in enumerate(lines):
-            fm = re.match(r"\s*func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(", line)
+            fm = _SENTINEL_GO_DEF_RE.match(line)
             if fm:
                 func_starts.append((fm.group(1), lineno_0))
 
@@ -312,9 +317,7 @@ def _detect_go_sentinel(
             body = "\n".join(lines[start:end])
 
             nil_on_err = bool(_GO_NIL_RETURN_ON_ERR.search(body))
-            nil_on_success = bool(re.search(
-                r"return\s+nil\s*,\s*nil\b", body,
-            ))
+            nil_on_success = bool(_SENTINEL_GO_NIL_PAIR_RE.search(body))
             if nil_on_err and nil_on_success:
                 results.append(SentinelCollapse(
                     file=path,
@@ -652,7 +655,7 @@ def _find_coercion_of_call(
     caller_indent = 0
 
     for lineno_0, line in enumerate(lines):
-        fm = re.match(r"(\s*)(?:async\s+)?def\s+(\w+)\s*\(", line)
+        fm = _SENTINEL_PY_INDENT_DEF_RE.match(line)
         if fm:
             if fm.group(2) == caller_name:
                 in_caller = True

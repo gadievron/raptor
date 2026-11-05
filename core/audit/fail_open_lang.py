@@ -85,6 +85,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_FAIL_OPEN_PRINT_CALL_RE = re.compile(r"print\(")
+_FAIL_OPEN_VOID_CAST_RE = re.compile(r"\(\s*void\s*\)")
+_FAIL_OPEN_GO_NAME_RE = re.compile(r"[A-Za-z_][\w.]*")
+_FAIL_OPEN_GO_ERROR_RE = re.compile(r"\berror\b")
+_FAIL_OPEN_JS_NAME_RE = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
+_FAIL_OPEN_PROMISE_RE = re.compile(r"\bnew\s+Promise\s*\(")
+_FAIL_OPEN_RUST_RESULT_RE = re.compile(r"\bResult\b")
+
 # Languages with an analyzer. Phase 3 added JS/TS and Rust; phase 4
 # adds Kotlin, C# and Swift.
 SUPPORTED_LANGUAGES = frozenset({
@@ -340,7 +348,7 @@ def _classify_python_handler(
         # census drops these as "not silent" — the channel gates them
         # to undecided rather than calling them fail-closed.
         return OUTCOME_FALLBACK_ACTION, "loud-log-and-continue"
-    if re.search(r"print\(", src_seg) or "sys.stderr" in src_seg:
+    if _FAIL_OPEN_PRINT_CALL_RE.search(src_seg) or "sys.stderr" in src_seg:
         return OUTCOME_FALLBACK_ACTION, "prints-and-continues"
 
     if all(isinstance(s, ast.Pass) for s in body):
@@ -616,7 +624,7 @@ def _classify_ignored_return_site(
         t = cur.type
         if t == "cast_expression":
             cast_text = _ts_node_text(cur, src)
-            if re.match(r"\(\s*void\s*\)", cast_text):
+            if _FAIL_OPEN_VOID_CAST_RE.match(cast_text):
                 through_void_cast = True
             cur = cur.parent
             continue
@@ -1432,7 +1440,7 @@ def _go_call_index(root, src: bytes) -> list[tuple[int, str]]:
         if cur.type == "call_expression":
             name = _call_name(cur, src)
             if name and name != "recover" \
-                    and re.fullmatch(r"[A-Za-z_][\w.]*", name):
+                    and _FAIL_OPEN_GO_NAME_RE.fullmatch(name):
                 calls.append((cur.start_byte, name))
         stack.extend(cur.children)
     calls.sort()
@@ -1751,9 +1759,7 @@ def go_function_returns_error(source: str, function_name: str) -> bool:
                 result = node.child_by_field_name("result")
                 if result is None:
                     return False
-                return bool(re.search(
-                    r"\berror\b", _ts_node_text(result, src),
-                ))
+                return bool(_FAIL_OPEN_GO_ERROR_RE.search(_ts_node_text(result, src)))
             return False
         except Exception:
             logger.debug("fail_open_lang: go signature scan failed",
@@ -1845,8 +1851,7 @@ def _js_calls_in(node, src: bytes) -> list[str]:
                 "function") or cur.child_by_field_name("constructor")
             if fn is not None:
                 name = _ts_node_text(fn, src)
-                if re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*",
-                                name):
+                if _FAIL_OPEN_JS_NAME_RE.fullmatch(name):
                     calls.append(name)
         stack.extend(cur.children)
     return calls
@@ -1864,8 +1869,7 @@ def _js_call_index(root, src: bytes) -> list[tuple[int, str]]:
                 "function") or cur.child_by_field_name("constructor")
             if fn is not None:
                 name = _ts_node_text(fn, src)
-                if re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*",
-                                name):
+                if _FAIL_OPEN_JS_NAME_RE.fullmatch(name):
                     calls.append((cur.start_byte, name))
         stack.extend(cur.children)
     calls.sort()
@@ -2150,8 +2154,7 @@ def js_handlers(
             fn = receiver.child_by_field_name("function")
             if fn is not None:
                 name = _ts_node_text(fn, src)
-                if re.fullmatch(
-                        r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", name):
+                if _FAIL_OPEN_JS_NAME_RE.fullmatch(name):
                     receiver_calls.insert(0, name)
         line = _line_of(node)
         span = (
@@ -2279,8 +2282,7 @@ def js_function_returns_promise(
                                  and _ts_node_text(c, src) == "async")
            for c in node.children):
         return True
-    return bool(re.search(r"\bnew\s+Promise\s*\(",
-                          _ts_node_text(node, src)))
+    return bool(_FAIL_OPEN_PROMISE_RE.search(_ts_node_text(node, src)))
 
 
 def _js_call_tail(name: str) -> str:
@@ -2713,7 +2715,7 @@ def rust_function_returns_result(
             ret = node.child_by_field_name("return_type")
             if ret is None:
                 return False
-            return bool(re.search(r"\bResult\b", _ts_node_text(ret, src)))
+            return bool(_FAIL_OPEN_RUST_RESULT_RE.search(_ts_node_text(ret, src)))
         except Exception:
             logger.debug("fail_open_lang: rust signature scan failed",
                          exc_info=True)
