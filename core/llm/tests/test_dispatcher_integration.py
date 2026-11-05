@@ -11,7 +11,8 @@ The full subprocess-end-to-end is exercised in
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import contextmanager, ExitStack
+import errno
 import http.server
 import json
 import os
@@ -106,6 +107,41 @@ def _wired_dispatcher(creds, tmp_path, provider: str, upstream: _CaptiveUpstream
         return d
 
 
+@contextmanager
+def _worker_session(dispatcher, *, label):
+    """Own an in-process worker's token FD, environment and cached token."""
+    from core.llm.dispatcher import client
+
+    with ExitStack() as cleanup:
+        _, fd = dispatcher.allocate_worker(label=label)
+        identity = None
+
+        def close_unread_token():
+            # read_token() normally consumes and closes the descriptor. If
+            # another resource has reused its number, that resource is not
+            # ours. Before the initial fstat succeeds no consumer has run.
+            if identity is None:
+                os.close(fd)
+                return
+            try:
+                current = os.fstat(fd)
+            except OSError as exc:
+                if exc.errno != errno.EBADF:
+                    raise
+            else:
+                if (current.st_dev, current.st_ino) == identity:
+                    os.close(fd)
+
+        cleanup.callback(close_unread_token)
+        stat = os.fstat(fd)
+        identity = (stat.st_dev, stat.st_ino)
+        with pytest.MonkeyPatch.context() as session:
+            session.setenv("RAPTOR_LLM_SOCKET", str(dispatcher.socket_path))
+            session.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
+            session.setattr(client, "_cached_token", None)
+            yield
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher-route selection at provider __init__
 # ---------------------------------------------------------------------------
@@ -126,14 +162,7 @@ class TestProviderRouteSelection:
             cleanup.callback(upstream.shutdown)
             d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
             cleanup.callback(d.shutdown)
-            _, fd = d.allocate_worker(label="ant-init")
-            monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-            monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
-
-            # Reset the worker-side token cache so this test sees the
-            # fresh FD instead of one from a previous test.
-            from core.llm.dispatcher import client as _client
-            _client._cached_token = None
+            cleanup.enter_context(_worker_session(d, label='ant-init'))
 
             from core.llm.providers import AnthropicProvider
             cfg = ModelConfig(provider="anthropic", model_name="claude-3-haiku-20240307")
@@ -170,11 +199,7 @@ class TestProviderRouteSelection:
             cleanup.callback(upstream.shutdown)
             d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
             cleanup.callback(d.shutdown)
-            _, fd = d.allocate_worker(label="oai-init")
-            monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-            monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
-            from core.llm.dispatcher import client as _client
-            _client._cached_token = None
+            cleanup.enter_context(_worker_session(d, label='oai-init'))
 
             from core.llm.providers import OpenAICompatibleProvider
             cfg = ModelConfig(provider="openai", model_name="gpt-5")
@@ -196,11 +221,7 @@ class TestProviderRouteSelection:
             cleanup.callback(upstream.shutdown)
             d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
             cleanup.callback(d.shutdown)
-            _, fd = d.allocate_worker(label="ollama-init")
-            monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-            monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
-            from core.llm.dispatcher import client as _client
-            _client._cached_token = None
+            cleanup.enter_context(_worker_session(d, label='ollama-init'))
 
             from core.llm.providers import OpenAICompatibleProvider
             cfg = ModelConfig(
@@ -223,11 +244,7 @@ class TestProviderRouteSelection:
             cleanup.callback(upstream.shutdown)
             d = _wired_dispatcher(fake_creds, tmp_path, "gemini", upstream)
             cleanup.callback(d.shutdown)
-            _, fd = d.allocate_worker(label="gem-init")
-            monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-            monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
-            from core.llm.dispatcher import client as _client
-            _client._cached_token = None
+            cleanup.enter_context(_worker_session(d, label='gem-init'))
 
             from core.llm.providers import GeminiProvider
             cfg = ModelConfig(provider="gemini", model_name="gemini-2.5-pro")
@@ -262,12 +279,10 @@ class TestGrandchildRelay:
             audit_path=tmp_path / "audit.jsonl",
             token_ttl_s=60, token_budget=10,
         )
-        try:
-            _, parent_fd = d.allocate_worker(label="parent")
-            monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-            monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(parent_fd))
+        with ExitStack() as cleanup:
+            cleanup.callback(d.shutdown)
+            cleanup.enter_context(_worker_session(d, label='parent'))
             from core.llm.dispatcher import client as _client
-            _client._cached_token = None
 
             # Parent reads its own token via the cache (simulates
             # what AnthropicProvider did at startup).
@@ -288,8 +303,6 @@ class TestGrandchildRelay:
                     os.close(child_fd)
                 except OSError:
                     pass
-        finally:
-            d.shutdown()
 
     def test_grandchild_subprocess_uses_relayed_session(
         self, fake_creds, tmp_path,
