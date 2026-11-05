@@ -768,3 +768,70 @@ def test_merge_restarts_identity_after_a_partial_stream_depth_failure(monkeypatc
     # retain two runs. Both complete identities must still coalesce.
     assert len(merged['runs']) == 1
     assert merged['runs'][0]['results'] == report['runs'][0]['results']
+
+
+@pytest.mark.parametrize('qualified', [False, True])
+def test_merge_releases_input_documents_before_loading_the_next(monkeypatch, qualified):
+    import weakref
+    import core.sarif.parser as parser
+
+    class Tracked(dict):
+        pass
+
+    inputs = []
+    latest = []
+
+    def load(path):
+        for document_ref, run_ref in inputs:
+            assert document_ref() is None, 'previous input survived into the next read'
+            assert run_ref() is None, 'previous raw run survived into the next read'
+        result = Tracked(ruleId='rule', message={'text': 'finding'})
+        if qualified:
+            result['ruleIndex'] = 0
+        run = Tracked(tool={'driver': {'name': 'CodeQL', 'rules': [{'id': 'rule'}]}}, results=[result])
+        document = Tracked(runs=[run])
+        inputs.append((weakref.ref(document), weakref.ref(run)))
+        latest.append(weakref.ref(result))
+        return document
+
+    monkeypatch.setattr(parser, 'load_sarif', load)
+    merged = parser.merge_sarif(['first.sarif', 'second.sarif', 'third.sarif'])
+    assert all(document() is None and run() is None for document, run in inputs)
+    assert len(merged['runs']) == 1
+    assert merged['runs'][0]['results'] == [latest[-1]()]
+    assert all(result() is None for result in latest[:-1])
+
+
+def test_merge_releases_unused_duplicate_metadata_but_keeps_the_owned_table(monkeypatch):
+    import weakref
+    import core.sarif.parser as parser
+
+    class Tracked(dict):
+        pass
+
+    rules = []
+
+    def load(path):
+        if len(rules) >= 2:
+            assert rules[0]() is not None, 'retained context lost its rule table'
+            assert rules[-1]() is None, 'unused duplicate rule table survived into the next read'
+        rule = Tracked(id='rule')
+        rules.append(weakref.ref(rule))
+        return {'runs': [{'tool': {'driver': {'name': 'CodeQL', 'rules': [rule]}},
+                          'results': [{'ruleId': 'rule', 'ruleIndex': 0, 'message': {'text': 'finding'}}]}]}
+
+    monkeypatch.setattr(parser, 'load_sarif', load)
+    merged = parser.merge_sarif(['first.sarif', 'second.sarif', 'third.sarif'])
+    assert merged['runs'][0]['tool']['driver']['rules'][0] is rules[0]()
+    assert all(rule() is None for rule in rules[1:])
+
+
+def test_empty_inputs_between_reports_do_not_reset_accumulated_findings(monkeypatch):
+    import core.sarif.parser as parser
+
+    result = {'ruleId': 'rule', 'message': {'text': 'finding'}}
+    valid = {'runs': [{'tool': {'driver': {'name': 'tool'}}, 'results': [result]}]}
+    documents = {'first': valid, 'empty': {'runs': []}, 'missing': None, 'last': valid}
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: documents[str(path)])
+    merged = parser.merge_sarif(['missing', 'first', 'empty', 'missing', 'last', 'empty'])
+    assert merged['runs'][0]['results'] == [result]
