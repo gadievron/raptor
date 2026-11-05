@@ -361,7 +361,7 @@ def registered_spelling_role(part: str) -> str | None:
 # whole namespace is detection-grade by the channels' own
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
-    "check-overflow", "check-oob", "check-null-deref",
+    "check-overflow", "check-oob",
 )
 _SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
     "invariant-preservation", "check-overflow-to-oob",

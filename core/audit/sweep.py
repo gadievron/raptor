@@ -2216,7 +2216,8 @@ _SMT_VERB_ROLES = {
     "invariant-preservation": "detection",
     "check-overflow": "verification",
     "check-oob": "verification",
-    "check-null-deref": "verification",
+    # A free pointer variable equaling zero does not establish a source dereference.
+    "check-null-deref": "detection",
     "check-overflow-to-oob": "detection",
     "check-negative-bypass": "detection",
     "validate-path": "detection",
