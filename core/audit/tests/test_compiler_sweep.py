@@ -1701,7 +1701,7 @@ def _clang_pp(tu: Path, *, cwd: Path | None = None,
     tu_arg = str(tu) if cwd is None else os.path.relpath(tu, cwd)
     proc = subprocess.run(
         [cc, "-E", "-D__clang_analyzer__=1", *inc, tu_arg],
-        capture_output=True, text=True, cwd=cwd, check=False,
+        capture_output=True, text=True, cwd=cwd, check=False, timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
@@ -1746,6 +1746,7 @@ class TestLayer2PresumedNames:
         ('#line 1 "../../x.c"', True), ('#line 1 "../x.c"', False),
         ('# 1 "../../x.c"', True),
     ])
+    @pytest.mark.slow
     def test_source_line_from_nested_tu(self, tmp_path, line, escapes):
         tu = _write(tmp_path, "tgt/sub/t.c", f"{line}\n{_NULL_FN}")
         _write(tmp_path, "tgt/x.c", "")
@@ -1757,6 +1758,7 @@ class TestLayer2PresumedNames:
         else:
             assert _clean(got), got
 
+    @pytest.mark.slow
     def test_header_authored_line_with_directories(self, tmp_path):
         target = tmp_path / "tgt"
         _write(target, "inc/h.h",
@@ -1769,6 +1771,7 @@ class TestLayer2PresumedNames:
         assert _clean(compiler_sweep._closure_suppression_witness(
             _clang_pp(tu), target, tu))
 
+    @pytest.mark.slow
     def test_symlink_escape_is_unvetted(self, tmp_path):
         target = tmp_path / "tgt"
         (tmp_path / "outside").mkdir()
@@ -1779,6 +1782,7 @@ class TestLayer2PresumedNames:
             _clang_pp(tu), target, tu)
         assert not w and "link/x.c" in fail
 
+    @pytest.mark.slow
     def test_symlinked_target_root_stays_vetted(self, tmp_path):
         real = tmp_path / "real"
         tu_real = _write(real, "t.c", f'#line 1 "x.c"\n{_NULL_FN}')
@@ -1790,6 +1794,7 @@ class TestLayer2PresumedNames:
             _clang_pp(tu), target, tu))
 
     @pytest.mark.parametrize("inside", [False, True])
+    @pytest.mark.slow
     def test_symlinked_tu_fails_closed(self, tmp_path, inside):
         # A TU that is itself a symlink (to a file outside the tree, or
         # inside it) cannot be read by the capped, no-follow reader:
@@ -1807,6 +1812,7 @@ class TestLayer2PresumedNames:
     @pytest.mark.parametrize("name", [
         r"C:\\x\\t.c", r"\\\\srv\\share\\t.c", "C:t.c", r"dir\\t.c",
     ])
+    @pytest.mark.slow
     def test_windows_like_names_are_unvetted(self, tmp_path, name):
         tu = _write(tmp_path, "t.c", f'#line 1 "{name}"\n{_NULL_FN}')
         w, fail = compiler_sweep._closure_suppression_witness(
@@ -1831,6 +1837,7 @@ class TestLayer2PresumedNames:
             pp, tmp_path, tu)
         assert not w and "unresolvable" in fail
 
+    @pytest.mark.slow
     def test_cwd_relative_include_marker_resolving_to_wrong_file(
         self, tmp_path, monkeypatch,
     ):
@@ -1853,6 +1860,7 @@ class TestLayer2PresumedNames:
         w, fail = compiler_sweep._closure_suppression_witness(pp, target, tu)
         assert not w and "relative include marker" in fail, (w, fail)
 
+    @pytest.mark.slow
     def test_cwd_relative_include_unreadable_keeps_base_failure(
         self, tmp_path, monkeypatch,
     ):
@@ -1865,6 +1873,7 @@ class TestLayer2PresumedNames:
             pp, target, tu) == ("", "closure file inc/h.h unreadable")
 
     @pytest.mark.parametrize("lead", ["\u00a0", "\u2028", "\u3000"])
+    @pytest.mark.slow
     def test_unicode_led_line_directive_unvetted(self, tmp_path, lead):
         tu = _write(tmp_path, "t.c",
                     f'{lead}#line 1 "/usr/include/zz.h"\n{_NULL_FN}')
@@ -2061,6 +2070,7 @@ class TestLayer2AttributeScan:
         "#define P(x) _Pragma(#x)\n__attribute__((aligned(sizeof(int)) "
         "P(clang diagnostic push),\n  suppress)) " + _NULL_FN,
     ])
+    @pytest.mark.slow
     def test_preprocessed_path_real_clang(self, tmp_path, src):
         tu = _write(tmp_path, "t.c", src)
         pp = _clang_pp(tu)
@@ -2068,6 +2078,7 @@ class TestLayer2AttributeScan:
         assert w or fail, pp
 
     @needs_clang
+    @pytest.mark.slow
     def test_token_pasted_name_needs_the_pp_path(self, tmp_path):
         src = ("#define CAT(a,b) a##b\n__attribute__((aligned(sizeof(int)),\n"
                "  CAT(sup,press))) " + _NULL_FN)
@@ -3132,6 +3143,7 @@ class TestWitnessSnippetDirectives:
         assert w == "[[gnu::cold, #include <stdbool.h> clang::suppress", w
 
     @needs_clang
+    @pytest.mark.slow
     def test_real_clang_include_inside_list(self, tmp_path):
         tu = _write(tmp_path, "leak2.c",
                     "#define S suppress\n[[gnu::aligned(sizeof(int)),\n"
