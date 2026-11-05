@@ -38,8 +38,8 @@ accepted:
   is re-enumerated immediately before the swap — a shard that
   appeared (an appender rolling to the next number lands on a name
   pass 2 would otherwise rename over), vanished, or moved size
-  refuses with nothing replaced. What remains unguarded is the swap
-  itself (see the crash window below).
+  refuses with nothing replaced. Ordinary swap failures restore the original trail; process death
+  during the swap still requires the recovery described below.
 
 Crash window: between moving the originals to their backups and
 renaming the new shards into place, the trail lives only in the
@@ -108,18 +108,18 @@ def _backup_path(shard_path: Path) -> Path:
     """First free ``.pre-rotate`` name — an existing backup is never
     overwritten (it may be the only copy of a previous generation)."""
     base = shard_path.with_name(shard_path.name + _BACKUP_SUFFIX)
-    if not base.exists():
+    if not os.path.lexists(base):
         return base
     n = 2
     while True:
         candidate = base.with_name(f"{base.name}.{n}")
-        if not candidate.exists():
+        if not os.path.lexists(candidate):
             return candidate
         n += 1
 
 
-def _shard_snapshot(out_dir: Path) -> dict[Path, int]:
-    """Sizes of the contiguous shard set's on-disk entries.
+def _shard_snapshot(out_dir: Path) -> dict[Path, tuple[int, int, int, int, int]]:
+    """Identity, size, and timestamps of the contiguous shard set's on-disk entries.
 
     ``lstat``-based: the writer only ever creates regular files at
     shard names, so anything else there (a symlink pointed at a file
@@ -128,7 +128,7 @@ def _shard_snapshot(out_dir: Path) -> dict[Path, int]:
     loudly, never followed. Raises :class:`RotateRefused`; entries
     that do not exist are simply absent from the snapshot.
     """
-    snapshot: dict[Path, int] = {}
+    snapshot: dict[Path, tuple[int, int, int, int, int]] = {}
     for p in audit_log_paths(out_dir):
         try:
             st = os.lstat(p)
@@ -141,11 +141,23 @@ def _shard_snapshot(out_dir: Path) -> dict[Path, int]:
                 "trail name?) — nothing was modified. Remove it and "
                 "retry."
             )
-        snapshot[p] = st.st_size
+        snapshot[p] = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
     return snapshot
 
 
 def rotate_audit_log(out_dir: Path) -> RotateStats:
+    """Serialize rotations; the live-run gate still excludes active writers."""
+    from core.atomic_fs.fs_lock import artifact_lock
+
+    out_dir = Path(out_dir)
+    if not out_dir.exists():
+        return _rotate_audit_log(out_dir)
+    with artifact_lock(out_dir / ".audit-log-rotate", required=True,
+                       create_parent=False, subject="audit log rotation"):
+        return _rotate_audit_log(out_dir)
+
+
+def _rotate_audit_log(out_dir: Path) -> RotateStats:
     """Re-split the audit-log trail at *out_dir* so every shard ends
     at most one line past the writer's roll threshold — under the
     per-shard read budget with the threshold's margin, unless a
@@ -173,7 +185,8 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
         raise RotateRefused(detail) from exc
 
     all_paths = audit_log_paths(out_dir)
-    sizes = _shard_snapshot(out_dir)
+    snapshot = _shard_snapshot(out_dir)
+    sizes = {p: signature[2] for p, signature in snapshot.items()}
     existing = list(sizes)
     orphans = tuple(_audit_log_orphan_names(out_dir, len(all_paths)))
     total = sum(sizes.values())
@@ -209,9 +222,25 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
             tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
             0o644,
         )
-        current = os.fdopen(fd, "wb")
-        current_size = 0
         temps.append(tmp)
+        try:
+            current = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        current_size = 0
+
+    def _cleanup() -> None:
+        if current is not None:
+            try:
+                current.close()
+            except BaseException:
+                logger.warning("Cannot close rotation temporary", exc_info=True)
+        for tmp in temps:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Cannot remove rotation temporary %s", tmp, exc_info=True)
 
     try:
         _open_next()
@@ -232,7 +261,12 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
                     f"{src.name} without following links ({exc}) — "
                     "nothing was replaced."
                 ) from exc
-            with os.fdopen(src_fd, "rb") as fh:
+            try:
+                source_stream = os.fdopen(src_fd, "rb")
+            except BaseException:
+                os.close(src_fd)
+                raise
+            with source_stream as fh:
                 while True:
                     chunk = fh.readline(_CHUNK_BYTES)
                     if not chunk:
@@ -263,10 +297,7 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
         # but surface an actionable refusal instead of a raw
         # traceback; the stale file is left for inspection — it must
         # never be silently absorbed or deleted.
-        if current is not None:
-            current.close()
-        for tmp in temps:
-            tmp.unlink(missing_ok=True)
+        _cleanup()
         raise RotateRefused(
             f"rotate at {out_dir}: a stale temp file from an "
             f"interrupted rotate is in the way ({exc.filename}). "
@@ -274,66 +305,81 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
             f"{_TMP_PREFIX}* file(s), then retry."
         ) from exc
     except BaseException:
-        if current is not None:
-            current.close()
-        for tmp in temps:
-            tmp.unlink(missing_ok=True)
+        _cleanup()
         raise
 
-    # EVERY resulting shard is checked, not just the final one: the
-    # absorb arm can only overfill the last temp, but a single line
-    # bigger than the budget's margin over the roll threshold pins
-    # whichever shard it lands in over the budget.
-    over_budget = tuple(
-        _audit_log_shard_name(i + 1)
-        for i, tmp in enumerate(temps)
-        if tmp.stat().st_size > _AUDIT_LOG_MAX_BYTES
-    )
-
-    # Byte reconciliation BEFORE any original moves: a rewrite that
-    # cannot prove it copied every byte must not replace anything.
-    if written != total:
-        for tmp in temps:
-            tmp.unlink(missing_ok=True)
-        raise RotateRefused(
-            f"rotate at {out_dir}: byte accounting mismatch "
-            f"(read {total}, wrote {written}) — a shard changed size "
-            "mid-rewrite (concurrent appender?). Nothing was "
-            "replaced; stop the writer and retry."
-        )
-
-    # ── pre-swap recheck ────────────────────────────────────────────
-    # The reconciliation above accounts only the SNAPSHOT files. A
-    # concurrent appender that ROLLED to a fresh shard (the trail's
-    # last shard is past the roll threshold — that is why rotate is
-    # running — so a racing append resolves to the next number) is
-    # invisible to it, and pass 2's rename onto that same name would
-    # destroy the appended rows with no backup and no warning. Refuse
-    # on ANY drift: a shard appeared, vanished, or moved size.
     try:
-        recheck = _shard_snapshot(out_dir)
-    except RotateRefused:
-        for tmp in temps:
-            tmp.unlink(missing_ok=True)
-        raise
-    if recheck != sizes:
-        for tmp in temps:
-            tmp.unlink(missing_ok=True)
-        raise RotateRefused(
-            f"rotate at {out_dir}: shard set changed during the "
-            "rewrite (a concurrent appender rolled to a new shard or "
-            "appended). Nothing was replaced; stop the writer and "
-            "retry."
+        # EVERY resulting shard is checked, not just the final one: the
+        # absorb arm can only overfill the last temp, but a single line
+        # bigger than the budget's margin over the roll threshold pins
+        # whichever shard it lands in over the budget.
+        over_budget = tuple(
+            _audit_log_shard_name(i + 1)
+            for i, tmp in enumerate(temps)
+            if tmp.stat().st_size > _AUDIT_LOG_MAX_BYTES
         )
+
+        # Byte reconciliation BEFORE any original moves: a rewrite that
+        # cannot prove it copied every byte must not replace anything.
+        if written != total:
+            raise RotateRefused(
+                f"rotate at {out_dir}: byte accounting mismatch "
+                f"(read {total}, wrote {written}) — a shard changed size "
+                "mid-rewrite (concurrent appender?). Nothing was "
+                "replaced; stop the writer and retry."
+            )
+
+        # ── pre-swap recheck ────────────────────────────────────────────
+        # The reconciliation above accounts only the SNAPSHOT files. A
+        # concurrent appender that ROLLED to a fresh shard (the trail's
+        # last shard is past the roll threshold — that is why rotate is
+        # running — so a racing append resolves to the next number) is
+        # invisible to it, and pass 2's rename onto that same name would
+        # destroy the appended rows with no backup and no warning. Refuse
+        # on ANY drift: a shard appeared, vanished, or moved size.
+        recheck = _shard_snapshot(out_dir)
+        if recheck != snapshot:
+            raise RotateRefused(
+                f"rotate at {out_dir}: shard set changed during the "
+                "rewrite (a concurrent appender rolled to a new shard or "
+                "appended). Nothing was replaced; stop the writer and "
+                "retry."
+            )
+
+    except BaseException:
+        _cleanup()
+        raise
 
     # ── pass 2: swap — originals to backups, temps into place ──────
     backups: list[str] = []
-    for p in existing:
-        backup = _backup_path(p)
-        os.rename(p, backup)
-        backups.append(backup.name)
-    for i, tmp in enumerate(temps):
-        os.rename(tmp, out_dir / _audit_log_shard_name(i + 1))
+    retired: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for p in existing:
+            backup = _backup_path(p)
+            os.rename(p, backup)
+            retired.append((p, backup))
+            backups.append(backup.name)
+        for i, tmp in enumerate(temps):
+            target = out_dir / _audit_log_shard_name(i + 1)
+            os.rename(tmp, target)
+            published.append(target)
+    except BaseException:
+        # Remove only this invocation's published shards. If rollback
+        # fails, retain backups for manual recovery and preserve the cause.
+        for target in reversed(published):
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Cannot remove partially published shard %s", target)
+        for target, backup in reversed(retired):
+            try:
+                os.rename(backup, target)
+            except OSError:
+                logger.exception("Restore %s manually from %s", target, backup)
+        raise
+    finally:
+        _cleanup()
     try:
         dir_fd = os.open(out_dir, os.O_RDONLY)  # raw-open: directory fsync handle — no bytes read; a symlinked out_dir must still fsync (renames above traversed it)
         try:

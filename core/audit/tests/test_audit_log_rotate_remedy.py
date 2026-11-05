@@ -520,3 +520,181 @@ class TestConcurrentAppendDetection:
         assert log.read_bytes() == before
         assert not list(tmp_path.glob("*.pre-rotate*"))
         assert not list(tmp_path.glob(".audit-log-rotate.tmp.*"))
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_rotation_swap_failure_restores_trail(tmp_path, monkeypatch, fail_at, cancel):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 60)
+    before = source.read_bytes()
+    rename = os.rename
+    calls = 0
+
+    def fail_once(src, dst):
+        nonlocal calls
+        calls += 1
+        if calls == fail_at:
+            if cancel:
+                raise KeyboardInterrupt("interrupted swap")
+            raise OSError("failed swap")
+        return rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", fail_once)
+    with pytest.raises(KeyboardInterrupt if cancel else OSError):
+        rotate_audit_log(tmp_path)
+    assert source.read_bytes() == before
+    assert _trail_bytes(tmp_path) == before
+    assert not list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*"))
+    assert not list(tmp_path.glob("*.pre-rotate*"))
+
+
+def test_dangling_backup_name_is_preserved(tmp_path, monkeypatch):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 60)
+    backup = source.with_name(source.name + ".pre-rotate")
+    backup.symlink_to("missing-backup-target")
+    result = rotate_audit_log(tmp_path)
+    assert backup.is_symlink()
+    assert result.backups == (backup.name + ".2",)
+
+
+@pytest.mark.parametrize("replace_inode", [False, True])
+def test_same_size_drift_refuses_rotation(tmp_path, monkeypatch, replace_inode):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 60)
+    original_snapshot = rotate_mod._shard_snapshot
+    calls = 0
+    replacement = b"x" * source.stat().st_size
+
+    def snapshot(directory):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if replace_inode:
+                alternate = tmp_path / "replacement"
+                alternate.write_bytes(replacement)
+                alternate.replace(source)
+            else:
+                source.write_bytes(replacement)
+        return original_snapshot(directory)
+
+    monkeypatch.setattr(rotate_mod, "_shard_snapshot", snapshot)
+    with pytest.raises(RotateRefused, match="shard set changed"):
+        rotate_audit_log(tmp_path)
+    assert source.read_bytes() == replacement
+    assert not list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*"))
+    assert not list(tmp_path.glob("*.pre-rotate*"))
+
+
+@pytest.mark.parametrize("mode", ["rb", "wb"])
+def test_stream_setup_failure_closes_fd_and_removes_temp(tmp_path, monkeypatch, mode):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 60)
+    before = source.read_bytes()
+    fdopen = os.fdopen
+    failed_fds = []
+
+    def fail_setup(fd, requested_mode):
+        if requested_mode == mode:
+            failed_fds.append(fd)
+            raise OSError("stream setup failed")
+        return fdopen(fd, requested_mode)
+
+    monkeypatch.setattr(os, "fdopen", fail_setup)
+    with pytest.raises(OSError, match="stream setup failed"):
+        rotate_audit_log(tmp_path)
+    for fd in failed_fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    assert source.read_bytes() == before
+    assert not list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*"))
+
+
+def test_cleanup_failure_does_not_mask_primary_or_skip_remaining_temps(tmp_path, monkeypatch):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 100)
+    before = source.read_bytes()
+    fsync = os.fsync
+    unlink = Path.unlink
+    syncs = 0
+    refused = []
+
+    def fail_fsync(fd):
+        nonlocal syncs
+        syncs += 1
+        if syncs == 3:
+            raise OSError("primary flush failure")
+        return fsync(fd)
+
+    def fail_unlink(path, *args, **kwargs):
+        if path.name == rotate_mod._TMP_PREFIX + "001":
+            refused.append(path)
+            raise PermissionError("cleanup failure")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as faults:
+        faults.setattr(os, "fsync", fail_fsync)
+        faults.setattr(Path, "unlink", fail_unlink)
+        with pytest.raises(OSError, match="primary flush failure"):
+            rotate_audit_log(tmp_path)
+    assert source.read_bytes() == before
+    assert refused
+    assert list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*")) == [refused[0]]
+    refused[0].unlink()
+
+
+def test_failed_restore_keeps_recovery_backup(tmp_path, monkeypatch, caplog):
+    _shrink_budgets(monkeypatch)
+    source = tmp_path / record.AUDIT_LOG_FILENAME
+    _plant_rows(source, 60)
+    before = source.read_bytes()
+    rename = os.rename
+    calls = 0
+
+    def fail_publish_and_restore(src, dst):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise OSError("publication and restore failure")
+        return rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", fail_publish_and_restore)
+    with pytest.raises(OSError, match="publication and restore failure"):
+        rotate_audit_log(tmp_path)
+    backup = source.with_name(source.name + ".pre-rotate")
+    assert backup.read_bytes() == before
+    assert str(backup) in caplog.text
+    assert not list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*"))
+
+
+@pytest.mark.parametrize("fail_at", [2, 3, 4])
+def test_swap_failure_restores_multiple_original_shards(tmp_path, monkeypatch, fail_at):
+    _shrink_budgets(monkeypatch)
+    first = tmp_path / record.AUDIT_LOG_FILENAME
+    second = tmp_path / record._audit_log_shard_name(2)
+    _plant_rows(first, 60)
+    _plant_rows(second, 10, start=60)
+    originals = {p: p.read_bytes() for p in (first, second)}
+    rename = os.rename
+    calls = 0
+
+    def fail_once(src, dst):
+        nonlocal calls
+        calls += 1
+        if calls == fail_at:
+            raise OSError("multiple shard swap failure")
+        return rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", fail_once)
+    with pytest.raises(OSError, match="multiple shard swap failure"):
+        rotate_audit_log(tmp_path)
+    assert {p: p.read_bytes() for p in originals} == originals
+    assert record.audit_log_paths(tmp_path) == [first, second]
+    assert not list(tmp_path.glob(rotate_mod._TMP_PREFIX + "*"))
+    assert not list(tmp_path.glob("*.pre-rotate*"))
