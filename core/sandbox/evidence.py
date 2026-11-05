@@ -376,23 +376,30 @@ class EvidenceFile:
     def close(self, *, verify: bool = True) -> bool:
         """Finalise: optionally verify identity and size, then close the fd.
 
-        Returns the verification result (True when skipped or clean).
-        Repeated closes return the original result. Verification errors
-        propagate after descriptor cleanup and leave a failed result.
+        Returns True only when verification is skipped or clean and the
+        descriptor closes successfully. Close I/O errors warn and return
+        False. Repeated closes return the cached result. Other errors
+        propagate after cleanup and leave a failed result.
         """
         with self._io_lock:
             if self._closed:
                 return self._close_result
             self._closed = True
+            verification_result = False
             try:
-                self._close_result = self.verify() if verify else True
-                return self._close_result
+                verification_result = self.verify() if verify else True
             finally:
-                # close() must verify while it still owns the descriptor,
-                # then publish the final result before releasing its number.
+                # Verify while the fd is owned, but publish success only
+                # after close completes. Never retry a released fd number.
                 self._fd_released = True
-                with contextlib.suppress(OSError):
+                try:
                     os.close(self.fd)
+                except OSError:
+                    logger.warning("evidence close failed for %s", self.path,
+                                   exc_info=True)
+                else:
+                    self._close_result = verification_result
+            return self._close_result
 
 
 # ---------------------------------------------------------------------------
