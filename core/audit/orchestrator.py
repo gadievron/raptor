@@ -10489,22 +10489,9 @@ def _run_audit_body(
         _pass_ledger.end_phase()
         logger.debug("exited _adversarial_refute_pass")
 
-    _pass_ledger.start_phase("confidence_propagation")
-    try:
-        from .propagation import propagate_confidence
-        edge_index = shared.call_edge_index if shared else {}
-        check_index = shared.checklist_index if shared else {}
-        conf_demotions = propagate_confidence(
-            result.outcomes, edge_index, check_index,
-        )
-        for d in conf_demotions:
-            append_audit_log(config.out_dir, _demotion_log_entry(d))
-        if conf_demotions:
-            logger.info(
-                "confidence propagation: %d demotions", len(conf_demotions),
-            )
-    except Exception:
-        logger.debug("confidence propagation failed", exc_info=True)
+    # A neighbour's clean verdict is not proof of a call contract.
+    # Claim-specific verification, rather than confidence propagation,
+    # must adjudicate each suspicious outcome.
 
     # 5c: drain early dark probes before resolve-gate-demoted.
     _dark_handled: set[int] = set()

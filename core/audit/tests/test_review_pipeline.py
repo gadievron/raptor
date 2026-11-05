@@ -1918,7 +1918,7 @@ class _MockOutcome:
 
 class TestConfidencePropagation:
 
-    def test_all_callers_clean_demotes(self):
+    def test_all_callers_clean_do_not_prove_the_input_contract(self):
         from core.audit.propagation import propagate_confidence
 
         outcomes = [
@@ -1940,9 +1940,7 @@ class TestConfidencePropagation:
                             "callee_file": "b.c", "callee": "target"}],
         }
         demotions = propagate_confidence(outcomes, edge_index)
-        assert len(demotions) == 1
-        assert demotions[0].file == "b.c"
-        assert demotions[0].function == "target"
+        assert demotions == []
 
     def test_demotion_log_entry_carries_source_functions(self):
         """The audit-log record must carry the full evidentiary basis
@@ -2009,13 +2007,7 @@ class TestConfidencePropagation:
         assert len(demotions) == 0
 
     def test_no_transitive_demotion(self):
-        """Propagation-demoted outcomes must not seed further demotions.
-
-        root and root2 are confirmed clean callers of fn0 (meeting min_callers=2).
-        fn0 gets demoted, but it must NOT seed demotion of fn1 (only 1 caller: fn0).
-        Even with min_callers=1 fn1 should not demote because fn0 was only
-        propagation-demoted, not tool-confirmed.
-        """
+        """Neither an initial contract guess nor its descendants may become clean."""
         from core.audit.propagation import propagate_confidence
 
         outcomes = [
@@ -2047,8 +2039,7 @@ class TestConfidencePropagation:
         demotions = propagate_confidence(
             outcomes, edge_index, max_iterations=5, min_callers=1,
         )
-        assert len(demotions) == 1
-        assert demotions[0].function == "fn0"
+        assert demotions == []
 
     def test_vacuous_callee_not_demoted(self):
         """Callee not in edge index must not cause vacuous demotion."""
@@ -2115,8 +2106,7 @@ class TestConfidencePropagation:
         assert demotions == []
 
     def test_fileless_edge_still_matches_bare_name(self):
-        """An edge with no callee_file keeps matching by bare name —
-        the file-less shape has no full key to require."""
+        """File-less edges cannot establish a contract either."""
         from core.audit.propagation import propagate_confidence
 
         outcomes = [
@@ -2134,9 +2124,7 @@ class TestConfidencePropagation:
                              "callee": "target"}],
         }
         demotions = propagate_confidence(outcomes, edge_index)
-        assert len(demotions) == 1
-        assert demotions[0].file == "b.c"
-        assert demotions[0].function == "target"
+        assert demotions == []
 
 
 # ── Feature 4: Coccinelle concurrency rules ───────────────────────
@@ -2424,8 +2412,8 @@ class TestMinimumCallerGate:
         demotions = propagate_confidence(outcomes, edge_index)
         assert len(demotions) == 0
 
-    def test_min_callers_one_allows_single(self):
-        """Explicitly setting min_callers=1 allows single-caller demotion."""
+    def test_min_callers_one_does_not_authorize_demotion(self):
+        """Caller counts do not prove that arguments satisfy a contract."""
         from core.audit.propagation import propagate_confidence
 
         outcomes = [
@@ -2442,15 +2430,15 @@ class TestMinimumCallerGate:
                             "callee_file": "b.c", "callee": "target"}],
         }
         demotions = propagate_confidence(outcomes, edge_index, min_callers=1)
-        assert len(demotions) == 1
+        assert demotions == []
 
 
 # ── Fix 5c-2: Callee-direction propagation ──────────────────────
 
 class TestCalleeDirectionPropagation:
 
-    def test_callee_clean_demotes(self):
-        """When a hypothesis names a callee and that callee is confirmed clean, demote."""
+    def test_callee_clean_does_not_prove_return_values(self):
+        """A clean tier does not prove that a callee cannot return an error."""
         from core.audit.propagation import propagate_confidence
 
         outcomes = [
@@ -2467,8 +2455,7 @@ class TestCalleeDirectionPropagation:
                               "callee_file": "lib.c", "callee": "helper"}],
         }
         demotions = propagate_confidence(outcomes, edge_index)
-        assert len(demotions) == 1
-        assert demotions[0].function == "process"
+        assert demotions == []
 
     def test_callee_not_clean_keeps(self):
         """When a hypothesis names a callee that is suspicious, no demotion."""
