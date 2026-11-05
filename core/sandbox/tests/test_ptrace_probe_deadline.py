@@ -161,6 +161,10 @@ def cleanup_probe(monkeypatch):
         raise OSError(errno.ENOSYS, "pidfd unavailable")
 
     monkeypatch.setattr(probe.os, "pidfd_open", no_pidfd)
+    # Cleanup checks child ownership before falling back to PID signalling.
+    # Keep this synthetic child live and owned; the bounded reap is stubbed
+    # separately by each test below.
+    monkeypatch.setattr(probe.os, "waitpid", lambda pid, flags: (0, 0))
     monkeypatch.setattr(probe.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     return signals
 
