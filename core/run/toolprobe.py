@@ -36,11 +36,14 @@ about this module's state. :func:`reset_probe_cache` is the test hook.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 import threading
 from dataclasses import dataclass, field
 from core.security.env_sanitisation import safe_subprocess_env
@@ -60,7 +63,7 @@ _VERSION_RE = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.(\d+))?")
 _CAPTURE_RETAIN_CHARS = 64 * 1024
 
 _CACHE_LOCK = threading.Lock()
-_CACHE: dict[tuple[str, tuple[str, ...]], ToolInfo | None] = {}
+_CACHE: dict[tuple[str, tuple[str, ...], bool], ToolInfo | None] = {}
 
 
 @dataclass(frozen=True)
@@ -102,12 +105,32 @@ class ToolInfo:
         return tuple(int(g) for g in m.groups() if g is not None)
 
 
+@contextmanager
+def _probe_environment(isolated_home: bool):
+    env = safe_subprocess_env(strip_target_markers=True)
+    if not isolated_home:
+        yield env
+        return
+    # Some --version commands initialize settings and logs. Keep those writes
+    # inside the caller's writable scratch, never in the operator's HOME.
+    with TemporaryDirectory(prefix="raptor-toolprobe-", dir=env.get("TMPDIR")) as home:
+        env["HOME"] = home
+        for name, suffix in (("XDG_CONFIG_HOME", ".config"),
+                             ("XDG_CACHE_HOME", ".cache"),
+                             ("XDG_DATA_HOME", ".local/share")):
+            path = Path(home) / suffix
+            path.mkdir(mode=0o700, parents=True)
+            env[name] = str(path)
+        yield env
+
+
 def probe(
     name: str,
     *,
     args: tuple[str, ...] = ("--version",),
     timeout: float = 10,
     use_cache: bool = False,
+    isolated_home: bool = False,
 ) -> ToolInfo | None:
     """Locate *name* on PATH and run it with *args*.
 
@@ -115,11 +138,14 @@ def probe(
     :class:`ToolInfo`; a probe-execution failure (timeout, exec error)
     yields ``returncode=None`` with empty streams rather than raising.
 
-    ``use_cache=True`` memoises per ``(name, args)`` — including the
+    ``isolated_home=True`` gives stateful tools a temporary HOME and XDG
+    directories, removed after the probe (including timeout/error paths).
+
+    ``use_cache=True`` memoises per ``(name, args, isolated_home)`` — including the
     not-on-PATH result — for hot call sites; leave it off where tests
     patch ``shutil.which`` / ``subprocess.run`` per-test.
     """
-    key = (name, args)
+    key = (name, args, isolated_home)
     if use_cache:
         with _CACHE_LOCK:
             if key in _CACHE:
@@ -130,15 +156,16 @@ def probe(
     else:
         try:
             path = os.path.abspath(path)
-            proc = subprocess.run(
-                [path, *args],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-                cwd=os.sep,
-                env=safe_subprocess_env(strip_target_markers=True),
-            )
+            with _probe_environment(isolated_home) as env:
+                proc = subprocess.run(
+                    [path, *args],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=timeout,
+                    cwd=os.sep,
+                    env=env,
+                )
             # Retention cap: probes exec whatever PATH resolves, and a
             # hostile tool can answer --version with an arbitrarily
             # large stream — every ToolInfo consumer wants a first
