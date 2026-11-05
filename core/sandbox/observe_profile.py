@@ -57,7 +57,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.security.capped_read import CappedReadRefused, read_capped
+from core.security.capped_read import CappedReadRefused, path_may_exist, read_capped
 
 from .evidence import evidence_write_path as _evidence_write_path
 from .evidence import resolve_read_path as _resolve_evidence_path
@@ -513,7 +513,8 @@ def _iter_records(path: Path, *, profile: ObserveProfile | None = None) -> Itera
         if not line:
             continue
         try:
-            yield json.loads(line.decode("utf-8", errors="replace"))
+            # Damaged bytes are capture loss, not rewritten observations.
+            yield json.loads(line.decode("utf-8"))
         except (ValueError, TypeError, RecursionError):
             if profile is not None:
                 profile.capture_incomplete = True
@@ -630,7 +631,8 @@ def parse_observe_log(run_dir, *,
         log_path = _evidence_write_path(run_dir, filename)
     else:
         log_path = _resolve_evidence_path(run_dir, filename)
-    if not log_path.exists():
+    # Keep unreadable entries for the bounded reader's incomplete flag.
+    if not path_may_exist(log_path):
         if current_run:
             profile.capture_incomplete = True
         return profile
