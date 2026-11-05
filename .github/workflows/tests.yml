@@ -1007,7 +1007,9 @@ jobs:
     with:
       tier: source_intel
       test_path: ${{ needs.changes.outputs.source_intel_files }}
-      pytest_args: "-n 2 --dist loadfile"
+      # Scope outputs contain unique file paths, separated by one space.
+      # One selected file stays serial; broader selections use this runner's cores.
+      pytest_args: ${{ contains(needs.changes.outputs.source_intel_files, ' ') && '-n 2 --dist loadfile' || '' }}
       native_pytest_markers: "(slow or integration) and not corpus"
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
@@ -1030,9 +1032,10 @@ jobs:
     with:
       tier: engine
       test_path: ${{ needs.changes.outputs.engine_files }}
-      # Keep the engine's existing serial execution here; its subprocess-
-      # heavy rule corpus needs a separate parallelism measurement.
-      pytest_args: ""
+      # Balance individual cases; engine has no shared module/class setup.
+      # One selected file stays serial to avoid worker startup overhead.
+      pytest_args: ${{ contains(needs.changes.outputs.engine_files, ' ') && '-n 2 --dist worksteal' || '' }}
+      native_pytest_markers: "integration and not corpus"
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # Prompt-envelope audit: AST-based heuristic over the registered

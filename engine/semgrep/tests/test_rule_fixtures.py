@@ -193,6 +193,7 @@ def test_cases_are_within_the_universe():
     assert not stale, f"_CASES entries not in rules/: {stale}"
 
 
+@pytest.mark.integration
 @pytest.mark.slow  # Native whole-inventory validation exceeds the fast-tier budget.
 def test_every_rule_file_validates(tmp_path: Path):
     """Whole-universe --validate in one invocation: an unparseable or
@@ -220,6 +221,7 @@ def test_every_rule_file_validates(tmp_path: Path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("rule_rel", sorted(_CASES))
 def test_rule_file_is_valid(rule_rel: str):
     rule_file = _RULES_DIR / rule_rel
@@ -235,6 +237,7 @@ def test_rule_file_is_valid(rule_rel: str):
     assert proc.returncode == 0, f"--validate failed: {proc.stderr[:500]}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("rule_rel", sorted(_CASES))
 def test_positive_fixtures_fire(rule_rel: str):
     positives, _ = _CASES[rule_rel]
@@ -254,6 +257,7 @@ def test_positive_fixtures_fire(rule_rel: str):
     assert not silent, f"{rule_rel} produced no findings on {silent}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("rule_rel", sorted(_CASES))
 def test_negative_fixtures_stay_silent(rule_rel: str):
     _, negatives = _CASES[rule_rel]
@@ -272,6 +276,7 @@ def test_negative_fixtures_stay_silent(rule_rel: str):
     assert not hits, f"{rule_rel} fired on clean fixture(s): {hits}"
 
 
+@pytest.mark.integration
 def test_php_rules_silent_on_c_targets(tmp_path: Path):
     """The php/ pack must neither fire nor load-error when a scan
     hands it C sources — the audit dispatch is language-gated, but a
@@ -357,6 +362,7 @@ _PHP_EXACT_LINES = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("rule_rel", sorted(_PHP_EXACT_LINES))
 def test_php_web_family_exact_lines(rule_rel: str):
     fixture, expected = _PHP_EXACT_LINES[rule_rel]
@@ -373,6 +379,7 @@ def test_php_web_family_exact_lines(rule_rel: str):
     )
 
 
+@pytest.mark.integration
 def test_php_pack_holds_flat_on_adversarial_concat_chains(tmp_path: Path):
     """Perf pin for the whole php pack against concatenation-chain
     fodder: a 100+-term single-expression chain of attribute-opener
@@ -419,6 +426,7 @@ _CASE_FOLD_CASES = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("rule_rel", sorted(_CASE_FOLD_CASES))
 def test_weak_crypto_matches_case_insensitively(rule_rel: str):
     fixture, expected_lines = _CASE_FOLD_CASES[rule_rel]
@@ -432,6 +440,7 @@ def test_weak_crypto_matches_case_insensitively(rule_rel: str):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "rule_rel",
     ["crypto/weak-hash.yaml", "crypto/weak-symmetric-cipher.yaml",
@@ -445,6 +454,7 @@ def test_weak_crypto_case_negatives_stay_silent(rule_rel: str):
     assert not hits, f"{rule_rel} fired on clean fixture: {hits}"
 
 
+@pytest.mark.integration
 def test_prototype_pollution_impl_exact_lines():
     """Exact-line pin for the deep-set + unguarded-merge rules: the
     Object.keys-iterating merge is individually witnessed (Object.keys
