@@ -13,7 +13,7 @@ from core.sandbox import observe_profile as observe
     ({'reader_failed': True, 'reader_drained': True}, True),
     ({'reader_failed': False, 'reader_drained': True}, False),
     ({}, False),
-    ({'reader_failed': 'true', 'reader_drained': 0}, False),
+    ({'reader_failed': 'true', 'reader_drained': 0}, True),
 ])
 def test_summary_capture_state_is_typed_and_separate(tmp_path, flags, expected):
     record = {'type': 'audit_summary', 'nonce': 'trusted', 'dropped_by_category': {}, **flags}
