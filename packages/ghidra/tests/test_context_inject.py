@@ -7,7 +7,6 @@ import pytest
 from packages.ghidra.context_inject import (
     _build_func_index,
     _render_function_context,
-    clear_ghidra_cache,
     ghidra_blocks_for_finding,
     prepare_ghidra_context,
 )
@@ -21,10 +20,17 @@ from packages.ghidra.model import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
-    clear_ghidra_cache()
-    yield
-    clear_ghidra_cache()
+def _clear_cache(monkeypatch):
+    from packages.ghidra import context_inject
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(context_inject, {
+        "_GHIDRA_CACHE": {}, "_GHIDRA_FUNC_INDEX": {},
+    }, lock=context_inject._GHIDRA_LOCK):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _make_db(functions=None, xrefs=None, types=None, comments=None):

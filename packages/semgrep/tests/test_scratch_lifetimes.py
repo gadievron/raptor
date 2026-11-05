@@ -16,24 +16,14 @@ from packages.semgrep import runner
 
 
 @pytest.fixture(autouse=True)
-def isolated_scratch(tmp_path, monkeypatch):
-    runner._reset_sandbox_scratch()
-    original = runner.tempfile.mkdtemp
-    monkeypatch.setattr(
-        runner.tempfile,
-        "mkdtemp",
-        lambda prefix="", dir=None, **kw: original(
-            prefix=prefix, dir=tmp_path if dir is None else dir, **kw
-        ),
-    )
+def isolated_scratch(tmp_path, monkeypatch, semgrep_scratch, request):
+    # Keep registration assertions local to this consumer, not the global ticker.
+    monkeypatch.setattr(request.module, "scratch_mod", semgrep_scratch)
     monkeypatch.setattr(runner, "is_available", lambda: True)
     monkeypatch.setattr(runner, "scope_isolation_available", lambda: True)
     monkeypatch.setattr("core.sandbox.python_paths.python_tool_paths", lambda *a: [])
     monkeypatch.setattr("core.config.RaptorConfig.SEMGREP_OFFLINE", False)
     yield
-    runner._reset_sandbox_scratch()
-    for path in tmp_path.glob("semgrep-sbx-*"):
-        rmtree_hardened(path)
 
 
 def result():

@@ -11,13 +11,10 @@ with another (fake-home symlink-TOCTOU isolation).
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import packages.semgrep.runner as runner_mod
 from packages.semgrep.runner import (
@@ -41,6 +38,11 @@ def _sarif_result(rule_id: str, uri: str, line: int) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _fresh_scratch(semgrep_scratch):
+    return semgrep_scratch
+
+
 class TestBuildCmdExtraTargets:
     def test_extra_targets_appended_after_target(self, tmp_path: Path):
         cmd = build_cmd(
@@ -55,11 +57,6 @@ class TestBuildCmdExtraTargets:
 
 
 class TestSandboxScratch:
-    @pytest.fixture(autouse=True)
-    def _fresh_scratch(self):
-        runner_mod._reset_sandbox_scratch()
-        yield
-        runner_mod._reset_sandbox_scratch()
 
     def test_each_invocation_gets_a_fresh_scratch_dir(self, tmp_path: Path):
         """Per-invocation isolation is the TOCTOU defence: a live

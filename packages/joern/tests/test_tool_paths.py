@@ -19,10 +19,18 @@ from packages.joern.models import JoernCPG
 
 
 @pytest.fixture(autouse=True)
-def _fresh_path_cache():
-    prereqs.reset_path_cache()
-    yield
-    prereqs.reset_path_cache()
+def _fresh_path_cache(monkeypatch):
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(prereqs, {
+        "_resolved_joern": None, "_joern_resolved": False,
+        "_resolved_joern_parse": None, "_joern_parse_resolved": False,
+        "_resolved_java": None, "_java_resolved": False,
+    }):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _fake_install(root: Path, *, flat: bool = False) -> dict[str, str]:
