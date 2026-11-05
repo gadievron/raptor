@@ -883,7 +883,7 @@ def run_release_order_prepass(
     fin_re = _call_re(list(fin_vocab))
     rel_re = _call_re(list(rel_vocab))
 
-    from .resource_bounds import _c_function_spans
+    from .resource_bounds import _c_function_spans, _c_function_spans_from_lines
 
     candidates: list[tuple[str, str]] = []
     for fp, source in sorted(source_texts.items()):
@@ -892,7 +892,9 @@ def run_release_order_prepass(
         if not (fin_re.search(source) and rel_re.search(source)):
             continue
         lines = split_lines(source)  # once per file, not per span
-        for name, start, end in _c_function_spans(source):
+        spans = (_c_function_spans_from_lines(lines) if type(source) is str
+                 else _c_function_spans(source))
+        for name, start, end in spans:
             segment = "\n".join(lines[start - 1:end])
             if fin_re.search(segment) and rel_re.search(segment):
                 candidates.append((fp, name))
