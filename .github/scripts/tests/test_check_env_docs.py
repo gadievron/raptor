@@ -500,3 +500,30 @@ def test_deferred_scan_uses_the_original_source_snapshot(det, tmp_path, monkeypa
     inventory = det.scan_tree(root)
     assert _kinds(inventory, "RAPTOR_SNAPSHOT") == ["read"]
     assert "RAPTOR_CHANGED" not in inventory.vars
+
+
+@pytest.mark.parametrize("artifact", ["build", "node_modules", ".venv"])
+def test_artifact_directories_are_not_traversed(det, tmp_path, monkeypatch, artifact):
+    root = _tree(tmp_path, {
+        f"core/generated/{artifact}/nested/ignored.py": "",
+        "core/build/__init__.py": "",
+        "core/build/kept.py": "",
+        "core/z.py": "",
+        "core/a/kept.py": "",
+        "libexec/entry": "#!/bin/sh\n",
+        "entry.py": "",
+    })
+    excluded = root / "core/generated" / artifact
+    scandir = det.os.scandir
+
+    def guarded_scandir(path):
+        assert Path(path) != excluded, "artifact directory was traversed"
+        return scandir(path)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(det.os, "scandir", guarded_scandir)
+        found = [p.relative_to(root).as_posix() for p in det._iter_files(root)]
+    assert found == [
+        "core/a/kept.py", "core/build/__init__.py", "core/build/kept.py",
+        "core/z.py", "libexec/entry", "entry.py",
+    ]

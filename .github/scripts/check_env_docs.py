@@ -94,6 +94,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -680,14 +681,23 @@ def _iter_files(root: Path):
         base = root / sub
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*")):
-            if not p.is_file() or p in seen:
-                continue
-            rel_parts = p.relative_to(root).parts
-            if _is_artifact_dir(root, rel_parts):
-                continue
-            seen.add(p)
-            yield p
+        candidates: list[Path] = []
+        for directory, dirs, files in os.walk(base):
+            parent = Path(directory)
+            rel_parts = parent.relative_to(root).parts
+            # Prune before descent: filtering rglob's results still walks
+            # entire dependency/build trees that cannot enter the inventory.
+            dirs[:] = [
+                name for name in dirs
+                if not _is_artifact_dir(root, (*rel_parts, name, ""))
+            ]
+            candidates.extend(parent / name for name in files)
+        # Keep the previous per-root lexicographic file order, including
+        # files interleaved with child directories and overlapping roots.
+        for p in sorted(candidates):
+            if p.is_file() and p not in seen:
+                seen.add(p)
+                yield p
     # Repo-root entry modules, derived from the tree — never a name
     # list (codeql_scope.py's doctrine: a hand-maintained entry-module
     # list silently dropped new entry points before; the previous
