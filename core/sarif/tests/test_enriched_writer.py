@@ -491,7 +491,7 @@ class TestUntrustedRowShapes:
         assert "exploitability_score" not in props
 
     def test_poison_row_skipped_with_record_others_survive(self):
-        poison = self._good(rule_id="r-bad", analysis="not-a-dict")
+        poison = self._good(rule_id="r-bad", level=["invalid"])
         doc = build_enriched_sarif(
             [self._good(), poison, self._good(rule_id="r-2")])
         run = doc["runs"][0]
@@ -549,7 +549,7 @@ class TestUntrustedRowShapes:
 
     def test_skip_record_text_escaped(self):
         poison = self._good(
-            rule_id="r-\x1b[2Jbad", analysis="not-a-dict")
+            rule_id="r-\x1b[2Jbad", level=["invalid"])
         doc = build_enriched_sarif([poison])
         notes = [
             n
@@ -623,7 +623,7 @@ def test_enriched_scoped_catalog_stays_compact_and_uses_function_alias(tmp_path)
 def test_enriched_catalog_planning_does_not_abort_on_malformed_row_metadata():
     good = {'tool': 'T', 'rule_id': 'good', 'rule_scope': 'a' * 64, 'cwe_id': 'CWE-79'}
     poison = {'tool': ['invalid'], 'rule_id': ['invalid'], 'rule_scope': ['invalid'],
-              'cwe_id': {}, 'analysis': 'invalid'}
+              'cwe_id': {}, 'analysis': 'invalid', 'level': ['invalid']}
     document = build_enriched_sarif([good, poison], tool_version='test')
     results = [result for run in document['runs'] for result in run['results']]
     notes = [note for run in document['runs'] for invocation in run['invocations']
@@ -635,7 +635,7 @@ def test_enriched_catalog_planning_does_not_abort_on_malformed_row_metadata():
 
 @pytest.mark.parametrize('with_valid_row', [False, True], ids=['all-skipped', 'partial-export'])
 def test_write_count_matches_emitted_results_after_malformed_row_skips(tmp_path, with_valid_row):
-    findings = [{'rule_id': 'bad', 'analysis': 'invalid'}]
+    findings = [{'rule_id': 'bad', 'level': ['invalid']}]
     if with_valid_row:
         findings.append({'rule_id': 'good', 'file': 'a.c', 'startLine': 1})
     output = tmp_path / 'counted.sarif'
@@ -662,3 +662,30 @@ def test_enriched_export_uses_validation_severity_without_overriding_level(level
         finding['level'] = level
     result = build_enriched_sarif([finding], tool_version='test')['runs'][0]['results'][0]
     assert result['level'] == expected
+
+
+@pytest.mark.parametrize("analysis", [True, 1, "untrusted", ["not", "an", "object"]])
+def test_malformed_optional_analysis_preserves_finding(analysis):
+    finding = {
+        "rule_id": "example", "file": "app.c", "line": 7,
+        "message": "Keep this finding", "analysis": analysis,
+    }
+    doc = build_enriched_sarif([finding])
+    results = doc["runs"][0]["results"]
+    assert len(results) == 1
+    result = results[0]
+    assert result["message"]["text"] == "Keep this finding"
+    props = result["properties"]["raptor"]
+    assert props["verdict"] == "not_analyzed"
+    assert props["reachability"] == "not_evaluated"
+    assert "is_exploitable" not in props
+    assert "suppressions" not in result
+
+
+@pytest.mark.parametrize("analysis", [True, 1, "untrusted", ["not", "an", "object"]])
+def test_malformed_analysis_does_not_erase_valid_legacy_verdict(analysis):
+    verdict, props = _build_raptor_properties({
+        "analysis": analysis, "exploitable": True,
+    })
+    assert verdict == "exploitable"
+    assert props["reachability"] == "not_evaluated"

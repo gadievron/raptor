@@ -29,7 +29,9 @@ _VALID_LEVELS = frozenset({"none", "note", "warning", "error"})
 
 
 def _verdict_from_analysis(finding: dict[str, Any]) -> str:
-    analysis = finding.get("analysis") or {}
+    analysis = finding.get("analysis")
+    if not isinstance(analysis, dict):
+        analysis = {}
     if analysis.get("reachability_suppression"):
         return "suppressed"
     # Legacy alias, genuine-bool rule (agentic_passes precedent): a
@@ -46,7 +48,9 @@ def _verdict_from_analysis(finding: dict[str, Any]) -> str:
 
 
 def _reachability_from_analysis(finding: dict[str, Any]) -> str:
-    analysis = finding.get("analysis") or {}
+    analysis = finding.get("analysis")
+    if not isinstance(analysis, dict):
+        analysis = {}
     verdict = analysis.get("reachability_verdict")
     if verdict:
         return verdict
@@ -74,7 +78,9 @@ def _build_raptor_properties(
     if finding.get("has_dataflow"):
         props["has_dataflow"] = True
 
-    analysis = finding.get("analysis") or {}
+    analysis = finding.get("analysis")
+    if not isinstance(analysis, dict):
+        analysis = {}
     _exploitable = read_verdict(analysis, "is_exploitable")
     if _exploitable is not None:
         props["is_exploitable"] = _exploitable
@@ -207,7 +213,9 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
         result["fingerprints"] = {"matchBasedId/v1": fid}
 
     if verdict == "suppressed":
-        analysis = finding.get("analysis") or {}
+        analysis = finding.get("analysis")
+        if not isinstance(analysis, dict):
+            analysis = {}
         result["suppressions"] = [{
             "kind": "inSource",
             "justification": (
