@@ -72,6 +72,9 @@ class _Cfg:
     """Minimal OrchestratorConfig stand-in for _run_tool_chain."""
 
     def __init__(self, target: Path):
+        source = target / "src" / "a.c"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("void f(void) {}\n")
         self.target_path = target
         self.out_dir = None
         self.codeql_db_path = None

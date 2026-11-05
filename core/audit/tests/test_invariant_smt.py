@@ -193,6 +193,8 @@ class TestDispatchWiring:
             _run_tool_chain,
         )
 
+        # A refutation must identify the same source the checker sees.
+        (tmp_path / "a.c").write_text("len = min(n, size);\n")
         counters = {"smt_invariant": TierCounters()}
         confirmed = _run_tool_chain(
             [{"type": "smt_invariant",

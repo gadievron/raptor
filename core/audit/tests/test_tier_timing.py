@@ -22,6 +22,9 @@ from core.audit.orchestrator import (
 
 
 def _mk_config(tmp_path):
+    source = tmp_path / "src" / "a.c"
+    source.parent.mkdir(exist_ok=True)
+    source.write_text("void handler(void) {}\n")
     (tmp_path / "out").mkdir(exist_ok=True)
     return OrchestratorConfig(
         target_path=tmp_path, out_dir=tmp_path / "out",

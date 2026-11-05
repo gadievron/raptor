@@ -134,6 +134,23 @@ class TestProducersStampTheBasis:
             review_result={"cwe": "CWE-89", "mechanism": "SQL injection"},
         )
         outcome.tools_dispatched = set(dispatched)
+        # Positive clean-basis coverage needs explicit claim refutations;
+        # recording that a tool ran is no longer negative evidence.
+        if dispatched:
+            from core.audit.refutation_source import capture_source_identity
+            from core.audit.verification_results import ClaimRefutation, ProbeOutcome
+            claims = [h["mechanism"] for h in orch._extract_all_hypotheses(outcome)]
+            if outcome.hypothesis not in claims:
+                claims.append(outcome.hypothesis)
+            identity = capture_source_identity(tgt, outcome.file)
+            assert identity is not None
+            outcome.claim_refutations = tuple(
+                ClaimRefutation(
+                    outcome.file, outcome.function, outcome.line, claim,
+                    (ProbeOutcome("semgrep", "refuted", "semgrep:fixture"),),
+                    identity,
+                ) for claim in claims
+            )
         result = OrchestratorResult()
         result.outcomes = [outcome]
         result.suspicious = 1
@@ -141,7 +158,7 @@ class TestProducersStampTheBasis:
             {"name": "getUser", "line_start": 2, "line_end": 4}]}]}
         # Hermetic: a prefilter hit on the SQL sink would count as
         # mechanical corroboration and keep the claim suspicious, so it
-        # is stubbed out; only the dispatch record decides.
+        # is stubbed out; the scoped refutations decide the negative path.
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
                 orch, "run_prefilter",
@@ -159,7 +176,7 @@ class TestProducersStampTheBasis:
 
     def test_gate_resolved_clean_is_stamped(self, tmp_path):
         """A clean reached by end-of-run gate resolution, because the covering
-        scanner ran silent, must carry the gate_resolved basis. If the stamp
+        scanner supplied scoped refutations, must carry the gate_resolved basis. If the stamp
         were missing, cross-run reuse would treat it as a reviewed clean and
         import it for free forever."""
         final = self._resolve(tmp_path, {"semgrep"})
