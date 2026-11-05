@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import core.logging as core_logging
 from core.logging import log_security_event
+from core.testing.logging_state import owned_log_handler
 
 
 class _CapturingHandler(logging.Handler):
@@ -46,10 +47,7 @@ class _SecurityEventTestBase(unittest.TestCase):
         # test emits through.
         self.raptor_logger = core_logging.RaptorLogger()
         self.handler = _CapturingHandler()
-        self.raptor_logger.logger.addHandler(self.handler)
-
-    def tearDown(self) -> None:
-        self.raptor_logger.logger.removeHandler(self.handler)
+        self.enterContext(owned_log_handler(self.raptor_logger.logger, self.handler))
 
     def _security_records(self) -> list[logging.LogRecord]:
         return [
