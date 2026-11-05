@@ -2812,8 +2812,8 @@ def cmd_journal(args: argparse.Namespace) -> int:
     re-emission rows (newest per identity kept; corrections, claim
     rows, $-bearing rows, and unparseable lines always survive — the
     final verdict per function and the journal spend floor are
-    unchanged). The original is preserved as
-    ``review-journal.jsonl.pre-compact``.
+    unchanged). When a shard changes, its original is preserved as
+    ``review-journal.jsonl.pre-compact``; unchanged shards need no archive.
 
     ``--supersede`` adds the lossy-with-archive tier: only the NEWEST
     row per review identity (site, source hash, verdict, model,
@@ -2920,7 +2920,10 @@ def cmd_journal(args: argparse.Namespace) -> int:
             f"  spend floor: ${stats.spend_usd_after:.2f} (unchanged — "
             "only zero-cost duplicates drop)"
         )
-    print(f"  backup: {stats.backup_path}")
+    if stats.backup_path:
+        print(f"  backup: {stats.backup_path}")
+    else:
+        print("  journal unchanged; no backup created")
     return 0
 
 
@@ -3352,13 +3355,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
             print(f"  journal checkpoint skipped: {exc}", file=sys.stderr)
         else:
             if _ck.fired and _ck.stats is not None:
+                archive_note = (f"backup: {_ck.stats.backup_path}" if _ck.stats.backup_path
+                                else "journal unchanged")
                 print(
                     f"journal checkpoint: {_ck.stats.rows_before} -> "
                     f"{_ck.stats.rows_after} rows, "
                     f"{_ck.stats.bytes_before} -> "
                     f"{_ck.stats.bytes_after} bytes "
                     f"in {_ck.duration_s:.1f}s "
-                    f"(backup: {_ck.stats.backup_path})",
+                    f"({archive_note})",
                     flush=True,
                 )
             elif _ck.advisory or _ck.aborted:

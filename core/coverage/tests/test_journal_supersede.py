@@ -164,10 +164,16 @@ class TestMegaAuditWedge:
         assert backup.name == "review-journal.jsonl.pre-supersede"
         assert backup.read_bytes() == original
 
-        # A second pass never clobbers the first archive generation.
+        # An unchanged pass creates no generation. Once more evidence lands,
+        # the next changed pass archives it without clobbering the first.
         second = compact_journal(tmp_path, supersede=True)
-        assert Path(second.backup_path).name \
-            == "review-journal.jsonl.pre-supersede.2"
+        assert second.backup_path == ""
+        _mega_audit_run(tmp_path, n_sites=3, n_passes=2)
+        third_original = journal.read_bytes()
+        third = compact_journal(tmp_path, supersede=True)
+        assert Path(third.backup_path).name == "review-journal.jsonl.pre-supersede.2"
+        assert Path(third.backup_path).read_bytes() == third_original
+        assert backup.read_bytes() == original
 
     def test_idempotent_second_pass_drops_nothing(
         self, tmp_path: Path,
@@ -346,7 +352,7 @@ class TestHardStops:
         assert (tmp_path / JOURNAL_FILENAME).read_bytes() == original
         assert not (tmp_path
                     / "review-journal.jsonl.pre-supersede").exists()
-        assert not list(tmp_path.glob(".~compact-*")), (
+        assert not list(tmp_path.glob(".~journal-compact-*")), (
             "tmp file leaked after the refused swap"
         )
 
@@ -483,7 +489,7 @@ class TestStaleTmpSweep:
         self, tmp_path: Path,
     ) -> None:
         _mega_audit_run(tmp_path, n_sites=2, n_passes=2)
-        stale = tmp_path / ".~compact-killed.jsonl"
+        stale = tmp_path / ".~journal-compact-killed.jsonl"
         stale.write_bytes(b"leftover from a pre-rename kill")
         compact_journal(tmp_path, supersede=True)
         assert not stale.exists()

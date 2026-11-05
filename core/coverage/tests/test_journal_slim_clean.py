@@ -668,12 +668,17 @@ class TestShardInteraction:
             p for p in shards if b'"body_offload"' in p.read_bytes()
         ]
         assert len(shard_with_stub) > 1
-        # Per-shard .pre-slim archive, byte-exact each.
+        # Changed shards have byte-exact archives; untouched (including empty)
+        # shards keep their inode and need no extra archive generation.
         for p in shards:
             backup = p.with_name(p.name + ".pre-slim")
-            assert backup.is_file()
-            assert backup.read_bytes() == originals[p]
-            assert str(backup) in stats.backup_path
+            if p.read_bytes() == originals[p]:
+                assert not backup.exists()
+                assert str(backup) not in stats.backup_path
+            else:
+                assert backup.is_file()
+                assert backup.read_bytes() == originals[p]
+                assert str(backup) in stats.backup_path
         # Views and spend floor preserved across the set.
         assert {
             k: (e.verdict, e.ts)
