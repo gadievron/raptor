@@ -2064,42 +2064,6 @@ class TestComparisonPremiseExtraction:
         assert _extract_comparison_premises(["4"], src) == []
 
 
-class TestArithOperatorExtraction:
-    def test_backtick_expression_wins(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator(
-            "integer overflow in `count * size` calculation",
-        ) == "*"
-
-    def test_prose_spaced_operator(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator(
-            "integer overflow when count * size exceeds uint32",
-        ) == "*"
-
-    def test_keyword_multiplication(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator(
-            "multiplication of count and size can wrap",
-        ) == "*"
-
-    def test_keyword_underflow_is_subtraction(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator(
-            "underflow when len is subtracted from offset",
-        ) == "-"
-
-    def test_default_is_addition(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator("integer overflow in size calc") == "+"
-
-    def test_spaced_hyphen_is_punctuation(self):
-        from core.audit.sweep import _extract_arith_operator
-        assert _extract_arith_operator(
-            "integer overflow in size calc - see report",
-        ) == "+"
-
-
 class TestPremiseGate:
     def test_no_premises_is_vacuous(self):
         from core.audit.sweep import _premise_gate

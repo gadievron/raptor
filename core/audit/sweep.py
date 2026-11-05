@@ -2865,16 +2865,18 @@ def _run_smt_verb_on_source(
                     rule_id=f"smt:{verb}",
                 )
             from packages.exploit_feasibility.smt_verbs import check_overflow
-            operands = _extract_arithmetic_operands(hypothesis, source)
-            if len(operands) < 2:
+            from .arithmetic_claim import parse_arithmetic_claim
+            claim = parse_arithmetic_claim(hypothesis)
+            if claim is None:
                 return SweepResult(
                     tool="smt", file_path=file_path,
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
+                    details={"arithmetic_expression_status": "unavailable"},
                 )
+            operands, op = list(claim.operands), claim.operator
             from .arithmetic_operation import bind_arithmetic_operation
             from .condition_extraction import language_for_file
-            op = _extract_arith_operator(hypothesis)
             operation = bind_arithmetic_operation(
                 source, operands, op, language=language_for_file(file_path), integer_abi=integer_abi,
             )
@@ -3293,14 +3295,6 @@ def _strip_comments_and_strings(source: str) -> str:
                 pos = close + 1
 
 
-def _operand_in_source_arithmetic(operand: str, source: str) -> bool:
-    """Check if *operand* appears adjacent to an arithmetic operator in source."""
-    import re
-    cleaned = _strip_comments_and_strings(source)
-    pat = rf"(?:\b{re.escape(operand)}\b\s*[+\-*/%]|[+\-*/%]\s*\b{re.escape(operand)}\b)"
-    return bool(re.search(pat, cleaned))
-
-
 # Simple relational expression with atomic sides: ``ident OP ident``
 # or ``ident OP literal`` (either order).  Lookarounds exclude shift
 # operators (``<<`` / ``>>``) and compound assignment fragments so
@@ -3405,42 +3399,6 @@ def _premise_gate(premises: list[str], profile: str) -> str | None:
     return None
 
 
-_ARITH_OP_KEYWORDS = (
-    ("*", ("multipl", "product", "times", "mul ")),
-    ("-", ("subtract", "minus", "underflow", "decrement")),
-    ("+", ("add", "sum", "plus", "increment")),
-)
-
-
-def _extract_arith_operator(hypothesis: str) -> str:
-    """Determine the arithmetic operator a CWE-190 hypothesis is about.
-
-    Order of preference: an explicit operator inside a backticked
-    expression (`` `a * b` ``), then an explicit spaced operator in
-    the prose, then operation keywords.  Defaults to ``"+"`` — the
-    historical behaviour — when nothing is recognisable.
-    """
-    import re
-    for expr in re.findall(r"`([^`]+)`", hypothesis):
-        m = re.search(r"\w\s*([+*-])\s*\w", expr)
-        if m:
-            return m.group(1)
-    # Spaced operator in prose ("count * size overflows"); require
-    # whitespace on both sides.  Backticks are stripped first so
-    # "`count` * `size`" (operands quoted individually) also matches.
-    # ``-`` is excluded here — a spaced hyphen in prose is usually
-    # punctuation, so subtraction is only recognised via backticks or
-    # keywords.
-    m = re.search(r"\w\s+([+*])\s+\w", hypothesis.replace("`", ""))
-    if m:
-        return m.group(1)
-    hyp = hypothesis.lower()
-    for op, keywords in _ARITH_OP_KEYWORDS:
-        if any(kw in hyp for kw in keywords):
-            return op
-    return "+"
-
-
 def _extract_ptr_operand(hypothesis: str) -> str | None:
     """Extract pointer name from hypothesis like 'NULL pointer dereference of ptr'."""
     import re
@@ -3453,35 +3411,6 @@ def _extract_ptr_operand(hypothesis: str) -> str | None:
     if m and _IDENT_RE.fullmatch(m.group(1)):
         return m.group(1)
     return None
-
-
-def _extract_arithmetic_operands(
-    hypothesis: str, source: str,
-) -> list:
-    """Extract operand identifiers from hypothesis about integer overflow.
-
-    After extracting candidates from hypothesis text, verifies each
-    actually participates in an arithmetic expression in the source.
-    """
-    import re
-    backtick_ids = re.findall(r"`(\w+)`", hypothesis)
-    if len(backtick_ids) >= 2:
-        raw = [i for i in backtick_ids[:3] if _IDENT_RE.fullmatch(i)]
-    else:
-        ids = _IDENT_RE.findall(hypothesis)
-        raw = [
-            i for i in ids
-            if i.lower() not in {
-                "integer", "overflow", "the", "in", "of", "can", "cause",
-                "value", "large", "leading", "to", "size", "check", "a",
-                "an", "this", "that", "with", "from", "by", "for", "is",
-            }
-        ]
-        raw = raw[:3]
-    if source:
-        verified = [c for c in raw if _operand_in_source_arithmetic(c, source)]
-        return verified[:2]
-    return raw[:2]
 
 
 def _extract_oob_operands(

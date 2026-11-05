@@ -5171,23 +5171,6 @@ def check_race_protection(
 # Hypothesis disproof
 # ---------------------------------------------------------------------------
 
-# Every whitespace run is pinned with (?=\S) — the run ends where
-# the non-whitespace tail begins (same language: the following lazy
-# classes absorbed any remainder) — so the runs cannot split against
-# the lazy filler: the naive spelling was quadratic on an
-# 'integer overflow'-opening hypothesis ending in a whitespace run.
-# \b pins the opening keyword to a token start, and the two filler
-# gaps are bounded: a hypothesis names its expression within a few
-# hundred chars (500 is far above real phrasing), while unbounded
-# fillers re-scan a hostile hypothesis from every keyword tease.
-_INT_HYPO_RE = re.compile(
-    r"\b(?:integer|int)\s*(?:overflow|underflow|wraparound)"
-    r".{0,500}?(?:in|of|when|during)\s+(?=\S)"
-    r"(?:the\s+(?=\S))?(?:calculation|multiplication|expression|addition|subtraction)?"
-    r"[^.]{0,500}?(`[^`]+`|[a-zA-Z_]\w*(?:\s*[*+\-]\s*[a-zA-Z_]\w*)*)",
-    re.IGNORECASE,
-)
-
 @dataclass
 class HypothesisDisproofResult:
     """Result of attempting to mechanically disprove a hypothesis."""
@@ -5264,47 +5247,21 @@ def disprove_integer_overflow(
 
     var_types = var_types or {}
 
-    m = _INT_HYPO_RE.search(hypothesis)
-    if not m:
+    from .arithmetic_claim import has_integer_overflow_subject, parse_arithmetic_claim
+    claim = parse_arithmetic_claim(hypothesis) if has_integer_overflow_subject(hypothesis) else None
+    if claim is None:
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",
-            reasoning="could not extract expression from hypothesis",
+            reasoning="explicit arithmetic expression unavailable — inconclusive",
         )
-
-    expr_text = m.group(1).strip("`").strip()
-    ops_in_expr = set(re.findall(r"[*+\-]", expr_text))
-    if len(ops_in_expr) > 1:
-        # ``a + b * c`` — the old code applied the FIRST operator to
-        # the whole chain, modeling a different expression than the
-        # hypothesis names.
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=(
-                f"mixed arithmetic operators in '{expr_text}' — cannot "
-                f"model as a single-operator chain; inconclusive"
-            ),
-        )
-    op_char = ops_in_expr.pop() if ops_in_expr else "*"
-    # (?<!\s) pins each separator match to the start of its
-    # whitespace run: an unpinned `\s*` prefix re-consumes the run
-    # from every position — quadratic on hostile expression text.
-    # The earliest match always starts at the run start, so the
-    # split pieces are identical.
-    parts = re.split(r"(?<!\s)\s*[*+\-]\s*", expr_text)
-    var_names = [p.strip() for p in parts if p.strip() and re.match(r"[a-zA-Z_]", p.strip())]
-
-    if not var_names:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=f"no variables found in expression '{expr_text}'",
-        )
+    operands, op_char = list(claim.operands), claim.operator
+    var_names = [value for value in operands if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)]
 
     from .arithmetic_operation import bind_arithmetic_operation
     from .sweep import _premise_gate
 
     # Preserve expression order, including literals. Reordering variables
     # ahead of constants would change subtraction's intrinsic predicate.
-    operands = [part.strip() for part in parts if part.strip()]
     operation = bind_arithmetic_operation(source_context, operands, op_char, language=language, integer_abi=abi)
     if operation.status != "bound" or operation.guard_status == "unavailable":
         return HypothesisDisproofResult(
