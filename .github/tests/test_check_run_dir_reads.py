@@ -12,14 +12,19 @@ codes, and the shipped tree itself must be gate-clean.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
+from contextlib import redirect_stdout
+from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import check_run_dir_reads as census_module
 from check_run_dir_reads import finding_key, main, run_census
 
 
@@ -210,25 +215,47 @@ class TestBaselineGate:
         capsys.readouterr()
 
 
-# Slow tier: both tests sweep every Python file in the shipped tree —
-# whole-repo AST work that grows with the tree and breaches the
+# Slow tier: both tests share the real CLI's whole-repository census —
+# AST work that grows with the tree and breaches the
 # default-tier budget on loaded runners. The gate itself still runs
 # on every PR via the detector CLI in the repo-invariants lint job
 # (and the daily miswiring scan); nightly runs these pytest wrappers.
 @pytest.mark.slow
 class TestShippedTree:
-    def test_repo_is_gate_clean(self, capsys):
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def shipped_census():
+        """Exercise the real CLI once and retain its input for both checks."""
+        repo = Path(__file__).resolve().parents[2]
+        observed = []
+        real_census = census_module.run_census
+
+        def capture(root):
+            assert root == repo
+            result = real_census(root)
+            # Keep census assertions independent of any CLI-side mutation.
+            observed.append(deepcopy(result))
+            return result
+
+        output = io.StringIO()
+        with (
+            patch.object(census_module, "run_census", side_effect=capture),
+            redirect_stdout(output),
+        ):
+            status = main([])
+        assert len(observed) == 1
+        return status, output.getvalue(), observed[0]
+
+    def test_repo_is_gate_clean(self, shipped_census):
         # The gate as wired in CI: the shipped tree plus the shipped
         # baseline must be clean, and the census must be non-vacuous
         # in both columns.
-        rc = main([])
-        out = capsys.readouterr().out
+        rc, out, _ = shipped_census
         assert rc == 0, out
         assert "census clean" in out
 
-    def test_repo_census_is_non_vacuous(self):
-        raw, hardened = run_census(
-            Path(__file__).resolve().parents[2])
+    def test_repo_census_is_non_vacuous(self, shipped_census):
+        raw, hardened = shipped_census[2]
         assert len(hardened) > 50, "hardened-reader extraction went vacuous"
         # Raw readers surviving on the tree are exactly the shipped
         # baseline's keys — nothing silently out of scope.
