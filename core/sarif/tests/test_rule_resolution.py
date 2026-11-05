@@ -333,3 +333,31 @@ def test_distinct_subrules_survive_dedup_and_table_reordering(tmp_path, run):
     assert [(f['rule_id'], f['finding_id']) for f in reordered] == [
         (f['rule_id'], f['finding_id']) for f in original
     ]
+
+
+@pytest.mark.parametrize('level', [None, 'error'])
+@pytest.mark.parametrize('reference,expected', [
+    ({'ruleIndex': 0}, 'same'),
+    ({'rule': {'index': 0, 'toolComponent': {'index': 0}}}, 'same'),
+    ({'rule': {'id': 'same/child', 'index': 0, 'toolComponent': {'index': 0}}}, 'same/child'),
+    ({'ruleId': 'explicit'}, 'explicit'),
+    ({'rule': {'id': 'invented', 'index': 0}}, 'unknown'),
+    ({'ruleIndex': True}, 'unknown'),
+    ({'ruleId': ''}, 'unknown'),
+])
+def test_metrics_rule_counts_match_validated_import_identity(tmp_path, run, reference, expected, level):
+    import json
+    from core.sarif.parser import generate_scan_metrics, parse_sarif_findings
+
+    result = dict(reference, message={'text': 'finding'}, locations=[{'physicalLocation': {
+        'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+    }}])
+    if level is not None:
+        result['level'] = level
+    path = tmp_path / 'metrics-identity.sarif'
+    path.write_text(json.dumps({'version': '2.1.0', 'runs': [dict(run, results=[result])]}))
+    metrics = generate_scan_metrics([str(path)])
+    finding = parse_sarif_findings(path)[0]
+    assert metrics['findings_by_rule'] == {expected: 1}
+    assert (finding['rule_id'] or 'unknown') == expected
+    assert metrics['findings_by_severity'][finding['level']] == 1
