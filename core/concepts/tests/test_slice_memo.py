@@ -34,18 +34,21 @@ from core.concepts.tests import slice_vectors
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
-    """Every test starts and ends with cold model/memo state.
+def _clean_caches(monkeypatch):
+    """Use private model/memo caches and preserve the caller's warm state."""
+    from collections import OrderedDict
+    from functools import lru_cache
 
-    The slice-memo store and the model parse cache are process-global;
-    without this, one test's model content leaks derivations into the
-    next test's assertions.
-    """
-    _load_cached.cache_clear()
-    ab._slice_memos.clear()
-    yield
-    _load_cached.cache_clear()
-    ab._slice_memos.clear()
+    from core.testing.module_state import isolated_module_state
+
+    cached = ab._load_cached
+    with isolated_module_state(
+        ab, {"_slice_memos": OrderedDict(), "_load_cached":
+             lru_cache(**cached.cache_parameters())(cached.__wrapped__)},
+        lock=ab._slice_memo_lock,
+    ):
+        monkeypatch.setitem(globals(), "_load_cached", ab._load_cached)
+        yield
 
 # ---------------------------------------------------------------------------
 # Frozen reference implementations (pre-cache code, verbatim).
