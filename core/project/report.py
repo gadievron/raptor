@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import stat
 import re
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.atomic_fs import rmtree_hardened
+from core.atomic_fs.fs_lock import artifact_lock
+from core.run.scratch import scratch_dir
 from core.json import dumps_artifact, dumps_display, save_json
 from core.security.prompt_output_sanitise import (
     sanitise_code,
@@ -416,20 +421,14 @@ def render_grouped_findings_markdown(
 
 def _clear_generated_findings_dir(findings_dir: Path) -> None:
     """Remove prior generated per-finding artifacts without following symlinks."""
-    import shutil
-
-    if findings_dir.is_symlink():
-        # rmtree refuses symlinks with OSError (uncaught it crashed
-        # the whole report pass); unlinking the LINK honours the
-        # no-follow contract — the pointed-to tree is not ours.
-        findings_dir.unlink(missing_ok=True)
-        return
     try:
-        shutil.rmtree(findings_dir)
-    except NotADirectoryError:
-        findings_dir.unlink(missing_ok=True)
+        mode = findings_dir.lstat().st_mode
     except FileNotFoundError:
-        pass
+        return
+    if not stat.S_ISDIR(mode):
+        findings_dir.unlink(missing_ok=True)
+    elif not rmtree_hardened(findings_dir):
+        raise OSError(f"Cannot remove generated findings tree: {findings_dir}")
 
 
 def export_findings_directory(
@@ -451,10 +450,53 @@ def export_findings_directory(
     findings = list(findings)
     sca_findings = list(sca_findings)
     output_dir = Path(output_dir)
-    findings_dir = output_dir / "findings"
-    _clear_generated_findings_dir(findings_dir)
-    findings_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    final = output_dir / "findings"
+    with artifact_lock(output_dir / ".findings-export", required=True,
+                       create_parent=False, subject="findings export"):
+        # keep=True lets us retain the previous report if rollback fails.
+        # Staging lives next to the output so publication is a same-FS rename.
+        with scratch_dir(prefix=".findings-stage-", dir=output_dir, keep=True) as stage:
+            backup = stage / "previous"
+            published = False
+            failed = False
+            try:
+                result = _write_findings_directory(
+                    findings, output_dir, stage / "next", project_name=project_name,
+                    sca_findings=sca_findings, readjudication=readjudication,
+                )
+                if os.path.lexists(final):
+                    final.rename(backup)
+                (stage / "next").rename(final)
+                published = True
+                return result
+            except BaseException:
+                failed = True
+                if os.path.lexists(backup):
+                    try:
+                        backup.rename(final)
+                    except BaseException:
+                        logger.exception("Restore findings report manually from %s", backup)
+                raise
+            finally:
+                if not published and os.path.lexists(backup):
+                    logger.warning("Findings recovery tree retained at %s", stage)
+                else:
+                    try:
+                        _clear_generated_findings_dir(stage)
+                    except BaseException as exc:
+                        logger.warning("Findings staging cleanup failed at %s", stage, exc_info=True)
+                        if not failed and not isinstance(exc, Exception):
+                            raise
 
+
+def _write_findings_directory(
+    findings, output_dir: Path, findings_dir: Path, *, project_name: str,
+    sca_findings, readjudication,
+) -> dict[str, Any]:
+    """Build a complete replacement with paths naming its published location."""
+    findings_dir.mkdir()
+    published_dir = output_dir / "findings"
     counts = {"confirmed": 0, "needs-review": 0, "ruled-out": 0}
     manifest: dict[str, Any] = {"findings": []}
     jsonl_records = []
@@ -485,8 +527,8 @@ def export_findings_directory(
             "status": _finding_status(finding),
             "bucket": bucket,
             "fingerprint": _finding_fingerprint(finding),
-            "markdown": str(markdown_path.relative_to(output_dir)),
-            "json": str(json_path.relative_to(output_dir)),
+            "markdown": str(Path("findings") / markdown_path.relative_to(findings_dir)),
+            "json": str(Path("findings") / json_path.relative_to(findings_dir)),
         }
         manifest["findings"].append(record)
         jsonl_records.append({**record, "finding": finding})
@@ -500,8 +542,8 @@ def export_findings_directory(
         encoding="utf-8",
     )
     return {
-        "findings_dir": str(findings_dir),
-        "aggregate_markdown": str(aggregate_path),
+        "findings_dir": str(published_dir),
+        "aggregate_markdown": str(published_dir / aggregate_path.name),
         "counts": counts,
         "files": len(jsonl_records) * 2 + 3,
     }
