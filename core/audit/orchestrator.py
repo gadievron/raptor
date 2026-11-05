@@ -31514,7 +31514,11 @@ def _pre_loop_smt_screen(
 
         if not tool_hit and is_c_or_go:
             with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
-                inr = check_integer_narrowing(source)
+                from .condition_extraction import language_for_file
+                inr = check_integer_narrowing(
+                    source, function_name=func_name or "",
+                    language=language_for_file(file_path) or "c",
+                )
                 if inr.narrowing_found:
                     tool_hit = "smt:check-integer-narrowing"
                     if inr.witness:
@@ -31746,7 +31750,11 @@ def _promote_smt_clean(
 
         if not tool_hit and is_c_or_go:
             try:
-                inr = check_integer_narrowing(source)
+                from .condition_extraction import language_for_file
+                inr = check_integer_narrowing(
+                    source, function_name=outcome.function or "",
+                    language=language_for_file(outcome.file) or "c",
+                )
                 if inr.narrowing_found:
                     tool_hit = "smt:check-integer-narrowing"
                     if inr.witness:

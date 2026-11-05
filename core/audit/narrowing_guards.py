@@ -45,7 +45,8 @@ def _unwrap(node):
 class NarrowingGuardContext:
     """One bounded source parse shared by initializer and guard checks."""
 
-    def __init__(self, source: str):
+    def __init__(self, source: str, *, language="c"):
+        self.language = language
         self.source = source
         self.lines = source.split("\n")
         self.data = source.encode("utf-8")
@@ -285,19 +286,39 @@ class NarrowingGuardContext:
                 interval = source_range
         return None
 
-    def _initializer_at(self, line, column):
+    def _load_root(self):
         if not self.loaded:
             self.loaded = True
             try:
                 from .condition_extraction import _get_parser
 
-                parser = _get_parser("c")
+                parser = _get_parser(self.language)
                 self.root = (
                     parser.parse(self.data).root_node if parser is not None else None
                 )
             except Exception:
                 self.root = None
-        if self.root is None or self.root.has_error:
+        return self.root
+
+    def function_scope(self, function_name):
+        from .probe_function_scope import select_function
+
+        return select_function(
+            self._load_root(), self.data, function_name, self.language
+        )
+
+    def in_function(self, line, column, scope):
+        target = self._initializer_at(line, column)
+        while target is not None and target.type != "function_definition":
+            target = target.parent
+        return target is not None and (target.start_byte, target.end_byte) == (
+            scope.start,
+            scope.end,
+        )
+
+    def _initializer_at(self, line, column):
+        root = self._load_root()
+        if root is None or root.has_error:
             return None
         offset = self.offsets[line] + len(self.lines[line][:column].encode("utf-8"))
         target = self.root.descendant_for_byte_range(offset, offset)
@@ -332,7 +353,11 @@ class NarrowingGuardContext:
         if target is None:
             return False
         value = _unwrap(target.child_by_field_name("value"))
-        if value is None or value.type != "identifier" or self._node_source(value) != variable:
+        if (
+            value is None
+            or value.type != "identifier"
+            or self._node_source(value) != variable
+        ):
             return False  # guarding an operand does not bound an arbitrary expression
         function = target.parent
         while function is not None and function.type != "function_definition":

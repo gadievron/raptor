@@ -2891,13 +2891,17 @@ def _run_smt_verb_inner(
             )
         elif verb == "check-integer-narrowing":
             from core.audit.condition_smt import check_integer_narrowing
-            if not source:
+            if not source or not isinstance(function_name, str) or not function_name.strip():
                 return SweepResult(
                     tool="smt", file_path=file_path,
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
-            narr_result = check_integer_narrowing(source)
+            from .condition_extraction import language_for_file
+            narr_result = check_integer_narrowing(
+                source, function_name=function_name,
+                language=language_for_file(file_path) or "c",
+            )
             verdict = "confirmed" if narr_result.narrowing_found else _negative_outcome(narr_result)
             verdict, details = _scope_smt_observation(verb, verdict, narr_result.to_dict())
             return SweepResult(

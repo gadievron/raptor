@@ -41,7 +41,7 @@ def test_width_worker_preserves_observations_without_negative_authority(
     monkeypatch.setattr(
         condition_smt,
         "check_integer_narrowing",
-        lambda *a: condition_smt.IntegerNarrowingResult(
+        lambda *a, **kw: condition_smt.IntegerNarrowingResult(
             narrowing_found=found, witness={"count": 1}
         ),
     )
@@ -118,7 +118,7 @@ def test_actual_guarded_candidate_reaches_dispatch_without_verdict_authority(
     )
     source = f"int Read(size_t wide) {{\n{prefix}\nint small = wide;\nreturn small;\n}}"
     (tmp_path / "record.c").write_text(source)
-    monkeypatch.setattr(condition_smt, "_try_z3_integer_narrowing", lambda *a: None)
+    monkeypatch.setattr(condition_smt, "_try_z3_integer_narrowing", lambda *a, **kw: None)
     monkeypatch.setattr(orch, "run_smt_verb_direct", sweep._run_smt_verb_inner)
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
     result = orch._run_tool_chain(
