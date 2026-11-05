@@ -25,6 +25,8 @@ import json
 import httpx
 import pytest
 
+from core.testing.fds import read_and_close
+
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher
 
@@ -164,12 +166,10 @@ class TestChildPathAllowlist:
         # The path pin scopes CHILD tokens; full-power worker tokens
         # keep their existing surface (they never ride the child
         # plane's containment story).
-        import os as _os
 
         d, upstream = dispatcher
         _, fd = d.allocate_worker(label="test-worker")
-        worker_token = _os.read(fd, 64).decode().strip()
-        _os.close(fd)
+        worker_token = read_and_close(fd, 64).decode().strip()
         transport = httpx.HTTPTransport(uds=str(d.socket_path))
         with httpx.Client(transport=transport, timeout=10.0) as client:
             resp = _post(

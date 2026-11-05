@@ -22,6 +22,8 @@ import time
 import httpx
 import pytest
 
+from core.testing.fds import read_and_close
+
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import (
     _TOKEN_HEADER,
@@ -171,8 +173,7 @@ class TestLayer3TokenAuth:
         )
         try:
             _socket_path, fd = dispatcher.allocate_worker(label="test-l3")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
             r = self._post(dispatcher, headers={_TOKEN_HEADER: token})
             assert r.status_code == 200
             assert r.json()["id"] == "msg_test"
@@ -212,8 +213,7 @@ class TestLayer4TokenLifecycle:
         )
         try:
             _socket_path, fd = d.allocate_worker(label="budget-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=5.0) as c:
                 # First two consume budget. Both pass token check.
@@ -243,8 +243,7 @@ class TestLayer4TokenLifecycle:
         )
         try:
             _socket_path, fd = d.allocate_worker(label="expiry-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
             # No need to ``time.sleep(0.05)`` here — with
             # ``token_ttl_s=0`` the dispatcher sets
             # ``expires_at == issued_at``, so the *next* call into
@@ -273,8 +272,7 @@ class TestLayer4TokenLifecycle:
 
     def test_revoked_token_is_rejected(self, dispatcher):
         _socket_path, fd = dispatcher.allocate_worker(label="revoke")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+        token = read_and_close(fd, 64).decode().strip()
         # Manually flip status — what happens on connection close
         # in production.
         with dispatcher._tokens_lock:
@@ -297,8 +295,7 @@ class TestLayer4TokenLifecycle:
     @staticmethod
     def _mint_worker_token(d) -> str:
         _socket_path, fd = d.allocate_worker(label="renew-test")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+        token = read_and_close(fd, 64).decode().strip()
         return token
 
     def test_renew_rearms_expiry_window(self, dispatcher):
@@ -620,8 +617,7 @@ class TestLayer5AuditLog:
 
     def test_audit_does_not_log_token_value(self, dispatcher):
         _socket_path, fd = dispatcher.allocate_worker(label="leak-check")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+        token = read_and_close(fd, 64).decode().strip()
         events = _read_audit(dispatcher)
         for e in events:
             for value in e.values():
@@ -716,8 +712,7 @@ class TestE2ECredentialIsolation:
         d, upstream = self._setup(fake_creds, tmp_path)
         try:
             _, fd = d.allocate_worker(label="e2e")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
 
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=10.0) as client:
@@ -763,8 +758,7 @@ class TestE2ECredentialIsolation:
         d, upstream = self._setup(fake_creds, tmp_path)
         try:
             _, fd = d.allocate_worker(label="audit-e2e")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
 
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=10.0) as c:
@@ -846,8 +840,7 @@ class TestRealAnthropicSDKThroughDispatcher:
 
         try:
             _socket_path, fd = d.allocate_worker(label="sdk-e2e")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
 
             client = make_anthropic_client(
                 socket_path=str(d.socket_path),
@@ -1059,8 +1052,7 @@ class TestChildPlaneSocket:
 
     def _worker_token(self, d) -> str:
         _sock, fd = d.allocate_worker(label="victim-worker")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+        token = read_and_close(fd, 64).decode().strip()
         return token
 
     def test_child_socket_exists_next_to_worker_socket(self, dispatcher):
@@ -1338,8 +1330,7 @@ class TestE2EResponseEncodingPreserved:
         d, upstream = self._setup(fake_creds, tmp_path, payload)
         try:
             _, fd = d.allocate_worker(label="gzip-e2e")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
+            token = read_and_close(fd, 64).decode().strip()
 
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=10.0) as client:

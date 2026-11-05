@@ -17,11 +17,14 @@ Hermetic — captive loopback upstream, no LLM, no network egress.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 import time
 
 import pytest
+
+from core.testing.fds import read_and_close
 
 anthropic = pytest.importorskip("anthropic")
 
@@ -62,24 +65,37 @@ def _no_sleep(monkeypatch):
 def _wire(fake_creds, tmp_path, upstream, monkeypatch) -> LLMDispatcher:
     """Dispatcher fronting *upstream*, with THIS process set up as its
     worker (socket env + cached token, as spawn_worker would)."""
-    d = LLMDispatcher(
-        run_id="consumed-e2e", creds=fake_creds,
-        audit_path=tmp_path / "audit.jsonl",
-        token_ttl_s=3600, token_budget=100,
-    )
-    original = d._rules["anthropic"]
-    d._rules["anthropic"] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
-    _, fd = d.allocate_worker(label="consumed-e2e-worker")
-    token = os.read(fd, 64).decode().strip()
-    os.close(fd)
-    monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
-    monkeypatch.setattr(dispatcher_client, "_cached_token", token)
-    return d
+    previous_socket = os.environ.get("RAPTOR_LLM_SOCKET")
+    previous_token = dispatcher_client._cached_token
+
+    def restore_setup_state():
+        if previous_socket is None:
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+        else:
+            os.environ["RAPTOR_LLM_SOCKET"] = previous_socket
+        dispatcher_client._cached_token = previous_token
+
+    with ExitStack() as rollback:
+        rollback.callback(restore_setup_state)
+        d = LLMDispatcher(
+            run_id="consumed-e2e", creds=fake_creds,
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=3600, token_budget=100,
+        )
+        rollback.callback(d.shutdown)
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+        _, fd = d.allocate_worker(label="consumed-e2e-worker")
+        token = read_and_close(fd, 64).decode().strip()
+        monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
+        monkeypatch.setattr(dispatcher_client, "_cached_token", token)
+        rollback.pop_all()
+        return d
 
 
 def _llm_client(max_retries: int) -> LLMClient:
@@ -119,9 +135,11 @@ class TestConsumedAttemptE2E:
         """The measured defect, closed: a generation that dies
         mid-response through the whole real stack is bought once, not
         once per retry attempt."""
-        upstream = MockUpstream("rst-mid-response")
-        d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("rst-mid-response")
+            cleanup.callback(upstream.shutdown)
+            d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
+            cleanup.callback(d.shutdown)
             client = _llm_client(max_retries=3)
             with caplog.at_level("WARNING", logger="core.llm.client"):
                 with pytest.raises(RuntimeError) as excinfo:
@@ -135,9 +153,6 @@ class TestConsumedAttemptE2E:
             assert any(
                 "NOT re-sending" in r.message for r in caplog.records
             )
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_pre_response_death_keeps_worker_retry(
         self, fake_creds, tmp_path, monkeypatch, _no_sleep,
@@ -146,9 +161,11 @@ class TestConsumedAttemptE2E:
         pre-existing recovery path: the dispatcher answers 502
         (stamped pre-response) and the worker spends its full retry
         budget — one request.error audit row per worker attempt."""
-        upstream = MockUpstream("no-response-close")
-        d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("no-response-close")
+            cleanup.callback(upstream.shutdown)
+            d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
+            cleanup.callback(d.shutdown)
             client = _llm_client(max_retries=2)
             with pytest.raises(RuntimeError):
                 client.generate("hello")
@@ -158,9 +175,6 @@ class TestConsumedAttemptE2E:
             # dispatcher's own bounded fresh-connection retry, so
             # strictly more sends than worker attempts).
             assert upstream.counters()["requests_processed"] >= 2
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_escape_hatch_resends_through_the_real_stack(
         self, fake_creds, tmp_path, monkeypatch, _no_sleep, caplog,
@@ -169,9 +183,11 @@ class TestConsumedAttemptE2E:
         really happen — upstream processes once per worker attempt,
         each named a re-purchase."""
         monkeypatch.setenv("RAPTOR_LLM_RETRY_CONSUMED", "1")
-        upstream = MockUpstream("rst-mid-response")
-        d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("rst-mid-response")
+            cleanup.callback(upstream.shutdown)
+            d = _wire(fake_creds, tmp_path, upstream, monkeypatch)
+            cleanup.callback(d.shutdown)
             client = _llm_client(max_retries=2)
             with caplog.at_level("WARNING", logger="core.llm.client"):
                 with pytest.raises(RuntimeError):
@@ -182,6 +198,3 @@ class TestConsumedAttemptE2E:
                 "re-buys the generation" in r.message
                 for r in caplog.records
             ) == 2
-        finally:
-            upstream.shutdown()
-            d.shutdown()

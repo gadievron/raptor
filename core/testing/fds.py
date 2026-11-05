@@ -1,4 +1,4 @@
-"""Descriptor snapshots for tests that temporarily redirect standard I/O."""
+"""Descriptor ownership and snapshots for tests."""
 
 from contextlib import contextmanager, ExitStack
 import os
@@ -13,3 +13,11 @@ def preserved_fds(*fds):
             cleanup.callback(os.close, saved)
             cleanup.callback(os.dup2, saved, fd)
         yield
+
+
+def read_and_close(fd: int, size: int) -> bytes:
+    """Read bounded bytes, closing the owned descriptor on every exit."""
+    try:
+        return os.read(fd, size)
+    finally:
+        os.close(fd)

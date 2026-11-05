@@ -30,6 +30,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
+from core.testing.fds import read_and_close
+
 from core.llm.dispatcher.auth import (
     BedrockTransformError,
     CredentialStore,
@@ -132,8 +134,7 @@ def _post_bedrock(
     prefix.  Worker sends standard Anthropic shape; dispatcher forwards
     to Mantle (``/anthropic/v1/messages``) with AWS auth attached."""
     socket_path, fd = dispatcher.allocate_worker(label="bedrock-test")
-    token = os.read(fd, 64).decode().strip()
-    os.close(fd)
+    token = read_and_close(fd, 64).decode().strip()
     transport = httpx.HTTPTransport(uds=str(dispatcher.socket_path))
     with httpx.Client(transport=transport, timeout=10.0) as c:
         return c.post(
@@ -545,8 +546,7 @@ def test_anthropic_sdk_roundtrip(upstream, tmp_path):
     )
     try:
         socket_path, fd = d.allocate_worker(label="bedrock-sdk")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
+        token = read_and_close(fd, 64).decode().strip()
         client = make_bedrock_client(
             socket_path=str(d.socket_path), token=token,
         )
