@@ -63,6 +63,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,16 @@ logger = logging.getLogger(__name__)
 # load-bearing for the mount-ns shadowing (mount_ns.py) and the macOS
 # seatbelt deny rule (seatbelt.build_profile) — all three must agree.
 AUDIT_SUBDIR = ".audit"
+
+
+def _unique_evidence_object(fields: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous objects before duplicate members are overwritten."""
+    record: dict[str, Any] = {}
+    for field, value in fields:
+        if field in record:
+            raise ValueError("duplicate field in evidence object")
+        record[field] = value
+    return record
 
 
 def audit_dir_path(run_dir) -> Path:

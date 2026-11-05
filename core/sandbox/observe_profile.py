@@ -59,6 +59,7 @@ from pathlib import Path
 
 from core.security.capped_read import CappedReadRefused, path_may_exist, read_capped
 
+from .evidence import _unique_evidence_object
 from .evidence import evidence_write_path as _evidence_write_path
 from .evidence import resolve_read_path as _resolve_evidence_path
 
@@ -513,8 +514,10 @@ def _iter_records(path: Path, *, profile: ObserveProfile | None = None) -> Itera
         if not line:
             continue
         try:
-            # Damaged bytes are capture loss, not rewritten observations.
-            yield json.loads(line.decode("utf-8"))
+            # Damaged bytes and ambiguous objects are capture loss, not
+            # rewritten observations or proof of capture completion.
+            yield json.loads(
+                line.decode("utf-8"), object_pairs_hook=_unique_evidence_object)
         except (ValueError, TypeError, RecursionError):
             if profile is not None:
                 profile.capture_incomplete = True

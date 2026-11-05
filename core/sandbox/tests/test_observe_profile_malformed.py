@@ -3,6 +3,7 @@
 import errno
 import json
 import os
+from types import ModuleType
 from unittest.mock import Mock
 
 import pytest
@@ -77,13 +78,17 @@ def test_json_recursion_error_does_not_end_reading(tmp_path, monkeypatch):
     real_loads = json.loads
     calls = []
 
-    def decode(line):
+    def decode(line, **kwargs):
         calls.append(line)
         if len(calls) == 2:
             raise RecursionError("deep JSON")
-        return real_loads(line)
+        return real_loads(line, **kwargs)
 
-    monkeypatch.setattr(observe.json, "loads", decode)
+    private_json = ModuleType("observe_decode_json")
+    vars(private_json).update(vars(json))
+    private_json.loads = decode
+    monkeypatch.setattr(observe, "json", private_json)
+    assert json.loads is real_loads
     assert observe.parse_observe_log(tmp_path).paths_read == ["/first", "/last"]
 
 

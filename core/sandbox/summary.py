@@ -78,6 +78,7 @@ from core.security.capped_read import path_may_exist, read_capped
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
+from .evidence import _unique_evidence_object
 from .escalation_signatures import (
     ESCAPE_PRIMITIVE_SYSCALLS, HOSTILE_IOCTL_CMDS, HOSTILE_SOCKET_ARGS,
     hostile_arg_label,
@@ -1030,16 +1031,6 @@ def _finite_json_number(value: str) -> float:
     if not math.isfinite(number):
         raise ValueError("non-finite evidence number")
     return number
-
-
-def _unique_evidence_object(fields: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Reject ambiguous objects before duplicate members are overwritten."""
-    record: dict[str, Any] = {}
-    for field, value in fields:
-        if field in record:
-            raise ValueError("duplicate field in evidence object")
-        record[field] = value
-    return record
 
 
 def _iter_denial_lines(raw: bytes):
