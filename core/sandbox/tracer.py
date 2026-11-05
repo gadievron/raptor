@@ -125,6 +125,7 @@ import ctypes
 import ctypes.util
 import json
 
+from core.atomic_fs import open_hardened_append
 from core.json import dumps_artifact
 import logging
 import os
@@ -1240,36 +1241,46 @@ def _ptrace_detach(pid: int) -> bool:
 # ----- JSONL record writer -----
 
 def _append_jsonl_line(run_dir: Path, filename: str, line: str) -> bool:
-    """Append one line to the evidence JSONL. Returns True on success.
+    """Append one complete line, returning False on encoding or I/O failure.
 
-    Preferred path: the held evidence fd inherited from the spawn
-    parent (`_evidence_out_fd`) — appends through it are immune to
-    path-level swaps of the JSONL. Fallback (standalone / testing
-    invocations without a parent-minted fd): open
-    ``<run_dir>/.audit/<filename>`` per record with the same
-    O_NOFOLLOW + O_APPEND discipline as summary.record_denial.
+    Borrowed parent descriptors stay open. The standalone fallback owns
+    its hardened regular-file descriptor and releases it on every exit.
+    Each record uses one append write; incomplete fragments are not retried
+    because other appenders may already have written after them.
     """
-    if _evidence_out_fd is not None:
-        try:
-            os.write(_evidence_out_fd, line.encode("utf-8"))
-            return True
-        except OSError as e:
-            logger.debug("tracer: evidence-fd write failed: %s", e)
-            return False
     try:
-        jsonl_path = run_dir / AUDIT_SUBDIR / filename
-        jsonl_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(
-            str(jsonl_path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(line)
-        return True
+        data = line.encode("utf-8")
+    except UnicodeError as e:
+        logger.debug("tracer: evidence encoding failed: %s", e)
+        return False
+    owned_fd = None
+    success = False
+    try:
+        fd = _evidence_out_fd
+        if fd is None:
+            jsonl_path = run_dir / AUDIT_SUBDIR / filename
+            jsonl_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            owned_fd = open_hardened_append(jsonl_path, mode=0o600)
+            fd = owned_fd
+        written = os.write(fd, data)
+        success = written == len(data)
+        if not success:
+            logger.warning(
+                "tracer: incomplete evidence append: wrote %s of %s bytes",
+                written, len(data),
+            )
     except OSError as e:
         logger.debug("tracer: evidence append failed: %s", e)
-        return False
+    finally:
+        if owned_fd is not None:
+            try:
+                os.close(owned_fd)
+            except OSError as e:
+                # A close error fails an otherwise successful append while
+                # leaving any original exception/cancellation authoritative.
+                success = False
+                logger.debug("tracer: evidence close failed: %s", e)
+    return success
 
 
 def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
