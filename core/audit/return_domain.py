@@ -627,9 +627,9 @@ def _constants_for_root(
     try:
         from core.inventory.macro_resolve import (
             _ENUMERATOR_NAME_RE,
-            _MACRO_DEF_RE,
             _SKIP_IDENTS_C,
             _iter_enum_bodies,
+            _iter_macro_definitions,
             _parse_enumerator_value,
         )
 
@@ -659,7 +659,7 @@ def _constants_for_root(
         # once instead of rescanning the entire prefix for every match.
         line = 1
         line_offset = 0
-        for m in _MACRO_DEF_RE.finditer(text):
+        for m in _iter_macro_definitions(text):
             name = m.group(1)
             if name in _SKIP_IDENTS_C or m.group(2):
                 continue

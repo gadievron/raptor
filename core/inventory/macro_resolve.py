@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from core.inventory._walk import iter_regular_files
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ _MACRO_DEF_RE = re.compile(
     r"^[^\S\n]*#\s*define\s+(\w+)(\([^)]*\))?\s+(.+?)(?:\s*\\)?$",
     re.MULTILINE,
 )
+_MACRO_DEFINE_PREFIX_RE = re.compile(r"#\s*define\s")
 _MACRO_IDENT_RE = re.compile(r"\b([A-Za-z_]\w*)\b")
 _C_EXTENSIONS = frozenset({
     ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx",
@@ -71,6 +73,13 @@ _table_cache: OrderedDict[str, dict[str, tuple[str, str]]] = OrderedDict()
 # located with one linear ``str.find``.
 _ENUM_HEAD_RE = re.compile(r"\benum\s*(?:\w{1,256}\s*)?\{")
 _ENUMERATOR_NAME_RE = re.compile(r"\b(\w+)\s*=\s*")
+
+
+def _iter_macro_definitions(text: str) -> Iterator[re.Match[str]]:
+    """Iterate unchanged definition matches, skipping definition-free text."""
+    if type(text) is str and _MACRO_DEFINE_PREFIX_RE.search(text) is None:
+        return iter(())
+    return _MACRO_DEF_RE.finditer(text)
 
 
 def _iter_enum_bodies(text: str):
@@ -246,7 +255,7 @@ def build_macro_table(target_path: Path) -> dict[str, tuple[str, str]]:
             except OSError:
                 continue
             text = text.replace("\\\n", " ")
-            for m in _MACRO_DEF_RE.finditer(text):
+            for m in _iter_macro_definitions(text):
                 name = m.group(1)
                 params = m.group(2) or ""
                 body = m.group(3).strip()

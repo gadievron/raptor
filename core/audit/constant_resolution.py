@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 from core.inventory.macro_resolve import (
     _C_EXTENSIONS,
     _ENUMERATOR_NAME_RE,
-    _MACRO_DEF_RE,
     _SKIP_IDENTS_C,
     _iter_enum_bodies,
+    _iter_macro_definitions,
     _parse_enumerator_value,
 )
 from core.source.lines import split_lines
@@ -255,7 +255,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
 
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 
-        for m in _MACRO_DEF_RE.finditer(text_joined):
+        for m in _iter_macro_definitions(text_joined):
             name = m.group(1)
             if name in _SKIP_IDENTS_C:
                 continue
