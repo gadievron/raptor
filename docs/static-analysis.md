@@ -485,6 +485,11 @@ When GCC explicitly names a simple identifier as the subject of a warning,
 `/audit` uses that name for attribution. Mentioning another variable on the
 same source line does not make that warning evidence about the other variable.
 
+For compiler-backed hypothesis checks, `/audit` resolves relative diagnostic
+paths from the translation unit’s directory, as `/scan` does. A warning in
+`include/unit.c` is not attributed to `unit.c` merely because the basenames
+match.
+
 ## Output
 
 ### SARIF Files
