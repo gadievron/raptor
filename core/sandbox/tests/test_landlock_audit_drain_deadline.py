@@ -28,7 +28,7 @@ from core.testing.wallclock import wall_deadline
 def saturated_pipe(monkeypatch):
     """Simulate a permanently-readable fd: select always reports it ready
     and os.read always returns data (never EOF)."""
-    monkeypatch.setattr(mod.select, "select", lambda r, w, x, t: (list(r), [], []))
+    monkeypatch.setattr(mod, "_readable_fds", lambda fds, timeout: list(fds))
     monkeypatch.setattr(os, "read", lambda fd, n: b"x" * n)
     # Pin the target ALIVE: the liveness probe runs on every wake
     # (waitid WNOWAIT), and the fake target_pid=1 would probe as

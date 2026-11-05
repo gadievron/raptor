@@ -48,6 +48,7 @@ import ctypes.util
 import errno
 import json
 import logging
+import math
 import os
 import select
 import signal
@@ -305,6 +306,19 @@ def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
             _close_safely(pidfd)
 
 
+def _readable_fds(fds: Iterable[int], timeout: float | None) -> list[int]:
+    """Read readiness without select()'s fixed descriptor-number limit."""
+    descriptors = list(fds)
+    if not descriptors:
+        return []
+    poller = select.poll()
+    for fd in descriptors:
+        poller.register(fd, select.POLLIN)
+    milliseconds = -1 if timeout is None else max(0, math.ceil(timeout * 1000))
+    # HUP/ERR are readiness too: read() must collect buffered bytes or EOF.
+    return [fd for fd, events in poller.poll(milliseconds)]
+
+
 def _drain_pipes_until_eof(
     fds: Iterable[int],
     target_pid: int,
@@ -416,7 +430,7 @@ def _drain_pipes_until_eof(
             wait = _DRAIN_IDLE_POLL_S
             if deadline is not None:
                 wait = min(wait, max(0.0, deadline - time.monotonic()))
-        ready, _, _ = select.select(list(fds_open), [], [], wait)
+        ready = _readable_fds(fds_open, wait)
         if not ready:
             if target_exited:
                 break
@@ -841,7 +855,7 @@ def run_landlock_audit(
         ready = b""
         ready_timed_out = False
         try:
-            rlist, _, _ = select.select([t_ready_r], [], [], _TRACER_READY_TIMEOUT_S)
+            rlist = _readable_fds([t_ready_r], _TRACER_READY_TIMEOUT_S)
             if rlist:
                 ready = os.read(t_ready_r, 1)
             else:
