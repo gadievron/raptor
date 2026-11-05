@@ -9,12 +9,14 @@ import contextlib
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
 from core.config import RaptorConfig
+from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.fs_lock import artifact_lock
 from core.json import load_json, save_json
 from core.logging import get_logger
@@ -1116,7 +1118,8 @@ class ProjectManager:
         directory — REFUSED while any run under it is live (another
         session's in-flight run would have its dir deleted underneath
         it; the same ``split_live_runs`` predicate clean/dedup/merge
-        already use — purge never had it). ``force=True`` overrides.
+        already use — purge never had it). ``force=True`` overrides only
+        the live-run refusal; purge path and ownership checks still apply.
 
         Holds the registry-file RMW lock for the whole load → unlink
         window: an in-flight locked mutator (trust marker, setting,
@@ -1133,6 +1136,18 @@ class ProjectManager:
         if not project:
             msg = f"Project '{name}' not found"
             raise ValueError(msg)
+
+        purge_identity = None
+        if purge:
+            try:
+                info = project.output_path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISDIR(info.st_mode):
+                    raise ValueError(
+                        f"Refusing to purge non-directory output path: {project.output_path}")
+                purge_identity = (info.st_dev, info.st_ino)
 
         # Live-run refusal applies to EVERY delete, not only purge:
         # deleting the registry entry alone re-binds sessions to none
@@ -1170,44 +1185,8 @@ class ProjectManager:
                 )
                 raise ValueError(msg)
 
-        if purge and project.output_path.exists():
-            # Safety: refuse to delete paths that could cause serious damage.
-            #
-            # The existing checks (== home, == /, < 3 parts, ancestor of
-            # home) catch the most obvious targets, but an attacker with
-            # write access to the project JSON could set
-            # `output_dir = "/etc"` or `"/usr/share/foo"` — none of those
-            # match the simple checks but rmtree of any of them is
-            # catastrophic.
-            #
-            # Add a containment check: refuse to rmtree any path that
-            # ISN'T inside the expected output base (DEFAULT_OUTPUT_BASE
-            # — `out/projects` resolved). Operators with custom
-            # output_dirs outside that base will need to clean by hand;
-            # the trade-off is correct because the alternative (trust
-            # the project JSON) is exactly the attack surface.
-            output = project.output_path.resolve()
-            home = Path.home().resolve()
-            if (output == home or output == Path("/")
-                    or len(output.parts) < 3
-                    or home.is_relative_to(output)):
-                msg = f"Refusing to delete suspicious path: {output}"
-                raise ValueError(msg)
-            expected_base = DEFAULT_OUTPUT_BASE.resolve()
-            try:
-                output.relative_to(expected_base)
-            except ValueError:
-                msg = (
-                    f"Refusing to delete output path {output} outside the "
-                    f"expected base {expected_base}. Use --no-purge or "
-                    f"clean the directory by hand."
-                )
-                raise ValueError(msg) from None
-            try:
-                shutil.rmtree(project.output_path)
-            except FileNotFoundError:
-                pass
-            logger.info("Deleted output directory: %s", project.output_dir)
+        if purge:
+            self._purge_output(project, purge_identity)
 
         project_file = self.projects_dir / f"{name}.json"
         project_file.unlink(missing_ok=True)
@@ -1225,6 +1204,52 @@ class ProjectManager:
         self._rewrite_bindings(name, None)
 
         logger.info("Deleted project '%s'", name)
+
+    def _purge_output(self, project: Project,
+                      expected_identity: tuple[int, int] | None) -> None:
+        """Remove only the checked, exclusively claimed project output tree."""
+        path = project.output_path
+        # Match create/rename's name-lock -> output-claim-lock order.
+        with self._output_dir_claim_lock(path):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return
+            if (not stat.S_ISDIR(info.st_mode)
+                    or (info.st_dev, info.st_ino) != expected_identity):
+                raise OSError(f"Refusing purge: output directory changed: {path}")
+            output = path.resolve()
+            home = Path.home().resolve()
+            if (output == home or output == Path("/")
+                    or len(output.parts) < 3 or home.is_relative_to(output)):
+                raise ValueError(f"Refusing to delete suspicious path: {output}")
+            expected_base = DEFAULT_OUTPUT_BASE.resolve()
+            if output == expected_base or not output.is_relative_to(expected_base):
+                raise ValueError(
+                    f"Refusing to delete output path {output}: expected a strict "
+                    f"child of {expected_base}. Use --no-purge or clean by hand.")
+            # Older registries can contain shared or nested output claims,
+            # even though new creates reject an identical output directory.
+            for other in self.list_projects():
+                if other.name == project.name or not other.output_dir:
+                    continue
+                other_output = Path(other.output_dir).resolve()
+                if (other_output.is_relative_to(output)
+                        or output.is_relative_to(other_output)):
+                    raise ValueError(
+                        f"Refusing purge: output overlaps project '{other.name}': "
+                        f"{other_output}")
+            try:
+                latest = path.lstat()
+            except FileNotFoundError:
+                return
+            if (not stat.S_ISDIR(latest.st_mode)
+                    or (latest.st_dev, latest.st_ino) != expected_identity
+                    or path.resolve() != output):
+                raise OSError(f"Refusing purge: output directory changed: {path}")
+            if not rmtree_hardened(path):
+                raise OSError(f"Could not remove project output directory: {path}")
+            logger.info("Deleted output directory: %s", project.output_dir)
 
     def _rewrite_bindings(self, old_name: str,
                           new_name: str | None) -> None:
