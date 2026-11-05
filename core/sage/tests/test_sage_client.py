@@ -5,6 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from core.testing.logging_state import owned_log_handler
+
 
 class TestSageClientHealthCheck(unittest.TestCase):
     """Test sync health check."""
@@ -644,14 +646,11 @@ class TestHardenIdentityKeyPerms(unittest.TestCase):
         os.chmod(self.dir, 0o700)
         from core.sage.client import harden_identity_key_perms
         records = []
+        logger = logging.getLogger("raptor")
         handler = logging.Handler()
         handler.emit = records.append
-        logger = logging.getLogger("raptor")
-        logger.addHandler(handler)
-        try:
+        with owned_log_handler(logger, handler):
             harden_identity_key_perms(self.key)
-        finally:
-            logger.removeHandler(handler)
         self.assertEqual(self._mode(self.key), 0o600)
         self.assertFalse(
             [r for r in records if r.levelno >= logging.WARNING],

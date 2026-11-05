@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 
 from core.llm.scorecard import integrity
+
+from core.testing.logging_state import owned_log_handler
 from core.llm.scorecard import (
     ModelScorecard,
     EventType,
@@ -47,8 +49,10 @@ def _raptor_logger_propagates():
     raptor = logging.getLogger("raptor")
     orig = raptor.propagate
     raptor.propagate = True
-    yield
-    raptor.propagate = orig
+    try:
+        yield
+    finally:
+        raptor.propagate = orig
 
 
 # ---------------------------------------------------------------------------
@@ -1105,13 +1109,10 @@ class TestAutoGc:
 
         raptor_logger = logging.getLogger("raptor")
         captor = _Capture(level=logging.INFO)
-        raptor_logger.addHandler(captor)
-        try:
+        with owned_log_handler(raptor_logger, captor):
             sc.record_event(
                 "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
             )
-        finally:
-            raptor_logger.removeHandler(captor)
 
         # Summary line carries the per-model breakdown + outcome
         # tallies. Operators wanting historical data grep this line.
@@ -1151,13 +1152,10 @@ class TestAutoGc:
 
         raptor_logger = logging.getLogger("raptor")
         captor = _Capture(level=logging.INFO)
-        raptor_logger.addHandler(captor)
-        try:
+        with owned_log_handler(raptor_logger, captor):
             sc.record_event(
                 "x:y", "fresh-2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
             )
-        finally:
-            raptor_logger.removeHandler(captor)
         assert not any(
             "auto-GC" in r.getMessage() for r in captured
         )

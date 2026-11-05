@@ -55,6 +55,7 @@ import pytest
 
 from core.sandbox import proxy as proxy_mod
 from core.sandbox.tests.socket_server import SocketServer
+from core.testing.logging_state import owned_log_handler
 
 # Far above a loopback round-trip, far below any proxy timeout —
 # same bound rationale as test_proxy_teardown.py.
@@ -707,14 +708,16 @@ class TestStatsLineClosedStreamGuard:
 
     def test_emit_skipped_when_a_servicing_handler_stream_is_closed(
             self, reset_proxy, caplog):
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        # Attach to a PARENT logger: the guard must walk the hierarchy
-        # exactly as Logger.callHandlers would reach this handler.
-        parent_log = logging.getLogger("core.sandbox")
-        stream = io.StringIO()
-        handler = logging.StreamHandler(stream)
-        parent_log.addHandler(handler)
-        try:
+        with contextlib.ExitStack() as cleanup:
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+            cleanup.callback(proxy.stop)
+            # Attach to a PARENT logger: the guard must walk the hierarchy
+            # exactly as Logger.callHandlers would reach this handler.
+            parent_log = logging.getLogger("core.sandbox")
+            stream = cleanup.enter_context(io.StringIO())
+            cleanup.enter_context(owned_log_handler(
+                parent_log, logging.StreamHandler(stream),
+            ))
             with caplog.at_level(logging.INFO,
                                  logger="core.sandbox.proxy"):
                 # Open stream: the forced line emits and lands.
@@ -725,9 +728,6 @@ class TestStatsLineClosedStreamGuard:
                 stream.close()
                 assert proxy._log_stats_line("beat",
                                              force=True) is False
-        finally:
-            parent_log.removeHandler(handler)
-            proxy.stop()
 
     def test_closed_handler_above_record_level_does_not_suppress(
             self, reset_proxy, caplog):
@@ -735,20 +735,18 @@ class TestStatsLineClosedStreamGuard:
         # service the INFO stats record — callHandlers checks
         # record.levelno against handler.level — so it must not
         # silence the stats trail (the guard is level-aware).
-        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        parent_log = logging.getLogger("core.sandbox")
-        stream = io.StringIO()
-        stream.close()
-        handler = logging.StreamHandler(stream)
-        handler.setLevel(logging.CRITICAL)
-        parent_log.addHandler(handler)
-        try:
+        with contextlib.ExitStack() as cleanup:
+            proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+            cleanup.callback(proxy.stop)
+            parent_log = logging.getLogger("core.sandbox")
+            stream = cleanup.enter_context(io.StringIO())
+            stream.close()
+            cleanup.enter_context(owned_log_handler(
+                parent_log, logging.StreamHandler(stream), level=logging.CRITICAL,
+            ))
             with caplog.at_level(logging.INFO,
                                  logger="core.sandbox.proxy"):
                 assert proxy._log_stats_line("beat", force=True) is True
-        finally:
-            parent_log.removeHandler(handler)
-            proxy.stop()
 
     def test_hostile_closed_property_fails_toward_skip(self):
         # Real shape of the class: a TextIOWrapper whose buffer was
@@ -768,22 +766,20 @@ class TestStatsLineClosedStreamGuard:
                 return None
 
         log = logging.getLogger("jailfix_hostile_closed_test")
-        handler = logging.StreamHandler(_HostileStream())
-        log.addHandler(handler)
-        try:
+        with owned_log_handler(log, logging.StreamHandler(_HostileStream())):
             assert proxy_mod._stats_emit_would_hit_closed_stream(
                 log) is True
-        finally:
-            log.removeHandler(handler)
 
     def test_guard_walk_honours_propagate_false(self):
         parent = logging.getLogger("jailfix_guard_walk_test")
         child = logging.getLogger("jailfix_guard_walk_test.child")
-        stream = io.StringIO()
-        stream.close()
-        handler = logging.StreamHandler(stream)
-        parent.addHandler(handler)
-        try:
+        with contextlib.ExitStack() as cleanup:
+            cleanup.callback(setattr, child, "propagate", child.propagate)
+            stream = cleanup.enter_context(io.StringIO())
+            stream.close()
+            cleanup.enter_context(owned_log_handler(
+                parent, logging.StreamHandler(stream),
+            ))
             child.propagate = True
             assert proxy_mod._stats_emit_would_hit_closed_stream(
                 child) is True
@@ -793,6 +789,3 @@ class TestStatsLineClosedStreamGuard:
             child.propagate = False
             assert proxy_mod._stats_emit_would_hit_closed_stream(
                 child) is False
-        finally:
-            parent.removeHandler(handler)
-            child.propagate = True
