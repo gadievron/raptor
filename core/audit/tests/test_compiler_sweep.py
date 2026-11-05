@@ -3942,3 +3942,109 @@ def test_encoded_sarif_primary_location_confirms_its_actual_file(tmp_path, monke
         line_start=1, line_end=1, out_dir=tmp_path,
     )
     assert result.outcome == 'confirmed', result.details
+
+
+@pytest.mark.parametrize('filename,line', [
+    ('source', 0), ('source', -1), ('source', True), ('source', 1.0),
+    ('source', '1'), ('source', None), ('', 1), (42, 1),
+    ('bad\x00/a.c', 1), ('bad\n/a.c', 1),
+])
+@pytest.mark.parametrize('include_valid', [False, True])
+def test_unusable_family_diagnostic_location_is_not_evidence(
+    tmp_path, monkeypatch, filename, line, include_valid,
+):
+    import json
+
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a.c'
+    source.write_text('void f(void) {}\n')
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: None)
+
+    def run(command, **kwargs):
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        diagnostics = [{
+            'kind': 'warning', 'option': '-Wanalyzer-use-after-free',
+            'message': "use after 'free' of 'p'", 'locations': [{'caret': {
+                'file': str(source) if filename == 'source' else filename, 'line': line,
+            }}],
+        }]
+        if include_valid:
+            diagnostics.append({
+                'kind': 'warning', 'option': '-Wanalyzer-use-after-free',
+                'message': "use after 'free' of 'p'", 'locations': [{'caret': {
+                    'file': str(source), 'line': 1,
+                }}],
+            })
+        return subprocess.CompletedProcess(command, 0, '', json.dumps(diagnostics))
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path=source.name, function_name='f',
+        hypothesis='memory is freed then used', cwe='CWE-416',
+        line_start=1, line_end=1, out_dir=tmp_path,
+    )
+    assert result.outcome == ('confirmed' if include_valid else 'inconclusive'), result.details
+    assert result.details['unlocated_diagnostics']
+    assert len(result.matches) == int(include_valid)
+
+
+@pytest.mark.parametrize('message,expected', [
+    ("Potential leak of memory pointed to by 'p'", 'refuted'),
+    ('Allocation lifetime classification changed', 'inconclusive'),
+    ('Use of memory after it is freed', 'inconclusive'),
+])
+def test_unlocated_shared_checker_retains_family_discrimination(tmp_path, monkeypatch, message, expected):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a.cpp'
+    source.write_text('void f() {}\n')
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: '/owned/clang')
+
+    def run(command, **kwargs):
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        return subprocess.CompletedProcess(command, 0, '', f'{source}:0:1: warning: {message} [unix.Malloc]\n')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path=source.name, function_name='f',
+        hypothesis='memory is freed then used', cwe='CWE-416',
+        line_start=1, line_end=1, out_dir=tmp_path,
+    )
+    assert result.outcome == expected, result.details
+
+
+def test_aliasing_corroboration_receives_only_locatable_candidates(tmp_path, monkeypatch):
+    import json
+    from core.detectors import scalar_aliasing
+
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a.c'
+    source.write_text('void f(void) {}\n')
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: '/owned/clang')
+    diagnostics = [{
+        'kind': 'warning', 'option': '-Wstrict-aliasing', 'message': 'aliasing candidate',
+        'locations': [{'caret': {'file': filename, 'line': 1}}],
+    } for filename in (42, str(source))]
+    monkeypatch.setattr('core.sandbox.context.run', lambda command, **kw:
+                        subprocess.CompletedProcess(command, 0, '', json.dumps(diagnostics)))
+    candidates = []
+
+    def corroborate(target, file, points, **kwargs):
+        candidates.extend(points)
+        return scalar_aliasing.AliasingResult(complete=True)
+
+    monkeypatch.setattr(scalar_aliasing, 'corroborate_aliasing', corroborate)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path=source.name, function_name='f',
+        hypothesis='incompatible access', cwe='CWE-843',
+        line_start=1, line_end=1, out_dir=tmp_path,
+    )
+    assert result.outcome == 'inconclusive'
+    assert candidates == [{'file': 'a.c', 'line': 1}]
+    assert result.details['unlocated_diagnostics']

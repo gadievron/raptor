@@ -494,6 +494,11 @@ Compiler SARIF locations use the actual source filename after URI decoding,
 including spaces and literal percent sequences. Non-local or invalid location
 URIs are reported as analysis errors rather than treated as clean results.
 
+Compiler warnings need a usable filename and positive integer line number
+to become findings. An unlocatable warning for the checked family leaves
+`/audit` inconclusive; `/scan` reports a coverage limitation. Other valid
+findings from the same analyzer run are retained.
+
 ## Output
 
 ### SARIF Files
