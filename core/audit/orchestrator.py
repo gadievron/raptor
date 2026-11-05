@@ -55,6 +55,7 @@ from packages.checker_synthesis.library import RuleLibrary
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
+from .claim_counters import _DISMISSIVE_COUNTERS, has_claim_counter, matching_claims
 from .refutation_source import capture_source_identity
 from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
 from .codeql_backend import (
@@ -24987,7 +24988,7 @@ def _aggregate_ihv_verdicts(
             gate_block = "cross-function-premise"
         else:
             gate_block = _ihv_context_gate(
-                candidate, config, joern_server=joern_server,
+                candidate, config, joern_server=joern_server, claim=hyp,
             )
         if gate_block:
             candidate.review_result["ihv_gate_blocked"] = gate_block
@@ -25058,6 +25059,7 @@ def _ihv_context_gate(
     config: OrchestratorConfig,
     *,
     joern_server=None,
+    claim: dict[str, Any] | None = None,
 ) -> str | None:
     """Annotate caller context, then run IHV context validation gates.
 
@@ -25079,7 +25081,7 @@ def _ihv_context_gate(
             return f"guarded-sink:{block}"
 
     # Gate 2: refuting counter
-    if _has_refuting_counter(outcome):
+    if _has_refuting_counter(outcome, claim=claim):
         return "refuting-counter"
 
     return None
@@ -28167,45 +28169,26 @@ def _untally_outcome(result: OrchestratorResult, outcome: ReviewOutcome) -> None
             result.reviewed -= 1
 
 
-_DISMISSIVE_COUNTERS = frozenset(
-    {
-        "no plausible",
-        "cannot construct",
-        "no realistic",
-        "no viable",
-        "function is safe",
-        "no vulnerability",
-        "none",
-        "n/a",
-        "not applicable",
-    }
-)
+def _has_refuting_counter(
+    outcome: ReviewOutcome,
+    *,
+    hypothesis: str | None = None,
+    claim: dict[str, Any] | None = None,
+) -> bool:
+    """A specific counter can fence only the claim being adjudicated.
 
-
-def _has_refuting_counter(outcome: ReviewOutcome) -> bool:
-    """Check if any active hypothesis has a specific counter-argument.
-
-    When the LLM marks a function as suspicious and provides a specific
-    reason why the hypothesis does not reach finding level (e.g. "only
-    exploitable if multi-threaded", "callers check the return value"),
-    mechanical tools that match syntactic patterns should not override
-    that judgment — they cannot reason about the architectural
-    constraint the LLM identified.
+    IHV supplies its selected structured claim directly. Other lanes use
+    exact mechanism lookup across the outcome and review records; an
+    unrelated or unidentifiable counter cannot veto this mechanism.
     """
-    hypotheses = (outcome.review_result or {}).get("hypotheses") or []
-    for h in hypotheses:
-        if not isinstance(h, dict):
-            continue
-        if (h.get("confidence") or "").lower() == "refuted":
-            continue
-        counter = h.get("counter", "")
-        if not counter or len(counter) < 20:
-            continue
-        lower = counter.lower().strip()
-        if any(d in lower for d in _DISMISSIVE_COUNTERS):
-            continue
-        return True
-    return False
+    review = outcome.review_result or {}
+    mechanism = hypothesis if hypothesis is not None else (
+        outcome.hypothesis or review.get("hypothesis") or ""
+    )
+    collections = ([claim],) if claim is not None else (
+        outcome.hypotheses, review.get("hypotheses"),
+    )
+    return has_claim_counter(mechanism, collections)
 
 
 _sink_guard_cache: dict[str, str] = {}
@@ -28485,7 +28468,7 @@ def _promote_suspicious_one(
     if not hypothesis:
         return None
 
-    refuting_counter = _has_refuting_counter(outcome)
+    refuting_counter = _has_refuting_counter(outcome, hypothesis=hypothesis)
 
     # Premise binding for the primary hypothesis, same rule as the
     # secondary sweep below: a function-local confirm cannot
@@ -28581,6 +28564,7 @@ def _promote_suspicious_one(
         else:
             promoted = _promote_outcome(
                 outcome, mech_tool, provisional=provisional,
+                hypothesis=hypothesis,
             )
             if not _commit_promotion(result, i, outcome, promoted):
                 return None
@@ -28641,6 +28625,7 @@ def _promote_suspicious_one(
             else:
                 promoted = _promote_outcome(
                     outcome, tool, provisional=provisional,
+                    hypothesis=hypothesis,
                 )
                 if not _commit_promotion(result, i, outcome, promoted):
                     return None
@@ -28792,6 +28777,7 @@ def _promote_suspicious_one(
                 tool = "+".join(confirmed)
                 promoted = _promote_outcome(
                     outcome, tool, provisional=provisional,
+                    hypothesis=hypothesis,
                 )
                 _record_aggregated_promotion(
                     promoted, agg_channels, post_mean, confirmed,
@@ -28834,7 +28820,9 @@ def _promote_suspicious_one(
             )
             return None
         tool = "+".join(high_prec)
-        promoted = _promote_outcome(outcome, tool, provisional=provisional)
+        promoted = _promote_outcome(
+            outcome, tool, provisional=provisional, hypothesis=hypothesis,
+        )
         if not _commit_promotion(result, i, outcome, promoted):
             return None
         logger.info(
@@ -28988,7 +28976,7 @@ def _resweep_zero_dispatch_suspicious(
             if outcome.body.startswith(_GATE_DEMOTION_BODY_PREFIXES):
                 record["skip_reason"] = "mechanical-gate-demotion"
                 return
-            if _has_refuting_counter(outcome):
+            if _has_refuting_counter(outcome, hypothesis=hypothesis):
                 # The promotion pass diverts counter-fenced outcomes
                 # to synthesis and never consumes chain receipts for
                 # them — receipt supply here would be pure burn.
@@ -30155,34 +30143,15 @@ def _primary_hypothesis_entry(
     outcome: ReviewOutcome,
     hypothesis: str,
 ) -> dict[str, Any]:
-    """Structured hypothesis entry backing the resolved primary mechanism.
+    """Structured premise for this exact mechanism, or no matching claim.
 
-    ``_sweep_validate`` grades a finding against its primary hypothesis
-    string; premise binding needs the structured entry that carries
-    ``counter``/``counter_scope``. Matches on mechanism text, falling
-    back to the highest-confidence entry. Returns ``{}`` when the
-    review has no structured hypotheses — the premise gate then no-ops
-    (there is no counter to weigh a confirm against).
+    Confidence and shared prefixes cannot bind another claim's counter to
+    the primary. Preserve both hypothesis stores used by review lanes.
     """
-    hyps = getattr(outcome, "hypotheses", None) or []
-    if not hyps and outcome.review_result:
-        hyps = outcome.review_result.get("hypotheses") or []
-    entries = [h for h in hyps if isinstance(h, dict)]
-    if not entries:
-        return {}
-    head = (hypothesis or "").strip()[:120]
-    if head:
-        for h in entries:
-            mech = (h.get("mechanism") or "").strip()
-            if mech and (
-                mech.startswith(head) or head.startswith(mech[:120])
-            ):
-                return h
-    rank = {"high": 0, "medium": 1, "low": 2}
-    return min(
-        entries,
-        key=lambda h: rank.get((h.get("confidence") or "").lower(), 3),
-    )
+    entries = matching_claims(hypothesis, (
+        outcome.hypotheses, (outcome.review_result or {}).get("hypotheses"),
+    ))
+    return entries[0] if entries else {}
 
 
 def _note_premise_blocked_validation(
@@ -32346,24 +32315,28 @@ def _promote_outcome(
     tool: str,
     *,
     provisional: bool = False,
+    hypothesis: str | None = None,
 ) -> ReviewOutcome:
     """Promote a suspicious item to finding with tool evidence.
 
     ``provisional`` marks a cadence-tick promotion the post-loop
     finalization must still confirm or retract.
     """
+    review = dict(outcome.review_result) if outcome.review_result is not None else None
+    if hypothesis is not None and review is not None:
+        review["hypothesis"] = hypothesis
     promoted = ReviewOutcome(
         file=outcome.file,
         function=outcome.function,
         status="finding",
         body=f"[sweep promoted via {tool}]\n\n{outcome.body}",
-        hypothesis=outcome.hypothesis,
+        hypothesis=outcome.hypothesis if hypothesis is None else hypothesis,
         hypotheses=outcome.hypotheses,
         evidence_tool=tool,
         cost_usd=outcome.cost_usd,
         model=outcome.model,
         duration_s=outcome.duration_s,
-        review_result=outcome.review_result,
+        review_result=review,
         line=outcome.line,
     )
     promoted.tools_dispatched = outcome.tools_dispatched

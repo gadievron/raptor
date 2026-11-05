@@ -135,6 +135,7 @@ def test_guarded_sink_check_is_not_short_circuited_by_caller_hint(tmp_path, monk
 def test_specific_counter_still_blocks_promotion(tmp_path):
     outcome = orch.ReviewOutcome(
         file="record.c", function="Read", status="suspicious", body="Called by parse_record.",
+        hypothesis=LOCAL,
         review_result={"callers": [{"name": "parse_record"}], "hypotheses": [{
             "mechanism": LOCAL, "confidence": "high",
             "counter": "The conversion result is consumed by the error handling branch.",

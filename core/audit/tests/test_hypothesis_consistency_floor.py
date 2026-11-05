@@ -114,7 +114,7 @@ def test_sweep_consumes_the_selected_claim_not_the_old_clean_summary(tmp_path, m
     claim = result.outcomes[0].hypotheses[0]["mechanism"]
     seen = []
     orch._promote_hypothesis_inconsistent(result)
-    monkeypatch.setattr(orch, "_has_refuting_counter", lambda o: False)
+    monkeypatch.setattr(orch, "_has_refuting_counter", lambda o, **kw: False)
     monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", lambda *a, **kw: [{"type": "smt"}])
     monkeypatch.setattr(orch, "_read_raw_source", lambda *a, **kw: "")
 
