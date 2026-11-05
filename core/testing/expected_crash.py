@@ -78,7 +78,14 @@ def _trace(command, deadline, ready_file):
             raise OSError(code, os.strerror(code))
 
     read_fd, write_fd = os.pipe()  # non-inheritable, so successful exec closes it
-    pid = os.fork()
+    try:
+        pid = os.fork()
+    except BaseException:
+        try:
+            os.close(read_fd)
+        finally:
+            os.close(write_fd)
+        raise
     if pid == 0:
         os.close(read_fd)
         stage = 'ptrace'
@@ -138,8 +145,10 @@ def _trace(command, deadline, ready_file):
                 result['returncode'] = _terminate_and_reap(pid, ptrace)
             except (OSError, TimeoutError) as exc:
                 result['error'] = f'cleanup failed: {type(exc).__name__}: {exc}'
-        setup = os.read(read_fd, 4096)
-        os.close(read_fd)
+        try:
+            setup = os.read(read_fd, 4096)
+        finally:
+            os.close(read_fd)
         if setup:
             result['setup_error'] = json.loads(setup)
     return result
@@ -153,6 +162,8 @@ def _invoke(command, *, timeout, ready_file=None, cwd=None, env=None,
         raise ValueError('timeout must be positive and finite')
     if not command:
         raise ValueError('command is empty')
+    from core.testing.processes import reap_on_exit
+
     with tempfile.TemporaryDirectory(prefix='raptor-expected-crash-') as scratch:
         report = Path(scratch) / 'trace.json'
         argv = [sys.executable, '-I', str(Path(__file__).resolve()),
@@ -167,18 +178,11 @@ def _invoke(command, *, timeout, ready_file=None, cwd=None, env=None,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=text, encoding=encoding, errors=errors,
                                 start_new_session=True)
-        try:
+        with reap_on_exit(proc, process_group=True):
             stdout, stderr = proc.communicate(input=input, timeout=timeout + 5)
-        except BaseException:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)  # this invocation's private group
-            except ProcessLookupError:
-                pass
-            proc.communicate()
-            raise
-        if proc.returncode or not report.is_file():
-            raise ExpectedCrashError(f'crash tracer failed ({proc.returncode}): {stderr!r}')
-        data = json.loads(report.read_text())
+            if proc.returncode or not report.is_file():
+                raise ExpectedCrashError(f'crash tracer failed ({proc.returncode}): {stderr!r}')
+            data = json.loads(report.read_text())
     return subprocess.CompletedProcess(command, data['returncode'], stdout, stderr), data
 
 
