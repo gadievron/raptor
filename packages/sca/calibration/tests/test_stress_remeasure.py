@@ -22,18 +22,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clean_in_flight_registry():
-    """The in-flight registry is module state that DELIBERATELY keeps
-    entries for scans whose workers were abandoned (cancellation
-    post-mortems must name them). Tests that abandon blocked workers
-    therefore leak entries into later tests in the same process —
-    order-dependent under randomised scheduling. Reset around every
-    test; production semantics are untouched."""
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
-    yield
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
+def _clean_in_flight_registry(monkeypatch):
+    """Own registry entries and finish test workers before restoring the caller."""
+    from core.testing.stress_state import isolated_stress_workers
+
+    with isolated_stress_workers(stress_mod, monkeypatch):
+        yield
 
 
 
