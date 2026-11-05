@@ -123,6 +123,22 @@ jobs:
           set -euo pipefail
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
+      - name: Install Chromium Linux dependencies
+        if: runner.os == 'Linux' && contains(matrix.families, 'playwright-browser')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrapper_apt_config="$RUNNER_TEMP/wrapper-apt.conf"
+          cat > "$wrapper_apt_config" <<'APT'
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
+          Acquire::Retries "2";
+          APT
+          # Run dependency provisioning as root so Playwright does not cross a
+          # second sudo boundary that would discard this scoped APT config.
+          sudo env APT_CONFIG="$wrapper_apt_config" \
+            "$GITHUB_WORKSPACE/$VENV_PATH/bin/python" -m playwright install-deps chromium
       - name: Install isolated Chromium runtime
         if: contains(matrix.families, 'playwright-browser')
         timeout-minutes: 5
@@ -132,11 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            "$VENV_PATH/bin/python" -m playwright install --with-deps chromium
-          else
-            "$VENV_PATH/bin/python" -m playwright install chromium
-          fi
+          "$VENV_PATH/bin/python" -m playwright install chromium
       - name: Exercise registered dispatch contracts
         id: contracts
         if: toJSON(matrix.contracts) != '[]'
