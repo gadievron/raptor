@@ -55,7 +55,7 @@ class NarrowingGuardContext:
         for line in source.splitlines(keepends=True):
             self.offsets.append(self.offsets[-1] + len(line.encode("utf-8")))
 
-    def _text(self, node):
+    def _node_source(self, node):
         return (
             self.data[node.start_byte : node.end_byte].decode("utf-8")
             if node is not None
@@ -71,7 +71,7 @@ class NarrowingGuardContext:
             if (
                 declarator is not None
                 and declarator.type == "identifier"
-                and self._text(declarator) == variable
+                and self._node_source(declarator) == variable
             ):
                 return True
         return False
@@ -97,14 +97,14 @@ class NarrowingGuardContext:
                 if (
                     operand is not None
                     and operand.type == "identifier"
-                    and self._text(operand) == variable
+                    and self._node_source(operand) == variable
                 ):
                     return True
         return False
 
     def _constant(self, node, source_range):
         node = _unwrap(node)
-        text = self._text(node).strip()
+        text = self._node_source(node).strip()
         if not text:
             return None
         if node.type == "identifier":
@@ -173,7 +173,7 @@ class NarrowingGuardContext:
             return interval
         if (
             node.type == "unary_expression"
-            and self._text(node.child_by_field_name("operator")) == "!"
+            and self._node_source(node.child_by_field_name("operator")) == "!"
         ):
             return self._constrain(
                 node.child_by_field_name("argument"),
@@ -184,7 +184,7 @@ class NarrowingGuardContext:
             )
         if node.type != "binary_expression":
             return interval
-        op = self._text(node.child_by_field_name("operator"))
+        op = self._node_source(node.child_by_field_name("operator"))
         left, right = (
             node.child_by_field_name("left"),
             node.child_by_field_name("right"),
@@ -201,9 +201,9 @@ class NarrowingGuardContext:
         if op not in {"<", "<=", ">", ">=", "==", "!="}:
             return interval
         left, right = _unwrap(left), _unwrap(right)
-        if left.type == "identifier" and self._text(left) == variable:
+        if left.type == "identifier" and self._node_source(left) == variable:
             bound = self._constant(right, source_range)
-        elif right.type == "identifier" and self._text(right) == variable:
+        elif right.type == "identifier" and self._node_source(right) == variable:
             bound = self._constant(left, source_range)
             op = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}[
                 op
@@ -324,7 +324,7 @@ class NarrowingGuardContext:
         if target is None:
             return False
         value = _unwrap(target.child_by_field_name("value"))
-        if value is None or value.type != "identifier" or self._text(value) != variable:
+        if value is None or value.type != "identifier" or self._node_source(value) != variable:
             return False  # guarding an operand does not bound an arbitrary expression
         function = target.parent
         while function is not None and function.type != "function_definition":
@@ -336,16 +336,16 @@ class NarrowingGuardContext:
         if len(bindings) != 1:
             return False  # globals, pointers, or shadowing require another model
         if " ".join(
-            self._text(bindings[0].child_by_field_name("type")).split()
+            self._node_source(bindings[0].child_by_field_name("type")).split()
         ) != " ".join(source_type.split()):
             return False  # a same-named variable elsewhere cannot supply this type
         if any(item.type in {"goto_statement", "labeled_statement"} for item in items):
             return False
         if any(
             item.type == "pointer_expression"
-            and self._text(item.child_by_field_name("operator")) == "&"
+            and self._node_source(item.child_by_field_name("operator")) == "&"
             and any(
-                n.type == "identifier" and self._text(n) == variable
+                n.type == "identifier" and self._node_source(n) == variable
                 for n in _nodes(item)
             )
             for item in items
