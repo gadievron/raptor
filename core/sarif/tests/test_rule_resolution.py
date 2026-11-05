@@ -461,3 +461,74 @@ def test_artifact_count_inputs_cannot_inflate_suppression_count(tmp_path):
     metrics = generate_scan_metrics([str(primary)], file_count_paths=[str(original)])
     assert metrics['total_files_scanned'] == 1
     assert metrics['total_findings'] == metrics['nosemgrep_suppressed_count'] == 0
+
+
+@pytest.mark.parametrize('tool_fingerprint', [False, True])
+def test_cross_tool_collisions_survive_dedup_without_artifact_id_overlap(tmp_path, tool_fingerprint):
+    import copy
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    result = {'ruleId': 'shared-rule', 'message': {'text': 'finding'}, 'locations': [{'physicalLocation': {
+        'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+    }}]}
+    if tool_fingerprint:
+        result['fingerprints'] = {'matchBasedId/v1': 'shared-fingerprint'}
+    path = tmp_path / 'tools.sarif'
+    path.write_text(json.dumps({'runs': [
+        {'tool': {'driver': {'name': name}}, 'results': [result, result]}
+        for name in ['Semgrep', 'CodeQL']
+    ]}))
+    findings = parse_sarif_findings(path)
+    before = copy.deepcopy(findings)
+    assert len({finding['finding_id'] for finding in findings}) == 1
+    retained = deduplicate_findings(findings)
+    assert len(retained) == 2
+    assert {finding['tool'] for finding in retained} == {'Semgrep', 'CodeQL'}
+    # Consumers key analysis files and result maps on finding_id alone.
+    assert len({finding['finding_id']: finding for finding in retained}) == 2
+    assert {finding['source_finding_id'] for finding in retained} == {findings[0]['finding_id']}
+    assert findings == before
+    assert deduplicate_findings(retained) == retained
+    reversed_result = deduplicate_findings(list(reversed(findings)))
+    assert {f['tool']: f['finding_id'] for f in reversed_result} == {
+        f['tool']: f['finding_id'] for f in retained
+    }
+
+
+def test_tool_scoped_ids_do_not_shadow_an_existing_finding_id():
+    import copy
+    from core.sarif.parser import deduplicate_findings
+
+    rows = [dict(file='a.c', startLine=1, endLine=1, rule_id='shared',
+                 finding_id='shared', tool=tool) for tool in ['Semgrep', 'CodeQL']]
+    first = deduplicate_findings(rows)
+    assert len(first) == 2
+    existing = dict(rows[0], file='elsewhere.c', tool='other', finding_id=first[0]['finding_id'])
+    original = copy.deepcopy([*rows, existing])
+    retained = deduplicate_findings([*rows, existing])
+    assert len(retained) == len({f['finding_id'] for f in retained}) == 3
+    assert retained[-1] == existing
+    assert [*rows, existing] == original
+    reversed_result = deduplicate_findings(list(reversed([*rows, existing])))
+    assert {f['tool']: f['finding_id'] for f in reversed_result} == {
+        f['tool']: f['finding_id'] for f in retained
+    }
+
+
+def test_tool_aliases_and_uncollided_ids_keep_existing_identity():
+    from core.sarif.parser import deduplicate_findings
+
+    row = dict(file='a.c', startLine=1, endLine=1, rule_id='rule',
+               finding_id='original-fingerprint', tool='Semgrep OSS')
+    duplicate = dict(row, tool='semgrep')
+    assert deduplicate_findings([row, duplicate]) == [row]
+    assert deduplicate_findings([row])[0] is row
+
+
+def test_legacy_findings_without_ids_remain_separate_across_tools():
+    from core.sarif.parser import deduplicate_findings
+
+    rows = [dict(file='a.c', startLine=1, rule_id='rule', tool=tool)
+            for tool in ['Semgrep', 'CodeQL']]
+    assert deduplicate_findings([*rows, dict(rows[0])]) == rows
