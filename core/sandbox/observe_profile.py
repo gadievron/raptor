@@ -644,20 +644,9 @@ def parse_observe_log(run_dir, *,
     darwin_connect_unparsed = 0
 
     ambiguous_skipped = 0
-    summary_seen = False
+    summary_at_tail = False
     for rec in _iter_records(log_path, profile=profile):
         if not isinstance(rec, dict):
-            continue
-        if rec.get("parse_ambiguous"):
-            # Tamper-suspect records (unanchorable PID field — see
-            # seatbelt_audit._LOG_LINE_RE) are admitted to the JSONL
-            # as EVIDENCE and get the run nonce stamped, so the nonce
-            # gate below would accept them — but they must never be
-            # POLICY INPUT: an observe-derived allowlist must not
-            # learn paths or hosts from a record whose origin could
-            # not be attributed (any same-host sandboxed process can
-            # mint the ambiguous shape).
-            ambiguous_skipped += 1
             continue
         # Provenance: when an expected nonce is set, drop records
         # without a matching value. Records the tracer wrote carry
@@ -672,11 +661,26 @@ def parse_observe_log(run_dir, *,
                 and rec.get("nonce", "") != expected_nonce):
             continue
 
+        # Completion belongs to the last accepted record, not an earlier
+        # summary followed by additional records from the same capture.
+        summary_at_tail = rec.get("type") == "audit_summary"
+        if rec.get("parse_ambiguous"):
+            summary_at_tail = False
+            # Tamper-suspect records (unanchorable PID field — see
+            # seatbelt_audit._LOG_LINE_RE) are admitted to the JSONL
+            # as EVIDENCE and get the run nonce stamped, so the nonce
+            # gate has accepted them — but they must never be
+            # POLICY INPUT: an observe-derived allowlist must not
+            # learn paths or hosts from a record whose origin could
+            # not be attributed (any same-host sandboxed process can
+            # mint the ambiguous shape).
+            ambiguous_skipped += 1
+            continue
+
         # Audit-summary tail record carries budget data. Surface
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
-            summary_seen = True
             if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
                 profile.capture_incomplete = True
             append_failures = rec.get("append_failures")
@@ -759,9 +763,9 @@ def parse_observe_log(run_dir, *,
                 seen_connect.add(target)
                 profile.connect_targets.append(target)
 
-    if current_run and not summary_seen:
+    if current_run and not summary_at_tail:
         # Current writers finish with a summary, even for zero events. Its
-        # absence means capture completion cannot be established. Offline
+        # absence at the accepted tail means completion is unproven. Offline
         # readers still accept legacy streams that predate summary tails.
         profile.capture_incomplete = True
 
