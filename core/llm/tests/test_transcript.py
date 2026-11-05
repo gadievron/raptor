@@ -44,10 +44,15 @@ _SCHEMA = {
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
     """Every test starts with no ambient transcript session."""
+    from core.llm import transcript
+    from core.testing.module_state import isolated_module_state
+
     monkeypatch.delenv("RAPTOR_LLM_TRANSCRIPT", raising=False)
-    reset_active_transcript()
-    yield
-    reset_active_transcript()
+    with isolated_module_state(
+        transcript, {"_active": None, "_active_resolved": False},
+        lock=transcript._active_lock,
+    ):
+        yield
 
 
 def _record_entry(

@@ -10,16 +10,13 @@ under-recording warning. No fence when no transcript is active.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-from core.llm.providers import LLMResponse  # noqa: E402
-from core.llm.transcript import (  # noqa: E402
+from core.llm.providers import LLMResponse
+from core.llm.transcript import (
     TranscriptError,
     TranscriptRecorder,
     reset_active_transcript,
@@ -28,10 +25,15 @@ from core.llm.transcript import (  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
+    from core.llm import transcript
+    from core.testing.module_state import isolated_module_state
+
     monkeypatch.delenv("RAPTOR_LLM_TRANSCRIPT", raising=False)
-    reset_active_transcript()
-    yield
-    reset_active_transcript()
+    with isolated_module_state(
+        transcript, {"_active": None, "_active_resolved": False},
+        lock=transcript._active_lock,
+    ):
+        yield
 
 
 def _seed_transcript(tmp_path: Path) -> Path:

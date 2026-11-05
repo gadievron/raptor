@@ -12,18 +12,15 @@ zero cost. This is the hermetic-CI eval contract for
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-import packages.llm_analysis.agent as agent_mod  # noqa: E402
-from core.json.jsonl import load_jsonl  # noqa: E402
-from core.llm.config import LLMConfig, ModelConfig  # noqa: E402
-from core.llm.transcript import (  # noqa: E402
+import packages.llm_analysis.agent as agent_mod
+from core.json.jsonl import load_jsonl
+from core.llm.config import LLMConfig, ModelConfig
+from core.llm.transcript import (
     TranscriptLLMClient,
     TranscriptRecorder,
     TranscriptReplayer,
@@ -39,6 +36,8 @@ def _fresh_session(monkeypatch, tmp_path_factory):
     XDG_DATA_HOME), no scorecard sidecar writes — same conventions as
     core/llm/tests/conftest.py, local here because this is the one
     module in this tree that constructs real LLMClients."""
+    from core.llm import transcript
+    from core.testing.module_state import isolated_module_state
     from core.llm.client import LLMClient
 
     monkeypatch.delenv("RAPTOR_LLM_TRANSCRIPT", raising=False)
@@ -50,9 +49,11 @@ def _fresh_session(monkeypatch, tmp_path_factory):
         LLMClient, "flush_usage_to_scorecard",
         lambda self, **kwargs: None,
     )
-    reset_active_transcript()
-    yield
-    reset_active_transcript()
+    with isolated_module_state(
+        transcript, {"_active": None, "_active_resolved": False},
+        lock=transcript._active_lock,
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------

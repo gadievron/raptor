@@ -14,22 +14,19 @@ semantics, and a record→replay transcript round trip.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-import packages.llm_analysis.agent as agent_mod  # noqa: E402
-from core.llm.transcript import current_subject  # noqa: E402
-from packages.llm_analysis.agent import (  # noqa: E402
+import packages.llm_analysis.agent as agent_mod
+from core.llm.transcript import current_subject
+from packages.llm_analysis.agent import (
     AutonomousSecurityAgentV2,
     VulnerabilityContext,
 )
-from packages.llm_analysis.context_toolloop import (  # noqa: E402
+from packages.llm_analysis.context_toolloop import (
     CONTEXT_REQUESTS_FIELD,
     MAX_TOOLLOOP_TURNS,
 )
@@ -591,8 +588,9 @@ class TestTranscriptRoundTrip:
 
     @pytest.fixture(autouse=True)
     def _fresh_session(self, monkeypatch, tmp_path_factory):
+        from core.llm import transcript
+        from core.testing.module_state import isolated_module_state
         from core.llm.client import LLMClient
-        from core.llm.transcript import reset_active_transcript
 
         monkeypatch.delenv("RAPTOR_LLM_TRANSCRIPT", raising=False)
         monkeypatch.setenv("RAPTOR_LLM_CACHE", "off")
@@ -603,9 +601,11 @@ class TestTranscriptRoundTrip:
             LLMClient, "flush_usage_to_scorecard",
             lambda self, **kwargs: None,
         )
-        reset_active_transcript()
-        yield
-        reset_active_transcript()
+        with isolated_module_state(
+            transcript, {"_active": None, "_active_resolved": False},
+            lock=transcript._active_lock,
+        ):
+            yield
 
     def test_record_then_replay_multi_turn_loop(self, tmp_path, monkeypatch):
         from core.json.jsonl import load_jsonl
