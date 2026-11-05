@@ -62,6 +62,7 @@ from core.sandbox.summary import (
     AUDIT_DEGRADED_FILE,
     MAX_DENIALS_PER_RUN,
     SUMMARY_FILE,
+    _unique_evidence_object,
     get_evidence_inode_mismatch,
     get_evidence_write_failure,
     get_proxy_persist_state,
@@ -613,6 +614,16 @@ def triage_run(run_dir: Path, *,
             count_record=(None if provenance_unavailable
                           else raw_events_count),
             over_bound=events_over_bound))
+    if not allow_legacy and count_present and raw_events_count is None:
+        # Refused/non-object sidecars must not collapse to "no sidecar",
+        # especially when there are no surviving events to trigger a check.
+        events_integrity = _INTEGRITY_TAMPERED
+        unreadable_count_note = (
+            "proxy-events count sidecar is present but unreadable or not "
+            "a JSON object (destroyed/replaced)"
+        )
+        count_note = (f"{count_note}; {unreadable_count_note}"
+                      if count_note else unreadable_count_note)
     if events_read_issues:
         events_integrity = _INTEGRITY_TAMPERED
         read_note = ("proxy-events input incomplete: "
@@ -1169,7 +1180,8 @@ def _load_json(path: Path) -> dict | None:
     if data is None:
         return None
     try:
-        loaded = json.loads(data.decode("utf-8"))
+        loaded = json.loads(
+            data.decode("utf-8"), object_pairs_hook=_unique_evidence_object)
     except (ValueError, RecursionError):
         return None
     return loaded if isinstance(loaded, dict) else None
@@ -1302,7 +1314,8 @@ def _parse_jsonl_line(
     try:
         # Reject damaged bytes rather than silently changing JSON keys or
         # values before provenance and classification checks.
-        record = json.loads(line.decode("utf-8"))
+        record = json.loads(
+            line.decode("utf-8"), object_pairs_hook=_unique_evidence_object)
     except (ValueError, RecursionError):
         issues.add("malformed_record")
         return
