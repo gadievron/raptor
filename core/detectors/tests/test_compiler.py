@@ -127,3 +127,22 @@ def test_parallel_runs_do_not_share_records_or_scratch(tmp_path):
     assert [r[0]["diags"] for r in results] == [[{"number": str(i)}] for i in range(8)]
     assert len({r[1] for r in results}) == 8
     assert all(not Path(r[1]).exists() for r in results)
+
+
+@pytest.mark.parametrize("returncode", [-9, 0, 1])
+def test_malformed_diagnostics_preserve_signal_death(tmp_path, returncode):
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    def malformed(workdir, stderr):
+        raise CompilerDiagnosticError("truncated diagnostics")
+
+    req = replace(request(tmp_path), parse=malformed)
+    run = lambda *a, **kw: SimpleNamespace(returncode=returncode, stderr="[")
+    if returncode < 0:
+        execution = run_compiler_analysis(req, run)
+        assert execution.status == "error"
+        assert execution.value.record["returncode"] == returncode
+        assert execution.value.record["diags"] == []
+    else:
+        with pytest.raises(CompilerDiagnosticError, match="truncated diagnostics"):
+            run_compiler_analysis(req, run)
