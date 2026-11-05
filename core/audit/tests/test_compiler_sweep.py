@@ -3643,11 +3643,12 @@ def test_gcc_control_path_survives_audit_receipt(tmp_path, sandbox_spy):
 
 
 @needs_clang
+@pytest.mark.slow
 @pytest.mark.parametrize("source, expected", [
     ("void f() { int *p = new int(1); *p = 2; }\n", "confirmed"),
     ("void f() { int *p = new int(1); *p = 2; delete p; }\n", "refuted"),
     ("struct Owner { int *p; ~Owner() { delete p; } }; void f() { Owner o{new int(1)}; *o.p=2; }\n", "refuted"),
-])
+], ids=["leak", "delete", "raii"])
 def test_cpp_leak_checker_and_cleanup_controls(tmp_path, sandbox_spy, source, expected):
     target = tmp_path / "repo"
     target.mkdir()
