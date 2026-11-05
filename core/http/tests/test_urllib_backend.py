@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import gzip
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from packages.web.tests.http_server import start_http_server
 
 # core/http/tests/test_urllib_backend.py -> repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -977,7 +981,6 @@ class TestFollowRedirects:
         unfollowed — the follow target must never be requested. Real
         localhost server (not a mock): this pins the wire behaviour
         the accidental retries=False coupling used to provide."""
-        import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         hits: list[str] = []
@@ -1007,10 +1010,9 @@ class TestFollowRedirects:
                     "no_proxy", "NO_PROXY"):
             monkeypatch.delenv(var, raising=False)
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
+        with ExitStack() as cleanup:
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            start_http_server(server, cleanup.callback)
             port = server.server_address[1]
             client = UrllibClient(circuit_breaker=_HostCircuitBreaker())
             resp = client.request(
@@ -1022,10 +1024,6 @@ class TestFollowRedirects:
             assert hits == ["/start"], (
                 f"redirect target was requested: {hits}"
             )
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
 
     def test_docstring_states_redirects_not_followed(self):
         """The request() docstring must not claim redirect
