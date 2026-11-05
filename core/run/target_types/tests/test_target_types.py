@@ -9,7 +9,6 @@ import pytest
 
 from core.run.target_types import (
     CatalogEntry,
-    _reset_cache_for_tests,
     all_entries,
     binary_dominant,
     detect,
@@ -19,13 +18,12 @@ from core.run.target_types import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_catalog_cache():
-    """Ensure each test sees a fresh catalog load — module-level
-    cache means tests would otherwise interfere via leftover
-    state."""
-    _reset_cache_for_tests()
-    yield
-    _reset_cache_for_tests()
+def _reset_catalog_cache(monkeypatch):
+    """Load a private catalog and restore the caller's immutable snapshot."""
+    from importlib import import_module
+
+    target_types = import_module("core.run.target_types")
+    monkeypatch.setattr(target_types, "_CACHED_CATALOG", None)
 
 
 # ---------------------------------------------------------------------------

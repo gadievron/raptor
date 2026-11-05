@@ -17,17 +17,21 @@ from core.llm import model_resolution
 from core.llm.model_resolution import (
     resolve_anthropic,
     _fetch_inventory,
-    _reset_cache_for_tests,
     _seed_cache_for_tests,
 )
 
 
 @pytest.fixture(autouse=True)
 def _isolated_cache():
-    """Each test starts with an empty resolver cache."""
-    _reset_cache_for_tests()
-    yield
-    _reset_cache_for_tests()
+    """Use private resolver state and preserve the caller's inventory and logs."""
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        model_resolution, {"_INVENTORY": None, "_INVENTORY_PROBED": False,
+                           "_LOGGED_RESOLUTIONS": set()},
+        lock=model_resolution._INVENTORY_LOCK,
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
