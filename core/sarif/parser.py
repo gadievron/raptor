@@ -857,6 +857,20 @@ class ResultRuleResolver:
         return get_result_rule(self._run, result)
 
 
+def _result_rule_id(result: dict[str, Any], rule: dict[str, Any]) -> str | None:
+    """Readable result identity, with fallback only from a validated descriptor."""
+    rule_id = result.get("ruleId")
+    if isinstance(rule_id, str) and rule_id:
+        return rule_id
+    if rule:
+        reference_id = _as_dict(result.get("rule")).get("id")
+        resolved_id = (reference_id if isinstance(reference_id, str) and reference_id
+                       else rule.get("id"))
+        if isinstance(resolved_id, str) and resolved_id:
+            return resolved_id
+    return rule_id if isinstance(rule_id, str) else None
+
+
 def rule_default_level(rule: dict[str, Any]) -> str | None:
     """The rule's ``defaultConfiguration.level``, or None.
 
@@ -1038,16 +1052,7 @@ def parse_sarif_findings(
             except (TypeError, ValueError):
                 canonical = repr(sorted(result.items()))
             sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            rule_id = result.get("ruleId")
-            if not isinstance(rule_id, str):
-                rule_id = None
-            if not rule_id and rule:
-                # Only a validated reference may supply a missing readable
-                # identity. Preserve a sub-rule ID rather than its parent.
-                reference_id = _as_dict(result.get("rule")).get("id")
-                resolved_id = reference_id or rule.get("id")
-                if isinstance(resolved_id, str) and resolved_id:
-                    rule_id = resolved_id
+            rule_id = _result_rule_id(result, rule)
             fingerprint = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
             if isinstance(fingerprint, str) and fingerprint:
                 finding_id = fingerprint
@@ -1326,17 +1331,21 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
             for result in results:
                 if not isinstance(result, dict):
                     continue
-                # Count by severity
+                # Resolve at most once, and only when an inherited field
+                # needs it. Fully explicit results need no descriptor lookup.
                 level = result.get("level")
-                if not isinstance(level, str) or not level:
-                    level = rule_default_level(rule_resolver.resolve(result)) or "warning"
+                raw_rule_id = result.get("ruleId")
+                needs_level = not isinstance(level, str) or not level
+                needs_id = not isinstance(raw_rule_id, str) or not raw_rule_id
+                rule = rule_resolver.resolve(result) if needs_level or needs_id else {}
+                # Count by severity
+                if needs_level:
+                    level = rule_default_level(rule) or "warning"
                 if level in metrics["findings_by_severity"]:
                     metrics["findings_by_severity"][level] += 1
 
                 # Count by rule
-                rule_id = result.get("ruleId", "unknown")
-                if not isinstance(rule_id, str):
-                    rule_id = "unknown"
+                rule_id = _result_rule_id(result, rule) or "unknown"
                 metrics["findings_by_rule"][rule_id] = (
                     metrics["findings_by_rule"].get(rule_id, 0) + 1
                 )
