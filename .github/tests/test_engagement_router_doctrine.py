@@ -38,7 +38,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
 
 ROUTER_PATH = REPO_ROOT / "core" / "engagement" / "router.py"
 

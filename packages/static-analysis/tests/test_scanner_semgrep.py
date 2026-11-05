@@ -27,7 +27,8 @@ _spec = importlib.util.spec_from_file_location(
     "static_analysis_scanner_semgrep", _SCANNER_PATH,
 )
 _scanner_mod = importlib.util.module_from_spec(_spec)
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 _spec.loader.exec_module(_scanner_mod)
 
 run_single_semgrep = _scanner_mod.run_single_semgrep

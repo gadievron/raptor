@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import packages.coccinelle.runner as cocci_runner
 from core.audit.cocci_prewarm import (

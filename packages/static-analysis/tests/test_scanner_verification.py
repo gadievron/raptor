@@ -18,7 +18,8 @@ _spec = importlib.util.spec_from_file_location(
     "static_analysis_scanner_verification", _SCANNER_PATH
 )
 _scanner_mod = importlib.util.module_from_spec(_spec)
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 _spec.loader.exec_module(_scanner_mod)
 
 _compose_verification_manifest = _scanner_mod._compose_verification_manifest

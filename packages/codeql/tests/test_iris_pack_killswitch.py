@@ -9,7 +9,8 @@ before any pack work happens. Symmetric to the kill-switch test in
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
 class TestAnalyzeIrisPacksKillSwitch:

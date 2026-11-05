@@ -21,7 +21,8 @@ _spec = importlib.util.spec_from_file_location(
     "_scanner_under_test_pack_applicability", _SCANNER_PATH,
 )
 _scanner = importlib.util.module_from_spec(_spec)
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 _spec.loader.exec_module(_scanner)
 
 _target_semgrep_languages = _scanner._target_semgrep_languages
