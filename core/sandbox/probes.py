@@ -209,35 +209,40 @@ def _poll_probe_child_exit(pid: int, deadline: float) -> int:
 
 def _cleanup_probe_child(pid: int, label: str, *, pidfd: int | None = None) -> None:
     """Kill and reap a private probe child while ownership is still known."""
+    if type(pid) is not int or not 1 < pid <= 0x7fffffff:
+        return
     deadline = time.monotonic() + _PROBE_CHILD_REAP_TIMEOUT_S
-    if pidfd is None:
-        # Cancellation may have hidden an already-collected wait result.
-        # Recheck before signalling, never treat a lost child as a live PID.
-        while True:
-            try:
-                waited, status = os.waitpid(pid, os.WNOHANG)
-                break
-            except InterruptedError:
-                if time.monotonic() >= deadline:
-                    logger.warning("%s probe: could not verify child %d for cleanup", label, pid)
+    for use_pidfd in ((True, False) if pidfd is not None else (False,)):
+        if not use_pidfd:
+            # Verify again when falling back: pidfd signaling may be blocked,
+            # but a lost child must never turn into a signal to a reused PID.
+            while True:
+                try:
+                    waited, status = os.waitpid(pid, os.WNOHANG)
+                    break
+                except InterruptedError:
+                    if time.monotonic() >= deadline:
+                        logger.warning("%s probe: could not verify child %d for cleanup", label, pid)
+                        return
+                except OSError as exc:
+                    if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
+                        logger.warning("%s probe: child ownership check failed: %s", label, exc)
                     return
-            except OSError as exc:
-                if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
-                    logger.warning("%s probe: child ownership check failed: %s", label, exc)
+            if waited == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
                 return
-        if waited == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
-            return
-        if waited not in (0, pid):
-            return
-    try:
-        if pidfd is not None:
-            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
-        else:
-            os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except OSError as exc:
-        logger.warning("%s probe: child %d kill failed: %s", label, pid, exc)
+            if waited not in (0, pid):
+                return
+        try:
+            if use_pidfd:
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except (AttributeError, OSError) as exc:
+            if use_pidfd and getattr(exc, "errno", None) != errno.ESRCH:
+                continue
+            if getattr(exc, "errno", None) != errno.ESRCH:
+                logger.warning("%s probe: child %d kill failed: %s", label, pid, exc)
+        break
     try:
         _poll_probe_child_exit(pid, deadline)
     except TimeoutError:
