@@ -28,11 +28,12 @@ from contextlib import ExitStack
 import http.server
 import json
 import logging
-import os
 import threading
 
 import httpx
 import pytest
+
+from core.testing.fds import read_and_close
 
 from core.llm.dispatcher import server as server_mod
 from core.llm.dispatcher import usage_scan_jail
@@ -217,8 +218,7 @@ class TestAdmissionGate:
             d = _make_dispatcher(fake_creds, tmp_path, upstream)
             cleanup.callback(d.shutdown)
             _sock_path, token_fd = d.allocate_worker("worker-gate")
-            token = os.read(token_fd, 256).decode("ascii")
-            os.close(token_fd)
+            token = read_and_close(token_fd, 256).decode('ascii')
             resp = _post(d, token)
             assert resp.status_code == 200
             assert len(upstream.requests) == 1

@@ -16,11 +16,12 @@ semantics.
 
 from __future__ import annotations
 
-import os
 import time
 
 import httpx
 import pytest
+
+from core.testing.fds import read_and_close
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import _TOKEN_HEADER, LLMDispatcher
@@ -64,8 +65,7 @@ def dispatcher(fake_creds, tmp_path):
 
 def _issue_token(dispatcher, label):
     _, fd = dispatcher.allocate_worker(label=label)
-    token = os.read(fd, 64).decode().strip()
-    os.close(fd)
+    token = read_and_close(fd, 64).decode().strip()
     return token
 
 
