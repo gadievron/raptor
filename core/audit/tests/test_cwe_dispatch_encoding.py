@@ -516,6 +516,6 @@ class TestEvidenceGradeMirror:
         assert self._mirror(
             monkeypatch, "smt:check-encoding-residual:witness",
         )
-        # Other verbs keep the :witness receipt and their roles.
-        assert not self._mirror(monkeypatch, "smt:check-toctou:witness")
+        # Source-pattern witnesses also remain diagnostic.
+        assert self._mirror(monkeypatch, "smt:check-toctou:witness")
         assert self._mirror(monkeypatch, "smt:check-toctou")

@@ -309,6 +309,8 @@ class NarrowingGuardContext:
 
     def in_function(self, line, column, scope):
         target = self._initializer_at(line, column)
+        if target is not None and any(start <= target.start_byte < end for start, end in scope.excluded):
+            return False
         while target is not None and target.type != "function_definition":
             target = target.parent
         return target is not None and (target.start_byte, target.end_byte) == (

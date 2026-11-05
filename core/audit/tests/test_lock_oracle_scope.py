@@ -76,7 +76,7 @@ def test_parent_normalizes_old_lock_worker_results(monkeypatch, verdict):
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", lambda *a, **kw: asdict(old))
     result = sweep._smt_verb_in_subprocess(file_path="record.c", function_name="Read",
                                           verb="check-lock-discipline", source=BALANCED, hypothesis="claim")
-    assert result.outcome == ("confirmed" if verdict == "confirmed" else "inconclusive")
+    assert result.outcome == "inconclusive"
     assert result.rule_id == "smt:check-lock-discipline"
     assert result.details["witness"] == {"enabled": 0}
     assert result.details["oracle_scope"] == "lexical-lock-discipline"

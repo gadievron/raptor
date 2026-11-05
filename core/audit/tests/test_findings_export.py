@@ -505,7 +505,7 @@ class TestConfirmedByDiscrimination:
     def test_detection_stamp_stays_out_of_confirmed_by(self):
         outcome = FakeOutcome(
             evidence_tool="smt:check-toctou",
-            review_result={"hypothesis": "toctou"},
+            review_result={"hypothesis": "integer overflow"},
         )
         finding = build_graded_finding(outcome)
         assert finding["discovery"]["confirmed_by"] == []
@@ -514,7 +514,7 @@ class TestConfirmedByDiscrimination:
         outcome = FakeOutcome(
             evidence_tool="smt:check-toctou",
             review_result={
-                "hypothesis": "toctou",
+                "hypothesis": "integer overflow",
                 "secondary_confirmations": [
                     {"mechanism": "m", "evidence_tool": "coccinelle:r1"},
                     # premise-blocked confirmations do not confirm
@@ -531,7 +531,7 @@ class TestConfirmedByDiscrimination:
         # but no receipt qualifies — the export must not ship the claim.
         outcome = FakeOutcome(
             evidence_tool="smt:check-toctou",
-            review_result={"hypothesis": "toctou"},
+            review_result={"hypothesis": "integer overflow"},
         )
         outcome.verification_tier = "tool_backed"
         finding = build_graded_finding(outcome)
@@ -555,8 +555,8 @@ class TestConfirmedByDiscrimination:
         # ride the witness arm into confirmed_by and defeat the
         # no-receipt tier cap.
         outcome = FakeOutcome(
-            evidence_tool="llm-claimed:smt:check-toctou:witness",
-            review_result={"hypothesis": "toctou"},
+            evidence_tool="llm-claimed:smt:check-overflow:witness",
+            review_result={"hypothesis": "integer overflow"},
         )
         outcome.verification_tier = "tool_backed"
         finding = build_graded_finding(outcome)
@@ -569,13 +569,13 @@ class TestConfirmedByDiscrimination:
         # concrete solver model discriminates) keeps its confirming
         # role and the recorded tier.
         outcome = FakeOutcome(
-            evidence_tool="smt:check-toctou:witness",
-            review_result={"hypothesis": "toctou"},
+            evidence_tool="smt:check-overflow:witness",
+            review_result={"hypothesis": "integer overflow"},
         )
         outcome.verification_tier = "tool_backed"
         finding = build_graded_finding(outcome)
         assert finding["discovery"]["confirmed_by"] \
-            == ["smt:check-toctou:witness"]
+            == ["smt:check-overflow:witness"]
         assert finding["verification_tier"] == "tool_backed"
 
     def test_part_after_claim_marker_stays_out_of_confirmed_by(self):

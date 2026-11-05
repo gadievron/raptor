@@ -2,18 +2,25 @@
 
 from dataclasses import dataclass
 
+_MASK_TABLE = bytes(value if value in (10, 13) else 32 for value in range(256))
+
 
 @dataclass(frozen=True)
 class FunctionScope:
     status: str
     start: int = 0
     end: int = 0
+    excluded: tuple[tuple[int, int], ...] = ()
 
     def source_span(self, source: str) -> str:
         """Keep original line positions for a line-oriented scoped checker."""
+        if self.status != "selected":
+            raise ValueError("unresolved function scope has no probe source")
         raw = source.encode("utf-8")
-        masked = bytearray(c if c in (10, 13) else 32 for c in raw)
+        masked = bytearray(raw.translate(_MASK_TABLE))
         masked[self.start : self.end] = raw[self.start : self.end]
+        for start, end in self.excluded:
+            masked[start:end] = raw[start:end].translate(_MASK_TABLE)
         return masked.decode("utf-8")
 
 
@@ -26,9 +33,9 @@ def _node_source(node, source):
 
 
 def _name(node, source, language):
-    if language == "go":
+    if language not in {"c", "cpp"}:
         name = _node_source(node.child_by_field_name("name"), source)
-        receiver = node.child_by_field_name("receiver")
+        receiver = node.child_by_field_name("receiver") if language == "go" else None
         if receiver is not None:
             stack = [receiver]
             while stack:
@@ -78,16 +85,19 @@ def select_function(
         return FunctionScope("missing")
     if root is None or root.has_error:
         return FunctionScope("unavailable")
-    kinds = (
-        {"function_declaration", "method_declaration"}
-        if language == "go"
-        else {"function_definition"}
-    )
+    from .condition_extraction import _FUNCTION_TYPES
+
+    kinds = _FUNCTION_TYPES.get(language, ())
+    if not kinds:
+        return FunctionScope("unavailable")
     requested = function_name.strip().replace("::", ".")
     matches = []
+    callables = []
     stack = [root]
     while stack:
         node = stack.pop()
+        if node.type in kinds or node.type in {"lambda_expression", "lambda"}:
+            callables.append(node)
         if node.type in kinds:
             name = _name(node, source, language)
             if name == requested or (
@@ -97,7 +107,13 @@ def select_function(
         stack.extend(node.named_children)
     if len(matches) != 1:
         return FunctionScope("missing" if not matches else "ambiguous")
-    return FunctionScope("selected", matches[0].start_byte, matches[0].end_byte)
+    selected = matches[0]
+    excluded = tuple(
+        (node.start_byte, node.end_byte)
+        for node in callables
+        if selected.start_byte < node.start_byte < node.end_byte <= selected.end_byte
+    )
+    return FunctionScope("selected", selected.start_byte, selected.end_byte, excluded)
 
 
 def go_function_scope(source: str, function_name: str) -> FunctionScope:
@@ -113,3 +129,29 @@ def go_function_scope(source: str, function_name: str) -> FunctionScope:
         return select_function(root, source.encode("utf-8"), function_name, "go")
     except Exception:
         return FunctionScope("unavailable")
+
+
+def source_for_function(source: str, file_path: str, function_name: str):
+    """Return a selected scope and raw function source, or no probe source."""
+    try:
+        from .condition_extraction import _get_parser, language_for_file
+
+        language = language_for_file(file_path)
+        parser = _get_parser(language) if language else None
+        data = source.encode("utf-8")
+        root = parser.parse(data).root_node if parser is not None else None
+        scope = select_function(root, data, function_name, language)
+        return scope, scope.source_span(source) if scope.status == "selected" else None
+    except Exception:
+        return FunctionScope("unavailable"), None
+
+
+def source_binding(source: str, function_name: str, *, verb: str) -> dict[str, str]:
+    """A worker receipt must describe the exact scoped input it analyzed."""
+    import hashlib
+
+    return {
+        "function": function_name,
+        "verb": verb,
+        "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+    }
