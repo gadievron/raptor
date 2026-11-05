@@ -217,10 +217,10 @@ def test_scan_bounds_requests_smoke(tmp_path: Path) -> None:
 
     Scale trade-off: n must exceed one EPSS chunk (100) to prove
     batching spans chunks AND exceed the budget to prove the cap +
-    degradation, but every finding costs an SSVC cache-file write, so
-    growing n re-creates the contended-runner cost the nightly test
-    already covers. 150/100 is the smallest shape exercising both."""
-    n, budget = 150, 100
+    degradation. 101/100 is the smallest shape exercising both while
+    limiting real cache-file I/O; the nightly test retains distro-scale
+    volume."""
+    n, budget = 101, 100
     deps, results, _ = _distro_scale_inputs(n)
     http = CountingHttp()
     epss, vuln = _clients(http, tmp_path)
@@ -231,8 +231,8 @@ def test_scan_bounds_requests_smoke(tmp_path: Path) -> None:
     )
 
     assert len(findings) == n
-    assert len(http.epss_requests) == 2           # ceil(150 / 100)
-    assert len(http.vuln_requests) == budget      # capped, not 150
+    assert len(http.epss_requests) == 2           # 100 + 1
+    assert len(http.vuln_requests) == budget      # capped, not all n
     # EPSS enrichment is complete — batching is a cost fix, not a
     # coverage change.
     assert all(f.epss == 0.5 for f in findings)
@@ -248,7 +248,9 @@ def test_second_pass_reuses_cache(tmp_path: Path) -> None:
     """Re-scan against a warm cache: zero EPSS fetches, and the SSVC
     budget is spent only on the CVEs the first pass left uncached —
     repeat scans progressively warm past the budget line."""
-    n, budget = 300, 200
+    # Cross an EPSS batch boundary and retain eight warm-cache misses:
+    # both passes still exercise the full eight-worker SSVC pool.
+    n, budget = 108, 100
     deps, results, _ = _distro_scale_inputs(n)
 
     http1 = CountingHttp()
@@ -257,8 +259,10 @@ def test_second_pass_reuses_cache(tmp_path: Path) -> None:
         deps, results, epss=epss1, vulnrichment=vuln1,
         ssvc_fetch_budget=budget,
     )
-    assert len(http1.epss_requests) == 3          # ceil(300 / 100)
+    assert len(http1.epss_requests) == 2          # 100 + 8
     assert len(http1.vuln_requests) == budget
+    assert sum(f.ssvc_exploitation == "active" for f in findings1) == budget
+    assert sum(f.ssvc_exploitation is None for f in findings1) == n - budget
 
     http2 = CountingHttp()
     epss2, vuln2 = _clients(http2, tmp_path)
@@ -267,7 +271,7 @@ def test_second_pass_reuses_cache(tmp_path: Path) -> None:
         ssvc_fetch_budget=budget,
     )
     assert len(http2.epss_requests) == 0          # fully cached
-    # Only the 100 CVEs the first pass skipped need network now.
+    # Only the eight CVEs the first pass skipped need network now.
     assert len(http2.vuln_requests) == n - budget
     assert all(f.epss == 0.5 for f in findings2)
     assert sum(
@@ -355,7 +359,7 @@ def test_budget_priority_non_kev_high_severity_first(tmp_path: Path) -> None:
 def test_epss_chunk_failure_degrades_only_that_chunk(tmp_path: Path) -> None:
     """A failed EPSS batch leaves its own CVEs unresolved and nothing
     else — one lost chunk must not nuke the whole scan's enrichment."""
-    n = 150                                       # 2 chunks: 100 + 50
+    n = 101                                       # 2 chunks: 100 + 1
     deps, results, cves = _distro_scale_inputs(n)
     # Fail whichever chunk carries the last CVE (the second chunk —
     # the client sorts ids, and ours are generated in sorted order).
@@ -369,6 +373,6 @@ def test_epss_chunk_failure_degrades_only_that_chunk(tmp_path: Path) -> None:
     scored = [f for f in findings if f.epss == 0.5]
     unscored = [f for f in findings if f.epss is None]
     assert len(scored) == 100
-    assert len(unscored) == 50
+    assert len(unscored) == 1
     # SSVC enrichment is unaffected by the EPSS outage.
     assert all(f.ssvc_exploitation == "active" for f in findings)
