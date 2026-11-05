@@ -22,6 +22,25 @@ def _positive(value):
     return isinstance(value, int) and not isinstance(value, bool) and 0 < value < 2**31
 
 
+def local_uri_path(uri: Any) -> str:
+    """Decode one local SARIF URI once; filesystem names must bypass this.
+
+    Callers apply their own target containment and relative-path policy.
+    Ambiguous or non-local locations cannot establish diagnostic silence.
+    """
+    if not isinstance(uri, str) or not uri or len(uri) > 4096:
+        raise ValueError("invalid compiler location URI")
+    if uri.startswith(" ") or any(ord(char) < 32 for char in uri):
+        raise ValueError("invalid compiler location URI")
+    parsed = urlsplit(uri)
+    if parsed.scheme not in ("", "file") or parsed.netloc not in ("", "localhost") or parsed.query or parsed.fragment:
+        raise ValueError("non-local compiler location URI")
+    path = unquote(parsed.path, errors="strict")
+    if not path or any(ord(char) < 32 for char in path):
+        raise ValueError("invalid compiler location path")
+    return path
+
+
 def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None
                     ) -> tuple[list[dict[str, Any]], list[str]]:
     """Copy a small SARIF codeFlows subset, validating every retained event."""
@@ -61,12 +80,7 @@ def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None
                         raise ValueError("invalid compiler event location")
                     if not isinstance(message, str) or len(message) > 2048:
                         raise ValueError("invalid compiler event description")
-                    parsed = urlsplit(uri)
-                    if parsed.scheme not in ("", "file") or parsed.netloc not in ("", "localhost") or parsed.query or parsed.fragment:
-                        raise ValueError("non-local compiler event URI")
-                    uri = unquote(parsed.path, errors="strict")
-                    if any(ord(char) < 32 for char in uri):
-                        raise ValueError("control character in compiler event path")
+                    uri = local_uri_path(uri)
                     mapped = locate(uri) if locate is not None else uri
                     if mapped is None:
                         raise ValueError("compiler event outside target")

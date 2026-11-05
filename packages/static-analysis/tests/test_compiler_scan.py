@@ -1540,3 +1540,22 @@ def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch):
     assert not result.ok
     assert 'diagnostics unavailable' in result.reason
     assert not result.diagnostics
+
+
+def test_encoded_sarif_diagnostic_is_reported_at_its_real_source_path(tmp_path):
+    import json
+
+    source = tmp_path / 'a %20.c'
+    source.write_text('void f(void) {}\n')
+    result = {'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning',
+              'message': {'text': 'warning'}, 'locations': [{'physicalLocation': {
+                  'artifactLocation': {'uri': source.as_uri()}, 'region': {'startLine': 1},
+              }}]}
+    sarif = tmp_path / 'gcc.sarif'
+    sarif.write_text(json.dumps({'runs': [{'results': [result]}]}))
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    diagnostics = _cs._scan_diagnostics(
+        _parse_gcc_sarif(sarif), tmp_path, source, 'gcc', source.name,
+    )
+    assert len(diagnostics) == 1
+    assert diagnostics[0]['file'] == source.name
