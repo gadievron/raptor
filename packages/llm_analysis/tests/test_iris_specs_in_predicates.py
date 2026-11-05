@@ -14,10 +14,9 @@ from packages.llm_analysis.dataflow_validation import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_note_cache():
-    dv._IRIS_NOTE_CACHE.clear()
-    yield
-    dv._IRIS_NOTE_CACHE.clear()
+def _clear_note_cache(monkeypatch):
+    """Use private caches and restore the caller's cache objects."""
+    monkeypatch.setattr(dv, "_IRIS_NOTE_CACHE", {})
 
 
 def _seed_store(tmp_path):

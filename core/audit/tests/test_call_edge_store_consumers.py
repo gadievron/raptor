@@ -51,11 +51,8 @@ def _hermetic_ambient_state(tmp_path, monkeypatch):
         sessions_mod, "SESSIONS_DIR", tmp_path / "sessions.d")
     from core.audit import orchestrator as orch_mod
 
-    orch_mod._GRAPH_STORE_MEMO.clear()
-    pc._STORE_LANE_MEMO.clear()
-    yield
-    orch_mod._GRAPH_STORE_MEMO.clear()
-    pc._STORE_LANE_MEMO.clear()
+    monkeypatch.setattr(orch_mod, "_GRAPH_STORE_MEMO", {})
+    monkeypatch.setattr(pc, "_STORE_LANE_MEMO", {})
 
 
 def _seed_store(tmp_path: Path, target: str = "/target"):
