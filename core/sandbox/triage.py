@@ -230,8 +230,15 @@ def _verify_proxy_events(
                  if isinstance(count_record, dict) else None)
         count = (count_record.get("count")
                  if isinstance(count_record, dict) else None)
-        flags = (count_record.get("flags") or []
+        flags = (count_record.get("flags", [])
                  if isinstance(count_record, dict) else [])
+        # Validate before canonicalizing MAC fields: arbitrary JSON shapes
+        # must produce a report rather than raise during flag iteration.
+        if (type(count) is not int or count < 0
+                or not isinstance(flags, list)
+                or not all(isinstance(flag, str) for flag in flags)):
+            count_note = "proxy-events count sidecar malformed"
+            return usable, rejected, _INTEGRITY_TAMPERED, count_note
         fields = telemetry_mac.proxy_events_count_fields(
             count, flags, run)
         if not telemetry_mac.verify(fields, token):
@@ -245,9 +252,6 @@ def _verify_proxy_events(
                 "writer-flagged proxy-events tampering: "
                 + ", ".join(sorted(str(f) for f in flags))
             )
-            return usable, rejected, _INTEGRITY_TAMPERED, count_note
-        if not isinstance(count, int) or count < 0:
-            count_note = "proxy-events count sidecar malformed"
             return usable, rejected, _INTEGRITY_TAMPERED, count_note
         seqs = []
         for e in usable:
