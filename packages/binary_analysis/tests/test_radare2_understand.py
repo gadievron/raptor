@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from packages.binary_analysis.radare2_understand import (
     _DANGEROUS_IMPORTS,
     _ENTRY_POINT_HINTS,
@@ -18,6 +20,13 @@ from packages.binary_analysis.radare2_understand import (
     analyse_binary_context,
     probe_capability,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+
+    pin_defense_telemetry(monkeypatch)
 
 
 class TestProbeCapability(unittest.TestCase):
