@@ -30,6 +30,19 @@ from core.sandbox.observe_cli import (
 from core.sandbox.observe_profile import ConnectTarget, ObserveProfile
 
 
+@pytest.fixture(autouse=True)
+def _isolate_scratch_ownership(monkeypatch):
+    """Filesystem tests track ownership without starting a process-wide ticker."""
+    from core.run import scratch, tmp_reaper
+
+    live = set()
+    monkeypatch.setattr(tmp_reaper, "_RUNTIME_DIR_PREFIXES", set())
+    monkeypatch.setattr(scratch, "keepalive_register", lambda p: live.add(str(p)))
+    monkeypatch.setattr(scratch, "keepalive_unregister", lambda p: live.discard(str(p)))
+    yield
+    assert not live, f"scratch ownership not released: {sorted(live)}"
+
+
 def _materialise_observe_log(run_dir) -> None:
     """Write a minimal observe log at the CANONICAL parent-owned
     location (``<run_dir>/.audit/``) — where the real tracer writes.

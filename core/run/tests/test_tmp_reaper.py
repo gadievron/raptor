@@ -215,6 +215,18 @@ class TestDirReaping:
         assert reap_stale_tmp() == []
         assert d.is_dir()
 
+    def test_disposable_observe_orphan_reaped(self, tmp_root):
+        path = _make_old_dir(tmp_root, "raptor-observe-tmp-abcdefgh",
+                             [".sandbox-observe.jsonl"])
+        assert reap_stale_tmp() == [path]
+        assert not path.exists()
+
+    def test_kept_observe_with_real_suffix_survives(self, tmp_root):
+        path = _make_old_dir(tmp_root, "raptor-observe-abcdefgh",
+                             [".sandbox-observe.jsonl"])
+        assert reap_stale_tmp() == []
+        assert path.is_dir()
+
     def test_symlink_squatting_on_prefix_kept(self, tmp_root):
         target = tmp_root / "victim"
         target.mkdir()

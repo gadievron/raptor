@@ -35,9 +35,10 @@ SIGTERM (Python does not run ``atexit`` hooks on SIGTERM) skip them, so
 every hard-killed run leaks its set. This module sweeps such orphans at
 the start of the next run.
 
-``raptor-observe-*`` dirs are deliberately NOT reaped: the observe CLI
-only leaves one behind when the operator passed ``--keep`` (or ``--out``)
-to preserve it for re-inspection.
+Kept ``raptor-observe-*`` dirs are deliberately NOT reaped: the operator
+passed ``--keep`` to preserve them for re-inspection. Disposable observations
+use the distinct ``raptor-observe-tmp-`` prefix and are swept after crashes;
+explicit ``--out`` paths are caller-owned and never registered.
 
 Safety posture (world-writable /tmp on a shared box):
 
@@ -83,6 +84,9 @@ logger = logging.getLogger(__name__)
 # Dir prefixes whose creators ALWAYS intend cleanup — presence past the
 # age floor means the owning process died without its exit path.
 _DIR_PREFIXES = (
+    # Disposable observe CLI output; scratch_dir holds a keepalive until
+    # its ExitStack exits. --keep uses a separate, unreaped namespace.
+    "raptor-observe-tmp-",
     # Corpus receipt-replay temporary target/output trees.
     "receipt-replay-",
     "raptor-web-browser-",
