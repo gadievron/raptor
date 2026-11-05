@@ -3515,24 +3515,10 @@ def _extract_arithmetic_operands(
 def _extract_oob_operands(
     hypothesis: str, source: str,
 ) -> tuple:
-    """Extract (index, size) from hypothesis about out-of-bounds access."""
-    import re
-    # (?<!\w) pin — same rationale as _extract_ptr_operand.
-    m = re.search(r"(?<!\w)[`'\"]?(\w+)[`'\"]?\s+(?:is\s+)?(?:used\s+)?(?:as\s+)?(?:an?\s+)?(?:array\s+)?index", hypothesis.lower())
-    index = m.group(1) if m and _IDENT_RE.fullmatch(m.group(1)) else None
+    """Read explicit, case-preserving symbolic roles for a bounds lead."""
+    from .bounds_operands import extract_bounds_operands
 
-    m = re.search(r"(?:array|buffer)\s+(?:of\s+)?(?:size\s+)?[`'\"]?(\w+)[`'\"]?", hypothesis.lower())
-    if m and _IDENT_RE.fullmatch(m.group(1)):
-        size = m.group(1)
-    else:
-        ids = _IDENT_RE.findall(source)
-        size_candidates = [
-            i for i in ids
-            if any(kw in i.lower() for kw in ("size", "len", "count", "num", "nsems"))
-        ]
-        size = size_candidates[0] if size_candidates else None
-
-    return index, size
+    return extract_bounds_operands(hypothesis, _strip_comments_and_strings(source))
 
 
 _PROSE_STOP_WORDS = frozenset({
