@@ -14,6 +14,8 @@ hard-codes the registry id would otherwise fail post-#196.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import importlib.util
 import sys
 from pathlib import Path
@@ -22,6 +24,7 @@ from unittest.mock import patch
 import pytest
 
 from core.config import RaptorConfig
+from core.testing.logging_state import owned_log_handler
 
 # The dispatchers under test resolve baseline registry packs via
 # ``RaptorConfig.get_semgrep_config`` and then drop unresolved
@@ -764,10 +767,10 @@ class TestCodeQLStageTag:
                 records.append(record.getMessage())
 
         cap = _Capture()
-        tag = _scanner_mod._CodeQLStageTag()
-        raptor_logger.addHandler(cap)
-        attach_to.addFilter(tag)
-        try:
+        with owned_log_handler(raptor_logger, cap), ExitStack() as cleanup:
+            tag = _scanner_mod._CodeQLStageTag()
+            cleanup.callback(attach_to.removeFilter, tag)
+            attach_to.addFilter(tag)
             t = threading.Thread(
                 target=lambda: raptor_logger.warning("db build step"),
                 name="codeql-stage_0",
@@ -777,9 +780,6 @@ class TestCodeQLStageTag:
             # the test, not hang the whole suite.
             t.join(timeout=30)
             assert not t.is_alive(), "log-emitting thread hung"
-        finally:
-            attach_to.removeFilter(tag)
-            raptor_logger.removeHandler(cap)
         assert len(records) == 1
         return records[0]
 

@@ -23,6 +23,8 @@ from core.env.store import (
 )
 
 
+from core.testing.logging_state import owned_log_handler
+
 def _spec(name: str = "redis-7.0") -> EnvironmentSpec:
     return EnvironmentSpec(
         name=name,
@@ -148,11 +150,8 @@ def _with_store_warnings(fn):
     import logging
     logger = logging.getLogger("core.env.store")
     handler = _RecordingHandler()
-    logger.addHandler(handler)
-    try:
+    with owned_log_handler(logger, handler):
         fn()
-    finally:
-        logger.removeHandler(handler)
     return [r.getMessage() for r in handler.records
             if r.levelno >= logging.WARNING]
 

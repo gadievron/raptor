@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.build.build_detector import BuildDetector
+from core.testing.logging_state import owned_log_handler
 
 
 @pytest.fixture(autouse=True)
@@ -416,12 +417,9 @@ class TestMissingConfigHeaderDetection:
         captured: list[logging.LogRecord] = []
         class _Capture(logging.Handler):
             def emit(self, record): captured.append(record)
-        h = _Capture(level=logging.WARNING)
         target_logger = logging.getLogger("raptor")
-        target_logger.addHandler(h)
-        try:
+        h = _Capture(level=logging.WARNING)
+        with owned_log_handler(target_logger, h):
             bd.synthesise_build_command("cpp")
-        finally:
-            target_logger.removeHandler(h)
         warnings = [r.getMessage() for r in captured if r.levelno == logging.WARNING]
         assert any("missing_config.h" in m for m in warnings), warnings

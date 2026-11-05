@@ -4,6 +4,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler
 from packages.sca import health as health_mod
 
 
@@ -25,14 +26,10 @@ class _StubClient:
 
 class TestProbeErrorAttribution:
     def _probe_with_capture(self, client):
-        capture = health_mod._ThreadLogCapture()
         reg = logging.getLogger(
             health_mod.PyPIClient.__module__.rsplit(".", 1)[0])
-        reg.addHandler(capture)
-        try:
+        with owned_log_handler(reg, health_mod._ThreadLogCapture()) as capture:
             return health_mod._run_probe(client, "stub", "pkg", capture)
-        finally:
-            reg.removeHandler(capture)
 
     def test_swallowed_error_surfaces_in_row(self):
         r = self._probe_with_capture(_StubClient(
@@ -58,18 +55,16 @@ class TestProbeErrorAttribution:
     def test_parallel_probes_attribute_to_own_thread(self):
         # Two concurrent probes, each logging a distinct cause: each
         # row must carry ITS thread's message, never the sibling's.
-        capture = health_mod._ThreadLogCapture()
         reg = logging.getLogger(
             health_mod.PyPIClient.__module__.rsplit(".", 1)[0])
-        reg.addHandler(capture)
-        barrier = threading.Barrier(2)
+        with owned_log_handler(reg, health_mod._ThreadLogCapture()) as capture:
+            barrier = threading.Barrier(2)
 
-        class _SyncStub(_StubClient):
-            def list_versions(self, name):
-                barrier.wait(timeout=10)
-                return super().list_versions(name)
+            class _SyncStub(_StubClient):
+                def list_versions(self, name):
+                    barrier.wait(timeout=10)
+                    return super().list_versions(name)
 
-        try:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fa = pool.submit(health_mod._run_probe,
                                  _SyncStub([], warn="cause-alpha"),
@@ -78,8 +73,6 @@ class TestProbeErrorAttribution:
                                  _SyncStub([], warn="cause-beta"),
                                  "b", "pkg", capture)
                 ra, rb = fa.result(), fb.result()
-        finally:
-            reg.removeHandler(capture)
         assert ra.error == "cause-alpha"
         assert rb.error == "cause-beta"
 
@@ -93,6 +86,7 @@ class TestTrimCause:
         assert len(out) <= 220 and out.endswith("…")
 
 
+@isolated_cli_logging()
 def test_offline_flag_is_refused() -> None:
     """health is a LIVE reachability check that deliberately probes
     against a throwaway scratch cache — under --offline every probe
