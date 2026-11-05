@@ -97,9 +97,14 @@ def test_protection_is_not_tied_to_a_fifteen_line_window():
     ).narrowing_found
 
 
-def test_macro_override_does_not_borrow_the_standard_limit():
+@pytest.mark.parametrize("directive", [
+    "#define INT_MAX 9999999999\n",
+    "\t#\tdefine\tINT_MAX 9999999999\r\n",
+    "#undef INT_MAX\n",
+])
+def test_macro_override_does_not_borrow_the_standard_limit(directive):
     assert check(
-        "#define INT_MAX 9999999999\nif (wide > INT_MAX) return 0;"
+        directive + "if (wide > INT_MAX) return 0;"
     ).narrowing_found
 
 
