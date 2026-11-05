@@ -55,6 +55,12 @@ def bare_console_config_offences(text: str) -> list[int]:
     deliberate evasion, same as the writer audit's aliased-sink
     residual.
     """
+    # Every rule below requires one of these exact, case-sensitive tokens.
+    # Most runtime files contain none; avoid five whole-text regex scans there.
+    if not any(token in text for token in (
+        "basicConfig", "StreamHandler", "dictConfig", "fileConfig",
+    )):
+        return []
     offences = []
     for m in re.finditer(r"^[^\n#]*?\b\w+\.basicConfig\(", text, re.M):
         offences.append(text.count("\n", 0, m.start()) + 1)
