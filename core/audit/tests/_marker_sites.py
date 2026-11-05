@@ -166,20 +166,29 @@ def scan(sources: dict[str, str], *, parsed_trees=None) -> tuple[list[tuple], li
             continue
         if parsed_trees is not None:
             parsed_trees[rel] = t
-        # All passes are read-only and use the same breadth-first order.
-        # Traverse each tree once instead of rebuilding that walk for
-        # constant extraction, loop bindings and consumer recognition.
-        nodes = tuple(ast.walk(t))
-        constants = _consts(nodes)
-        trees[rel] = (nodes, constants)
+        # Keep each pass's candidates in the same breadth-first order.
+        # Classify once rather than repeatedly visiting inert names, literals
+        # and contexts. Every subtree is still walked; these buckets match
+        # the node forms handled by _consts, _loop_env and the consumer pass.
+        assignments, loops, consumers = [], [], []
+        for node in ast.walk(t):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                assignments.append(node)
+            elif isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp,
+                                   ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                loops.append(node)
+            elif isinstance(node, (ast.Compare, ast.Call)):
+                consumers.append(node)
+        constants = _consts(assignments)
+        trees[rel] = (loops, consumers, constants)
         for k, v in constants.items():
             genv.setdefault(k, v)
     sites, normed = set(), set()
-    for rel, (nodes, constants) in trees.items():
+    for rel, (loops, consumers, constants) in trees.items():
         env = dict(genv)
         env.update(constants)
-        env = _loop_env(nodes, env)
-        for n in nodes:
+        env = _loop_env(loops, env)
+        for n in consumers:
             hits: list[tuple[str, str, bool]] = []
             if isinstance(n, ast.Compare) and len(n.ops) == 1:
                 op, right = n.ops[0], n.comparators[0]
