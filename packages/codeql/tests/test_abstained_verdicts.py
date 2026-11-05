@@ -38,9 +38,11 @@ def _raptor_logger_propagates():
     """
     raptor = logging.getLogger("raptor")
     orig = raptor.propagate
-    raptor.propagate = True
-    yield
-    raptor.propagate = orig
+    try:
+        raptor.propagate = True
+        yield
+    finally:
+        raptor.propagate = orig
 
 
 def _finding(file_path: str = "src/vuln.py", line: int = 2) -> CodeQLFinding:
