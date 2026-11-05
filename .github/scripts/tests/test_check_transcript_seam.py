@@ -470,3 +470,41 @@ class TestRealTree:
         observed = live_check[1]
         arms = {key.split(":", 1)[0] for key in observed}
         assert {"llm_client", "provider"} <= arms
+
+
+@pytest.mark.parametrize("imports", [
+    "from module import LLMClient as Client, AlphaProvider as Provider, create_provider as factory",
+    "import module.LLMClient as Client\n"
+    "import module.AlphaProvider as Provider\n"
+    "import module.create_provider as factory",
+])
+def test_client_and_provider_aliases_keep_separate_counts(det, tmp_path, imports):
+    root = _seeded_tree(tmp_path)
+    _plant(root, "packages/thing/stage.py", imports + (
+        "\ndef run():\n"
+        "    Client()\n"
+        "    Provider()\n"
+        "    factory(cfg)\n"
+    ))
+    assert det.census(root) == {
+        "llm_client:packages/thing/stage.py::run": 1,
+        "provider:packages/thing/stage.py::run": 2,
+    }
+
+
+def test_reused_import_alias_preserves_call_priority_and_subclass_arms(det, tmp_path):
+    root = _seeded_tree(tmp_path)
+    _plant(root, "packages/thing/stage.py", (
+        "from module import LLMClient as Shared\n"
+        "from module import AlphaProvider as Shared\n"
+        "def run():\n"
+        "    Shared()\n"
+        "class Mixed(Shared):\n"
+        "    pass\n"
+    ))
+    # Calls retain client priority; subclass definitions witness both groups.
+    assert det.census(root) == {
+        "llm_client:packages/thing/stage.py::run": 1,
+        "llm_client:packages/thing/stage.py::Mixed": 1,
+        "provider:packages/thing/stage.py::Mixed": 1,
+    }
