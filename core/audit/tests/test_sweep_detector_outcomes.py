@@ -4,8 +4,9 @@ A detector whose prerequisites are absent from the source ('no auth
 checks found', 'no lock acquires found', 'no allocations found', ...)
 never tested the hypothesis — recording outcome=refuted for that
 model miss let a non-analysis clear tool confirmations.  These tests
-pin the mapping: model-not-applicable → inconclusive; applied and
-negative → refuted; positive → confirmed.
+pin the mapping: model-not-applicable → inconclusive; applied source-pattern
+negatives remain diagnostic and inconclusive; positive → confirmed. Checker
+wrappers and the compatibility-level negative helper have separate contracts.
 """
 
 from __future__ import annotations
@@ -64,8 +65,8 @@ class TestModelMissIsInconclusive:
         assert r.outcome == "inconclusive"
 
 
-class TestAppliedDetectorStillRefutesOrConfirms:
-    def test_auth_bypass_applied_negative_refutes(self):
+class TestAppliedDetectorObservations:
+    def test_auth_bypass_applied_negative_stays_diagnostic(self):
         src = (
             "int f(int x) {\n"
             "    if (!capable(CAP_SYS_ADMIN))\n"
@@ -75,7 +76,11 @@ class TestAppliedDetectorStillRefutesOrConfirms:
             "}\n"
         )
         r = _run("check-auth-bypass", src)
-        assert r.outcome == "refuted"
+        assert not r.errors
+        assert r.outcome == "inconclusive"
+        assert r.details.get("applicable", True) is True
+        assert r.details["bypass_found"] is False
+        assert r.details["oracle_scope"] == "source-pattern"
 
     def test_lock_discipline_positive_confirms(self):
         src = (
