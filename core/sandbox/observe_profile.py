@@ -263,7 +263,8 @@ class ObserveProfile:
         it as unauthenticated observation, not verified evidence.
     capture_incomplete
         True when an accepted audit summary reports reader failure or an
-        undrained stream. Independent of budget drops; sticky across merges.
+        undrained stream, or parsing loses records to read/format/size errors.
+        Independent of budget drops; sticky across merges.
     """
     paths_read: list = field(default_factory=list)
     paths_written: list = field(default_factory=list)
@@ -272,7 +273,7 @@ class ObserveProfile:
     budget_truncated: bool = False
     dropped_by_category: dict = field(default_factory=dict)
     nonce_trusted: bool = True
-    # Reader failure or an undrained stream, independently of budget drops.
+    # Capture or parsing loss, independently of budget drops.
     capture_incomplete: bool = False
 
     def merge(self, other: ObserveProfile) -> None:
@@ -452,8 +453,11 @@ _MAX_OBSERVE_BYTES = 64 * 1024 * 1024
 _MAX_RECORD_BYTES = 1 * 1024 * 1024
 
 
-def _iter_records(path: Path) -> Iterable[dict]:
+def _iter_records(path: Path, *, profile: ObserveProfile | None = None) -> Iterable[dict]:
     """Yield decoded JSONL records, skipping malformed lines.
+
+    When supplied, mark the profile incomplete if input cannot be read
+    or records must be discarded by the parser.
 
     A partial write at the end of the file (tracer killed mid-event)
     can leave a truncated final line. We swallow JSON decode errors
@@ -479,6 +483,8 @@ def _iter_records(path: Path) -> Iterable[dict]:
     try:
         data = read_capped(path, _MAX_OBSERVE_BYTES, raise_on_refusal=True)
     except CappedReadRefused as exc:
+        if profile is not None:
+            profile.capture_incomplete = True
         if exc.reason == "not_regular":
             logger.warning(
                 "observe log %s is not a regular file "
@@ -491,12 +497,16 @@ def _iter_records(path: Path) -> Iterable[dict]:
                 path, _MAX_OBSERVE_BYTES)
         return
     except OSError:
+        if profile is not None:
+            profile.capture_incomplete = True
         return
     # Iterate without allocating a list proportional to the number of
     # newlines. The per-record limit excludes its newline terminator.
     for raw in io.BytesIO(data):
         size = len(raw) - int(raw.endswith(b"\n"))
         if size > _MAX_RECORD_BYTES:
+            if profile is not None:
+                profile.capture_incomplete = True
             continue
         line = raw.strip()
         if not line:
@@ -504,6 +514,8 @@ def _iter_records(path: Path) -> Iterable[dict]:
         try:
             yield json.loads(line.decode("utf-8", errors="replace"))
         except (ValueError, TypeError, RecursionError):
+            if profile is not None:
+                profile.capture_incomplete = True
             continue
 
 
@@ -629,7 +641,7 @@ def parse_observe_log(run_dir, *,
     darwin_connect_unparsed = 0
 
     ambiguous_skipped = 0
-    for rec in _iter_records(log_path):
+    for rec in _iter_records(log_path, profile=profile):
         if not isinstance(rec, dict):
             continue
         if rec.get("parse_ambiguous"):
