@@ -886,6 +886,11 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/audit/orchestrator.py::sweep": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed Semgrep sweep-memo key schema passed to _memoized_sweep_step: rule/source hashes, path/function/range, hypothesis hash, keyword, presence-only mode and language hint distinguish executed analyses. These are cache protocol field names, not target function-name vocabulary; retaining language prevents reuse across different scanner commands."
+  },
   "core/audit/path_symmetry.py::d": {
     "count": 12,
     "kind": "literal",
@@ -1840,6 +1845,16 @@
     "count": 10,
     "kind": "literal",
     "note": "kernel-defined /proc/softirqs row names (fixed external contract mirrored verbatim for the persona stub) - not a learnable vocabulary"
+  },
+  "core/sandbox/observe_cli.py::payload": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed raptor-observe --json output schema emitted by _profile_to_json: process/run metadata, observed paths/connections, truncation/completeness/drop accounting and nonce trust. These are serialization field names, not learned API vocabulary; capture_incomplete and nonce_trusted preserve evidence limitations for consumers."
+  },
+  "core/sandbox/observe_context_merge.py::merge_observation_into_context_map": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Fixed context-map runtime_observation serialization schema: binary/command/time, nonce trust and capture-limit metadata, observed paths/connections and derived correlations. These are output protocol field names, not a function-name vocabulary; completeness and trust fields must remain available alongside correlations."
   },
   "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
     "count": 34,
