@@ -362,19 +362,18 @@ class TestListenerLifecycle(unittest.TestCase):
                 )
             scanner.oob_listener.start()
             port = scanner.oob_listener.port
-            self.assertEqual(
-                socket.socket().connect_ex(("127.0.0.1", port)), 0,
-            )
-
-            scanner.close()
-
-            sock = socket.socket()
+            server = scanner.oob_listener._server
+            thread = scanner.oob_listener._thread
             try:
-                self.assertNotEqual(
-                    sock.connect_ex(("127.0.0.1", port)), 0,
-                )
+                with socket.socket() as sock:
+                    self.assertEqual(sock.connect_ex(("127.0.0.1", port)), 0)
             finally:
-                sock.close()
+                scanner.close()
+
+            # Inspect the owned resources: another parallel test can bind
+            # the released ephemeral port before a second connect probe.
+            self.assertEqual(server.socket.fileno(), -1)
+            self.assertFalse(thread.is_alive())
 
 class _HeaderSsrfClient:
     """Client double: the 'server' dereferences URL-bearing headers."""

@@ -118,7 +118,8 @@ def test_audit_kill_phase_falls_back_for_term_ignoring_child(monkeypatch):
             os.close(fd)
         sender = Mock(side_effect=PermissionError(errno.EPERM, 'blocked'))
         monkeypatch.setattr(signal, 'pidfd_send_signal', sender, raising=False)
-        audit._kill_and_reap(child, timeout_s=0.05)
+        # A real child needs scheduling time after each signal under CI load.
+        audit._kill_and_reap(child, timeout_s=1.0)
         assert [call.args[1] for call in sender.call_args_list] == [signal.SIGTERM, signal.SIGKILL]
         with pytest.raises(ChildProcessError):
             os.waitpid(child, os.WNOHANG)
