@@ -220,7 +220,12 @@ jobs:
     steps:
       - name: Verify all simulations passed
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          # Results only: scope outputs can exceed the process environment limit.
+          NEEDS_JSON: >-
+            {
+              "changes": {"result": "${{ needs['changes'].result }}"},
+              "preflight": {"result": "${{ needs['preflight'].result }}"}
+            }
           GH_TOKEN: ${{ github.token }}
         shell: python
         run: |
