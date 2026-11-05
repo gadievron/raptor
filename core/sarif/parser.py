@@ -456,8 +456,111 @@ def _uses_artifact_table(result: dict[str, Any]) -> bool:
     return True
 
 
+def _sarif_content_identity(value, *, stream=False):
+    # Result records are usually small; retain the C encoder's fast
+    # path there. Run metadata can contain an entire rule/artifact table.
+    if not stream:
+        return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
+    digest = hashlib.sha256()
+    try:
+        for chunk in iterencode_canonical(value):
+            digest.update(chunk)
+    except RecursionError:
+        # The Python iterator can reach its depth limit before the C
+        # encoder. Discard the partial hash and preserve legacy support.
+        return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
+    return digest.hexdigest()
+
+
 # Searching more incompatible groups may improve compaction, never correctness.
 _MERGE_COMPATIBILITY_CHECKS = 16
+
+
+def scope_conflicting_driver_rules(runs: list[Any]) -> list[Any]:
+    """Namespace conflicting driver bindings across runs without changing inputs.
+
+    Only live same-tool runs need comparison. Ordinary single-run reports and
+    nonconflicting definitions retain legacy namespaces. Existing well-formed
+    scopes are retained; scopes never grant evidence authority.
+    """
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            continue
+        results = run.get("results")
+        if isinstance(results, list) and any(isinstance(result, dict) for result in results):
+            grouped.setdefault(get_tool_name(run), []).append((index, run))
+    output = runs
+    for tool_runs in grouped.values():
+        if len(tool_runs) < 2:
+            continue
+        variants: dict[str, tuple[dict, dict] | None] = {}
+        conflicts: set[str] = set()
+        records = []
+        for index, run in tool_runs:
+            tool = _as_dict(run.get("tool"))
+            driver = _as_dict(tool.get("driver"))
+            header = {key: value for key, value in driver.items() if key != "rules"}
+            rules = driver.get("rules")
+            unique: dict[str, dict | None] = {}
+            for rule in rules if isinstance(rules, list) else []:
+                rid = _as_dict(rule).get("id")
+                if isinstance(rid, str) and rid:
+                    unique[rid] = None if rid in unique else rule
+            for rid, rule in unique.items():
+                if rule is None:
+                    if rid in variants and variants[rid] is not None:
+                        conflicts.add(rid)
+                    variants.setdefault(rid, None)
+                    continue
+                if _scope_fingerprint(_as_dict(rule.get("properties")).get("raptor_rule_scope")) is not None:
+                    continue  # Already distinct from the default namespace.
+                variant = (header, rule)
+                if rid in variants and variants[rid] != variant:
+                    conflicts.add(rid)
+                variants.setdefault(rid, variant)
+            # Extension fallback already has its own component namespace.
+            if not tool.get("extensions"):
+                for result in run["results"]:
+                    if not isinstance(result, dict):
+                        continue
+                    rid = result.get("ruleId")
+                    if (isinstance(rid, str) and rid and rid not in unique
+                            and "rule" not in result and result.get("ruleIndex", -1) == -1):
+                        if rid in variants and variants[rid] is not None:
+                            conflicts.add(rid)
+                        variants.setdefault(rid, None)
+            records.append((index, header, unique))
+        if not conflicts:
+            continue
+        for index, header, unique in records:
+            run = runs[index]
+            tool = _as_dict(run.get("tool"))
+            driver = _as_dict(tool.get("driver"))
+            rules = driver.get("rules")
+            if not isinstance(rules, list):
+                continue
+            replacement = None
+            for position, descriptor in enumerate(rules):
+                if not isinstance(descriptor, dict):
+                    continue
+                rid = descriptor.get("id")
+                if not isinstance(rid, str) or rid not in conflicts or unique.get(rid) is not descriptor:
+                    continue
+                properties = _as_dict(descriptor.get("properties"))
+                if _scope_fingerprint(properties.get("raptor_rule_scope")) is not None:
+                    continue
+                scope = _sarif_content_identity(
+                    ["raptor:driver-rule-context:v1", header, descriptor], stream=True,
+                )
+                if replacement is None:
+                    replacement = list(rules)
+                replacement[position] = {**descriptor, "properties": {**properties, "raptor_rule_scope": scope}}
+            if replacement is not None:
+                if output is runs:
+                    output = list(runs)
+                output[index] = {**run, "tool": {**tool, "driver": {**driver, "rules": replacement}}}
+    return output
 
 
 def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
@@ -479,21 +582,6 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     # Group runs by tool name so same-tool runs get their results merged
     tool_runs: dict[str | tuple[str, str], dict[str, Any]] = {}
     legacy_groups: dict[str, list[dict[str, Any]]] = {}
-
-    def content_identity(value, *, stream=False):
-        # Result records are usually small; retain the C encoder's fast
-        # path there. Run metadata can contain an entire rule/artifact table.
-        if not stream:
-            return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
-        digest = hashlib.sha256()
-        try:
-            for chunk in iterencode_canonical(value):
-                digest.update(chunk)
-        except RecursionError:
-            # The Python iterator can reach its depth limit before the C
-            # encoder. Discard the partial hash and preserve legacy support.
-            return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
-        return digest.hexdigest()
 
     def accumulate_file(sarif_path: str) -> None:
         sarif_data = load_sarif(Path(sarif_path))
@@ -533,12 +621,12 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 # Rules, URI bases and cached locations belong to this run.
                 # Combining tables can rebind rules, functions or evidence hops.
                 metadata = {key: value for key, value in run.items() if key != "results"}
-                context_key = (tool_name, content_identity(metadata, stream=True))
+                context_key = (tool_name, _sarif_content_identity(metadata, stream=True))
                 if context_key not in tool_runs:
                     tool_runs[context_key] = {"original": metadata, "results": {}}
                 for result in results:
                     if isinstance(result, dict):
-                        tool_runs[context_key]["results"][content_identity(result)] = result
+                        tool_runs[context_key]["results"][_sarif_content_identity(result)] = result
                 continue
             header = {**tool, "driver": {key: value for key, value in driver.items() if key != "rules"}}
             referenced = {result["ruleId"] for result in results
@@ -619,7 +707,7 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     return {
         "version": "2.1.0",
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "runs": merged_runs,
+        "runs": scope_conflicting_driver_rules(merged_runs),
     }
 
 
@@ -1309,6 +1397,7 @@ def parse_sarif_findings(
     # the audit trail. Malformed-input warnings above stay WARNING.
     logger.debug("SARIF parser: found %d run(s) in SARIF file", len(runs))
 
+    runs = scope_conflicting_driver_rules(runs)
     for run_idx, run in enumerate(runs):
         if not isinstance(run, dict):
             logger.warning(
