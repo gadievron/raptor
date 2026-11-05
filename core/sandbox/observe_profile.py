@@ -262,7 +262,7 @@ class ObserveProfile:
         Consumers deriving allowlists from this profile should treat
         it as unauthenticated observation, not verified evidence.
     capture_incomplete
-        True when an accepted audit summary reports reader failure or an
+        True when an accepted audit summary reports append/reader failure or an
         undrained stream, or parsing loses records to read/format/size errors.
         Independent of budget drops; sticky across merges.
     """
@@ -673,6 +673,9 @@ def parse_observe_log(run_dir, *,
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
             if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
+                profile.capture_incomplete = True
+            append_failures = rec.get("append_failures")
+            if type(append_failures) is int and append_failures > 0:
                 profile.capture_incomplete = True
             dropped = rec.get("dropped_by_category") or {}
             if isinstance(dropped, dict) and dropped:
