@@ -37,7 +37,7 @@ class TestGateWrapper:
 
     def test_pipeline_receipt_qualifies(self) -> None:
         assert _is_verification_evidence_for_gate(
-            _row("smt:check-integer-narrowing"),
+            _row("smt:check-overflow"),
         )
 
     def test_claim_tail_does_not_leak(self) -> None:

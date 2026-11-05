@@ -2232,7 +2232,7 @@ _SMT_VERB_ROLES = {
     "check-lock-discipline": "detection",
     "check-resource-leak": "detection",
     "check-null-propagation": "detection",
-    "check-integer-narrowing": "verification",
+    "check-integer-narrowing": "detection",
     "check-early-release": "detection",
     "check-lock-domain": "detection",
     "check-toctou": "detection",
@@ -2898,19 +2898,12 @@ def _run_smt_verb_inner(
                     rule_id=f"smt:{verb}",
                 )
             narr_result = check_integer_narrowing(source)
-            if narr_result.narrowing_found:
-                return SweepResult(
-                    tool="smt", file_path=file_path,
-                    function_name=function_name, outcome="confirmed",
-                    rule_id=f"smt:{verb}",
-                    details=narr_result.to_dict(),
-                )
+            verdict = "confirmed" if narr_result.narrowing_found else _negative_outcome(narr_result)
+            verdict, details = _scope_smt_observation(verb, verdict, narr_result.to_dict())
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name,
-                outcome=_negative_outcome(narr_result),
-                rule_id=f"smt:{verb}",
-                details=narr_result.to_dict(),
+                function_name=function_name, outcome=verdict,
+                rule_id=f"smt:{verb}", details=details,
             )
         elif verb == "check-lock-discipline":
             from core.audit.condition_smt import check_lock_discipline
