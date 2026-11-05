@@ -197,3 +197,23 @@ def test_runner_reclaims_process_and_pipes(runner, fault, tmp_path, monkeypatch)
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
+
+
+@pytest.mark.parametrize("exited", [False, True])
+def test_group_permission_error_requires_an_exited_child(exited, monkeypatch):
+    from unittest.mock import Mock
+    from core.testing.processes import reap_on_exit
+
+    child = Mock(pid=12345, returncode=None, stdin=None, stdout=None, stderr=None)
+    child.poll.return_value = -signal.SIGKILL if exited else None
+    denied = PermissionError("group signal denied")
+    monkeypatch.setattr(os, "killpg", Mock(side_effect=denied))
+    if exited:
+        with reap_on_exit(child, process_group=True):
+            pass
+        child.wait.assert_called_once()
+    else:
+        with pytest.raises(PermissionError) as caught:
+            with reap_on_exit(child, process_group=True):
+                pass
+        assert caught.value is denied
