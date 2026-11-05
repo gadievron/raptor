@@ -4,15 +4,18 @@ Exports a project output directory as a zip archive and imports
 zip archives back, with path traversal and symlink validation.
 """
 
+from contextlib import ExitStack
 import fnmatch
 import os
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.logging import get_logger
+from core.run.scratch import scratch_dir
 from core.zip import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 
 logger = get_logger()
@@ -246,18 +249,51 @@ def export_project(project_output_dir: Path, dest_path: Path,
     if dest_path.suffix != ".zip":
         dest_path = dest_path.with_suffix(".zip")
 
-    if dest_path.exists() and not force:
+    if os.path.lexists(dest_path) and not force:
         msg = f"File already exists: {dest_path} (use --force to overwrite)"
         raise FileExistsError(msg)
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build zip manually to skip symlinks (shutil.make_archive follows them)
-    # plus per-process / transient artefacts that shouldn't ship in a
-    # portable archive (POSIX advisory lock files, tempfile leftovers).
-    with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    # A failed archive must not truncate a previous export or leave a
+    # partial zip at the advertised destination. Keep staging on the same
+    # filesystem so publication needs no second copy of the archive.
+    destination = dest_path.parent.resolve() / dest_path.name
+    with scratch_dir(".export-", dir=dest_path.parent) as staging_dir:
+        staged_path = staging_dir / "archive.zip"
+        _write_project_zip(project_output_dir, staged_path, project_json_path,
+                           destination)
+        sha256 = sha256_file(staged_path)
+        if force:
+            try:
+                previous = dest_path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if stat.S_ISREG(previous.st_mode):
+                    staged_path.chmod(stat.S_IMODE(previous.st_mode))
+            os.replace(staged_path, dest_path)
+        else:
+            # O_EXCL semantics at publication, including a name that
+            # appeared while the archive was being built.
+            os.link(staged_path, dest_path)
+    logger.info("Exported project to %s (sha256: %s)", dest_path, sha256)
+    return {"path": str(dest_path), "sha256": sha256}
+
+
+def _write_project_zip(project_output_dir: Path, staged_path: Path,
+                       project_json_path: Path | None,
+                       destination: Path) -> None:
+    """Build the archive, excluding its own output and private staging."""
+    with zipfile.ZipFile(staged_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for dirpath, dirnames, filenames in os.walk(project_output_dir, followlinks=False):
-            dirnames[:] = [d for d in dirnames if not Path(dirpath, d).is_symlink()]
+            # Do not pack current or crash-left export staging into a
+            # later archive when the destination sits inside the source.
+            dirnames[:] = [
+                d for d in dirnames
+                if not Path(dirpath, d).is_symlink()
+                and not d.startswith(".export-")
+            ]
             # The OpenAnt scanner's staged config view (any depth) can
             # carry operator-authored LLM provider api_keys merged from
             # ~/.config/openant/config.json. The scanner scrubs it the
@@ -284,6 +320,8 @@ def export_project(project_output_dir: Path, dest_path: Path,
                 ]
             for fname in filenames:
                 item = Path(dirpath, fname)
+                if item.parent.resolve() / item.name == destination:
+                    continue
                 if item.is_symlink():
                     logger.debug("Skipping symlink in export: %s", item)
                     continue
@@ -303,9 +341,6 @@ def export_project(project_output_dir: Path, dest_path: Path,
         if project_json_path and project_json_path.exists():
             zf.write(project_json_path, f"{project_output_dir.name}/.project.json")
 
-    sha256 = sha256_file(dest_path)
-    logger.info("Exported project to %s (sha256: %s)", dest_path, sha256)
-    return {"path": str(dest_path), "sha256": sha256}
 
 
 def _guard_import_output_dir(output_base: Path, project_name: str) -> Path:
@@ -700,6 +735,13 @@ def import_project(zip_path: Path, projects_dir: Path,
             exists and force is False.
         FileNotFoundError: If zip file doesn't exist.
     """
+    with ExitStack() as cleanup:
+        return _import_project(zip_path, projects_dir, force, output_base, cleanup)
+
+
+def _import_project(zip_path: Path, projects_dir: Path, force: bool,
+                    output_base: Path | None, cleanup: ExitStack) -> dict[str, str]:
+    """Import with staging owned until publication or any failure."""
     import json
 
     zip_path = Path(zip_path)
@@ -881,16 +923,8 @@ def import_project(zip_path: Path, projects_dir: Path,
             # so a failed import destroyed the previous data with no
             # rollback. Failure cleanup now only ever removes the
             # staging dir import itself created.
-            # Hand-rolled (not scratch_dir, not reaper-listed):
-            # publish-by-rename ownership (the staging dir BECOMES the
-            # project dir on success), under the project output base,
-            # not the system tmp — the tmp reaper only sweeps the
-            # system tmp root, so a SIGKILL residue here is
-            # operator-visible next to the projects instead.
-            import tempfile
-            Path(output_base).mkdir(parents=True, exist_ok=True)
-            staging_dir = Path(tempfile.mkdtemp(
-                prefix=f".import-{project_name}-", dir=str(output_base),
+            staging_dir = cleanup.enter_context(scratch_dir(
+                prefix=f".import-{project_name}-", dir=output_base,
             ))
             # mkdtemp creates 0o700; project output dirs are plain
             # mkdir-default dirs, so widen before the rename publishes
@@ -917,93 +951,87 @@ def import_project(zip_path: Path, projects_dir: Path,
             max_size = 10 * 1024 * 1024 * 1024  # 10GB
             chunk = 1024 * 1024  # 1 MiB
             bytes_extracted = 0
-            try:
-                # Reuse the bounded infolist captured during validation
-                # (F029): the cap check has already proven the count is
-                # ≤ _MAX_ENTRIES, no need to materialise again.
-                for info in bounded_entries:
-                    if info.filename.endswith("/.project.json") or info.filename == ".project.json":
+            # Reuse the bounded infolist captured during validation
+            # (F029): the cap check has already proven the count is
+            # ≤ _MAX_ENTRIES, no need to materialise again.
+            for info in bounded_entries:
+                if info.filename.endswith("/.project.json") or info.filename == ".project.json":
+                    continue
+                if info.is_dir():
+                    continue
+                # Strip the archive's common root component so
+                # every entry lands under output_dir regardless
+                # of what the (attacker-chosen) root dir was
+                # called. `partition` rather than `split`: a
+                # bare root entry ("myproj") yields an empty
+                # remainder, which we skip.
+                if has_common_root:
+                    arcrel = info.filename.partition("/")[2]
+                    if not arcrel:
                         continue
-                    if info.is_dir():
-                        continue
-                    # Strip the archive's common root component so
-                    # every entry lands under output_dir regardless
-                    # of what the (attacker-chosen) root dir was
-                    # called. `partition` rather than `split`: a
-                    # bare root entry ("myproj") yields an empty
-                    # remainder, which we skip.
-                    if has_common_root:
-                        arcrel = info.filename.partition("/")[2]
-                        if not arcrel:
-                            continue
-                    else:
-                        arcrel = info.filename
-                    # Refuse if the per-entry declared size alone
-                    # would exceed remaining budget — saves opening
-                    # a stream we'd immediately cancel.
-                    if bytes_extracted + info.file_size > max_size:
-                        msg = (
-                            f"Entry {info.filename!r} ({info.file_size / 1024 / 1024:.0f}MB) "
-                            f"would exceed limit ({max_size / 1024 / 1024:.0f}MB)"
-                        )
-                        raise ValueError(msg)
-                    extract_dest = staging_dir
-                    target_path = extract_dest / arcrel
-                    # Resolve and re-check containment.
-                    # `_check_zip_entries` already vetted the
-                    # filenames upstream, but Python's traversal-
-                    # protection in zipfile is version-dependent
-                    # (3.6 had bugs around symlink-shaped entries,
-                    # 3.11 added stricter checks but still misses
-                    # NTFS-style alternate-data-stream filenames
-                    # and Windows drive-letter prefixes on POSIX).
-                    # Pre-fix this comment claimed "defence in
-                    # depth" but performed NO re-check — the
-                    # comment was a lie. Add the actual containment
-                    # check so any traversal that slipped past
-                    # _check_zip_entries (future regression, novel
-                    # filename shape, or a Python-version
-                    # behavioural difference) is caught here.
-                    extract_dest_resolved = extract_dest.resolve(strict=False)
-                    target_resolved = target_path.resolve(strict=False)
-                    try:
-                        target_resolved.relative_to(extract_dest_resolved)
-                    except ValueError:
-                        msg = (
-                            f"Refusing to extract {info.filename!r}: "
-                            f"resolved target {target_resolved} escapes "
-                            f"destination {extract_dest_resolved}"
-                        )
-                        raise ValueError(msg) from None
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    actual_size = 0
-                    with zf.open(info, "r") as src, open(target_path, "wb") as dst:
-                        while True:
-                            buf = src.read(chunk)
-                            if not buf:
-                                break
-                            actual_size += len(buf)
-                            bytes_extracted += len(buf)
-                            if bytes_extracted > max_size:
-                                msg = (
-                                    f"Extracted size ({bytes_extracted / 1024 / 1024:.0f}MB) "
-                                    f"exceeds limit ({max_size / 1024 / 1024:.0f}MB) "
-                                    f"during {info.filename!r}"
-                                )
-                                raise ValueError(msg)
-                            dst.write(buf)
-                    if actual_size != info.file_size:
-                        msg = (
-                            f"Size mismatch for {info.filename}: "
-                            f"header says {info.file_size}, got {actual_size} "
-                            f"(corrupted or malicious zip)"
-                        )
-                        raise ValueError(msg)
-            except Exception:
-                # Clean up the partial extraction — ONLY the staging
-                # dir import itself created; never the final path.
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                raise
+                else:
+                    arcrel = info.filename
+                # Refuse if the per-entry declared size alone
+                # would exceed remaining budget — saves opening
+                # a stream we'd immediately cancel.
+                if bytes_extracted + info.file_size > max_size:
+                    msg = (
+                        f"Entry {info.filename!r} ({info.file_size / 1024 / 1024:.0f}MB) "
+                        f"would exceed limit ({max_size / 1024 / 1024:.0f}MB)"
+                    )
+                    raise ValueError(msg)
+                extract_dest = staging_dir
+                target_path = extract_dest / arcrel
+                # Resolve and re-check containment.
+                # `_check_zip_entries` already vetted the
+                # filenames upstream, but Python's traversal-
+                # protection in zipfile is version-dependent
+                # (3.6 had bugs around symlink-shaped entries,
+                # 3.11 added stricter checks but still misses
+                # NTFS-style alternate-data-stream filenames
+                # and Windows drive-letter prefixes on POSIX).
+                # Pre-fix this comment claimed "defence in
+                # depth" but performed NO re-check — the
+                # comment was a lie. Add the actual containment
+                # check so any traversal that slipped past
+                # _check_zip_entries (future regression, novel
+                # filename shape, or a Python-version
+                # behavioural difference) is caught here.
+                extract_dest_resolved = extract_dest.resolve(strict=False)
+                target_resolved = target_path.resolve(strict=False)
+                try:
+                    target_resolved.relative_to(extract_dest_resolved)
+                except ValueError:
+                    msg = (
+                        f"Refusing to extract {info.filename!r}: "
+                        f"resolved target {target_resolved} escapes "
+                        f"destination {extract_dest_resolved}"
+                    )
+                    raise ValueError(msg) from None
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                actual_size = 0
+                with zf.open(info, "r") as src, open(target_path, "wb") as dst:
+                    while True:
+                        buf = src.read(chunk)
+                        if not buf:
+                            break
+                        actual_size += len(buf)
+                        bytes_extracted += len(buf)
+                        if bytes_extracted > max_size:
+                            msg = (
+                                f"Extracted size ({bytes_extracted / 1024 / 1024:.0f}MB) "
+                                f"exceeds limit ({max_size / 1024 / 1024:.0f}MB) "
+                                f"during {info.filename!r}"
+                            )
+                            raise ValueError(msg)
+                        dst.write(buf)
+                if actual_size != info.file_size:
+                    msg = (
+                        f"Size mismatch for {info.filename}: "
+                        f"header says {info.file_size}, got {actual_size} "
+                        f"(corrupted or malicious zip)"
+                    )
+                    raise ValueError(msg)
 
     except zipfile.BadZipFile:
         msg = "Invalid zip file"
@@ -1017,7 +1045,6 @@ def import_project(zip_path: Path, projects_dir: Path,
     try:
         _demote_imported_annotations(staging_dir)
     except Exception as e:
-        shutil.rmtree(staging_dir, ignore_errors=True)
         msg = f"Import failed while stamping restored annotations: {e}"
         raise ValueError(msg) from e
 
@@ -1029,7 +1056,6 @@ def import_project(zip_path: Path, projects_dir: Path,
     try:
         _mark_imported_runs(staging_dir, sha256_file(zip_path))
     except Exception as e:
-        shutil.rmtree(staging_dir, ignore_errors=True)
         raise ValueError(
             f"Import failed while marking imported runs: {e}"
         ) from e
@@ -1042,7 +1068,6 @@ def import_project(zip_path: Path, projects_dir: Path,
     try:
         _quarantine_imported_privileged_artifacts(staging_dir)
     except Exception as e:
-        shutil.rmtree(staging_dir, ignore_errors=True)
         raise ValueError(
             f"Import failed while quarantining privileged artifacts: {e}"
         ) from e
@@ -1064,7 +1089,6 @@ def import_project(zip_path: Path, projects_dir: Path,
         str(output_dir), exclude=project_name,
     )
     if other_owner:
-        shutil.rmtree(staging_dir, ignore_errors=True)
         raise ValueError(
             f"Refusing import: output dir {output_dir} already belongs "
             f"to project '{other_owner}' — two projects must never "
@@ -1073,27 +1097,23 @@ def import_project(zip_path: Path, projects_dir: Path,
             f"or move that project first."
         )
     orphaned_output = None
-    try:
-        if existing and force:
-            old_output_path = Path(existing.output_dir).resolve()
-            mgr.delete(project_name, purge=False)
-            if old_output_path != output_dir.resolve() and old_output_path.exists():
-                orphaned_output = str(old_output_path)
-            logger.info("Removed existing project '%s' (force=True)", project_name)
-        if output_dir.exists():
-            if not force:
-                # The pre-extraction check already refused this shape;
-                # reaching it here means the dir appeared mid-import.
-                # Refuse rather than delete data import didn't create.
-                raise ValueError(
-                    f"Refusing import: output dir {output_dir} "
-                    f"appeared during import and --force was not given"
-                )
-            shutil.rmtree(output_dir)
-        staging_dir.rename(output_dir)
-    except Exception:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
+    if existing and force:
+        old_output_path = Path(existing.output_dir).resolve()
+        mgr.delete(project_name, purge=False)
+        if old_output_path != output_dir.resolve() and old_output_path.exists():
+            orphaned_output = str(old_output_path)
+        logger.info("Removed existing project '%s' (force=True)", project_name)
+    if output_dir.exists():
+        if not force:
+            # The pre-extraction check already refused this shape;
+            # reaching it here means the dir appeared mid-import.
+            # Refuse rather than delete data import didn't create.
+            raise ValueError(
+                f"Refusing import: output dir {output_dir} "
+                f"appeared during import and --force was not given"
+            )
+        shutil.rmtree(output_dir)
+    staging_dir.rename(output_dir)
 
     # Register the project
     target = embedded_meta.get("target", "(imported)") if embedded_meta else "(imported)"
