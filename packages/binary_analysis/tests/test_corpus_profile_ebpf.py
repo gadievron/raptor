@@ -545,6 +545,8 @@ class TestExternalDecoder:
         assert classification["external_decoder"]["checked"] == _EBPF_EXTERNAL_CHECK_CAP
         assert classification["external_decoder"]["status"] == "agree"
 
+    # Real decoder startup includes full sandbox setup and can exceed 10s under load.
+    @pytest.mark.slow
     @pytest.mark.skipif(
         not any(shutil.which(name) for name in _EBPF_OBJDUMP_CANDIDATES),
         reason="no llvm-objdump on this host",
