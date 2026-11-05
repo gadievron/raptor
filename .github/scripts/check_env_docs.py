@@ -358,6 +358,20 @@ class _PyScanner(ast.NodeVisitor):
          self.consts) = (_collect_module_facts(tree)
                          if module_facts is None else module_facts)
         self.global_consts = global_consts
+        self._visitor_methods = {}
+
+    def visit(self, node: ast.AST):
+        # Resolve NodeVisitor's method name once per node type and file,
+        # rather than allocating it for every node in the full-tree scan.
+        # Store unbound methods so the cache does not retain this scanner.
+        node_type = type(node)
+        visitor = self._visitor_methods.get(node_type)
+        if visitor is None:
+            visitor = getattr(
+                type(self), "visit_" + node_type.__name__, type(self).generic_visit,
+            )
+            self._visitor_methods[node_type] = visitor
+        return visitor(self, node)
 
     def _name_of(self, node: ast.AST) -> str | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
