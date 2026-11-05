@@ -101,6 +101,9 @@ _lock = threading.Lock()
 # evidence dir cannot be created for a run.
 _evidence_handle: _evidence.EvidenceFile | None = None
 _evidence_open_failed = False
+# A failed held-inode verification remains authoritative across run switches
+# and summary-write retries. Guarded by _lock, keyed like other run state.
+_evidence_inode_mismatches: set[str] = set()
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
@@ -170,13 +173,16 @@ def set_active_run_dir(run_dir: Path | None) -> None:
 
     Resets the per-run denial counter so each run starts with a fresh
     cap (see MAX_DENIALS_PER_RUN). Any held evidence fd from the
-    previous run is finalised (inode-verified, then closed).
+    previous run is finalised (inode-verified, then closed). Failed
+    verification stays in parent memory for that run's later summary.
     """
     global _active_run_dir, _denial_count, _evidence_handle
     global _evidence_open_failed, _active_run_generation
     with _lock:
         if _evidence_handle is not None:
-            _evidence_handle.close()
+            if not _evidence_handle.close():
+                _evidence_inode_mismatches.add(
+                    str(_evidence_handle.path.parent.parent.resolve()))
             _evidence_handle = None
         _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
@@ -1003,8 +1009,10 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         if (_evidence_handle is not None
                 and _evidence_handle.path.parent.parent.resolve()
                 == run_dir.resolve()):
-            inode_mismatch = not _evidence_handle.close()
+            if not _evidence_handle.close():
+                _evidence_inode_mismatches.add(str(run_dir.resolve()))
             _evidence_handle = None
+        inode_mismatch = str(run_dir.resolve()) in _evidence_inode_mismatches
     # New (.audit/) location preferred; legacy <run_dir>/ location
     # kept as a read fallback for runs produced by older versions.
     jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
@@ -1020,7 +1028,10 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         # denials JSONL (nothing enforced, nothing traced) — the
         # bare-run annotation must still reach the summary file, so
         # the no-evidence early return yields to it.
-        if not _mem_only and get_cli_disable(run_dir) is None:
+        # The held descriptor can already have detected missing evidence.
+        # Preserve that result even when no records remain to aggregate.
+        if (not _mem_only and get_cli_disable(run_dir) is None
+                and not inode_mismatch):
             return None
         return _assemble_and_write_summary(
             run_dir, records=[], refusals=_mem_only,
