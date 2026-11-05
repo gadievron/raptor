@@ -54,7 +54,7 @@ def _break_cycles(
     # artifacts across otherwise-identical runs.
     adj_lists: dict[str, list[str]] = {}
     for caller, callees in caller_to_callees.items():
-        adj_lists.setdefault(caller, []).extend(sorted(callees))
+        adj_lists[caller] = sorted(callees)
 
     sccs = detect_sccs(adj_lists)
     edges_to_drop: set[tuple[str, str]] = set()
@@ -122,7 +122,11 @@ def _relax_bottlenecks(
     callee_to_callers: dict[str, set[str]] = {}
     for caller, callees in caller_to_callees.items():
         for callee in callees:
-            callee_to_callers.setdefault(callee, set()).add(caller)
+            grouped_values = callee_to_callers.get(callee)
+            if grouped_values is None:
+                grouped_values = set()
+                callee_to_callers[callee] = grouped_values
+            grouped_values.add(caller)
 
     candidates: list[tuple[int, str, set[str]]] = []
     for callee, callers in callee_to_callers.items():
@@ -267,7 +271,11 @@ class TaskGraph:
             bare = f"{gap['file']}:{gap['name']}"
             wq_keys.add(key)
             gaps_by_key[key] = gap
-            bare_to_lined.setdefault(bare, set()).add(key)
+            grouped_values = bare_to_lined.get(bare)
+            if grouped_values is None:
+                grouped_values = set()
+                bare_to_lined[bare] = grouped_values
+            grouped_values.add(key)
 
         caller_to_callees: dict[str, set[str]] = {}
         for edge in call_edges:
@@ -278,7 +286,11 @@ class TaskGraph:
                 continue
             for caller_key in bare_to_lined.get(caller_bare, ()):
                 for callee_key in bare_to_lined.get(callee_bare, ()):
-                    caller_to_callees.setdefault(caller_key, set()).add(callee_key)
+                    grouped_values = caller_to_callees.get(caller_key)
+                    if grouped_values is None:
+                        grouped_values = set()
+                        caller_to_callees[caller_key] = grouped_values
+                    grouped_values.add(callee_key)
 
         repass_callers: set[str] = set()
         total_edges = sum(len(v) for v in caller_to_callees.values())

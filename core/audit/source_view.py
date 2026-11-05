@@ -2362,15 +2362,20 @@ class _HeredocTerminators:
     def _build(self) -> dict[str, tuple[list[int], list[int], list[bool]]]:
         index: dict[str, tuple[list[int], list[int], list[bool]]] = {}
         for m in self._LINE_RE.finditer(self._source):
-            starts, ends, pre73 = index.setdefault(m.group(2), ([], [], []))
-            starts.append(m.start())
-            ends.append(m.end())
+            ident = m.group(2)
+            entry = index.get(ident)
+            if entry is None:
+                entry = ([], [], [])
+                index[ident] = entry
+            starts, ends, pre73 = entry
+            start, end = m.start(), m.end()
+            starts.append(start)
+            ends.append(end)
             ok = not m.group(1) and self._PRE73_TAIL_RE.match(
-                self._source, m.end()) is not None
+                self._source, end) is not None
             pre73.append(ok)
             if ok:
-                self._certain.setdefault(m.group(2), []).append(
-                    (m.start(), m.end()))
+                self._certain.setdefault(ident, []).append((start, end))
         return index
 
     def find_certain(
