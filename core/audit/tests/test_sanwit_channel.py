@@ -922,7 +922,7 @@ class TestSynthesisRoutingRestored:
         )
         monkeypatch.setattr(orch, "_run_tool_chain", run_stub)
         monkeypatch.setattr(
-            orch, "_has_refuting_counter", lambda o: refuting,
+            orch, "_has_refuting_counter", lambda o, **kw: refuting,
         )
         monkeypatch.setattr(
             orch, "_read_raw_source", lambda *a, **k: "function g(){}",

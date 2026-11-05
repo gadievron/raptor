@@ -3717,7 +3717,7 @@ class TestHasRefutingCounter:
     def test_dismissive_counter_returns_false(self):
         from core.audit.orchestrator import _has_refuting_counter
         o = ReviewOutcome(
-            file="f", function="g", status="suspicious", body="x",
+            file="f", function="g", status="suspicious", body="x", hypothesis="overflow",
             review_result={
                 "hypotheses": [{
                     "mechanism": "overflow",
@@ -3731,7 +3731,7 @@ class TestHasRefutingCounter:
     def test_short_counter_returns_false(self):
         from core.audit.orchestrator import _has_refuting_counter
         o = ReviewOutcome(
-            file="f", function="g", status="suspicious", body="x",
+            file="f", function="g", status="suspicious", body="x", hypothesis="overflow",
             review_result={
                 "hypotheses": [{
                     "mechanism": "overflow",
@@ -3745,7 +3745,7 @@ class TestHasRefutingCounter:
     def test_specific_counter_returns_true(self):
         from core.audit.orchestrator import _has_refuting_counter
         o = ReviewOutcome(
-            file="f", function="g", status="suspicious", body="x",
+            file="f", function="g", status="suspicious", body="x", hypothesis="double free via TOCTOU",
             review_result={
                 "hypotheses": [{
                     "mechanism": "double free via TOCTOU",
@@ -3762,7 +3762,7 @@ class TestHasRefutingCounter:
     def test_refuted_hypothesis_ignored(self):
         from core.audit.orchestrator import _has_refuting_counter
         o = ReviewOutcome(
-            file="f", function="g", status="suspicious", body="x",
+            file="f", function="g", status="suspicious", body="x", hypothesis="overflow",
             review_result={
                 "hypotheses": [{
                     "mechanism": "overflow",
@@ -3780,7 +3780,7 @@ class TestHasRefutingCounter:
         from core.audit.orchestrator import _has_refuting_counter
         for variant in ("Refuted", "REFUTED", "rEfUtEd"):
             o = ReviewOutcome(
-                file="f", function="g", status="suspicious", body="x",
+                file="f", function="g", status="suspicious", body="x", hypothesis="overflow",
                 review_result={
                     "hypotheses": [{
                         "mechanism": "overflow",
