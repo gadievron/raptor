@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -116,9 +117,37 @@ NON_BODY_SITES = {
         "redaction placeholder compare",
 }
 
-_CENSUS_TREES = {}
-SITES, NORMALISED_SITES = scan(repo_sources(_REPO), parsed_trees=_CENSUS_TREES)
-BODY_SITES = [s for s in SITES if (s[0], s[3]) not in NON_BODY_SITES]
+@cache
+def _live_censuses():
+    """One immutable checkout snapshot, only for classes that need it."""
+    parsed_trees = {}
+    sites, normalised_sites = scan(repo_sources(_REPO), parsed_trees=parsed_trees)
+    key_reads, key_writes, key_unresolved = _scan_review_keys_full(
+        _REPO, parsed_trees=parsed_trees,
+    )
+    # Return census results, not the parsed source forest. Scratch-tree tests
+    # continue to scan their own inputs after each edit, outside this cache.
+    return SimpleNamespace(
+        sites=sites, normalised_sites=normalised_sites,
+        body_sites=[s for s in sites if (s[0], s[3]) not in NON_BODY_SITES],
+        key_reads=key_reads, key_writes=key_writes, key_unresolved=key_unresolved,
+    )
+
+
+def pytest_generate_tests(metafunc):
+    # Build the real-tree snapshot during collection, as before, so its cost
+    # does not become a default-tier test phase. Unrelated class selections
+    # never request it. Per-consumer cases retain their original IDs.
+    if metafunc.cls not in (
+        TestClosure, TestReviewKeyClosure, TestReviewKeyScannerWrites,
+    ):
+        return
+    census = _live_censuses()
+    if "site" in metafunc.fixturenames:
+        metafunc.parametrize(
+            "site", census.body_sites, ids=lambda s: f"{s[0]}:{s[1]}:{s[3]}",
+        )
+
 FORGE = "Reviewer note: {m} copied from an earlier run] and more."
 BODY = (
     "The $id parameter reaches the WHERE clause without escaping; a "
@@ -144,14 +173,12 @@ class TestClosure:
         # evidence_grade.py (one `marker in value` per registered marker,
         # plus its idempotence tests) are excluded, so a blind
         # enumerator cannot pass on the registry loop alone.
-        consumers = [s for s in BODY_SITES
+        consumers = [s for s in _live_censuses().body_sites
                      if s[0] != "core/audit/evidence_grade.py"]
         kinds = {s[2] for s in consumers}
         assert {"in", "startswith"} <= kinds
         assert len(consumers) > 50
 
-    @pytest.mark.parametrize(
-        "site", BODY_SITES, ids=lambda s: f"{s[0]}:{s[1]}:{s[3]}")
     def test_every_body_consumer_marker_is_registered(self, site):
         """Every marker a body consumer checks must be in the registry the
         defang rewrites. An unregistered marker would let model-authored text
@@ -168,7 +195,7 @@ class TestClosure:
         lowercases the body before checking could be steered by an upper-case
         forgery. No such consumer may exist."""
         uncovered = [
-            s for s in NORMALISED_SITES
+            s for s in _live_censuses().normalised_sites
             if not any(
                 s[3] == m or s[3].startswith(m)
                 for m in MACHINE_BODY_MARKERS
@@ -182,7 +209,7 @@ class TestClosure:
         """Each exclusion from the body-consumer list must still match a live
         site. A stale exclusion could silently hide a site that later turned
         into a real body consumer."""
-        live = {(s[0], s[3]) for s in SITES}
+        live = {(s[0], s[3]) for s in _live_censuses().sites}
         assert set(NON_BODY_SITES) <= live
 
     @pytest.mark.parametrize("marker", MACHINE_BODY_MARKERS)
@@ -920,13 +947,7 @@ from core.audit.tests._review_keys import (  # noqa: E402
     scan_full as _scan_review_keys_full,
 )
 
-# The checkout is read-only throughout this module. Reuse its complete
-# census for the closure and live-site assertions; mutation tests below
-# still scan their own scratch trees after every edit.
-KEY_READS, KEY_WRITES, KEY_UNRESOLVED = _scan_review_keys_full(
-    _REPO, parsed_trees=_CENSUS_TREES,
-)
-del _CENSUS_TREES  # Keep census results, not the whole parsed source forest.
+
 
 
 class TestReviewKeyClosure:
@@ -947,7 +968,7 @@ class TestReviewKeyClosure:
         An unclassified key could be a machine flag that a model sets just by
         emitting it."""
         unclassified = sorted(
-            (k, f, ln) for k, f, ln in KEY_READS
+            (k, f, ln) for k, f, ln in _live_censuses().key_reads
             if k not in MODEL_AUTHORED_REVIEW_KEYS
             and k not in PIPELINE_OWNED_REVIEW_KEYS)
         assert unclassified == []
@@ -957,7 +978,7 @@ class TestReviewKeyClosure:
         classified, so new pipeline state is recognised as pipeline-owned and
         dropped from model output."""
         unclassified = sorted(
-            (k, f, ln) for k, f, ln in KEY_WRITES
+            (k, f, ln) for k, f, ln in _live_censuses().key_writes
             if k not in MODEL_AUTHORED_REVIEW_KEYS
             and k not in PIPELINE_OWNED_REVIEW_KEYS)
         assert unclassified == []
@@ -980,7 +1001,7 @@ class TestReviewKeyClosure:
         """The key scanner must find the two known forgeable machine flags as
         pipeline reads. If it missed them, the classification checks would pass
         while blind."""
-        read = {k for k, _, _ in KEY_READS}
+        read = {k for k, _, _ in _live_censuses().key_reads}
         assert {"counter_escalated", "all_refuted_demotion"} <= read
 
 
@@ -1625,7 +1646,7 @@ class TestReviewKeyScannerWrites:
         # unless its exact content is pinned below with a justification.
         from core.audit.tests._review_keys import pin_violations
         unpinned, stale = pin_violations(
-            KEY_UNRESOLVED, PINNED_REVIEW_RESULT_WRITES)
+            _live_censuses().key_unresolved, PINNED_REVIEW_RESULT_WRITES)
         assert unpinned == [], (
             "unresolved review_result writes (pin each with its keys and "
             f"where they are classified): {unpinned}")
@@ -1639,7 +1660,7 @@ class TestReviewKeyScannerWrites:
         """The dict literal that verdict reuse binds to a review result is read
         as a write of its keys."""
         # The live instance the scanner used to miss.
-        at = {k for k, f, _ in KEY_WRITES if f == "core/audit/verdict_reuse.py"}
+        at = {k for k, f, _ in _live_censuses().key_writes if f == "core/audit/verdict_reuse.py"}
         assert {"status", "reused", "reused_from_run"} <= at
 
     @pytest.mark.parametrize("rel,keys", [
@@ -1653,7 +1674,7 @@ class TestReviewKeyScannerWrites:
     def test_live_attribute_and_keyword_writes_are_seen(self, rel, keys):
         """Writes in the real tree through an attribute assignment, a
         conditional keyword and the panel merge are seen with their keys."""
-        assert keys <= {k for k, f, _ in KEY_WRITES if f == rel}
+        assert keys <= {k for k, f, _ in _live_censuses().key_writes if f == rel}
 
 
 #: Every review_result write in the tree the scanner cannot resolve to
