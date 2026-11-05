@@ -388,11 +388,21 @@ def _classify_rhs_text(rhs: str, params: Iterable[str]) -> str:
 def function_spans_regex(source: str) -> list[FunctionSpan]:
     """Regex-tier function span extraction (brace counting)."""
     spans: list[FunctionSpan] = []
+    native_source = type(source) is str
+    line = 1
+    line_offset = 0
     for m in _FUNC_DEF_RE.finditer(source):
         name = m.group("name")
         if name in _C_KEYWORDS:
             continue
-        start_line = source.count("\n", 0, m.start()) + 1
+        if native_source:
+            offset = m.start()
+            # Definition matches advance in order; count each gap once.
+            line += source.count("\n", line_offset, offset)
+            line_offset = offset
+            start_line = line
+        else:
+            start_line = source.count("\n", 0, m.start()) + 1
         depth = 0
         end_line = start_line
         for idx in range(m.end() - 1, len(source)):
@@ -402,10 +412,12 @@ def function_spans_regex(source: str) -> list[FunctionSpan]:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    end_line = source.count("\n", 0, idx) + 1
+                    end_line = (start_line + source.count("\n", offset, idx)
+                                if native_source else source.count("\n", 0, idx) + 1)
                     break
         else:
-            end_line = source.count("\n") + 1
+            end_line = (start_line + source.count("\n", offset)
+                        if native_source else source.count("\n") + 1)
         params = tuple(
             p.strip().rsplit(" ", 1)[-1].lstrip("*")
             for p in m.group("params").split(",")
