@@ -30,7 +30,7 @@ This page is split into:
 
 | Control | Tool | Scope |
 |---|---|---|
-| Python lint gate | Ruff | Changed Python files in a PR |
+| Python lint gate | Ruff | Changed Python, stub and notebook files; full tree for configuration changes or uncertain inputs |
 | Full-tree Python lint audit | Ruff | Entire repository tree |
 | Fast Python test suite | Pytest | `core/`, `packages/`, and `engine/`, split into subsystem tiers; changes under the top-level `test/` data root dispatch via the resource arms |
 | Sandbox slow/integration tier | Pytest | `slow`/`integration`-marked tests under `core/sandbox` and `packages/exploit_feasibility`, on sandbox-gated PRs (package-scoped mirror on exploit-feasibility-gated PRs) |
@@ -65,7 +65,7 @@ This page is split into:
   ruff check <changed .py files>
   ```
 
-- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate.
+- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on main pushes affecting Ruff inputs, weekly cron and manual runs. The existing metadata job scopes both Ruff jobs before runner allocation. Known non-Python edits skip Ruff; configuration/discovery changes, deletions, indirect inputs and unavailable history retain full-tree coverage. Custom discovery, nested Ruff configuration and unreviewed Ruff releases also retain full linting. PR filenames use a NUL-delimited, bounded argument handoff, including spaces, newlines and leading option/argfile characters. Same rule set as the PR gate.
 
   **Run locally:**
 

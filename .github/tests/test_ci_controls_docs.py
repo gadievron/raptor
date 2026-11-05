@@ -42,7 +42,8 @@ def test_ruff_tree_owns_main_pushes_and_pr_lint_owns_proposals() -> None:
         "\n  command-metadata:", 1
     )[0]
     assert "github.event_name == 'push'" in tree_block
-    assert "needs:" not in tree_block
+    assert "needs: [command-metadata]" in tree_block
+    assert "needs.command-metadata.outputs.ruff_run == 'true'" in tree_block
     pr_block = workflow.split("\n  ruff-pr:", 1)[1].split(
         "\n  ruff-tree:", 1
     )[0]
