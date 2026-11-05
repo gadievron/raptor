@@ -1,6 +1,4 @@
 """Parent evidence-integrity observations survive missing disk summaries."""
-import json
-
 import pytest
 
 from core.sandbox import summary, triage
@@ -28,7 +26,15 @@ def test_missing_summary_still_reports_parent_observation(tmp_path):
     report = triage.triage_run(tmp_path, allow_legacy=False)
     assert report is not None
     assert report['inputs']['integrity']['sandbox_summary'] == triage._INTEGRITY_TAMPERED
-    assert 'parent observed an evidence-file inode mismatch' in json.dumps(report)
+    assert report['inputs']['sandbox_summary_present'] is False
+    assert report['verdict'] == 'suspicious'
+    evidence = [
+        item
+        for signal in report['signals']
+        if signal['type'] == 'telemetry_tampering'
+        for item in signal['evidence']
+    ]
+    assert 'sandbox_summary: parent observed an evidence-file verification failure' in evidence
 
 
 def test_later_valid_summary_cannot_clear_parent_observation(tmp_path):
