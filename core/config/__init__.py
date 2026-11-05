@@ -639,7 +639,8 @@ class RaptorConfig:
         # grants. Target-bound envs strip both via
         # TARGET_ENV_STRIP_SET (sandboxed code never sees the
         # credential; see core/sandbox/context.py).
-        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+        "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
+        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
         "RAPTOR_CODEX_CONTEXT_ID",
         #   RAPTOR_REGISTRY_HOME  operator-registry relocation override
         #                    (core.project.registry_home — projects
@@ -699,7 +700,8 @@ class RaptorConfig:
     TARGET_ENV_STRIP_SET = frozenset({
         "CLAUDECODE", "CODEX", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "_RAPTOR_TRUSTED",
         "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_CODEX_HOOK", "RAPTOR_CODEX_HOOK_ROOT",
-        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+        "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
+        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
         "RAPTOR_CODEX_CONTEXT_ID",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
