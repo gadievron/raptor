@@ -77,3 +77,29 @@ def test_dense_tiny_comments_retain_legacy_allocation_bound():
     assert result.text == ' ' * len(source)
     assert not result.ambiguous
     assert peak < len(source) * 12
+
+
+@pytest.mark.parametrize('source', [
+    ''.join(chr(code) for code in range(128)) * 4,
+    'ordinary\r\né\x85\u2028🙂\ntext' * 30,
+])
+def test_rendering_preserves_only_lf_in_blanked_regions(source):
+    expected = ''.join('\n' if char == '\n' else ' ' for char in source)
+    assert _render_c_blank_ranges(source, [(0, len(source))]) == expected
+
+
+def test_large_ascii_comment_avoids_per_line_string_allocation():
+    if tracemalloc.is_tracing():
+        pytest.skip('requires isolated allocation tracing')
+    source = 'int live;\n/*' + ('a' * 80 + '\n') * 10000 + '*/\n'
+    tracemalloc.start()
+    try:
+        result = sanitized_view_with_status(source, 'a.c')
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.text.startswith('int live;\n')
+    assert len(result.text) == len(source)
+    assert result.text.count('\n') == source.count('\n')
+    assert not result.ambiguous
+    assert peak < len(source) * 3
