@@ -20,6 +20,8 @@ usage-frame-less spend can book $0.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import json
 
 import httpx
@@ -48,24 +50,23 @@ def fake_creds():
 def dispatcher(fake_creds, tmp_path):
     from core.llm.dispatcher.tests.test_child_tokens import _Upstream
 
-    upstream = _Upstream("json")
-    d = LLMDispatcher(
-        run_id="child-paths", creds=fake_creds,
-        audit_path=tmp_path / "audit.jsonl",
-        token_ttl_s=3600, token_budget=100,
-    )
-    original = d._rules["anthropic"]
-    d._rules["anthropic"] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
-    try:
+    with ExitStack() as cleanup:
+        upstream = _Upstream("json")
+        cleanup.callback(upstream.shutdown)
+        d = LLMDispatcher(
+            run_id="child-paths", creds=fake_creds,
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=3600, token_budget=100,
+        )
+        cleanup.callback(d.shutdown)
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
         yield d, upstream
-    finally:
-        d.shutdown()
-        upstream.shutdown()
 
 
 def _child_client(d: LLMDispatcher) -> httpx.Client:

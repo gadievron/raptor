@@ -6,12 +6,15 @@ Hermetic — captive loopback upstream, fake sockets, no LLM.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import struct
 import sys
-import threading
 import time
+
+from packages.web.tests.http_server import start_http_server
 
 import httpx
 import pytest
@@ -145,21 +148,15 @@ class _SlowDrainUpstream:
                     pass
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = start_http_server(self._server, cleanup.callback)
             self.base_url = (
                 f"http://127.0.0.1:{self._server.server_address[1]}"
             )
-            self._thread = threading.Thread(
-                target=self._server.serve_forever, daemon=True,
-            )
-            self._thread.start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 @pytest.mark.upstream_forward
@@ -175,20 +172,22 @@ class TestClientLegWriteTimeout:
         # The client-leg socket timeout is bound to the relay
         # total-deadline knob (read per connection).
         monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_RELAY_DEADLINE_S", "1")
-        upstream = _SlowDrainUpstream()
-        d = LLMDispatcher(
-            run_id="stalled-reader", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=100,
-        )
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _SlowDrainUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="stalled-reader", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=100,
+            )
+            cleanup.callback(d.shutdown)
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             token, _info = d.allocate_child("cc-stall", budget_usd=50.0)
             rec = d._tokens[token]
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
@@ -232,6 +231,3 @@ class TestClientLegWriteTimeout:
                 time.sleep(0.05)
             assert rec.reserved_usd == 0.0
             assert rec.spent_usd > 0.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
