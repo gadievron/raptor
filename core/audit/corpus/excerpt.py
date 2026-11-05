@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import shutil
+
+from core.atomic_fs import write_bytes_atomically
+from core.source import open_regular_beneath
 
 
 _QUOTED_C_INCLUDE = re.compile(
@@ -38,7 +40,10 @@ def copy_c_translation_unit_owners(
             if not resolved.is_relative_to(root) or resolved in anchors:
                 continue
             try:
-                with resolved.open("rb") as stream:
+                stream = open_regular_beneath(root, resolved.relative_to(root), "rb")
+                if stream is None:
+                    continue
+                with stream:
                     data = stream.read(_MAX_OWNER_BYTES + 1)
             except OSError:
                 continue
@@ -53,6 +58,6 @@ def copy_c_translation_unit_owners(
             if target.exists():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(resolved, target)
+            write_bytes_atomically(target, data)
             copied.add(rel)
     return copied
