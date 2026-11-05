@@ -164,6 +164,21 @@ def slice_text(
     ranges arrive from external producers that count ``\\n``, so a
     ``splitlines()`` view would hand back attacker-shifted lines.
     """
+    if (type(text) is str and type(start_line) is int and type(end_line) is int
+            and len(text) >= 16 * 1024 and start_line > 0 and end_line >= start_line):
+        selected = join_lf_slice(text, start_line - 1, end_line)
+        if not selected:
+            return ""
+        if "\r" in selected:
+            result = [line.removesuffix("\r") for line in selected.split("\n")]
+            # Only the file's final empty normalized element is dropped.
+            # An empty line inside the requested window must remain.
+            if result[-1] == "" and end_line > text.count("\n"):
+                result.pop()
+            return "\n".join(result)
+        if selected.endswith("\n") and end_line > text.count("\n"):
+            return selected[:-1]
+        return selected
     result = slice_lines(split_lines(text), start_line, end_line)
     return "\n".join(result) if result else ""
 

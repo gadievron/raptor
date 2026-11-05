@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from core.source.lines import join_lf_slice
+
 
 if TYPE_CHECKING:
     from .condition_extraction import SinkGuard
@@ -111,15 +113,26 @@ def extract_sink_arg_identifiers(
     used as arguments. This is a best-effort text extraction — for
     precise analysis, use the AST/CST layer.
     """
-    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
-    if sink_line < 1 or sink_line > len(lines):
-        return frozenset()
+    if (type(source) is str and type(sink_line) is int and type(sink_api) is str
+            and sink_line > 0 and len(source) >= 16 * 1024):
+        window = join_lf_slice(source, sink_line - 1, sink_line + 4)
+        if not window:
+            return frozenset()
+        lines = window.split("\n")  # line-model: same raw LF slice as the full split below
+        first_line = 0
+        stop_line = len(lines)
+    else:
+        lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
+        if sink_line < 1 or sink_line > len(lines):
+            return frozenset()
+        first_line = sink_line - 1
+        stop_line = min(sink_line + 4, len(lines))
 
     # Gather lines that might be part of the call (multi-line args)
     call_text = ""
     paren_depth = 0
     started = False
-    for i in range(sink_line - 1, min(sink_line + 4, len(lines))):
+    for i in range(first_line, stop_line):
         line = lines[i]
         if not started:
             # Find the sink API call on this line
