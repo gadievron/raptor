@@ -54,7 +54,7 @@ def capture_source_identity(root, file, *, excerpt=None, line_start=0) -> Source
         text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
         snippet = excerpt.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
         start = max(0, (line_start or 1) - 1)
-        window = "\n".join(text.split("\n")[start:start + len(snippet.split("\n"))])
+        window = "\n".join(text.split("\n")[start:start + len(snippet.split("\n"))])  # line-model: text and snippet normalize CRLF and bare CR above
         if snippet != text.rstrip("\n") and snippet != window:
             return None  # a cached excerpt is not the source now on disk
     return SourceIdentity(hashlib.sha256(data).hexdigest(), _version(after))

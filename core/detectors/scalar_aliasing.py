@@ -16,7 +16,7 @@ from typing import Any
 
 from core.atomic_fs import write_bytes_atomically
 from core.run.scratch import scratch_dir
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 
 from .budget import WorkBudget
 
@@ -279,7 +279,7 @@ def corroborate_aliasing(target: Path, tu: str, candidates: list[dict[str, Any]]
                 return any(token in code for token in ("optimize", "may_alias"))
             if (not view.ok or len(source) > _MAX_SOURCE_BYTES
                     or alias_exception(view.text, tu)
-                    or any(line.lstrip().startswith("#") for line in view.text.split("\n"))):
+                    or any(line.lstrip().startswith("#") for line in split_lines(view.text))):
                 raise _Unsupported("preprocessed view unavailable, over cap, or contains directives")
             # Marker names are target-controlled. Retain every entered source
             # file (even a header emitting only #line), then refuse raw location
