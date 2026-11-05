@@ -43,15 +43,14 @@ def test_decoder_recursion_failure_is_protocol_error(monkeypatch, frame):
         with pytest.raises(jail_mod._ProtocolError) as raised:
             jail_mod._validate_verdict(b"{}")
     else:
-        parent, child = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            parent, child = socket.socketpair()
+            cleanup.callback(child.close)
+            cleanup.callback(parent.close)
             parent.settimeout(1)
             child.sendall(jail_mod.FRAME_HEADER.pack(2, jail_mod.READY_FRAME_ID) + b"{}")
             with pytest.raises(jail_mod._ProtocolError) as raised:
                 jail_mod.ParserJail()._read_ready_frame(parent)
-        finally:
-            parent.close()
-            child.close()
     assert raised.value.__cause__ is failure
 
 

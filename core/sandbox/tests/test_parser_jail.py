@@ -36,6 +36,7 @@ involved and every protocol deviation is scripted.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import resource
 import socket
@@ -292,23 +293,21 @@ class TestFakeWorkerLifecycle:
             return recv_exact(*args)
 
         monkeypatch.setitem(globals(), "_recv_exact", observed_recv)
-        parent, child = socket.socketpair()
-        worker = None
-        try:
+        with ExitStack() as cleanup:
+            parent, child = socket.socketpair()
+            worker = None
+            cleanup.callback(child.close)
+            cleanup.callback(parent.close)
             worker = _FakeWorker([], pass_fds=(child.fileno(),), ready=None,
                                  responder=_honest_responder)
+            cleanup.callback(worker.wait, timeout=2)
+            cleanup.callback(worker.kill)
             child.close()
             assert entered.wait(2)
             worker.kill()
             assert worker.wait(timeout=2) == 0
             assert worker.poll() == 0
             assert worker._sock.fileno() == -1
-        finally:
-            parent.close()
-            child.close()
-            if worker is not None:
-                worker.kill()
-                worker.wait(timeout=2)
 
     def test_wait_reports_timeout_until_responder_exits(self):
         entered = threading.Event()

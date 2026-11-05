@@ -350,40 +350,41 @@ class TestWorkerSocketDead:
     """Unit coverage for the liveness probe on a real socketpair."""
 
     def test_silent_peer_is_alive(self):
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
             assert _worker_socket_dead(a) is False
-        finally:
-            a.close()
-            b.close()
 
     def test_closed_peer_is_dead(self):
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
             b.close()
             assert _worker_socket_dead(a) is True
-        finally:
-            a.close()
 
     def test_peer_with_pending_data_is_alive(self):
         """Bytes after the request body are a protocol violation, but
         a live worker must NEVER be cancelled on suspicion — the
         write-time failure path owns misbehaviour."""
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
             b.sendall(b"unexpected")
             assert _worker_socket_dead(a) is False
             # The probe peeked, never consumed.
             assert b"unexpected" == a.recv(64, socket.MSG_PEEK)
-        finally:
-            a.close()
-            b.close()
 
     def test_closed_own_fd_is_dead(self):
-        a, b = socket.socketpair()
-        a.close()
-        b.close()
-        assert _worker_socket_dead(a) is True
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
+            a.close()
+            b.close()
+            assert _worker_socket_dead(a) is True
 
 
 class TestOrphanPollKnob:
@@ -459,17 +460,14 @@ class TestCancelGuardIsStructural:
 
     @contextlib.contextmanager
     def _watcher(self):
-        a, b = socket.socketpair()
-        # Interval far beyond the test's lifetime: the poll thread
-        # never fires; the cancel routine is driven directly.
-        w = _OrphanWatcher(a, 30.0, lambda cancel: None)
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
+            w = _OrphanWatcher(a, 30.0, lambda cancel: None)
+            cleanup.callback(w.join)
+            cleanup.callback(w.stop)
             yield w
-        finally:
-            w.stop()
-            w.join()
-            a.close()
-            b.close()
 
     def _cancel(self, watcher, response):
         if response is not None:
@@ -478,8 +476,10 @@ class TestCancelGuardIsStructural:
             return watcher._cancel_upstream_locked()
 
     def test_h1_with_socket_shuts_the_raw_socket(self):
-        near, far = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            near, far = socket.socketpair()
+            cleanup.callback(far.close)
+            cleanup.callback(near.close)
             with self._watcher() as w:
                 action = self._cancel(
                     w, _FakeUpstreamResponse("HTTP/1.1", near),
@@ -488,13 +488,12 @@ class TestCancelGuardIsStructural:
             # The shutdown reached the actual socket: peer sees EOF.
             far.settimeout(2.0)
             assert far.recv(1) == b""
-        finally:
-            near.close()
-            far.close()
 
     def test_h2_is_flag_only_and_socket_untouched(self):
-        near, far = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            near, far = socket.socketpair()
+            cleanup.callback(far.close)
+            cleanup.callback(near.close)
             with self._watcher() as w:
                 action = self._cancel(
                     w, _FakeUpstreamResponse("HTTP/2", near),
@@ -504,22 +503,18 @@ class TestCancelGuardIsStructural:
             far.settimeout(0.2)
             with pytest.raises(TimeoutError):
                 far.recv(1)
-        finally:
-            near.close()
-            far.close()
 
     def test_empty_version_is_flag_only(self):
         # Fail-safe: a version the guard cannot positively identify
         # as HTTP/1.x is treated like h2, never shot.
-        near, far = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            near, far = socket.socketpair()
+            cleanup.callback(far.close)
+            cleanup.callback(near.close)
             with self._watcher() as w:
                 assert self._cancel(
                     w, _FakeUpstreamResponse("", near),
                 ) == "flag_only"
-        finally:
-            near.close()
-            far.close()
 
     def test_head_dwell_no_response_is_flag_only(self):
         with self._watcher() as w:
