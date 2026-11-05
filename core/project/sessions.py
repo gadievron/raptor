@@ -1271,7 +1271,10 @@ def _write_ledger(pid: int, records: list[dict],
     # accumulate one per pinned start for as long as run dirs live),
     # then unknown lines.
     def _over() -> bool:
-        return sum(len(ln) + 1 for ln in lines) > _MAX_LEDGER_BYTES
+        # Match the UTF-8 file size checked by the reader. Surrogate rows
+        # are measured here, then removed by the printable-line gate below.
+        return sum(len(ln.encode("utf-8", errors="surrogatepass")) + 1
+                   for ln in lines) > _MAX_LEDGER_BYTES
 
     while _over() and any(r["status"] != "running" for r in records):
         for i, r in enumerate(records):
