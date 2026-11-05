@@ -532,3 +532,116 @@ def test_legacy_findings_without_ids_remain_separate_across_tools():
     rows = [dict(file='a.c', startLine=1, rule_id='rule', tool=tool)
             for tool in ['Semgrep', 'CodeQL']]
     assert deduplicate_findings([*rows, dict(rows[0])]) == rows
+
+
+@pytest.mark.parametrize('same_component', [False, True])
+@pytest.mark.parametrize('tool_fingerprint', [False, True])
+@pytest.mark.parametrize('use_guids', [False, True])
+def test_same_tool_rule_namespaces_keep_independent_evidence(tmp_path, run, same_component, tool_fingerprint, use_guids):
+    import copy
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    driver = run['tool']['driver']['rules'][0]
+    extension = run['tool']['extensions'][0]['rules'][0]
+    driver.update(guid='driver-rule-guid', properties={'cwe': 'CWE-79'})
+    extension.update(properties={'cwe': 'CWE-78'})
+    if not use_guids:
+        driver.pop('guid')
+        extension.pop('guid')
+        run['tool']['extensions'][0].pop('guid')
+    references = [{'ruleId': 'same', 'ruleIndex': 0},
+                  {'ruleId': 'same', 'ruleIndex': 0, 'rule': {'toolComponent': {'index': 0}}}]
+    if same_component:
+        run['tool']['driver']['rules'].append(copy.deepcopy(extension))
+        references[1] = {'ruleId': 'same', 'ruleIndex': 1}
+    rows = [dict(reference, message={'text': 'same message'}, locations=[{'physicalLocation': {
+        'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+    }}]) for reference in references]
+    if tool_fingerprint:
+        for row in rows:
+            row['fingerprints'] = {'matchBasedId/v1': 'shared-fingerprint'}
+    path = tmp_path / 'rule-namespaces.sarif'
+    run['results'] = rows + copy.deepcopy(rows)
+    path.write_text(json.dumps({'runs': [run]}))
+    findings = parse_sarif_findings(path)
+    original = copy.deepcopy(findings)
+    assert len({finding['finding_id'] for finding in findings}) == 1
+    retained = deduplicate_findings(findings)
+    assert len(retained) == len({finding['finding_id'] for finding in retained}) == 2
+    assert {finding['cwe_id'] for finding in retained} == {'CWE-79', 'CWE-78'}
+    assert findings == original
+    assert deduplicate_findings(retained) == retained
+
+
+@pytest.mark.parametrize('use_guids', [False, True])
+def test_rule_scope_is_stable_across_reference_forms_and_table_reordering(tmp_path, run, use_guids):
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    path = tmp_path / 'reordered-components.sarif'
+
+    def parse(reference):
+        row = dict(reference, message={'text': 'finding'}, locations=[{'physicalLocation': {
+            'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+        }}])
+        path.write_text(json.dumps({'runs': [dict(run, results=[row])]}))
+        return parse_sarif_findings(path)[0]
+
+    if not use_guids:
+        run['tool']['extensions'][0].pop('guid')
+        run['tool']['extensions'][0]['rules'][0].pop('guid')
+    by_index = parse({'rule': {'index': 0, 'toolComponent': {'index': 0}}})
+    readable = ({'guid': 'rule-guid', 'toolComponent': {'guid': 'extension-guid'}}
+                if use_guids else {'id': 'same', 'toolComponent': {'name': 'extension'}})
+    by_name = parse({'rule': readable})
+    assert by_index['rule_scope'] == by_name['rule_scope']
+    run['tool']['extensions'][0]['rules'].insert(0, {'id': 'unrelated'})
+    run['tool']['extensions'].insert(0, {'name': 'unrelated', 'rules': []})
+    reordered = parse({'rule': {'index': 1, 'toolComponent': {'index': 1}}})
+    assert reordered['rule_scope'] == by_index['rule_scope']
+    assert deduplicate_findings([by_index, by_name, reordered]) == [by_index]
+
+
+def test_invalid_reference_cannot_borrow_rule_scope(tmp_path, run):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    path = tmp_path / 'invalid-scope.sarif'
+    row = {'ruleId': 'same', 'rule': {'toolComponent': {'index': 99}},
+           'message': {'text': 'finding'}, 'properties': {'rule_scope': 'forged'}}
+    path.write_text(json.dumps({'runs': [dict(run, results=[row])]}))
+    assert 'rule_scope' not in parse_sarif_findings(path)[0]
+
+
+@pytest.mark.parametrize('reference', [{'ruleId': 'same'}, {'ruleId': 'same', 'ruleIndex': 0}])
+def test_unique_driver_keeps_legacy_identity_and_finding_shape(tmp_path, run, reference):
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    path = tmp_path / 'ordinary-driver.sarif'
+    row = dict(reference, message={'text': 'finding'}, fingerprints={'matchBasedId/v1': 'original'})
+    path.write_text(json.dumps({'runs': [dict(run, results=[row])]}))
+    finding = parse_sarif_findings(path)[0]
+    assert finding['finding_id'] == 'original'
+    assert 'rule_scope' not in finding
+    assert deduplicate_findings([finding, dict(finding)]) == [finding]
+
+
+@pytest.mark.parametrize('difference', ['cwe', 'severity'])
+def test_anonymous_duplicate_descriptors_keep_distinct_inherited_evidence(tmp_path, difference):
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    rules = [{'id': 'same', 'properties': {'cwe': cwe}, 'defaultConfiguration': {'level': level}}
+             for cwe, level in [('CWE-79', 'note'),
+                                ('CWE-78', 'note') if difference == 'cwe' else ('CWE-79', 'error')]]
+    rows = [{'ruleId': 'same', 'ruleIndex': index, 'message': {'text': 'finding'},
+             'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'source.c'},
+                                                'region': {'startLine': 1}}}]} for index in range(2)]
+    path = tmp_path / 'anonymous-rules.sarif'
+    path.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'tool', 'rules': rules}},
+                                         'results': rows}]}))
+    retained = deduplicate_findings(parse_sarif_findings(path))
+    assert len(retained) == len({finding['finding_id'] for finding in retained}) == 2
+    assert len({(finding['cwe_id'], finding['level']) for finding in retained}) == 2
