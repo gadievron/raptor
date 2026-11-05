@@ -426,10 +426,13 @@ class TestStaleRetryShardEvidence:
         At threshold 2 a double strike from that single relay would
         drain the shard."""
         monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
-        upstream = MockUpstream("keepalive")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        oneshot = httpx.Client()
-        try:
+        with ExitStack() as cleanup:
+            upstream = MockUpstream("keepalive")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
+            oneshot = httpx.Client()
+            cleanup.callback(oneshot.close)
             token = _worker_token(d)
             pooled = self._sole_shard_client(d)
             self._condemn_while(monkeypatch, pooled, {"fail": True})
@@ -456,7 +459,3 @@ class TestStaleRetryShardEvidence:
                 "double strike: one relay drained the shard at threshold 2"
             )
             assert not pooled.is_closed
-        finally:
-            oneshot.close()
-            upstream.shutdown()
-            d.shutdown()
