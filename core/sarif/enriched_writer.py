@@ -6,7 +6,7 @@ and structural evidence. Suppressed findings (binary oracle ``absent``)
 are emitted with SARIF-standard ``result.suppressions``.
 
 Consumers: ``/agentic --sarif-out``, ``/project export --sarif``,
-``/validate`` (future).
+``/validate``.
 """
 
 import math
@@ -81,6 +81,9 @@ def _build_raptor_properties(
     analysis = finding.get("analysis")
     if not isinstance(analysis, dict):
         analysis = {}
+    validation_status = analysis.get("validation_status")
+    if isinstance(validation_status, str) and validation_status:
+        props["validation_status"] = validation_status
     _exploitable = read_verdict(analysis, "is_exploitable")
     if _exploitable is not None:
         props["is_exploitable"] = _exploitable
