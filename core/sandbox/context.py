@@ -431,7 +431,7 @@ def _count_lines_bounded(path, max_bytes: int = _RECOUNT_MAX_BYTES):
         count = 0
         seen = 0
         while True:
-            chunk = os.read(fd, 1 << 20)
+            chunk = os.read(fd, min(1 << 20, max_bytes - seen + 1))
             if not chunk:
                 return count, False
             seen += len(chunk)
@@ -441,7 +441,10 @@ def _count_lines_bounded(path, max_bytes: int = _RECOUNT_MAX_BYTES):
     except OSError:
         return 0, False
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 # Per-path stream state for the proxy-events writer, guarded by
