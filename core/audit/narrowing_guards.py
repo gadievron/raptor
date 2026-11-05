@@ -107,7 +107,7 @@ class NarrowingGuardContext:
             return None
         if node.type == "identifier":
             if re.search(
-                rf"^\s*#\s*(?:define|undef)\s+{re.escape(text)}\b",
+                rf"^[^\S\r\n]*#[^\S\r\n]*(?:define|undef)[^\S\r\n]+{re.escape(text)}\b",
                 self.source,
                 re.MULTILINE,
             ):
