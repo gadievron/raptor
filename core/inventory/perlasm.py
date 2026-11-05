@@ -46,7 +46,6 @@ import logging
 import os
 import re
 import shutil
-import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -64,6 +63,8 @@ GENERATED_PREFIX = ".perlasm-generated"
 # Bounded work: read caps mirror the builder's bounded reads; the
 # generator cap matches the design's ~50 x ~1s envelope.
 _MAX_PL_BYTES = 2 * 1024 * 1024
+_MAX_DRIVER_BYTES = 64 * 1024 * 1024
+_MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_ASM_BYTES = 8 * 1024 * 1024
 MAX_GENERATORS = 50
 _GEN_TIMEOUT_S = 30
@@ -133,10 +134,9 @@ def detect_perlasm_generators(target: Path) -> list[PerlasmGenerator]:
             if fpath.is_symlink():
                 continue
             try:
-                fd = os.open(fpath, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(fd, "rb") as fh:
-                    raw = fh.read(_MAX_PL_BYTES)
-            except OSError:
+                raw = read_bytes_gated(fpath, _MAX_PL_BYTES, follow_symlinks=False)
+            except (OSError, ValueError) as exc:
+                logger.warning("perlasm: cannot inspect complete generator %r: %r", fpath, exc)
                 continue
             content = raw.decode("utf-8", "replace")
             m = _XLATE_REF_RE.search(content)
@@ -162,15 +162,16 @@ def derive_flavour(gen: PerlasmGenerator, target: Path,
     applies.
     """
     configdata = target / "configdata.pm"
-    if configdata.is_file():
-        try:
-            m = _PERLASM_SCHEME_RE.search(
-                configdata.read_text(errors="replace")[:4 * 1024 * 1024]
-            )
-            if m:
-                return m.group(1), "build-metadata (configdata.pm)"
-        except OSError:
-            pass
+    try:
+        raw = read_bytes_gated(configdata, _MAX_CONFIG_BYTES, follow_symlinks=False)
+    except FileNotFoundError:
+        pass  # Absent metadata permits the documented family default.
+    except (OSError, ValueError) as exc:
+        return None, f"build metadata unavailable: {exc!r}"
+    else:
+        m = _PERLASM_SCHEME_RE.search(raw.decode("utf-8", errors="replace"))
+        if m:
+            return m.group(1), "build-metadata (configdata.pm)"
     flavour = DRIVER_DEFAULT_FLAVOURS.get(gen.driver)
     if flavour:
         return flavour, f"driver-family default for {gen.driver}"
@@ -207,24 +208,36 @@ def _resolve_driver_sha(gen: PerlasmGenerator,
         gen.path.parent / ".." / ".." / "perlasm" / f"{gen.driver}.pl",
     ):
         try:
-            resolved = cand.resolve()
+            try:
+                resolved = cand.resolve()
+            except RuntimeError as exc:  # Python 3.12 reports symlink loops this way.
+                raise ValueError("cannot resolve perlasm driver") from exc
             if target is not None and not resolved.is_relative_to(
                     target.resolve()):
                 continue
-            fd = os.open(str(resolved), os.O_RDONLY | os.O_NOFOLLOW)
-            try:
-                st = os.fstat(fd)
-                if not stat.S_ISREG(st.st_mode):
-                    continue
-                data = b""
-                while chunk := os.read(fd, 1 << 20):
-                    data += chunk
-                    if len(data) > 64 * 1024 * 1024:
+            with open_regular_gated(resolved, follow_symlinks=False) as stream:
+                before = os.fstat(stream.fileno())
+                if before.st_size > _MAX_DRIVER_BYTES:
+                    raise ValueError(f"perlasm driver exceeds {_MAX_DRIVER_BYTES}-byte budget")
+                digest = hashlib.sha256()
+                remaining = _MAX_DRIVER_BYTES
+                count = 0
+                while True:
+                    chunk = stream.read(min(1 << 20, remaining + 1))
+                    if not chunk:
                         break
-            finally:
-                os.close(fd)
-            return hashlib.sha256(data).hexdigest()
-        except OSError:
+                    if len(chunk) > remaining:
+                        raise ValueError(f"perlasm driver exceeds {_MAX_DRIVER_BYTES}-byte budget")
+                    digest.update(chunk)
+                    count += len(chunk)
+                    remaining -= len(chunk)
+                after = os.fstat(stream.fileno())
+                if count != before.st_size or (
+                        before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError("perlasm driver changed while being hashed")
+                return digest.hexdigest()
+        except FileNotFoundError:
             continue
     return "driver-unresolved"
 
@@ -246,7 +259,11 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
     sandbox profile (namespace + Landlock + network deny) or nothing.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / f"{_cache_key(gen, flavour, target)}.S"
+    try:
+        key = _cache_key(gen, flavour, target)
+    except (OSError, ValueError) as exc:
+        return None, f"{gen.rel_path!r}: driver identity unavailable: {exc!r}"
+    cached = cache_dir / f"{key}.S"
     try:
         with open_regular_gated(cached, follow_symlinks=False) as hit:
             if 0 < os.fstat(hit.fileno()).st_size <= _MAX_ASM_BYTES:
@@ -582,10 +599,16 @@ def enrich_inventory_with_perlasm(inventory: dict, target_path: str | Path,
             it.get("name", "") for it in record.get("items", [])
         }
         try:
-            pl_text = (Path(target_path) / gen_rel).read_text(  # type: ignore[operator]
-                errors="replace",
+            pl_raw = read_bytes_gated(
+                Path(target_path) / gen_rel, _MAX_PL_BYTES, follow_symlinks=False,
             )
-        except OSError:
+            expected = (record.get("perlasm") or {}).get("generator_sha256")
+            if expected and hashlib.sha256(pl_raw).hexdigest() != expected:
+                raise ValueError("generator changed before source-span mapping")
+            # Preserve read_text's prior universal-newline span model.
+            pl_text = pl_raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        except (OSError, ValueError) as exc:
+            result.gaps.append(f"{gen_rel!r}: source-span mapping unavailable: {exc!r}")
             continue
         have = {it.get("name") for it in pl_record.get("items", [])}
         new_items = [
