@@ -76,10 +76,33 @@ rules:
               - pattern: \array_key_exists($V, ...)
               - pattern: isset($MAP[$V])
           - focus-metavariable: $V
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = basename(...)
+              - pattern: $SAFE = \basename(...)
+              - pattern: $SAFE = intval(...)
+              - pattern: $SAFE = \intval(...)
+              - pattern: $SAFE = (int) $X
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
     pattern-sinks:
-      - pattern: include $PATH;
-      - pattern: include_once $PATH;
-      - pattern: require $PATH;
-      - pattern: require_once $PATH;
+      # Focus the executed path so a sanitizer on an enclosing assignment
+      # cannot hide an include evaluated inside the sanitizer's arguments.
+      - patterns:
+          - pattern: include $PATH;
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: include_once $PATH;
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: require $PATH;
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: require_once $PATH;
+          - focus-metavariable: $PATH
     metadata:
       cwe: ["CWE-22"]
