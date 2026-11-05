@@ -11,7 +11,7 @@ def isolated_run(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'keys'))
     summary.set_active_run_dir(None)
     monkeypatch.setattr(summary, '_floor_refusals', {})
-    monkeypatch.setattr(summary, '_evidence_inode_mismatches', set(), raising=False)
+    monkeypatch.setattr(summary, '_evidence_inode_mismatches', {}, raising=False)
     monkeypatch.setattr(summary, '_cli_disables', {})
     yield
     summary.set_active_run_dir(None)

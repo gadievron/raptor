@@ -103,7 +103,9 @@ _evidence_handle: _evidence.EvidenceFile | None = None
 _evidence_open_failed = False
 # A failed held-inode verification remains authoritative across run switches
 # and summary-write retries. Guarded by _lock, keyed like other run state.
-_evidence_inode_mismatches: set[str] = set()
+# True means not yet published; False keeps the failure sticky for fresh
+# evidence without rewriting completed output when there is no new input.
+_evidence_inode_mismatches: dict[str, bool] = {}
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
@@ -181,8 +183,8 @@ def set_active_run_dir(run_dir: Path | None) -> None:
     with _lock:
         if _evidence_handle is not None:
             if not _evidence_handle.close():
-                _evidence_inode_mismatches.add(
-                    str(_evidence_handle.path.parent.parent.resolve()))
+                _evidence_inode_mismatches[
+                    str(_evidence_handle.path.parent.parent.resolve())] = True
             _evidence_handle = None
         _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
@@ -1010,9 +1012,11 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                 and _evidence_handle.path.parent.parent.resolve()
                 == run_dir.resolve()):
             if not _evidence_handle.close():
-                _evidence_inode_mismatches.add(str(run_dir.resolve()))
+                _evidence_inode_mismatches[str(run_dir.resolve())] = True
             _evidence_handle = None
-        inode_mismatch = str(run_dir.resolve()) in _evidence_inode_mismatches
+        run_key = str(run_dir.resolve())
+        inode_mismatch = run_key in _evidence_inode_mismatches
+        inode_failure_pending = _evidence_inode_mismatches.get(run_key, False)
     # New (.audit/) location preferred; legacy <run_dir>/ location
     # kept as a read fallback for runs produced by older versions.
     jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
@@ -1029,9 +1033,9 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         # bare-run annotation must still reach the summary file, so
         # the no-evidence early return yields to it.
         # The held descriptor can already have detected missing evidence.
-        # Preserve that result even when no records remain to aggregate.
+        # Preserve an unpublished result even with no records to aggregate.
         if (not _mem_only and get_cli_disable(run_dir) is None
-                and not inode_mismatch):
+                and not inode_failure_pending):
             return None
         return _assemble_and_write_summary(
             run_dir, records=[], refusals=_mem_only,
@@ -1534,6 +1538,10 @@ def _assemble_and_write_summary(
             exc_info=True,
         )
         return None
+
+    if inode_mismatch:
+        with _lock:
+            _evidence_inode_mismatches[str(run_dir.resolve())] = False
 
     # The caller removes the claimed evidence after this succeeds.
     # Consume the parent-memory refusal mirror now that it is folded
