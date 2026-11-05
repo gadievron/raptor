@@ -163,4 +163,8 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         from .integer_abi import integer_abi_record
         binding["query_contract"] = "case-sensitive-overflow-v5"
         binding["integer_abi"] = integer_abi_record(integer_abi)
+    elif verb == "check-oob":
+        binding["query_contract"] = "explicit-bounds-roles-v1"
+    elif verb == "check-negative-bypass":
+        binding["query_contract"] = "explicit-negative-roles-v1"
     return binding
