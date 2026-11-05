@@ -222,7 +222,7 @@ def test_typedef_spelling_cannot_impersonate_a_fixed_width_builtin(c_grammar):
     assert result.status == "bound" and result.type_status == "unavailable"
 
 
-def test_signed_subtraction_declines_the_missing_backend_oracle(c_grammar):
+def test_signed_subtraction_uses_the_signed_backend_oracle(c_grammar):
     result = bind("int", "int", expression="a - b")
     assert result.status == "bound" and result.guard_status == "bound"
-    assert result.type_status == "unavailable"
+    assert result.type_status == "bound" and result.kind == "signed_wrap"

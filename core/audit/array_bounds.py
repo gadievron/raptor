@@ -14,12 +14,12 @@ import re
 from core.smt_solver import BVProfile, ge, lt, z3, z3_available as _z3_available
 from core.smt_solver.path_feasibility import PathCondition, check_path_feasibility, check_verb_feasibility, make_var
 
-from ._util import IDENTIFIER_RE
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
+from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import visible_declarations
 
 logger = logging.getLogger(__name__)
@@ -259,21 +259,8 @@ def _solve_access(access):
 
 
 def _valid_witness(access, model, abi):
-    for name, spelling in access.parameters:
-        value = model.get(name)
-        kind = integer_type(spelling, abi)
-        if type(value) is not int or kind is None:
-            return False
-        low = -(1 << (kind.width - 1)) if kind.signed else 0
-        high = (1 << (kind.width - (1 if kind.signed else 0))) - 1
-        if not low <= value <= high:
-            return False
-    for premise in access.premises:
-        left, op, right = premise.split()
-        a = model.get(left) if IDENTIFIER_RE.fullmatch(left) else int(left, 16 if left.lower().startswith("0x") else 10)
-        b = model.get(right) if IDENTIFIER_RE.fullmatch(right) else int(right, 16 if right.lower().startswith("0x") else 10)
-        if type(a) is not int or type(b) is not int or not _COMPARISONS[op](a, b):
-            return False
+    if validate_integer_witness(model, access.parameters, access.premises, abi) is None:
+        return False
     return model[access.index] < 0 or model[access.index] >= access.extent
 
 
@@ -284,9 +271,7 @@ def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
     if access.status != "bound" or not _z3_available():
         return details
     details.update(array_bounds_status="checked", source_access=asdict(access),
-                   integer_abi=integer_abi_record(integer_abi), proof_scope="function-entry-source-model",
-                   line_basis="supplied-source", access_kind="read",
-                   assumptions=["supplied declarations describe the active build", "entry parameters have their declared value domains", "no additional caller constraints are encoded"])
+                   integer_abi=integer_abi_record(integer_abi), access_kind="read", **source_model_scope())
     entry, result = _solve_access(access)
     if entry is not None:
         details.update(entry_feasible=entry.feasible, reason="entry path is infeasible or unencodable")

@@ -65,6 +65,8 @@ def is_non_refuting_smt_rule(rule_id: str) -> bool:
 
 
 def scope_smt_observation(verb: str, outcome: str, data: dict) -> tuple[str, dict]:
+    if verb == "check-overflow":
+        return outcome, dict(data)
     if verb == "check-array-bounds":
         details = dict(data)
         details["oracle_scope"] = "fixed-local-array-access"

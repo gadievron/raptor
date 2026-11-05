@@ -14,6 +14,8 @@ from .condition_extraction import _get_parser
 
 logger = logging.getLogger(__name__)
 _INTEGER_LITERAL_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|0|[1-9][0-9]*)")
+_MAX_SOURCE_CHARS = 65536
+_MAX_NODES = 2048
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,8 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     """
     if language not in {"c", "cpp"}:
         return ArithmeticOperation("unavailable")
+    if len(source) > _MAX_SOURCE_CHARS:
+        return ArithmeticOperation("unavailable")
     if len(operands) != 2 or operator not in {"+", "-", "*"}:
         return ArithmeticOperation("unbound")
     try:
@@ -69,9 +73,15 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
 
     bodies = []
     stack = [root]
+    visited = 0
     while stack:
+        visited += 1
+        if visited > _MAX_NODES:
+            return ArithmeticOperation("unavailable")
         node = stack.pop()
         if node.type == "function_definition":
+            if any(text(child) == "consteval" for child in node.named_children):
+                return ArithmeticOperation("unavailable")
             body = node.child_by_field_name("body")
             if body is not None:
                 bodies.append(body)
@@ -83,6 +93,9 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     matches = []
     stack = [bodies[0]]
     while stack:
+        visited += 1
+        if visited > _MAX_NODES:
+            return ArithmeticOperation("unavailable")
         node = stack.pop()
         if node.type in {"function_definition", "lambda_expression"}:
             continue  # another callable does not execute in this function's body

@@ -2939,6 +2939,8 @@ def _run_smt_verb_on_source(
             result = check_overflow(
                 operands, op, profile=operation.profile, guards=premises, kind=operation.kind,
             )
+            from .integer_witness import validate_overflow_result
+            result = validate_overflow_result(result, operation, operands, op, integer_abi)
         elif verb == "check-oob":
             if _lang_has_overflow_safety(file_path):
                 return SweepResult(
@@ -3191,6 +3193,8 @@ def _run_smt_verb_on_source(
 
         outcome, scope_details = _scope_smt_observation(verb, outcome, result)
         if verb == "check-overflow":
+            from .integer_witness import source_model_scope
+            scope_details.update(source_model_scope())
             scope_details["source_operation"] = {
                 "line": operation.line, "column": operation.column,
                 "guards": list(operation.premises),

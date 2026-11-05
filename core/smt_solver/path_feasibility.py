@@ -1524,6 +1524,19 @@ def check_verb_feasibility(
     ``smt_available=False`` case before calling this helper.
     """
     mode = profile.describe()
+    count = len(intrinsic) + len(text_guards)
+    if count > _MAX_CONDITIONS_PER_CALL:
+        reason = Rejection(
+            text="", kind=RejectionKind.TOO_MANY_CONDITIONS,
+            detail=f"{count} verb conditions exceeds per-call cap {_MAX_CONDITIONS_PER_CALL}",
+            hint="reduce the complete obligation; do not discard constraints to obtain a verdict",
+        )
+        return PathSMTResult(
+            feasible=None, satisfied=[], unsatisfied=[],
+            unknown=[text for text, _ in intrinsic] + [cond.text for cond in text_guards],
+            unknown_reasons=[reason], model={}, smt_available=True,
+            reasoning=f"refused: {reason.detail} ({mode})",
+        )
     tautology_solver = _new_solver()
     solver = _new_solver()
 

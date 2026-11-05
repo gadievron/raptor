@@ -5302,6 +5302,8 @@ def disprove_integer_overflow(
             operands, op_char, profile=profile, guards=premises,
             kind=overflow_kind,
         )
+        from .integer_witness import validate_overflow_result
+        result = validate_overflow_result(result, operation, operands, op_char, abi)
     except Exception as exc:  # noqa: BLE001 — degrade to inconclusive
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",
@@ -5337,7 +5339,7 @@ def disprove_integer_overflow(
         hypothesis_class="integer_overflow",
         reasoning=(
             "Z3 inconclusive: "
-            + "; ".join(result.get("unknown_reasons") or ["solver punted"])
+            + str(result.get("reasoning") or "solver punted")
         ),
     )
 
