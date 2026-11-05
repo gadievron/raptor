@@ -33,7 +33,9 @@ int branches(float value, int take) { if(take) return *(int*)&value; return 0; }
 """
 
 
-@pytest.fixture(scope="module")
+# Native tool startup belongs to the slow tier; retain one AST per worker
+# even when randomized test ordering revisits this module.
+@pytest.fixture(scope="session")
 def parsed(tmp_path_factory):
     clang = shutil.which("clang")
     if clang is None:
@@ -41,10 +43,11 @@ def parsed(tmp_path_factory):
     path = tmp_path_factory.mktemp("scalar-aliasing") / "owned.c"
     path.write_bytes(_SOURCE)
     proc = subprocess.run([clang, "-fsyntax-only", "-Xclang", "-ast-dump=json", str(path)],
-                          capture_output=True, timeout=15, check=True)
+                          capture_output=True, timeout=60, check=True)
     return json.loads(proc.stdout)
 
 
+@pytest.mark.slow
 def test_native_ast_proves_only_supported_actual_accesses(parsed):
     proofs = scalar_access_proofs(parsed, _SOURCE)
     assert {p["function"] for p in proofs} == {"direct", "indirect", "write_access"}
@@ -53,6 +56,7 @@ def test_native_ast_proves_only_supported_actual_accesses(parsed):
     assert indirect["identifiers"] == ["value", "p"]
 
 
+@pytest.mark.slow
 def test_proof_offsets_use_utf8_bytes(parsed):
     # A byte offset in this AST cannot be interpreted against shorter input.
     assert scalar_access_proofs(parsed, b"short") == []
@@ -71,6 +75,7 @@ def test_unknown_ast_shape_fails_closed():
 
 
 @pytest.mark.parametrize("kind", ["IfStmt", "WhileStmt", "CallExpr", "GCCAsmStmt", "UnaryExprOrTypeTraitExpr"])
+@pytest.mark.slow
 def test_unsupported_body_discards_every_partial_proof(parsed, kind):
     copied = json.loads(json.dumps(parsed))
     functions = [n for n in copied["inner"] if n.get("kind") == "FunctionDecl" and n.get("name") == "write_access"]
