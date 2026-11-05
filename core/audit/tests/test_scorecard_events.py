@@ -744,12 +744,48 @@ class TestInlineSitePins:
         # names them, and there is no third emission branch.
         assert "unreachability" not in segment
 
-    def test_dark_verify_grades_only_without_retained_stamp(self) -> None:
+    @pytest.mark.parametrize("evidence_tool", [
+        "", "llm-claimed:smt", "smt:check-overflow",
+    ])
+    @pytest.mark.parametrize("status", ["dark", "finding"])
+    def test_unreproduced_dark_witness_never_grades(
+        self, tmp_path, monkeypatch, evidence_tool, status,
+    ) -> None:
+        from unittest.mock import Mock
+        from core.audit import dark_verify
         from core.audit import orchestrator as orch
 
-        src = inspect.getsource(orch._run_dark_verification)
-        idx = src.index('_pe.startswith("llm-claimed:")')
-        assert "_sc_record_refutation" in src[idx:idx + 500]
+        outcome = _outcome(status=status, evidence_tool=evidence_tool,
+                           review_result={"adversarial_needs_evidence": True})
+        result = orch.OrchestratorResult(
+            outcomes=[outcome], dormant=int(status == "dark"),
+            findings=int(status == "finding"),
+        )
+        config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+        verdict = SimpleNamespace(verdict="refuted", match_detail="sample did not reproduce")
+        monkeypatch.setattr(orch, "_make_dispatch_gate", lambda *a, **k: None)
+        monkeypatch.setattr(dark_verify, "language_for_file", lambda path: "python")
+        monkeypatch.setattr(dark_verify, "build_witness_prompt", lambda **k: ("prompt", "system"))
+        monkeypatch.setattr(dark_verify, "parse_witness_response", lambda *a, **k: object())
+        execute = Mock(return_value=verdict)
+        grade = Mock()
+        monkeypatch.setattr(dark_verify, "execute_witness", execute)
+        monkeypatch.setattr(orch, "_sc_record_refutation", grade)
+
+        orch._run_dark_verification(
+            result, config, llm_client=lambda *a: "response", include_diagnostics=True,
+        )
+
+        execute.assert_called_once()
+        grade.assert_not_called()
+        assert result.scorecard_events == []
+        assert outcome.status == status
+        assert outcome.evidence_tool == evidence_tool
+        assert result.dormant == int(status == "dark")
+        assert result.findings == int(status == "finding")
+        assert result.clean == 0
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "refuted"
 
     def test_flush_runs_after_primary_artifacts(self) -> None:
         """The sidecar write takes a cross-process flock; a wedged
