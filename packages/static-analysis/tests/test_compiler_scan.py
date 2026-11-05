@@ -1468,6 +1468,7 @@ def test_scan_path_budget_omits_context_without_losing_the_warning(tmp_path, mon
     ("uaf.c", "CWE-416"), ("double_free.c", "CWE-415"), ("malloc_leak.c", "CWE-401"), ("leak.cpp", "CWE-401"),
 ])
 @needs_analyzer
+@pytest.mark.slow
 def test_native_shared_clang_checker_classifies_message(tmp_path, monkeypatch, sandbox_spy, fixture, expected):
     import shutil
     from core.audit.tests._live_transport import run_compiler_analyzer_sweep_guarded
