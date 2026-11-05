@@ -510,6 +510,8 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
     the caller."""
     from . import proxy as _proxy_mod
     from . import telemetry_mac as _tmac
+    # One snapshot feeds the parent mirror, MAC fields, and JSON payload.
+    flags = sorted(str(f) for f in flags)
     # Parent-memory mirror FIRST (out of the target's reach and not
     # dependent on a mintable token): the sidecar closes suffix/whole
     # truncation of the EVENTS file, but a target that erases BOTH
@@ -521,7 +523,7 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
         from . import summary as _summary_pm
         _summary_pm.record_proxy_persist_state(
             Path(output), expected_count=int(count),
-            flags=sorted(str(f) for f in flags))
+            flags=flags)
     except Exception:  # noqa: BLE001 — accounting is best-effort
         logger.debug("proxy persist accounting failed", exc_info=True)
     token = _tmac.mint(_tmac.proxy_events_count_fields(
@@ -531,30 +533,19 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
     import json as _json
     payload = _json.dumps({
         "count": int(count),
-        "flags": sorted(str(f) for f in flags),
+        "flags": flags,
         "mac": token,
     })
     path = os.path.join(output, _proxy_mod.PROXY_EVENTS_COUNT_FILENAME)
-    tmp = f"{path}.tmp.{os.getpid()}"
+    from core.atomic_fs import write_text_atomically
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                     | os.O_CLOEXEC, 0o600)
-        try:
-            os.write(fd, payload.encode("utf-8"))
-            # fsync before the rename: a power loss between replace
-            # and writeback must not surface a zero-length/garbage
-            # sidecar (which reads as count_sidecar_invalid — a
-            # tamper flag — on the next honest batch).
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
+        # Complete writes, unique temporary-file ownership, and fsync before
+        # replacement come from the same primitive as other audit artifacts.
+        write_text_atomically(
+            path, payload, tmp_prefix=".~proxy-count-", mode=0o600,
+        )
     except OSError:
-        logger.debug("Sandbox: could not write %s", path, exc_info=True)
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        logger.warning("Sandbox: could not write %s", path, exc_info=True)
 
 
 def _persist_proxy_events(
