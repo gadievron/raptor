@@ -21,7 +21,13 @@ Pinned properties:
     even when the test itself writes a colliding entry under the
     stamp's own key via ``record_property`` — the collision can
     neither disable the guard nor suppress the genuine stamp;
+  * setup overruns count, while teardown overruns do not;
+  * a real measured sleep still trips the unmarked guard;
   * a malformed marker fails collection loudly.
+
+Threshold cases supply exact phase durations through pytest's report hook;
+the real-sleep sentinel independently checks elapsed-time wiring. All cases
+still use the root hooks, real test reports and session exit handling.
 """
 
 from __future__ import annotations
@@ -34,6 +40,9 @@ from pathlib import Path
 
 import pytest
 
+# Keep the explicitly loaded child plugin visible to CI dependency routing.
+import core.testing.llm_tripwire  # noqa: F401
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 NESTED_INI = """\
@@ -44,15 +53,45 @@ markers =
 
 
 def _run_nested(
-    tmp_path: Path, budget: str, test_source: str
+    tmp_path: Path, budget: str, test_source: str,
+    phase_durations: dict[tuple[str, str], float] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one nested pytest session over ``test_source`` with the
     root conftest loaded and RAPTOR_MAX_TEST_SECONDS=``budget``."""
     (tmp_path / "pytest.ini").write_text(NESTED_INI, encoding="utf-8")
     test_file = tmp_path / "test_nested.py"
     test_file.write_text(test_source, encoding="utf-8")
-    env = os.environ.copy()
+    if phase_durations:
+        # Exercise the real report/stamp/logreport/session-exit pipeline at
+        # precise thresholds without waiting for those durations to elapse.
+        # Unlisted phases retain pytest's measured wall time.
+        (tmp_path / "conftest.py").write_text(
+            "import pytest\n"
+            f"DURATIONS = {phase_durations!r}\n"
+            "@pytest.hookimpl(wrapper=True)\n"
+            "def pytest_runtest_makereport(item, call):\n"
+            "    report = yield\n"
+            "    key = (item.name, report.when)\n"
+            "    if key in DURATIONS:\n"
+            "        report.duration = DURATIONS[key]\n"
+            "    return report\n",
+            encoding="utf-8",
+        )
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(
+        os.environ,
+        HOME=str(home), TMPDIR=str(tmp_path),
+        XDG_CONFIG_HOME=str(home / "config"),
+        XDG_CACHE_HOME=str(home / "cache"),
+        XDG_DATA_HOME=str(home / "data"),
+        RAPTOR_REGISTRY_HOME=str(tmp_path / "registry"),
+        RAPTOR_OUT_DIR=str(tmp_path / "out"),
+    )
     env["RAPTOR_MAX_TEST_SECONDS"] = budget
+    # These sessions exercise root hooks, not installed third-party plugins.
+    # Load the LLM guard explicitly rather than inheriting arbitrary plugins.
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     # The outer tier's knobs must not steer the nested session: its
     # addopts (faulthandler timeout), session budget, shuffle seed,
     # and the egress-guard dir handoff all belong to THIS session.
@@ -61,6 +100,7 @@ def _run_nested(
     # other plugins may key on the env var).
     for key in (
         "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
         "RAPTOR_MAX_SESSION_SECONDS",
         "RAPTOR_RANDOMISE_TESTS",
         "RAPTOR_EGRESS_LEAK_DIR",
@@ -74,6 +114,8 @@ def _run_nested(
             "pytest",
             "-p",
             "conftest",
+            "-p",
+            "core.testing.llm_tripwire",
             "-p",
             "no:cacheprovider",
             str(test_file),
@@ -107,22 +149,13 @@ def _flagged_nodeids(stdout: str) -> set[str]:
     return flagged
 
 
-# Each test here spawns one nested pytest session, and the guard
-# measures PER PHASE, so the budget is sized to the heaviest single
-# arm: 4.9 s wall on the authoring host = ~3.05 s of fixed sleeps
-# (sleeps do NOT scale with runner speed) + ~1.9 s interpreter +
-# collection overhead (which does, ~4x on the slowest expected
-# runner) → ~10.5 s projection. Not lower: the warn band is half the
-# budget and must clear that projection (≥ ~21 s) or the pin warns
-# run-over-run on slow runners — 30 keeps ~1.4x band margin. Not
-# higher: each nested session is bounded by its own 120 s subprocess
-# timeout (the hang net), and 30 s still trips once the heaviest
-# arm's cost roughly triples past the projection — a real harness
-# regression, not runner noise.
+# Keep headroom for nested interpreter/plugin startup on loaded runners.
+# Threshold cases use report durations; one real sleep below also pins the
+# elapsed-time wiring independently of the report-duration fixture.
 @pytest.mark.wall_budget(30.0)
 class TestWallBudgetMarker:
     def test_guard_semantics_raise_only(self, tmp_path: Path) -> None:
-        """One nested session, three tests, global budget 0.6 s:
+        """One nested session, global budget 0.6 s:
         unmarked-over flags, marked-below-global stays governed by
         the global (raise-only), marked-over-own-budget still flags.
         """
@@ -135,25 +168,43 @@ class TestWallBudgetMarker:
                 "\n"
                 "\n"
                 "def test_unmarked_over_budget():\n"
-                "    time.sleep(1.2)\n"
+                "    pass\n"
                 "\n"
                 "\n"
                 "@pytest.mark.wall_budget(0.15)\n"
                 "def test_marker_never_lowers():\n"
-                "    time.sleep(0.35)\n"
+                "    pass\n"
                 "\n"
                 "\n"
                 "@pytest.mark.wall_budget(0.9)\n"
                 "def test_marked_over_own_budget():\n"
-                "    time.sleep(1.5)\n"
+                "    pass\n"
+                "\n"
+                "def test_real_elapsed_time():\n"
+                "    time.sleep(0.8)\n"
+                "\n"
+                "def test_setup_counts():\n"
+                "    pass\n"
+                "\n"
+                "def test_teardown_is_excluded():\n"
+                "    pass\n"
             ),
+            phase_durations={
+                ("test_unmarked_over_budget", "call"): 1.2,
+                ("test_marker_never_lowers", "call"): 0.35,
+                ("test_marked_over_own_budget", "call"): 1.5,
+                ("test_setup_counts", "setup"): 1.2,
+                ("test_teardown_is_excluded", "teardown"): 1.2,
+            },
         )
-        assert "3 passed" in proc.stdout, proc.stdout
+        assert "6 passed" in proc.stdout, proc.stdout
         assert proc.returncode == 1, (proc.stdout, proc.stderr)
         flagged = _flagged_nodeids(proc.stdout)
         assert flagged == {
             "test_nested.py::test_unmarked_over_budget",
             "test_nested.py::test_marked_over_own_budget",
+            "test_nested.py::test_real_elapsed_time",
+            "test_nested.py::test_setup_counts",
         }, proc.stdout
 
     def test_marker_raises_budget(self, tmp_path: Path) -> None:
@@ -171,15 +222,16 @@ class TestWallBudgetMarker:
             tmp_path,
             "0.6",
             (
-                "import time\n"
                 "import pytest\n"
                 "\n"
                 "\n"
                 "@pytest.mark.wall_budget(30.0)\n"
                 "def test_marked_over_global_only(record_property):\n"
                 "    record_property('raptor-wall-budget', float('inf'))\n"
-                "    time.sleep(1.0)\n"
             ),
+            phase_durations={
+                ("test_marked_over_global_only", "call"): 1.0,
+            },
         )
         assert "1 passed" in proc.stdout, proc.stdout
         assert proc.returncode == 0, (proc.stdout, proc.stderr)
