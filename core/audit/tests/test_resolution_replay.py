@@ -97,13 +97,14 @@ class TestSilenceDerivedCleanBasis:
         )
         assert reason is None
 
-    def test_dark_verify_refuted_accepted(self):
+    def test_dark_verify_refuted_refused(self):
         entry = _entry(clean_basis="dark_verify_refuted")
         reason = _reuse_ineligibility(
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
         )
-        assert reason is None
+        assert reason == "silence-derived clean (dark_verify_refuted)"
+        assert _reuse_block_class(reason) == "silence_derived_clean"
 
     def test_block_class_silence_derived(self):
         assert _reuse_block_class(

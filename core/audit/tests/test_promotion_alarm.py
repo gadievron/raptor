@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.audit.promotion_alarm import (
     ALARM_EVENT,
     ALARM_FILENAME,
@@ -83,12 +85,21 @@ class TestBuildAlarmRecord:
 
     def test_tool_evidenced_finding_is_silent(self):
         for tool in ("semgrep", "smt:check-overflow", "prefilter:oob-write",
-                     "dark_verify:confirmed", "semgrep+joern"):
+                     "dark_verify:sanitizer-violation", "semgrep+joern"):
             rec = build_alarm_record(
                 stage="journal-write", file="a.c", function="f",
                 verdict="finding", evidence_tool=tool,
             )
             assert rec is None, f"alarm fired on tool evidence {tool!r}"
+
+    @pytest.mark.parametrize("tool", ["dark_verify:confirmed", "dark_verify:refuted"])
+    def test_legacy_witness_prediction_is_not_tool_evidence(self, tool):
+        rec = build_alarm_record(
+            stage="journal-write", file="a.c", function="f",
+            verdict="finding", evidence_tool=tool,
+        )
+        assert rec is not None
+        assert rec["event"] == "promotion_without_tool_evidence"
 
     def test_suspicious_is_designed_llm_guess_bucket(self):
         # Evidence-less suspicious is routine (the pipeline explicitly
