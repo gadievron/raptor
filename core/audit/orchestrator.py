@@ -1335,9 +1335,8 @@ class ReviewOutcome:
     # ``propagated`` = inferred from another clean; ``sarif_clean`` = file-level
     # silence; ``unknown`` = imported from a pre-field journal row;
     # ``dark_verify_refuted`` = one executed witness did not fire. The
-    # first four (``CLEAN_BASIS_NOT_REUSABLE``) are never tool_backed
-    # and never reused across runs; ``dark_verify_refuted`` is
-    # provenance only (reusable).
+    # All these explicit bases (``CLEAN_BASIS_NOT_REUSABLE``) are never
+    # tool_backed or reused across runs: a failed sample proves no absence.
     # Stamped by the producer; replacement objects start empty.
     clean_basis: str = ""
     semantic_confidence: str = ""
@@ -35192,38 +35191,10 @@ def _drain_dark_probes(
                     elif prior == "error":
                         result.errors -= 1
         elif verify_result.verdict == "refuted":
-            from .evidence_grade import is_tool_evidence
-
-            prior_evidence = outcome.evidence_tool or ""
-            tool_backed = (
-                prior in ("finding", "suspicious")
-                and is_tool_evidence(prior_evidence)
-            )
-            if tool_backed:
-                outcome.status = "suspicious"
-                if "dark_verify:refuted" not in prior_evidence:
-                    outcome.evidence_tool = (
-                        f"{prior_evidence}+dark_verify:refuted"
-                    )
-                if prior == "finding":
-                    with result._lock:
-                        result.findings -= 1
-                        result.suspicious += 1
-            else:
-                outcome.status = "clean"
-                outcome.evidence_tool = "dark_verify:refuted"
-                outcome.clean_basis = "dark_verify_refuted"
-                if prior != "clean":
-                    with result._lock:
-                        result.clean += 1
-                        if prior in ("dark", "dormant"):
-                            result.dormant -= 1
-                        elif prior == "suspicious":
-                            result.suspicious -= 1
-                        elif prior == "finding":
-                            result.findings -= 1
-                        elif prior == "error":
-                            result.errors -= 1
+            # This refutes one witness prediction, not the vulnerability.
+            # Preserve status, evidence, counters, and learned priors.
+            logger.info("dark witness did not reproduce %s:%s; verdict unchanged",
+                        outcome.file, outcome.function)
 
         records.append({
             "file": outcome.file,
@@ -35372,8 +35343,8 @@ def _run_dark_verification(
     the dispatch table (auth/biz-logic CWEs where witness execution is
     the primary grounding mechanism).
 
-    Confirmed witnesses upgrade the outcome to ``"finding"``; refuted
-    witnesses downgrade to ``"clean"``.
+    Confirmed witnesses upgrade the outcome to ``"finding"``. A witness
+    whose prediction was refuted leaves the original verdict unchanged.
 
     Witness probes (one LLM call + one sandboxed execution each) are
     independent per outcome, so with ``max_workers > 1`` they fan out
@@ -35534,10 +35505,7 @@ def _run_dark_verification(
             from .evidence_grade import is_tool_evidence as _is_tool_ev
 
             outcome.status = "finding"
-            # EXTEND the receipt chain, never replace it: the refuted
-            # branch already preserves a prior deterministic receipt
-            # ("+dark_verify:refuted"), while a plain assignment here
-            # erased engine provenance from the exported record.
+            # Extend the existing receipt chain without erasing engine provenance.
             _prior_ev = outcome.evidence_tool or ""
             if "dark_verify:confirmed" in _prior_ev:
                 pass
@@ -35565,62 +35533,10 @@ def _run_dark_verification(
             # the refute recorded; everything else demotes to clean as
             # before. Mirrors the dampening rule ("tool-backed findings
             # are never demoted") and the runtime-veto floor.
-            from .evidence_grade import is_tool_evidence
-
-            prior_evidence = outcome.evidence_tool or ""
-            tool_backed = (
-                prior in ("finding", "suspicious")
-                and is_tool_evidence(prior_evidence)
-            )
-            if tool_backed:
-                outcome.status = "suspicious"
-                if "dark_verify:refuted" not in prior_evidence:
-                    outcome.evidence_tool = (
-                        f"{prior_evidence}+dark_verify:refuted"
-                    )
-                if prior == "finding":
-                    result.findings -= 1
-                    result.suspicious += 1
-            else:
-                outcome.status = "clean"
-                outcome.evidence_tool = "dark_verify:refuted"
-                # Provenance only — the single-witness policy above is
-                # unchanged and the row stays reusable.
-                outcome.clean_basis = "dark_verify_refuted"
-                # An executed witness is ONE LLM-guessed input: it
-                # refutes its own prediction, not the hypothesis. It
-                # grades the model only when the outcome retained no
-                # deterministic stamp of ANY role — a detection-role
-                # receipt below the is_tool_evidence bar (which routed
-                # us into this branch) still contradicts the demotion,
-                # so those stay ungraded like the receipt-capped
-                # branch above.
-                _pe = (prior_evidence or "").strip().lower()
-                if prior in ("finding", "suspicious") and (
-                    not _pe
-                    or _pe == "none"
-                    or _pe.startswith("llm-claimed:")
-                ):
-                    _sc_record_refutation(
-                        result.scorecard_events, outcome,
-                        gate="dark-verify",
-                        reason=(
-                            "executed witness refuted the predicted "
-                            "signal and no deterministic receipt was "
-                            "retained"
-                        ),
-                        models=config.models,
-                    )
-                if prior != "clean":
-                    result.clean += 1
-                    if prior in ("dark", "dormant"):
-                        result.dormant -= 1
-                    elif prior == "suspicious":
-                        result.suspicious -= 1
-                    elif prior == "finding":
-                        result.findings -= 1
-                    elif prior == "error":
-                        result.errors -= 1
+            # This refutes one witness prediction, not the vulnerability.
+            # Preserve status, evidence, counters, and learned priors.
+            logger.info("dark witness did not reproduce %s:%s; verdict unchanged",
+                        outcome.file, outcome.function)
 
         return {
             "file": outcome.file,

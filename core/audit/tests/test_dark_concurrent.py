@@ -150,8 +150,8 @@ class TestDrainDarkProbes:
         assert result.dormant == 0
         assert "dark_verify:confirmed" in (o.evidence_tool or "")
 
-    def test_refuted_demotes_to_clean(self, tmp_path):
-        """A refuted probe on a non-tool-backed outcome → clean."""
+    def test_nonreproduction_preserves_dark(self, tmp_path):
+        """A failed witness prediction leaves the original dark verdict."""
         o = _outcome(status="dark")
         result = OrchestratorResult(
             outcomes=[o], dormant=1, clean=0,
@@ -169,9 +169,9 @@ class TestDrainDarkProbes:
             executor=executor,
         )
         assert id(o) in handled
-        assert o.status == "clean"
-        assert result.clean == 1
-        assert result.dormant == 0
+        assert o.status == "dark"
+        assert result.clean == 0
+        assert result.dormant == 1
 
     def test_none_result_handled_but_no_verdict(self, tmp_path):
         """A probe returning None is still marked handled (no duplicate)."""

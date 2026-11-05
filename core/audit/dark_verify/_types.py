@@ -71,7 +71,11 @@ class DarkWitnessSpec:
 
 @dataclass
 class DarkVerifyResult:
-    """Result of executing one dark witness."""
+    """Result of executing one dark witness.
+
+    ``refuted`` is expectation-relative: this input did not produce the
+    predicted observation. It is not a refutation of the vulnerability.
+    """
 
     finding_key: str
     verdict: str  # "confirmed" | "refuted" | "error" | "inconclusive"
