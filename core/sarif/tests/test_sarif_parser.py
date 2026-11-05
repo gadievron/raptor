@@ -993,9 +993,7 @@ class TestFindingIdDiscipline(unittest.TestCase):
 
 
 class TestMergeSarifUriBaseConflict(unittest.TestCase):
-    """merge_sarif must warn when same-tool runs define the same
-    originalUriBaseIds id with different uris (later wins; earlier
-    runs' relative URIs then resolve against the wrong root)."""
+    """Same-tool runs retain their own URI-base namespaces during merge."""
 
     @staticmethod
     def _sarif(base_uri):
@@ -1018,7 +1016,7 @@ class TestMergeSarifUriBaseConflict(unittest.TestCase):
                 paths.append(str(p))
             return merge_sarif(paths)
 
-    def test_conflicting_base_definitions_warn(self):
+    def test_conflicting_base_definitions_remain_in_separate_runs(self):
         from unittest.mock import patch
         with patch("core.sarif.parser.logger") as mock_logger:
             merged = self._merge([
@@ -1029,11 +1027,10 @@ class TestMergeSarifUriBaseConflict(unittest.TestCase):
             c for c in mock_logger.warning.call_args_list
             if "originalUriBaseIds" in str(c)
         ]
-        self.assertEqual(len(warnings), 1)
-        # Later definition wins.
+        self.assertEqual(warnings, [])
         self.assertEqual(
-            merged["runs"][0]["originalUriBaseIds"]["SRCROOT"]["uri"],
-            "file:///repo-b/",
+            [run["originalUriBaseIds"]["SRCROOT"]["uri"] for run in merged["runs"]],
+            ["file:///repo-a/", "file:///repo-b/"],
         )
 
     def test_identical_base_definitions_do_not_warn(self):
@@ -1325,3 +1322,87 @@ class TestExtensionRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestResolvedPrimaryLocationIdentity(unittest.TestCase):
+    @staticmethod
+    def _document(artifacts, bases):
+        rows = [_result(uri=artifact['uri'], startLine=1) for artifact in artifacts]
+        for row, artifact in zip(rows, artifacts):
+            row['locations'][0]['physicalLocation']['artifactLocation'] = artifact
+        document = _sarif(rows, tool='CodeQL')
+        document['runs'][0]['originalUriBaseIds'] = bases
+        return document
+
+    @staticmethod
+    def _parse(document, merge_first=False):
+        from core.sarif.parser import merge_sarif, parse_sarif_findings
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_sarif(directory, document)
+            if merge_first:
+                path = _write_sarif(directory, merge_sarif([str(path)]), 'combined.sarif')
+            return parse_sarif_findings(path)
+
+    def test_same_relative_uri_under_distinct_bases_has_distinct_ids(self):
+        from core.sarif.parser import deduplicate_findings
+        document = self._document(
+            [{'uri': 'same.c', 'uriBaseId': base} for base in ['LEFT', 'RIGHT']],
+            {'LEFT': {'uri': 'file:///repo/left/'}, 'RIGHT': {'uri': 'file:///repo/right/'}},
+        )
+        for merge_first in (False, True):
+            with self.subTest(merge_first=merge_first):
+                findings = self._parse(document, merge_first=merge_first)
+                self.assertEqual({finding['file'] for finding in findings},
+                                 {'file:///repo/left/same.c', 'file:///repo/right/same.c'})
+                self.assertEqual(len({finding['finding_id'] for finding in findings}), 2)
+                self.assertEqual(len(deduplicate_findings(findings)), 2)
+
+    def test_equivalent_direct_and_based_uris_deduplicate(self):
+        from core.sarif.parser import deduplicate_findings
+        document = self._document(
+            [{'uri': 'same.c', 'uriBaseId': 'ROOT'}, {'uri': 'file:///repo/same.c'}],
+            {'ROOT': {'uri': 'file:///repo/'}},
+        )
+        findings = self._parse(document)
+        self.assertEqual(findings[0]['finding_id'], findings[1]['finding_id'])
+        self.assertEqual(len(deduplicate_findings(findings)), 1)
+
+    def test_merging_conflicting_bases_keeps_both_files_and_ids(self):
+        from core.sarif.parser import merge_sarif, parse_sarif_findings
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, base in enumerate(['file:///repo/left/', 'file:///repo/right/']):
+                document = self._document([{'uri': 'same.c', 'uriBaseId': 'ROOT'}],
+                                          {'ROOT': {'uri': base}})
+                paths.append(str(_write_sarif(directory, document, f'input-{index}.sarif')))
+            merged = merge_sarif(paths)
+            path = _write_sarif(directory, merged, 'combined.sarif')
+            findings = parse_sarif_findings(path)
+        self.assertEqual(len(findings), 2)
+        self.assertEqual({finding['file'] for finding in findings},
+                         {'file:///repo/left/same.c', 'file:///repo/right/same.c'})
+        self.assertEqual(len({finding['finding_id'] for finding in findings}), 2)
+
+
+    def test_nested_bases_and_equivalent_aliases_share_an_identity(self):
+        from core.sarif.parser import deduplicate_findings
+        document = self._document(
+            [{'uri': 'same.c', 'uriBaseId': 'NESTED'},
+             {'uri': 'same.c', 'uriBaseId': 'ALIAS'},
+             {'uri': 'file:///repo/nested/same.c'}],
+            {'ROOT': {'uri': 'file:///repo/'},
+             'NESTED': {'uri': 'nested/', 'uriBaseId': 'ROOT'},
+             'ALIAS': {'uri': 'file:///repo/nested/'}},
+        )
+        findings = self._parse(document)
+        self.assertEqual({finding['file'] for finding in findings}, {'file:///repo/nested/same.c'})
+        self.assertEqual(len({finding['finding_id'] for finding in findings}), 1)
+        self.assertEqual(len(deduplicate_findings(findings)), 1)
+
+    def test_based_uri_preserves_tool_supplied_fingerprint(self):
+        document = self._document([{'uri': 'same.c', 'uriBaseId': 'ROOT'}],
+                                  {'ROOT': {'uri': 'file:///repo/'}})
+        document['runs'][0]['results'][0]['fingerprints'] = {'matchBasedId/v1': 'tool-fingerprint'}
+        finding = self._parse(document)[0]
+        self.assertEqual(finding['finding_id'], 'tool-fingerprint')
+        self.assertEqual(finding['file'], 'file:///repo/same.c')

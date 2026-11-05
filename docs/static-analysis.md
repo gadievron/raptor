@@ -525,13 +525,18 @@ is enabled via `--codeql`, per-language CodeQL SARIF files are added.
 All per-tool SARIFs are merged via `core.sarif.parser.merge_sarif()`
 into a single `combined.sarif`:
 
-- ID-only runs are grouped by tool name.
-- ID-only reports deduplicate by `(ruleId, uri, startLine, endLine,
-  startColumn, fingerprint)` -- latest occurrence wins on collision.
-- ID-only runs union their `tool.driver.rules` across the tool.
-- Indexed or component-qualified reports retain their owning run metadata.
-  Runs with identical metadata can combine exact duplicate reports without
-  changing rule-table positions.
+- ID-only runs without URI-base tables are grouped by tool name. Their
+  reports deduplicate by `(ruleId, uri, startLine, endLine, startColumn,
+  fingerprint)`, with the latest occurrence winning. Their driver rules
+  are unioned across the tool.
+- Reports with indexed or component-qualified rules, or URI-base tables,
+  retain their owning run metadata. Runs with identical metadata can
+  combine exact duplicates without changing rule-table positions or paths.
+
+Generated finding IDs use the resolved primary file URI. The same relative
+path under different URI bases remains distinct; equivalent direct and
+based references to one file share an identity. Tool-supplied fingerprints
+remain unchanged.
 
 ### Filtering
 
