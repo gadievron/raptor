@@ -694,16 +694,19 @@ def parse_observe_log(run_dir, *,
             append_failures = rec.get("append_failures")
             if type(append_failures) is int and append_failures > 0:
                 profile.capture_incomplete = True
-            dropped = rec.get("dropped_by_category") or {}
-            if isinstance(dropped, dict) and dropped:
-                # The writers emit nonnegative integer counts.
-                # Ignore corrupt values rather than converting NaN,
-                # infinity, booleans, or negatives into budget state.
+            dropped = rec.get("dropped_by_category", {})
+            if not isinstance(dropped, dict):
+                profile.capture_incomplete = True
+            elif dropped:
+                # The writers emit nonnegative integer counts. Malformed
+                # accounting is capture loss; retain valid counts without
+                # converting NaN, infinity, booleans, or negative values.
                 # A shared output log may contain multiple audit sessions.
                 # Each tail contributes drops; a later clean tail cannot
                 # make an earlier incomplete observation complete again.
                 for key, count in dropped.items():
                     if type(count) is not int or count < 0:
+                        profile.capture_incomplete = True
                         continue
                     category = str(key)
                     profile.dropped_by_category[category] = (
