@@ -11,6 +11,25 @@ import pytest
 _SCRIPT = Path(__file__).resolve().parents[1] / "check_env_docs.py"
 
 
+@pytest.mark.parametrize("source", [
+    'result = f"{os.getenv(\'RAPTOR_NESTED\')}"',
+    "result = [os.getenv('RAPTOR_NESTED') for item in items]",
+    "result = (lambda: os.environ.get('RAPTOR_NESTED'))()",
+    "def reader(value: os.getenv('RAPTOR_NESTED')): pass",
+    "class Reader(factory(os.getenv('RAPTOR_NESTED'))): pass",
+], ids=["fstring", "comprehension", "lambda", "annotation", "class-base"])
+def test_expression_accesses_survive_leaf_pruning(det, tmp_path, source):
+    root = _tree(tmp_path, {"core/reader.py": (
+        "import os\n" + source + "\n"
+        "text = \"os.getenv('RAPTOR_PHANTOM')\"\n"
+    )})
+    inventory = det.scan_tree(root)
+    assert [occ.to_dict() for occ in inventory.vars["RAPTOR_NESTED"]] == [
+        {"file": "core/reader.py", "line": 2, "kind": "read"},
+    ]
+    assert "RAPTOR_PHANTOM" not in inventory.vars
+
+
 @pytest.fixture(scope="module")
 def det():
     spec = importlib.util.spec_from_file_location("check_env_docs", _SCRIPT)
