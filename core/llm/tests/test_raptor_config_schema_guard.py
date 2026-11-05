@@ -48,12 +48,9 @@ def _raptor_logger_propagates():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_warn_latch():
-    saved = set(detection._schema_mismatch_warned)
-    detection._schema_mismatch_warned.clear()
-    yield
-    detection._schema_mismatch_warned.clear()
-    detection._schema_mismatch_warned.update(saved)
+def _fresh_warn_latch(monkeypatch):
+    """Use private caches and restore the caller's cache objects."""
+    monkeypatch.setattr(detection, "_schema_mismatch_warned", set())
 
 
 def test_looks_like_analysis_settings_shapes():

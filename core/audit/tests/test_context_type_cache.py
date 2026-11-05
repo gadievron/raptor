@@ -9,12 +9,10 @@ from core.audit import context
 
 
 @pytest.fixture(autouse=True)
-def clear_type_caches():
-    context._type_definition_cache.clear()
-    context._header_cache.clear()
-    yield
-    context._type_definition_cache.clear()
-    context._header_cache.clear()
+def clear_type_caches(monkeypatch):
+    """Use private caches and restore the caller's cache objects."""
+    monkeypatch.setattr(context, "_type_definition_cache", context.BoundedMemo(64))
+    monkeypatch.setattr(context, "_header_cache", context.BoundedMemo(16))
 
 
 @pytest.mark.parametrize("content,name", [

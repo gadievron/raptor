@@ -12,12 +12,10 @@ from core.audit.vocab_packs import is_kernel_tree, load_pack, pack_for_target
 
 
 @pytest.fixture(autouse=True)
-def _clear_caches():
-    vocab_packs._pack_cache.clear()
-    vocab_packs._kernel_tree_cache.clear()
-    yield
-    vocab_packs._pack_cache.clear()
-    vocab_packs._kernel_tree_cache.clear()
+def _clear_caches(monkeypatch):
+    """Use private caches and restore the caller's cache objects."""
+    monkeypatch.setattr(vocab_packs, "_pack_cache", {})
+    monkeypatch.setattr(vocab_packs, "_kernel_tree_cache", {})
 
 
 class TestKernelPack:
