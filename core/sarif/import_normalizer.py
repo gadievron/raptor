@@ -18,7 +18,7 @@ from urllib.parse import unquote
 
 from core.logging import get_logger
 from core.sarif import emit
-from core.sarif.parser import _coerce_line
+from core.sarif.parser import _coerce_line, _sanitize_step_properties
 from core.security.log_sanitisation import escape_nonprintable
 from core.source.lines import split_lines
 
@@ -723,17 +723,26 @@ def _step_to_threadflow_location(step: dict[str, Any]) -> dict[str, Any]:
     label = step.get("label")
     if isinstance(label, str) and label:
         location["message"] = {"text": label}
-    return {"location": location}
+    wrapper = {"location": location}
+    properties = _sanitize_step_properties(step.get("properties"))
+    if properties:
+        wrapper["properties"] = properties
+    return wrapper
 
 
 def _path_to_codeflow(path: dict[str, Any]) -> dict[str, Any] | None:
     """Convert one internal {source, sink, steps, ...} path dict to a
-    SARIF codeFlow object, or None when the path has fewer than the
-    two locations the parser requires to round-trip."""
-    ordered = [path.get("source"), *(path.get("steps") or []), path.get("sink")]
-    steps = [s for s in ordered if isinstance(s, dict)]
-    if len(steps) < 2:
+    SARIF codeFlow object, or None when endpoints or intermediate steps
+    are malformed. Never shorten a path or promote an intermediate step
+    into a missing source or sink."""
+    source, sink = path.get("source"), path.get("sink")
+    middle = path.get("steps")
+    if middle is None:
+        middle = []
+    if (not isinstance(source, dict) or not isinstance(sink, dict)
+            or not isinstance(middle, list) or any(not isinstance(step, dict) for step in middle)):
         return None
+    steps = [source, *middle, sink]
     return {
         "threadFlows": [
             {"locations": [_step_to_threadflow_location(s) for s in steps]}
@@ -764,7 +773,8 @@ def _dataflow_to_codeflows(dataflow_path: Any) -> list[dict[str, Any]]:
     primary = _path_to_codeflow(dataflow_path)
     if primary is not None:
         flows.append(primary)
-    for alt in dataflow_path.get("alternative_paths") or []:
+    alternatives = dataflow_path.get("alternative_paths")
+    for alt in alternatives if isinstance(alternatives, list) else []:
         if isinstance(alt, dict):
             cf = _path_to_codeflow(alt)
             if cf is not None:

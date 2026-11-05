@@ -1625,3 +1625,64 @@ class TestSnippetSourceGating:
             tmp_path,
         )
         assert "line2" in result.findings[0]["snippet"]
+
+
+def test_dataflow_round_trip_preserves_step_properties_on_primary_and_alternative_paths(tmp_path):
+    import copy
+    from core.sarif.parser import parse_sarif_findings
+
+    path = _internal_dataflow(alternatives=1)
+    for candidate in [path, *path['alternative_paths']]:
+        candidate['source']['properties'] = {'tier': 'resolved_static', 'kind': 'seed'}
+        candidate['steps'][0]['properties'] = {'tier': 'heuristic_dynamic', 'tags': ['assumed_propagation']}
+        candidate['sink']['properties'] = {'kind': 'sink', 'trusted': False}
+    before = copy.deepcopy(path)
+    finding = _make_finding(has_dataflow=True, dataflow_path=path)
+    report = tmp_path / 'properties.sarif'
+    report.write_text(json.dumps(findings_to_sarif([finding])))
+    assert parse_sarif_findings(report)[0]['dataflow_path'] == path
+    assert path == before
+
+
+@pytest.mark.parametrize('broken', ['source', 'sink', 'middle', 'steps-type'])
+def test_incomplete_dataflow_path_is_not_shortened_into_new_evidence(broken):
+    path = _internal_dataflow(alternatives=1)
+    if broken in ('source', 'sink'):
+        path[broken] = None
+    elif broken == 'middle':
+        path['steps'].append(None)
+    else:
+        path['steps'] = {'not': 'a list'}
+    finding = _make_finding(has_dataflow=True, dataflow_path=path)
+    report = findings_to_sarif([finding])
+    flows = report['runs'][0]['results'][0]['codeFlows']
+    assert len(flows) == 1, 'an incomplete primary path was emitted alongside the valid alternative'
+    from core.sarif.parser import extract_dataflow_path
+    actual = extract_dataflow_path(flows)
+    expected = path['alternative_paths'][0]
+    assert {key: value for key, value in actual.items() if key != 'alternative_paths'} == expected
+
+
+@pytest.mark.parametrize('alternatives', [1, 'malformed', {'not': 'a list'}],
+                         ids=['integer', 'string', 'object'])
+def test_malformed_alternative_collection_does_not_discard_the_primary_path(alternatives):
+    path = _internal_dataflow()
+    path['alternative_paths'] = alternatives
+    finding = _make_finding(has_dataflow=True, dataflow_path=path)
+    report = findings_to_sarif([finding])
+    assert len(report['runs'][0]['results'][0]['codeFlows']) == 1
+
+
+def test_dataflow_export_sanitizes_and_bounds_untrusted_step_properties():
+    from core.sarif.parser import _sanitize_step_properties
+
+    path = _internal_dataflow()
+    properties = {'tier': 'bad\x1btier', 'tags': ['x' * 2000], 'nested': {'drop': True},
+                  **{f'key-{number}': number for number in range(50)}}
+    path['source']['properties'] = properties
+    report = findings_to_sarif([_make_finding(has_dataflow=True, dataflow_path=path)])
+    wrapper = report['runs'][0]['results'][0]['codeFlows'][0]['threadFlows'][0]['locations'][0]
+    assert wrapper['properties'] == _sanitize_step_properties(properties)
+    assert '\x1b' not in wrapper['properties']['tier']
+    assert 'nested' not in wrapper['properties']
+    assert properties['tier'] == 'bad\x1btier'
