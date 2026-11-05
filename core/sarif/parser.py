@@ -12,7 +12,7 @@ import os
 import re
 import stat as stat_mod
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import unquote, urlsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
@@ -115,6 +115,7 @@ def _sanitize_step_properties(props: Any) -> dict[str, Any]:
 
 def _path_from_locations(
     locations: list[dict[str, Any]],
+    *, resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> dict[str, Any] | None:
     """Build a {source, sink, steps, total_steps} dict from one
     SARIF threadFlow's locations array. Returns None if there are
@@ -150,8 +151,11 @@ def _path_from_locations(
         snippet = escape_nonprintable(
             (region.get("snippet") or {}).get("text", "") or ""
         )
+        file_uri = resolve_uri(artifact) if resolve_uri is not None else artifact.get("uri", "")
+        if resolve_uri is not None and file_uri is None:
+            return None
         step_info = {
-            "file": artifact.get("uri", ""),
+            "file": file_uri,
             "line": _coerce_line(region.get("startLine")) or 0,
             "column": _coerce_line(region.get("startColumn")) or 0,
             "label": message,
@@ -169,7 +173,10 @@ def _path_from_locations(
     return path
 
 
-def extract_dataflow_path(code_flows: list[dict[str, Any]]) -> dict[str, Any] | None:
+def extract_dataflow_path(
+    code_flows: list[dict[str, Any]], *,
+    resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
+) -> dict[str, Any] | None:
     """
     Extract dataflow path information from SARIF codeFlows.
 
@@ -179,6 +186,10 @@ def extract_dataflow_path(code_flows: list[dict[str, Any]]) -> dict[str, Any] | 
     relevant thread). Picking only the first hid genuinely-different
     paths from the operator — the second sink for the same source, the
     second source feeding the same sink, etc.
+
+    An optional run-owned URI resolver applies to every hop. Returning
+    None rejects that path while leaving sibling thread flows available.
+    Without a resolver, explicit URI behavior is unchanged.
 
     Returns:
         Dict with `source`/`sink`/`steps`/`total_steps` for the first
@@ -194,11 +205,20 @@ def extract_dataflow_path(code_flows: list[dict[str, Any]]) -> dict[str, Any] | 
     all_paths: list[dict[str, Any]] = []
     for flow in code_flows:
         try:
-            for tflow in (flow.get("threadFlows") or []):
-                locations = tflow.get("locations") or []
-                p = _path_from_locations(locations)
-                if p is not None:
-                    all_paths.append(p)
+            thread_flows = flow.get("threadFlows") or []
+            if not isinstance(thread_flows, list):
+                raise TypeError("threadFlows must be an array")
+            malformed_thread_reported = False
+            for tflow in thread_flows:
+                try:
+                    locations = tflow.get("locations") or []
+                    p = _path_from_locations(locations, resolve_uri=resolve_uri)
+                    if p is not None:
+                        all_paths.append(p)
+                except Exception as e:  # noqa: BLE001
+                    if not malformed_thread_reported:
+                        logger.warning("SARIF parser: skipping malformed threadFlow(s): %s", e)
+                        malformed_thread_reported = True
         except Exception as e:  # noqa: BLE001
             logger.warning("SARIF parser: skipping malformed codeFlow: %s", e)
             continue
@@ -1164,6 +1184,20 @@ def parse_sarif_findings(
                 artifact_uris[index] = uri
             return uri
 
+        flow_root_warning_reported = False
+
+        def _resolve_flow_uri(artifact: dict[str, Any]) -> str | None:
+            nonlocal flow_root_warning_reported
+            uri = _resolve_uri(artifact)
+            if uri and source_root is not None and _uri_escapes_root(uri, source_root):
+                if not flow_root_warning_reported:
+                    logger.warning("SARIF parser: skipping dataflow paths with out-of-root URIs; first: %s",
+                                   escape_nonprintable(uri)[:1024])
+                    flow_root_warning_reported = True
+                return None
+            # Preserve the existing blank-file shape for unavailable locations.
+            return uri or ""
+
         for result in results:
             if not isinstance(result, dict):
                 logger.warning(
@@ -1263,7 +1297,7 @@ def parse_sarif_findings(
                 compiler_evidence = bounded
                 dataflow_path = None  # Control-flow assumptions are not taint source/sink evidence.
             else:
-                dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
+                dataflow_path = extract_dataflow_path(code_flows, resolve_uri=_resolve_flow_uri) if code_flows else None
 
             rule_cwe: str | None = None
             default_level: str | None = None

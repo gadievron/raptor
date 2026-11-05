@@ -10,6 +10,8 @@ shape.
 
 from __future__ import annotations
 
+import pytest
+
 from core.sarif.parser import (
     _STEP_PROPS_MAX_KEYS,
     _STEP_PROPS_MAX_LIST,
@@ -135,3 +137,117 @@ class TestBounds:
         props = _sanitize_step_properties(
             {"tags": ["y" * (_STEP_PROPS_MAX_STRING * 2)]})
         assert len(props["tags"][0]) == _STEP_PROPS_MAX_STRING
+
+
+def test_malformed_thread_does_not_hide_valid_sibling_paths():
+    first = {'locations': [_loc('source-a.c', 1), _loc('sink-a.c', 2)]}
+    last = {'locations': [_loc('source-b.c', 3), _loc('sink-b.c', 4)]}
+    malformed = {'locations': [None, None]}
+    path = extract_dataflow_path([{'threadFlows': [first, malformed, last]}])
+    assert path['source']['file'] == 'source-a.c'
+    assert path['alternative_paths'][0]['source']['file'] == 'source-b.c'
+
+
+def test_dataflow_hops_use_their_owning_run_artifacts_and_uri_bases(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    runs = []
+    for root in ['first/', 'second/']:
+        source = _loc('unused', 1, {'kind': 'seed'})
+        source['location']['physicalLocation']['artifactLocation'] = {'index': 0}
+        middle = _loc('middle.c', 2)
+        middle['location']['physicalLocation']['artifactLocation']['uriBaseId'] = 'ROOT'
+        sink = _loc('unused', 3, {'kind': 'sink'})
+        sink['location']['physicalLocation']['artifactLocation'] = {'index': 1}
+        runs.append({
+            'tool': {'driver': {'name': 'CodeQL'}},
+            'originalUriBaseIds': {'ROOT': {'uri': root}},
+            'artifacts': [{'location': {'uri': name, 'uriBaseId': 'ROOT'}} for name in ['source.c', 'sink.c']],
+            'results': [{'ruleId': 'flow', 'message': {'text': root},
+                         'locations': [{'physicalLocation': {'artifactLocation': {'index': 1}}}],
+                         'codeFlows': _flows(source, middle, sink)}],
+        })
+    report = tmp_path / 'flows.sarif'
+    report.write_text(json.dumps({'runs': runs}))
+    findings = parse_sarif_findings(report)
+    for finding, root in zip(findings, ['first/', 'second/'], strict=True):
+        path = finding['dataflow_path']
+        assert finding['file'] == root + 'sink.c'
+        assert path['source']['file'] == root + 'source.c'
+        assert path['steps'][0]['file'] == root + 'middle.c'
+        assert path['sink']['file'] == finding['file']
+        assert path['source']['properties'] == {'kind': 'seed'}
+        assert path['sink']['properties'] == {'kind': 'sink'}
+
+
+@pytest.mark.parametrize('external_artifact', [
+    {'uri': '../outside.c'}, {'uri': '%2e%2e/outside.c'}, {'index': 0},
+    {'uri': 'outside.c', 'uriBaseId': 'OUT'}, {'uri': 'https://example.invalid/outside.c'},
+], ids=['relative', 'encoded', 'indexed', 'based', 'remote'])
+def test_source_root_rejects_external_flow_without_hiding_an_in_root_alternative(tmp_path, external_artifact, caplog):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    root = tmp_path / 'source'
+    root.mkdir()
+    bad = {'locations': [_loc('../outside.c', 1), _loc('sink.c', 2)]}
+    bad['locations'][0]['location']['physicalLocation']['artifactLocation'] = external_artifact
+    good = {'locations': [_loc('source.c', 1), _loc('sink.c', 2)]}
+    report = tmp_path / 'contained.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'tool': {'driver': {'name': 'CodeQL'}},
+        'originalUriBaseIds': {'OUT': {'uri': '../'}},
+        'artifacts': [{'location': {'uri': '../outside.c'}}],
+        'results': [{'ruleId': 'flow', 'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'sink.c'}}}],
+                     'codeFlows': [{'threadFlows': [bad, bad, good]}]}],
+    }]}))
+    finding = parse_sarif_findings(report, source_root=root)[0]
+    assert finding['has_dataflow']
+    assert finding['dataflow_path']['source']['file'] == 'source.c'
+    assert finding['dataflow_path']['alternative_paths'] == []
+    assert len([record for record in caplog.records if 'out-of-root URIs' in record.message]) == 1
+
+
+def test_dataflow_rejected_paths_do_not_drop_the_finding(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    report = tmp_path / 'rejected-flow.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'results': [{'ruleId': 'flow',
+                     'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'inside.c'}}}],
+                     'codeFlows': _flows(_loc('../outside.c', 1), _loc('inside.c', 2))}],
+    }]}))
+    finding = parse_sarif_findings(report, source_root=tmp_path)[0]
+    assert finding['file'] == 'inside.c'
+    assert finding['has_dataflow'] is False
+    assert finding['dataflow_path'] is None
+
+
+def test_dataflow_invalid_artifact_index_remains_unlocated_without_borrowing_a_file(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    source = _loc('unused', 1)
+    source['location']['physicalLocation']['artifactLocation'] = {'index': True}
+    sink = _loc('explicit.c', 2)
+    sink['location']['physicalLocation']['artifactLocation']['index'] = 99
+    report = tmp_path / 'invalid-index.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'artifacts': [{'location': {'uri': 'not-the-source.c'}}],
+        'results': [{'ruleId': 'flow', 'codeFlows': _flows(source, sink)}],
+    }]}))
+    path = parse_sarif_findings(report)[0]['dataflow_path']
+    assert path['source']['file'] == ''
+    assert path['sink']['file'] == 'explicit.c'
+
+
+@pytest.mark.parametrize('malformed_threads', ['x' * 1000, [None] * 1000],
+                         ids=['non-array', 'many-invalid-entries'])
+def test_malformed_thread_warnings_are_bounded_per_flow(caplog, malformed_threads):
+    valid = {'threadFlows': [{'locations': [_loc('source.c', 1), _loc('sink.c', 2)]}]}
+    path = extract_dataflow_path([{'threadFlows': malformed_threads}, valid])
+    assert path['source']['file'] == 'source.c'
+    warnings = [record for record in caplog.records if 'skipping malformed' in record.message]
+    assert len(warnings) == 1
