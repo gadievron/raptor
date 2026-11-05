@@ -3,7 +3,7 @@
 from dataclasses import asdict, dataclass
 
 from .refutation_source import SourceIdentity
-from .smt_evidence import is_predicate_only_smt_rule
+from .smt_evidence import is_diagnostic_smt_rule
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class ClaimRefutation:
             file, function, line_start or 0, hypothesis,
         ) and bool(self.checks) and all(
             isinstance(check, ProbeOutcome) and check.verdict == "refuted" and check.rule_id
-            and not (check.tool == "smt" and is_predicate_only_smt_rule(check.rule_id))
+            and not (check.tool == "smt" and is_diagnostic_smt_rule(check.rule_id))
             for check in self.checks
         )
 
@@ -80,7 +80,7 @@ class ToolChainResult(list[str]):
             return ()  # conflicting observations need adjudication
         return tuple(outcome for outcome in self.outcomes
                      if outcome.verdict == "refuted" and outcome.rule_id
-                     and not (outcome.tool == "smt" and is_predicate_only_smt_rule(outcome.rule_id)))
+                     and not (outcome.tool == "smt" and is_diagnostic_smt_rule(outcome.rule_id)))
 
     def refutation_record(self, *, file, function, line_start, hypothesis) -> dict | None:
         receipt = self.refutation(file=file, function=function, line_start=line_start, hypothesis=hypothesis)

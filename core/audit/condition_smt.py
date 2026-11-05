@@ -2092,7 +2092,7 @@ _LABEL_RE = re.compile(r"^(\w+)\s*:", re.MULTILINE)
 
 @dataclass
 class LockDisciplineResult:
-    """Result of checking lock acquire/release discipline."""
+    """Lexical lock-discipline observation, not a source-level proof."""
 
     #: False when the detector's prerequisites were absent (no auth
     #: checks / lock acquires / allocations / ... in the source) — the
@@ -2132,7 +2132,10 @@ def check_lock_discipline(
 
     Scans for lock/unlock pairs and checks whether any return
     statement falls between an acquire and its matching release.
-    Handles goto-based error paths by resolving labels.
+    Handles goto-based error paths by resolving labels. This is a lexical
+    lead: neither line order nor a satisfiable nearest guard establishes
+    lock ownership or complete control-flow coverage. Negative observations
+    likewise cannot refute a source-level defect claim.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
