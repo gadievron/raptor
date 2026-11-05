@@ -328,8 +328,8 @@ def _load_or_create_key() -> bytes | None:
     unreadable) or when recovery is not possible."""
     path = _key_path()
     # Two passes with AT MOST ONE quarantine per call: the second pass
-    # serves the retry after a quarantine (whether the tamper was seen
-    # on the direct read or through the creation-race re-read); a key
+    # retries after an absent creation-race winner or a quarantine
+    # (whether tamper was seen directly or during race read-back); a key
     # that is tampered AGAIN after this call's quarantine refuses —
     # the marker and warning already fired, no quarantine treadmill.
     _quarantined = False
@@ -390,6 +390,17 @@ def _load_or_create_key() -> bytes | None:
             if isinstance(raced, _TamperedKey) or (
                     isinstance(raced, bytes) and len(raced) > _KEY_LEN):
                 continue  # outer pass quarantines + re-keys
+            if raced is None:
+                # A failed creator can remove its incomplete key while we
+                # wait. Restart only for actual absence: None also represents
+                # host read errors, whose existing retry budget is exhausted.
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue  # bounded outer pass retries exclusive creation
+                except OSError:
+                    pass
+                return None
             if raced is not None:
                 _warn_once_suspect_key(
                     path,
