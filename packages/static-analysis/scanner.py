@@ -2151,6 +2151,8 @@ def run_expanded_semgrep_stage(
                     logger.debug("expanded-semgrep: pack %s errors: %s", name, state.errors[:3])
                 failed_packs += 1
                 continue
+            if execution.status == "partial":
+                logger.warning("expanded-semgrep: pack %s coverage is partial: %s", name, execution.reason)
             translated, dropped = state.matches, state.dropped
             total_dropped += dropped
             for f in translated:

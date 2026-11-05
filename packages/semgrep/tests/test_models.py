@@ -645,3 +645,32 @@ def test_incompatible_rule_info_is_preserved_without_failing_compatible_rules():
     result = SemgrepResult(skipped_rules=parsed["skipped_rules"])
     assert result.ok
     assert result.to_dict()["skipped_rules"] == parsed["skipped_rules"]
+
+
+@pytest.mark.parametrize("text", ["invalid", " ", "[]", "null"])
+def test_malformed_metadata_is_not_a_successful_empty_scan(text):
+    parsed = parse_json_output(text)
+    assert parsed["errors"]
+    assert parsed["files_examined"] == []
+
+
+@pytest.mark.parametrize("metadata", [
+    {"paths": []}, {"paths": "a.py"},
+    {"paths": {"scanned": "a.py"}},
+    {"paths": {"scanned": [True, {"path": "a.py"}]}},
+    {"errors": "failure"}, {"errors": [None]},
+])
+def test_malformed_metadata_fields_are_reported_without_crashing(metadata):
+    parsed = parse_json_output(json.dumps(metadata))
+    assert parsed["errors"]
+    assert parsed["files_examined"] == []
+
+
+def test_metadata_damage_preserves_valid_paths_and_tool_errors():
+    parsed = parse_json_output(json.dumps({
+        "paths": {"scanned": ["a.py", None]},
+        "errors": [None, {"message": "tool failed", "level": "error"}],
+    }))
+    assert parsed["files_examined"] == ["a.py"]
+    assert "error: tool failed" in parsed["errors"]
+    assert len(parsed["errors"]) == 3

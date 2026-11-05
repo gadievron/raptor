@@ -268,6 +268,8 @@ def run_expanded_semgrep_rule(
         return ExpandedRuleResult(
             ok=False, file_path=file_path, rule_config=rule_config, reason=reason,
         )
+    if execution.status == "partial":
+        logger.warning("expanded_semgrep coverage is partial for %s: %s", file_path, execution.reason)
     return ExpandedRuleResult(
         ok=True, file_path=file_path, rule_config=rule_config,
         matches=state.matches, dropped_out_of_file=state.dropped,

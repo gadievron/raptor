@@ -337,11 +337,11 @@ def build_enriched_sarif(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = []
     for tool_key, results in runs_by_tool.items():
+        skipped = skipped_by_tool.get(tool_key)
         invocation: dict[str, Any] = {
-            "executionSuccessful": True,
+            "executionSuccessful": not bool(skipped),
             "endTimeUtc": now,
         }
-        skipped = skipped_by_tool.get(tool_key)
         if skipped:
             invocation["toolExecutionNotifications"] = skipped
         runs.append({

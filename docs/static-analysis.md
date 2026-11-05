@@ -356,6 +356,10 @@ A Semgrep parser error can leave a file only partially analysed. Findings
 recovered from that file remain useful, but an empty result does not establish
 that the file is clean. Check the reported exclusions and analysis errors when
 assessing scan coverage, especially for C code with compiler extensions.
+Expanded-source scans warn when files or rules were skipped while retaining
+usable findings. An enriched SARIF export that drops malformed finding rows
+marks its invocation unsuccessful and includes error notifications; surviving
+findings remain in the report.
 
 Semgrep is invoked with `--disable-nosem` so that all findings reach
 SARIF regardless of inline comments. After scanning, RAPTOR's own
