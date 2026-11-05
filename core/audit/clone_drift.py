@@ -47,7 +47,9 @@ from __future__ import annotations
 import logging
 import re
 import zlib
+from collections import defaultdict, deque
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -164,15 +166,19 @@ def _fingerprints(tokens: list[str]) -> frozenset[int]:
     Aiken, SIGMOD 2003)."""
     if len(tokens) < K_GRAM:
         return frozenset()
-    hashes = [
+    hash_count = len(tokens) - K_GRAM + 1
+    hashes = (
         zlib.crc32("\x00".join(tokens[i:i + K_GRAM]).encode())
-        for i in range(len(tokens) - K_GRAM + 1)
-    ]
-    if len(hashes) <= WINNOW_WINDOW:
+        for i in range(hash_count)
+    )
+    if hash_count <= WINNOW_WINDOW:
         return frozenset(hashes)
-    picked: set[int] = set()
-    for i in range(len(hashes) - WINNOW_WINDOW + 1):
-        picked.add(min(hashes[i:i + WINNOW_WINDOW]))
+    # Retain only the current window rather than every shingle hash.
+    window = deque(islice(hashes, WINNOW_WINDOW), maxlen=WINNOW_WINDOW)
+    picked: set[int] = {min(window)}
+    for value in hashes:
+        window.append(value)
+        picked.add(min(window))
     return frozenset(picked)
 
 
@@ -434,10 +440,10 @@ def detect_clone_drift(
         max_pairs = _derive_pair_cap(len(bodies))
 
     # Inverted fingerprint index → candidate pairs.
-    by_print: dict[int, list[int]] = {}
+    by_print: dict[int, list[int]] = defaultdict(list)
     for idx, body in enumerate(bodies):
         for fp in body.prints:
-            by_print.setdefault(fp, []).append(idx)
+            by_print[fp].append(idx)
     shared: dict[tuple[int, int], int] = {}
     for indices in by_print.values():
         if len(indices) < 2 or len(indices) > 20:
@@ -455,7 +461,7 @@ def detect_clone_drift(
             # ever going to be examined — count exactly those, so a
             # tail of sub-floor candidates does not fake a bite.
             dropped = sum(
-                1 for _, c in candidates[pos:]
+                1 for _, c in islice(candidates, pos, None)
                 if c >= MIN_SHARED_FINGERPRINTS
             )
             if dropped:
