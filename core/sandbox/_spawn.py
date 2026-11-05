@@ -891,8 +891,10 @@ def _kill_and_reap(pid: int) -> None:
     # happens to lead.
     try:
         pgid = os.getpgid(pid)
-    except ProcessLookupError:
+    except OSError as exc:
         pgid = None
+        if exc.errno != errno.ESRCH:
+            logger.warning("sandbox: child %d group lookup failed: %s", pid, exc)
     needs_pid_signal = True
     if pidfd_open is not None and pidfd_send_signal is not None:
         pidfd = -1
@@ -934,7 +936,13 @@ def _kill_and_reap(pid: int) -> None:
     # itself provoked. Never signal our own group; the direct
     # pid/pidfd kill above already handled the leader, which is all
     # that exists in that shape.
-    if pgid is not None and pgid != os.getpgrp():
+    own_pgid = None
+    if pgid is not None:
+        try:
+            own_pgid = os.getpgrp()
+        except OSError as exc:
+            logger.warning("sandbox: own group lookup failed; skipping group signal: %s", exc)
+    if pgid is not None and own_pgid is not None and pgid != own_pgid:
         try:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
@@ -996,8 +1004,13 @@ def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
             try:
                 status = os.waitid(os.P_PID, child_pid,
                                    os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except InterruptedError:
+                continue
             except (ChildProcessError, ProcessLookupError):
                 return
+            except OSError as exc:
+                logger.warning("sandbox: graceful child wait failed; forcing cleanup: %s", exc)
+                break
             if status is not None:
                 break
             time.sleep(0.01)
@@ -1022,8 +1035,13 @@ def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
     while time.monotonic() < deadline:
         try:
             pid, _ = os.waitpid(tracer_pid, os.WNOHANG)
+        except InterruptedError:
+            continue
         except ChildProcessError:
             return  # already reaped by someone else
+        except OSError as exc:
+            logger.warning("sandbox: tracer wait failed; forcing cleanup: %s", exc)
+            break
         if pid != 0:
             return
         time.sleep(0.02)
