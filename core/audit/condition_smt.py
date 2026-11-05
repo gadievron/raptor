@@ -3238,14 +3238,7 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
     source = sanitized_view(source, language="c")
     lines = source.split("\n")
     guards = NarrowingGuardContext(source)
-    params = _extract_param_types(source)
-    decls = _extract_local_decls(lines)
-
-    all_vars: dict[str, tuple[str, int]] = {}
-    for name, type_str in {**params, **decls}.items():
-        width = _type_to_width(type_str)
-        if width:
-            all_vars[name] = (type_str, width)
+    fallback_types = None
 
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -3260,7 +3253,17 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
                 continue
 
             rhs = initializer_text(line[m.end():])
-            for src_var, (src_type, src_width) in all_vars.items():
+            bindings = guards.visible_types(i, m.end())
+            if bindings is None:
+                # Preserve diagnostic leads when syntax is unavailable; this
+                # fallback never earns guard credit or verification authority.
+                if fallback_types is None:
+                    fallback_types = {**_extract_param_types(source), **_extract_local_decls(lines)}
+                bindings = fallback_types
+            for src_var, src_type in bindings.items():
+                src_width = _type_to_width(src_type) if src_type else None
+                if not src_width:
+                    continue
                 if src_var == dest_var:
                     continue
                 if src_width <= dest_width:

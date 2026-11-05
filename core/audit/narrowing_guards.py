@@ -305,6 +305,14 @@ class NarrowingGuardContext:
             target = target.parent
         return target
 
+    def visible_types(self, line, column):
+        target = self._initializer_at(line, column)
+        if target is None:
+            return None
+        from .narrowing_bindings import visible_types
+
+        return visible_types(target, self.data)
+
     def may_use_value(self, variable, line, column):
         target = self._initializer_at(line, column)
         if target is None:
