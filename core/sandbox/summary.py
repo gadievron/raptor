@@ -970,13 +970,17 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
     expected = (
         dumps_artifact(entry["payload"], ensure_ascii=True) + "\n"
     ).encode("utf-8")
+    # Classify this probe using its starting publication state: a pending
+    # writer may finish after we read absence but before we inspect state.
+    with _lock:
+        persisted_before_read = entry.get("persisted", True)
     current = _read_marker_bytes(Path(run_dir) / AUDIT_DEGRADED_FILE)
     if current == expected:
         entry["persisted"] = True
         return bool(entry.get("restored"))
-    if not entry.get("persisted", True):
-        # The initial write failed: retry without accusing the target of
-        # deleting a marker that never reached disk.
+    if not persisted_before_read:
+        # Publication was pending when the probe began. Retry without
+        # treating an earlier absence as deletion of a persisted marker.
         try:
             write_text_atomically(
                 Path(run_dir) / AUDIT_DEGRADED_FILE,
