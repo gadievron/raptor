@@ -483,7 +483,12 @@ _SCOPE_PUBLISH_VERBS: dict[str, str] = {
     # from the stamped tag). `actions: read` jobs (run queries) never
     # enter the universe; a write grant is blessed only on the
     # dispatch step itself.
-    "actions": r"gh workflow run",
+    # Reviewed publisher: validate live GitHub metadata and allocation evidence,
+    # then requeue one unassigned job. Inspection without --apply stays denied.
+    "actions": (
+        r"gh workflow run|"
+        r"^\s*python3 \.github/scripts/retry_macos_allocation\.py --apply\s*$"
+    ),
 }
 
 
@@ -1343,3 +1348,27 @@ def test_image_docs_publish_wrapper_is_exact_and_scope_bound(tmp_path):
         offenders, checked = _default_token_offenders(directory)
         assert checked == 1
         assert bool(offenders) is rejected, (command, permission, offenders)
+
+
+def test_allocation_recovery_token_grant_requires_exact_publish_command(tmp_path) -> None:
+    template = """permissions: {}
+jobs:
+  recover:
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMAND
+"""
+    for command, accepted in (
+        ("python3 .github/scripts/retry_macos_allocation.py --apply", True),
+        ("python3 .github/scripts/retry_macos_allocation.py", False),
+        ("python3 .github/scripts/retry_macos_allocation.py --apply --other", False),
+        ("python3 .github/scripts/other.py --apply", False),
+    ):
+        (tmp_path / "recovery.yml").write_text(template.replace("COMMAND", command))
+        offenders, checked = _default_token_offenders(tmp_path)
+        assert checked == 1
+        assert (not offenders) is accepted, command
