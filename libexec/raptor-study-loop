@@ -45,7 +45,6 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.config import RaptorConfig  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
 from core.concepts.study_failure import (  # noqa: E402
     clear_study_failure,
@@ -81,6 +80,8 @@ _MAX_STUDY_ARTIFACT_BYTES = 64 * 1024 * 1024
 # ------------------------------------------------------------------
 
 def _run(cmd: list[str], *, verbose: bool = False) -> int:
+    from core.config import RaptorConfig
+
     # Curated env, not a full os.environ copy: the children (study-prep
     # / study-run / compile-invariants) are RAPTOR's own LLM-calling
     # scripts, so they get the sanitised baseline plus LLM keys and

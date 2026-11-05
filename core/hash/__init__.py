@@ -20,10 +20,43 @@ import hashlib
 from pathlib import Path
 from typing import BinaryIO
 
-from core.config import RaptorConfig
-from core.logging import get_logger
+# Preserve the historical import surface without initializing configuration
+# or configuring the application logger for pure in-memory hashes.
+__all__ = [
+    "BinaryIO", "Path", "RaptorConfig", "get_logger", "hashlib", "logger",
+    "sha256_bytes", "sha256_file", "sha256_fileobj", "sha256_string", "sha256_tree",
+]
+_LAZY_EXPORTS = {
+    "RaptorConfig": ("core.config", "RaptorConfig"),
+    "get_logger": ("core.logging", "get_logger"),
+    "logger": ("core.hash._logging", "logger"),
+}
+for _cached_export in _LAZY_EXPORTS:
+    globals().pop(_cached_export, None)
+del _cached_export
 
-logger = get_logger()
+
+def __getattr__(name: str):
+    spec = _LAZY_EXPORTS.get(name)
+    if spec is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    module_name, attribute = spec
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
+def _export(name: str):
+    if name in globals():
+        return globals()[name]
+    return __getattr__(name)
+
 
 _FS_ENCODING = "utf-8"
 _FS_ERRORS = "surrogateescape"
@@ -60,10 +93,11 @@ def sha256_tree(
     Returns:
         SHA256 hex digest of the directory tree.
     """
+    config = _export("RaptorConfig")
     if max_file_size is None:
-        max_file_size = RaptorConfig.MAX_FILE_SIZE_FOR_HASH
+        max_file_size = config.MAX_FILE_SIZE_FOR_HASH
     if chunk_size is None:
-        chunk_size = RaptorConfig.HASH_CHUNK_SIZE
+        chunk_size = config.HASH_CHUNK_SIZE
     # Pre-fix `chunk_size=1` (or any tiny value) was accepted
     # verbatim — a buggy caller passing 1 would byte-by-byte
     # read every file, turning a sub-second tree-hash into a
@@ -154,7 +188,7 @@ def sha256_tree(
     # max_file_size was defaulted from config above, so it is never
     # None here — the fallback is simply 100x the per-file cap.
     cumulative_cap = getattr(
-        RaptorConfig, "MAX_TREE_HASH_BYTES", 100 * max_file_size,
+        config, "MAX_TREE_HASH_BYTES", 100 * max_file_size,
     )
     cumulative_bytes = 0
     truncated_at: str | None = None
@@ -258,7 +292,7 @@ def sha256_tree(
                 except OSError:
                     pass
     if skipped:
-        logger.debug("Skipped %s large files during hashing", len(skipped))
+        _export("logger").debug("Skipped %s large files during hashing", len(skipped))
     if truncated_at is not None:
         # Domain-separate truncated digests: mix a marker plus the
         # relpath of the file that tripped the cap. NUL bytes cannot
@@ -269,7 +303,7 @@ def sha256_tree(
         h.update(b"\x00[sha256_tree:truncated:")
         h.update(truncated_at.encode(_FS_ENCODING, errors=_FS_ERRORS))
         h.update(b"]\x00")
-        logger.warning(
+        _export("logger").warning(
             "sha256_tree: hit cumulative byte cap (%s bytes) on %s at %s; hash reflects partial tree only (truncation marker mixed in)", cumulative_cap, root, truncated_at
         )
     return h.hexdigest()
@@ -306,7 +340,7 @@ def sha256_fileobj(f: BinaryIO, chunk_size: int | None = None) -> str:
     first to re-hash a stream already read once.
     """
     if chunk_size is None:
-        chunk_size = RaptorConfig.HASH_CHUNK_SIZE
+        chunk_size = _export("RaptorConfig").HASH_CHUNK_SIZE
     chunk_size = _chunk_floor(chunk_size)
     h = hashlib.sha256()
     for chunk in iter(lambda: f.read(chunk_size), b""):
