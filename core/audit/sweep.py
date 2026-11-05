@@ -2846,6 +2846,18 @@ def _run_smt_verb_on_source(
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
+            from .arithmetic_operation import bind_arithmetic_operation
+            from .condition_extraction import language_for_file
+            op = _extract_arith_operator(hypothesis)
+            operation = bind_arithmetic_operation(
+                source, operands, op, language=language_for_file(file_path),
+            )
+            if operation.status != "bound":
+                return SweepResult(
+                    tool="smt", file_path=file_path, function_name=function_name,
+                    outcome="inconclusive", rule_id=f"smt:{verb}",
+                    details={"arithmetic_operation_status": operation.status},
+                )
             # Vacuity policy: SAT on unconstrained bitvectors is
             # near-certain and meaningless.  Extract comparison lines
             # mentioning the operands and add them as Z3 PREMISES —
@@ -2860,7 +2872,6 @@ def _run_smt_verb_on_source(
                     rule_id=f"smt:{verb}",
                     details={"summary": gate},
                 )
-            op = _extract_arith_operator(hypothesis)
             result = check_overflow(
                 operands, op, profile="uint32", guards=premises,
             )
@@ -3115,6 +3126,10 @@ def _run_smt_verb_on_source(
             outcome = "inconclusive"
 
         outcome, scope_details = _scope_smt_observation(verb, outcome, result)
+        if verb == "check-overflow":
+            scope_details["source_operation"] = {
+                "line": operation.line, "column": operation.column,
+            }
         return SweepResult(
             tool="smt", file_path=file_path,
             function_name=function_name, outcome=outcome,
