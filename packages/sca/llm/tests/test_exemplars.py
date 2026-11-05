@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import functools
+import pytest
+
 from packages.sca.llm.exemplars import (
     exfil_destinations_block,
     exemplar_blocks_for_supply_chain,
     popular_names_block,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_exemplar_caches(monkeypatch):
+    """Do not clear or populate exemplar blocks borrowed from the caller."""
+    from packages.sca.llm import exemplars
+
+    for name in ("popular_names_block", "exfil_destinations_block"):
+        original = getattr(exemplars, name)
+        private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+        monkeypatch.setattr(exemplars, name, private)
+        monkeypatch.setitem(globals(), name, private)
 
 
 def test_popular_names_block_npm():

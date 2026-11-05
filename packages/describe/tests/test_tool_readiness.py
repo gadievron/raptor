@@ -3,6 +3,9 @@ readiness checks tailored to a target."""
 
 from __future__ import annotations
 
+import functools
+import pytest
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +17,16 @@ from packages.describe.tool_readiness import (
     _check_coccinelle,
     check_tool_readiness,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_package_manager_cache(monkeypatch):
+    """Keep detection results and cache statistics owned by this test."""
+    from packages.describe import package_manager
+
+    original = package_manager.detect_package_manager
+    private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+    monkeypatch.setattr(package_manager, "detect_package_manager", private)
 
 
 def _shape(**overrides) -> TargetShape:
