@@ -446,6 +446,7 @@ class TestDarkVerificationGate:
             result, config,
             llm_client=lambda p, s: calls.append(p) or "{}",
             max_workers=workers,
+            include_diagnostics=True,
         )
         assert calls == []
         assert all(o.status == "dark" for o in result.outcomes)
@@ -465,6 +466,7 @@ class TestDarkVerificationGate:
             result, config,
             llm_client=lambda p, s: calls.append(p) or "{}",
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
         # Exactly two witness prompts dispatched before the guard
         # concluded; the rest never started — and the stop is booked.
@@ -481,6 +483,7 @@ class TestDarkVerificationGate:
             result, config,
             llm_client=lambda p, s: calls.append(p) or "{}",
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
         assert len(calls) == 3  # every eligible outcome probed
         assert guard.ticks == 3  # one gate per witness dispatch
@@ -494,6 +497,7 @@ class TestDarkVerificationGate:
             result, config,
             llm_client=lambda p, s: calls.append(p) or "{}",
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
         assert len(calls) == 2  # every eligible outcome still probed
 

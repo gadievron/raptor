@@ -241,6 +241,7 @@ class TestProducersStampTheBasis:
                 "module_path": "math_util", "function": "add",
                 "args": [1, 2], "expected_exception": "OverflowError",
                 "rationale": "overflow"}),
+                include_diagnostics=True,
         )
         assert result.outcomes[0].status == "dark"
         assert _basis(result.outcomes[0]) is None

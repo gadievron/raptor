@@ -385,7 +385,7 @@ class TestDarkEligibility:
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,
         )
-        _run_dark_verification(result, config, llm_client=fake_llm)
+        _run_dark_verification(result, config, llm_client=fake_llm, include_diagnostics=True)
         assert witnessed, (
             "adversarial_needs_evidence outcomes must be dark-eligible"
         )

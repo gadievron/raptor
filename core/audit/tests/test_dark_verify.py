@@ -3084,7 +3084,7 @@ class TestRunDarkVerification:
         config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
         outcome = self._make_outcome("a.py", "check")
         result = self._make_result([outcome])
-        _run_dark_verification(result, config, llm_client=None)
+        _run_dark_verification(result, config, llm_client=None, include_diagnostics=True)
         assert result.outcomes[0].status == "dark"
 
     def test_no_dark_outcomes_is_noop(self, tmp_path):
@@ -3095,7 +3095,7 @@ class TestRunDarkVerification:
         config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
         outcome = self._make_outcome("a.py", "check", status="clean")
         result = self._make_result([outcome])
-        _run_dark_verification(result, config, llm_client=lambda s, u: "{}")
+        _run_dark_verification(result, config, llm_client=lambda s, u: "{}", include_diagnostics=True)
         assert result.outcomes[0].status == "clean"
 
     def test_matched_exception_does_not_establish_a_defect(self, tmp_path):
@@ -3123,7 +3123,7 @@ class TestRunDarkVerification:
             "rationale": "dividing by zero",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].status == "dark"
         assert result.outcomes[0].evidence_tool == ""
         assert result.findings == 0
@@ -3154,7 +3154,7 @@ class TestRunDarkVerification:
             "rationale": "overflow on large inputs",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].status == "dark"
         assert result.clean == 0
         assert result.dormant == 1
@@ -3187,7 +3187,7 @@ class TestRunDarkVerification:
             "rationale": "overflow on large inputs",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].status == "finding"
         assert "smt:check-overflow" in result.outcomes[0].evidence_tool
         assert "dark_verify:refuted" not in result.outcomes[0].evidence_tool
@@ -3223,7 +3223,7 @@ class TestRunDarkVerification:
             "rationale": "overflow on large inputs",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].status == "finding"
         assert result.outcomes[0].evidence_tool == "llm-claimed:smt"
         assert result.findings == 1
@@ -3252,7 +3252,7 @@ class TestRunDarkVerification:
             calls.append(1)
             return "{}"
 
-        _run_dark_verification(result, config, llm_client=_llm)
+        _run_dark_verification(result, config, llm_client=_llm, include_diagnostics=True)
         assert calls == []
         assert result.outcomes[0].status == "clean"
 
@@ -3264,7 +3264,7 @@ class TestRunDarkVerification:
         config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
         outcome = self._make_outcome("README.md", "check")
         result = self._make_result([outcome])
-        _run_dark_verification(result, config, llm_client=lambda s, u: "{}")
+        _run_dark_verification(result, config, llm_client=lambda s, u: "{}", include_diagnostics=True)
         assert result.outcomes[0].status == "dark"
 
     def test_unparseable_llm_response_stays_dark(self, tmp_path):
@@ -3279,6 +3279,7 @@ class TestRunDarkVerification:
         result = self._make_result([outcome])
         _run_dark_verification(
             result, config, llm_client=lambda s, u: "not json at all",
+            include_diagnostics=True,
         )
         assert result.outcomes[0].status == "dark"
 
@@ -3303,7 +3304,7 @@ class TestRunDarkVerification:
             "expected_exception": "ZeroDivisionError",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
 
         results_path = tmp_path / "dark-verify-results.json"
         assert results_path.exists()
@@ -3341,7 +3342,7 @@ class TestRunDarkVerification:
             "rationale": "password not checked",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].status == "suspicious"
         assert result.outcomes[0].evidence_tool == ""
         assert result.findings == 0
@@ -3377,7 +3378,7 @@ class TestRunDarkVerification:
             "rationale": "2^30 * 8 = 2^33 wraps to 0 in uint32",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].evidence_tool == ""
         assert result.outcomes[0].status == "suspicious"
         records = json.loads((tmp_path / "dark-verify-results.json").read_text())
@@ -3411,7 +3412,7 @@ class TestRunDarkVerification:
             "rationale": "insufficient args for format",
         })
 
-        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
+        _run_dark_verification(result, config, llm_client=lambda s, u: llm_response, include_diagnostics=True)
         assert result.outcomes[0].evidence_tool == ""
         assert result.outcomes[0].status == "suspicious"
         records = json.loads((tmp_path / "dark-verify-results.json").read_text())
@@ -3449,6 +3450,7 @@ class TestRunDarkVerification:
 
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
+            include_diagnostics=True,
         )
         assert result.outcomes[0].evidence_tool == ""
         assert result.outcomes[0].status == "suspicious"
@@ -3487,6 +3489,7 @@ class TestRunDarkVerification:
 
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
+            include_diagnostics=True,
         )
         assert result.outcomes[0].evidence_tool == ""
         assert result.outcomes[0].status == "suspicious"
@@ -3506,7 +3509,7 @@ class TestRunDarkVerification:
         outcome.review_result = {"cwe_class": "CWE-120"}
         result = self._make_result([outcome])
         result.suspicious = 1
-        _run_dark_verification(result, config, llm_client=lambda s, u: "{}")
+        _run_dark_verification(result, config, llm_client=lambda s, u: "{}", include_diagnostics=True)
         assert result.outcomes[0].status == "suspicious"
 
 
@@ -6891,6 +6894,7 @@ class TestConfirmReceiptProvenance:
         })
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
+            include_diagnostics=True,
         )
         assert result.outcomes[0].status == "dark"
         parts = (result.outcomes[0].evidence_tool or "").split("+")

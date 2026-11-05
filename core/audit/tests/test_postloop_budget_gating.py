@@ -76,6 +76,7 @@ class TestDarkVerificationBudgetPolling:
 
         _run_dark_verification(
             result, config, llm_client=llm, start_time=start,
+            include_diagnostics=True,
         )
         assert calls == []
         assert all(o.status == "dark" for o in result.outcomes)
@@ -90,13 +91,13 @@ class TestDarkVerificationBudgetPolling:
             result, config,
             llm_client=lambda p, s: calls.append(p) or "{}",
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
         assert calls == []
         assert result.terminated_by == "sigterm"
 
     def test_healthy_budget_still_verifies(self, tmp_path):
-        """Positive control: with budget headroom the pass still runs
-        end-to-end (confirmed witness upgrades the outcome)."""
+        """Budget headroom permits diagnostic observation, not promotion."""
         src = tmp_path / "math_util.py"
         src.write_text("def divide(a, b):\n    return a / b\n",
                        encoding="utf-8")
@@ -115,8 +116,11 @@ class TestDarkVerificationBudgetPolling:
             result, config,
             llm_client=lambda p, s: llm_response,
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].status == "dark"
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_no_start_time_keeps_legacy_behaviour(self, tmp_path):
         """Callers that pass no start_time (tests, library use) get the
@@ -125,7 +129,7 @@ class TestDarkVerificationBudgetPolling:
             target_path=tmp_path, out_dir=tmp_path, max_seconds=1,
         )
         result = _result([_outcome("README.md", "check")])
-        _run_dark_verification(result, config, llm_client=lambda p, s: "{}")
+        _run_dark_verification(result, config, llm_client=lambda p, s: "{}", include_diagnostics=True)
         assert result.outcomes[0].status == "dark"
 
 

@@ -60,7 +60,7 @@ def test_prediction_vs_violation_through_application_paths(tmp_path, monkeypatch
     else:
         monkeypatch.setattr(dv, "parse_witness_response", lambda *args, **kw: SimpleNamespace(finding_key=f"{kw['file']}:{kw['function']}"))
         monkeypatch.setattr(dv, "execute_witness", lambda spec, *args, **kw: replace(observation, finding_key=spec.finding_key))
-        orch._run_dark_verification(result, config, llm_client=lambda *args: "stub", max_workers=2 if lane == "parallel" else 1)
+        orch._run_dark_verification(result, config, llm_client=lambda *args: "stub", max_workers=2 if lane == "parallel" else 1, include_diagnostics=True)
     promoted = kind == "sanitizer"
     assert all(o.status == ("finding" if promoted else status) for o in outcomes)
     assert all(original_evidence in o.evidence_tool for o in outcomes)

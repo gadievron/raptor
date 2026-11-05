@@ -40,7 +40,7 @@ def test_nonreproduction_preserves_verdict_evidence_and_counts(tmp_path, monkeyp
     else:
         monkeypatch.setattr(dv, "execute_witness", lambda *args, **kwargs: witness)
         monkeypatch.setattr(dv, "parse_witness_response", lambda *args, **kwargs: SimpleNamespace())
-        orch._run_dark_verification(result, config, llm_client=lambda *args: "stub", max_workers=2 if lane == "parallel" else 1)
+        orch._run_dark_verification(result, config, llm_client=lambda *args: "stub", max_workers=2 if lane == "parallel" else 1, include_diagnostics=True)
         filename = "dark-verify-results.json"
     assert outcomes == original
     assert refutation_calls == []

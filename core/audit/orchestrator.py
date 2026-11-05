@@ -56,6 +56,7 @@ from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
 from .dark_verify._admission import SANITIZER_RECEIPT, witness_can_confirm
+from .dark_verify._dispatch import automatic_witness_skip_reason, witness_requests_defect_oracle
 from .claim_counters import _DISMISSIVE_COUNTERS, has_claim_counter, matching_claims
 from .refutation_source import capture_source_identity
 from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
@@ -35020,8 +35021,13 @@ def _submit_dark_probes_early(
     result: OrchestratorResult,
     config: OrchestratorConfig,
     llm_client: Callable | None = None,
+    *,
+    include_diagnostics: bool = False,
 ) -> tuple[list[ReviewOutcome], list, Any]:
     """Submit dark probes before Phase I for overlapping execution.
+
+    ``include_diagnostics`` explicitly permits observation-only probes;
+    it never changes verdict admission.
 
     Returns (eligible_outcomes, futures, executor). The caller holds
     the executor open, drains with ``_drain_dark_probes`` after the
@@ -35050,6 +35056,14 @@ def _submit_dark_probes_early(
             return None
 
     def _eligible(o: ReviewOutcome) -> bool:
+        if not include_diagnostics:
+            review = o.review_result or {}
+            reason = automatic_witness_skip_reason(
+                o.file, review.get("cwe_class") or review.get("cwe") or "",
+            )
+            if reason:
+                logger.debug("dark witness skipped %s:%s: %s", o.file, o.function, reason)
+                return False
         if o.status == "dark":
             return True
         if (o.review_result or {}).get("adversarial_needs_evidence"):
@@ -35102,6 +35116,9 @@ def _submit_dark_probes_early(
             language=lang,
         )
         if spec is None:
+            return None
+        if not include_diagnostics and not witness_requests_defect_oracle(spec):
+            logger.debug("dark witness skipped %s:%s: prediction requests no defect oracle", outcome.file, outcome.function)
             return None
         try:
             return execute_witness(
@@ -35341,8 +35358,13 @@ def _run_dark_verification(
     start_time: float | None = None,
     max_workers: int = 1,
     dark_handled: set[int] | None = None,
+    include_diagnostics: bool = False,
 ) -> None:
     """Run dark-verification pass on eligible outcomes.
+
+    Automatic probes require an available independent oracle. Explicit
+    ``include_diagnostics`` also permits observation-only witnesses without
+    changing verdict admission.
 
     Eligible outcomes are those with status ``"dark"`` (no tool could
     confirm or refute) OR whose CWE class has ``dark_verify: True`` in
@@ -35403,6 +35425,14 @@ def _run_dark_verification(
             return None
 
     def _eligible(o: ReviewOutcome) -> bool:
+        if not include_diagnostics:
+            review = o.review_result or {}
+            reason = automatic_witness_skip_reason(
+                o.file, review.get("cwe_class") or review.get("cwe") or "",
+            )
+            if reason:
+                logger.debug("dark witness skipped %s:%s: %s", o.file, o.function, reason)
+                return False
         if o.status == "dark":
             return True
         # The adversarial refuter concluded the hypothesis cannot be
@@ -35481,6 +35511,9 @@ def _run_dark_verification(
             language=lang,
         )
         if spec is None:
+            return None
+        if not include_diagnostics and not witness_requests_defect_oracle(spec):
+            logger.debug("dark witness skipped %s:%s: prediction requests no defect oracle", outcome.file, outcome.function)
             return None
 
         # The run dir keeps sandbox --audit evidence for the witness's
