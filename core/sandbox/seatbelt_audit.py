@@ -619,6 +619,7 @@ class LogStreamer:
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._reader_failed = False
+        self._append_failures = 0  # guarded by _append_lock
         self._stopped = threading.Event()
         self._stop_lock = threading.Lock()
         self._stop_complete = False
@@ -1444,19 +1445,23 @@ class LogStreamer:
         """
         if self._capture_closed:
             return
-        if self._evidence is None:
-            # First call: materialise run_dir AND pin the evidence
-            # file beneath it.
-            self._run_dir.mkdir(parents=True, exist_ok=True)
-            self._evidence = _evidence_mod.EvidenceFile.open(
-                self._run_dir, self._filename,
-            )
-        if not self._evidence.write_record(record):
-            msg = (
-                f"evidence append failed for {self._filename} "
-                f"under {self._run_dir}"
-            )
-            raise OSError(msg)
+        try:
+            if self._evidence is None:
+                # First call: materialise run_dir AND pin the evidence
+                # file beneath it.
+                self._run_dir.mkdir(parents=True, exist_ok=True)
+                self._evidence = _evidence_mod.EvidenceFile.open(
+                    self._run_dir, self._filename,
+                )
+            if not self._evidence.write_record(record):
+                msg = (
+                    f"evidence append failed for {self._filename} "
+                    f"under {self._run_dir}"
+                )
+                raise OSError(msg)
+        except OSError:
+            self._append_failures += 1
+            raise
 
     def stop(self, *, drain_timeout: float = 1.5) -> None:
         """Drain and finalise once, including concurrent stop calls."""
@@ -1596,6 +1601,8 @@ class LogStreamer:
                     # Parse-ratio surface for operators reading the JSONL
                     # (extra keys tolerated by consumers per contract).
                     summary["reader_drained"] = reader_drained
+                    if self._append_failures:
+                        summary["append_failures"] = self._append_failures
                     if self._reader_failed:
                         summary["reader_failed"] = True
                     summary["kext_lines_seen"] = seen
