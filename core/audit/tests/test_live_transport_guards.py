@@ -1623,10 +1623,13 @@ class TestCompilerSurfaceFences:
     def test_compiler_sweep(self) -> None:
         calls = _function_call_map("test_compiler_sweep.py")
         # The toolchain-fault test deliberately mints not-installed.
-        # The unknown-checker and corrupt-output tests stub discovery,
-        # analyzer execution, and preprocessing to pin product behavior.
+        # Diagnostic-protocol, location, and corroboration tests stub
+        # discovery and execution to pin product classification behavior.
         # Nested raw calls also count for the enclosing test function.
         assert _callers_of(calls, "run_compiler_analyzer_sweep") == {
+            "test_unusable_family_diagnostic_location_is_not_evidence",
+            "test_unlocated_shared_checker_retains_family_discrimination",
+            "test_aliasing_corroboration_receives_only_locatable_candidates",
             "test_relative_header_diagnostic_does_not_confirm_tu_hypothesis",
             "test_encoded_sarif_primary_location_confirms_its_actual_file",
             "test_both_missing_is_error",
