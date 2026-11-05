@@ -5941,8 +5941,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                 threat_model=config.threat_model,
             )
             security_decision_keys = build_security_decision_set(context_map)
-            feeds_security_keys = frozenset(
-                build_feeds_security_map(context_map).keys(),
+            feeds_security_keys = build_feeds_security_map(
+                context_map, security_keys=security_decision_keys,
             )
             if provenance_map:
                 logger.info(
@@ -5952,7 +5952,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                     len(security_decision_keys),
                 )
     except Exception:
-        logger.debug("mechanical gates init failed", exc_info=True)
+        logger.warning("mechanical gate context initialization failed", exc_info=True)
 
     checker_library = RuleLibrary()
     if checker_library.all_entries():

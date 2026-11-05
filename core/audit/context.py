@@ -1661,10 +1661,11 @@ def format_context_for_prompt(
     if ctx.get("is_security_decision"):
         sections.append(PromptSection(
             "is_security_decision",
-            "\n### Security-decision point\nThis function IS a "
-            "security decision point (auth / crypto / access-control "
-            "naming). A correctness bug here has SECURITY impact — do "
-            "not dismiss as non-security.",
+            "\n### Potential security decision point (naming hint)\n"
+            "This function has an auth / crypto / access-control name. "
+            "Inspect its implementation and callers to determine whether it "
+            "makes a security decision. Naming alone does not establish "
+            "security impact.",
             1,
         ))
 
