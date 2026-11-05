@@ -742,14 +742,8 @@ class UseCommandAwarenessTest(unittest.TestCase):
         self.assertEqual(target, "myapp.json")
 
 
-@unittest.skipIf(sys.platform == "win32", "bash launcher")
-class LauncherAwarenessTest(unittest.TestCase):
-    """The launcher prunes, warns, and registers before exec.
-
-    Pre-P06: the launcher writes v1 entries and prunes with kill -0;
-    P06 upgrades it to the v2 mandatory seed + sentinel handoff and
-    extends these tests.
-    """
+class _LauncherMixin:
+    """Share the real launcher helper without inheriting test cases."""
 
     def _launch(self, home: Path, tmpdir: Path):
         path_dirs = [str(Path(sys.executable).resolve().parent)]
@@ -770,6 +764,16 @@ class LauncherAwarenessTest(unittest.TestCase):
             },
             cwd=str(home),
         )
+
+
+@unittest.skipIf(sys.platform == "win32", "bash launcher")
+class LauncherAwarenessTest(_LauncherMixin, unittest.TestCase):
+    """The launcher prunes, warns, and registers before exec.
+
+    Pre-P06: the launcher writes v1 entries and prunes with kill -0;
+    P06 upgrades it to the v2 mandatory seed + sentinel handoff and
+    extends these tests.
+    """
 
     def test_launcher_registers_prunes_and_warns(self):
         with TemporaryDirectory() as d:
@@ -980,7 +984,7 @@ class ProjectMutationHygieneTest(unittest.TestCase):
 
 
 @unittest.skipIf(sys.platform == "win32", "bash launcher")
-class LauncherSeedV2Test(LauncherAwarenessTest):
+class LauncherSeedV2Test(_LauncherMixin, unittest.TestCase):
     """The v2 mandatory seed: identity-stamped entry,
     exported env credential, seed even with an empty bookmark."""
 
