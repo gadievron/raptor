@@ -508,3 +508,36 @@ def test_reused_import_alias_preserves_call_priority_and_subclass_arms(det, tmp_
         "llm_client:packages/thing/stage.py::Mixed": 1,
         "provider:packages/thing/stage.py::Mixed": 1,
     }
+
+
+def test_import_discovery_keeps_statement_containers_without_walking_expressions(
+    det, monkeypatch,
+):
+    import ast
+
+    tree = ast.parse("""
+def outer():
+    try:
+        from example import LLMClient as Client
+    except RuntimeError:
+        from example import create_provider as factory
+    match subject:
+        case _ if predicate():
+            from example import AlphaProvider as Provider
+value = factory([Client() for item in items])
+""")
+    iter_children = ast.iter_child_nodes
+
+    def statement_children(node):
+        assert not isinstance(node, ast.expr), "import discovery entered an expression"
+        return iter_children(node)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(ast, "iter_child_nodes", statement_children)
+        aliases = det._symbol_aliases_by_target(
+            tree, frozenset({"LLMClient", "create_provider", "AlphaProvider"}),
+        )
+    assert aliases == {
+        "LLMClient": {"Client"}, "create_provider": {"factory"},
+        "AlphaProvider": {"Provider"},
+    }

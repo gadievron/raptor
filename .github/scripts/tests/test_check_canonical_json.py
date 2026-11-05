@@ -464,3 +464,31 @@ def test_mixed_assignment_propagates_both_kinds_through_aliases(det, tmp_path):
     assert sorted(f["rule"] for f in det.scan_tree(root)) == [
         "dumps_flows_to_hash", "substrate_dumps_flows_to_hash",
     ]
+
+
+def test_import_discovery_keeps_statement_containers_without_walking_expressions(
+    det, monkeypatch,
+):
+    import ast
+
+    tree = ast.parse("""
+def outer():
+    try:
+        import json as nested_json
+    except RuntimeError:
+        from json import dumps as nested_dumps
+    match subject:
+        case _ if predicate():
+            from json import dump as nested_dump
+value = nested_json.dumps([transform(item) for item in items])
+""")
+    iter_children = ast.iter_child_nodes
+
+    def statement_children(node):
+        assert not isinstance(node, ast.expr), "import discovery entered an expression"
+        return iter_children(node)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(ast, "iter_child_nodes", statement_children)
+        aliases = det._json_aliases(tree)
+    assert aliases == ({"nested_json"}, {"nested_dumps", "nested_dump"})
