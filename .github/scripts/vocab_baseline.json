@@ -822,6 +822,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "core/audit/narrowing_guards.py::widths": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed C integer-limit macro-prefix mapping to widths under the narrowing checker's existing target model (8/16/32/64 bits), not a learned target function-name vocabulary. Used only after an exact MIN/MAX macro match; source define/undef overrides refuse guard credit. This registration does not establish target ABI widths."
+  },
   "core/audit/negative_space.py::_AMR_KEYWORDS": {
     "count": 17,
     "kind": "literal",
