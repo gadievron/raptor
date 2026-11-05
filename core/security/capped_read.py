@@ -25,12 +25,27 @@ parsers) all repeated.
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from typing import TYPE_CHECKING, Literal, overload
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def path_may_exist(path: Path) -> bool:
+    """Probe the final entry without following its symlink or hiding errors.
+
+    Only ENOENT/ENOTDIR establish absence. Other errors preserve the
+    candidate so a caller's hardened read/refusal path can report them.
+    This avoids pathlib's version-dependent error suppression.
+    """
+    try:
+        os.lstat(path)
+    except OSError as error:
+        return error.errno not in (errno.ENOENT, errno.ENOTDIR)
+    return True
 
 
 class CappedReadRefused(ValueError):

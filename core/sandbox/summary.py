@@ -74,6 +74,7 @@ from typing import Any
 from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 from core.logging import log_security_event as _log_security_event
+from core.security.capped_read import path_may_exist
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
@@ -1080,7 +1081,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     # New (.audit/) location preferred; legacy <run_dir>/ location
     # kept as a read fallback for runs produced by older versions.
     jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
-    if not (jsonl.exists() or jsonl.is_symlink()):
+    if not path_may_exist(jsonl):
         # Parent-memory floor refusals must survive a target that
         # DELETED the evidence file outright (the empty-file and
         # edited-file shapes are re-asserted below; whole-file

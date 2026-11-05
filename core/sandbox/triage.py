@@ -52,7 +52,7 @@ from core.sandbox.escalation_signatures import (
     is_credential_path,
 )
 from core.sandbox.profiles import host_recon_threshold_for_profile
-from core.security.capped_read import read_capped
+from core.security.capped_read import path_may_exist, read_capped
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox.proxy import (
     PROXY_EVENTS_COUNT_FILENAME,
@@ -1176,16 +1176,12 @@ def _load_json(path: Path) -> dict | None:
 
 
 def _artifact_present(path: Path) -> bool:
-    """Whether SOMETHING exists at path — including a dangling
-    symlink or a FIFO the bounded reader refuses to read. Destruction
+    """Conservative presence, including uninspectable entries, dangling
+    symlinks, and FIFOs the bounded reader refuses to read. Destruction
     must not read as absence: a target that replaces its telemetry
     with a FIFO, an oversized blob, or garbage bytes must land in the
     tampered path, not the "no telemetry" path."""
-    try:
-        os.lstat(path)
-        return True
-    except OSError:
-        return False
+    return path_may_exist(path)
 
 
 # Streaming bounds for the proxy-events JSONL specifically. The count
