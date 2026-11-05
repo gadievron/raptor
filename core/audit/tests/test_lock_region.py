@@ -373,7 +373,7 @@ class TestCocciCorroboration:
             RULE_CALLBACK_UNDER_LOCK + DETECTION_VARIANT_SUFFIX,
             COCCI_STAMP,
         ])
-        assert channels == ["coccinelle", "lock_region"]
+        assert channels == []
 
     @pytest.mark.skipif(
         shutil.which("spatch") is None, reason="spatch not installed",

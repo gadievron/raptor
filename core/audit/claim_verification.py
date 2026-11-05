@@ -4,8 +4,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .evidence_grade import is_tool_evidence
-
 
 @dataclass(frozen=True)
 class ClaimVerification:
@@ -24,20 +22,16 @@ class ClaimVerification:
 class ClaimSupport:
     verification: ClaimVerification
     receipts: tuple[str, ...]
-    channels: tuple[str, ...] = ()
-    posterior_mean: float = 0.0
 
 
 def supported_claims(
     verifications: Iterable[ClaimVerification], *,
     receipt_can_promote: Callable[[str], bool],
-    aggregate: Callable[[list[str]], tuple[list[str], float]],
 ) -> list[ClaimSupport]:
-    """Apply existing evidence policy separately to each claim.
+    """Only promotion-grade evidence can support a selected claim.
 
-    Two weak signals for different claims cannot corroborate each other.
-    A strong receipt is selected ahead of a detection lead on that claim,
-    keeping the exported mechanism and evidence aligned.
+    Detection leads cannot upgrade each other, even on the same mechanism.
+    Keep the exported claim aligned with its actual supporting receipts.
     """
     supported = []
     for verification in verifications:
@@ -45,8 +39,4 @@ def supported_claims(
         strong = tuple(r for r in receipts if receipt_can_promote(r))
         if strong:
             supported.append(ClaimSupport(verification, strong))
-        elif receipts and is_tool_evidence("+".join(receipts)):
-            channels, mean = aggregate(list(receipts))
-            if channels:
-                supported.append(ClaimSupport(verification, receipts, tuple(channels), mean))
     return supported

@@ -368,8 +368,8 @@ class TestAggregationFirewall:
             "consistency:field-parity-majority",
             "ptr_lifecycle:stale-alias" + DETECTION_VARIANT_SUFFIX,
         ])
-        assert channels == ["consistency", "ptr_lifecycle"]
-        assert mean > 0.0
+        assert channels == []
+        assert mean == 0.0
 
     def test_two_leg_a_receipts_do_not_self_corroborate(self):
         from core.audit.orchestrator import (

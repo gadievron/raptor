@@ -676,11 +676,9 @@ class TestCompositePolicy:
         assert not is_tool_evidence("Semgrep+joern")
         assert not is_tool_evidence("joern+CodeQL:rule")
 
-    def test_aggregation_shape_two_detection_namespaces_qualifies(self):
-        # The Bayesian aggregation lane stamps "+".join(confirmed)
-        # after >=2 independent detection channels cross the posterior
-        # threshold — the chokepoint must accept its own receipt.
-        assert is_tool_evidence(
+    def test_detection_composite_does_not_qualify(self):
+        # Multiple namespaces do not establish independent premises.
+        assert not is_tool_evidence(
             "consistency:return-check-majority"
             "+fail_open:handler-outcome-naming",
         )
@@ -709,8 +707,7 @@ class TestSanitizedCompositeOrdering:
     # A claim whose text names a genuine verification receipt plus a
     # detection variant — raw, the receipt part would qualify.
     CLAIMED_MIXED = "smt:check-integer-narrowing+consistency:return-check-majority"
-    # A claim shaped exactly like the aggregation-promotion receipt —
-    # raw, two distinct detection namespaces qualify.
+    # Historical aggregation-shaped claims remain non-verification.
     CLAIMED_AGGREGATION = (
         "consistency:return-check-majority"
         "+fail_open:handler-outcome-naming"
@@ -720,7 +717,7 @@ class TestSanitizedCompositeOrdering:
         # Control: the pins below prove sanitization is what demotes
         # these composites, not that the spellings were worthless.
         assert is_verification_evidence(self.CLAIMED_MIXED)
-        assert is_verification_evidence(self.CLAIMED_AGGREGATION)
+        assert not is_verification_evidence(self.CLAIMED_AGGREGATION)
 
     def test_whole_string_sanitize_never_verifies(self):
         for raw in (self.CLAIMED_MIXED, self.CLAIMED_AGGREGATION):

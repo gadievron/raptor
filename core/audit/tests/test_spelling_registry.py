@@ -64,15 +64,13 @@ class TestRegistryAdmission:
         assert not eg.is_tool_evidence("regtool:relation-violation")
         assert not eg.is_verification_evidence("regtool:relation-violation")
 
-    def test_listed_detection_spelling_aggregates(
+    def test_listed_detection_spellings_stay_diagnostic(
         self, registry: None,
     ) -> None:
-        # Two DISTINCT detection-role namespaces agreeing is the
-        # Bayesian aggregation-promotion receipt — the registry's
-        # detection spellings participate like channel-classified ones.
+        # Registry detection spellings cannot upgrade each other.
         stamp = "regtool:relation-violation+fail_open:handler-outcome-naming"
-        assert eg.is_tool_evidence(stamp)
-        assert eg.is_verification_evidence(stamp)
+        assert not eg.is_tool_evidence(stamp)
+        assert not eg.is_verification_evidence(stamp)
 
     def test_unlisted_spelling_fails_closed(self, registry: None) -> None:
         assert not eg.is_tool_evidence("regtool:novel-variant")
@@ -229,10 +227,10 @@ class TestCodeqlLlmEntry:
         assert not eg.is_tool_evidence("codeql-llm:dataflow")
         assert not eg.is_verification_evidence("codeql-llm:dataflow")
 
-    def test_spelling_aggregates_with_a_second_namespace(self) -> None:
+    def test_second_detection_namespace_cannot_upgrade_spelling(self) -> None:
         stamp = "codeql-llm:dataflow+joern:live"
-        assert eg.is_tool_evidence(stamp)
-        assert eg.is_verification_evidence(stamp)
+        assert not eg.is_tool_evidence(stamp)
+        assert not eg.is_verification_evidence(stamp)
 
     def test_unlisted_spelling_fails_closed_non_poisonous(self) -> None:
         assert not eg.is_tool_evidence("codeql-llm:novel")
