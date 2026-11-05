@@ -325,11 +325,11 @@ class TestExtractIdentifiers:
         )
         assert ids == ["dst", "count"]
 
-    def test_stop_words_filtered(self):
+    def test_explicit_identifiers_bypass_prose_stop_words(self):
         ids = extract_hypothesis_identifiers(
             "`buffer` overflow via `memcpy_wrapper`", "", "f",
         )
-        assert ids == ["memcpy_wrapper"]
+        assert ids == ["buffer", "memcpy_wrapper"]
 
     def test_prose_must_be_grounded_in_source(self):
         source = "int msg_qbytes = limit;"
@@ -3763,3 +3763,40 @@ def test_missing_gcc_sarif_is_not_silence(tmp_path):
 
     with pytest.raises(CompilerDiagnosticError):
         compiler_sweep._parse_gcc_sarif(tmp_path / 'absent.sarif')
+
+
+@pytest.mark.parametrize('name', ['buffer', 'size', 'index'])
+@needs_compiler
+def test_explicit_common_identifier_does_not_confirm_another_objects_bug(
+    tmp_path, sandbox_spy, name,
+):
+    target = _target_with(tmp_path, 'two_ptrs.c')
+    source = target / 'two_ptrs.c'
+    source.write_text(source.read_text().replace('other_buf', name))
+
+    def sweep(identifier):
+        return _guarded_compiler_sweep(
+            target_path=target, file_path='two_ptrs.c',
+            function_name='mixed_buffers', hypothesis=f'use-after-free of `{identifier}`',
+            cwe='CWE-416', line_start=7, line_end=15, out_dir=tmp_path,
+        )
+
+    assert sweep('p').outcome == 'confirmed'
+    unrelated = sweep(name)
+    assert unrelated.outcome == 'inconclusive', unrelated.details
+    assert unrelated.details['hypothesis_identifiers'] == [name]
+    assert unrelated.details['unattributed']
+
+
+@pytest.mark.parametrize('name', ['buffer', 'size', 'index'])
+@pytest.mark.parametrize('quote', ['`', "'", '"'])
+def test_explicit_common_identifiers_survive_all_supported_quotes(name, quote):
+    assert extract_hypothesis_identifiers(
+        f'check {quote}{name}{quote}', '', 'f',
+    ) == [name]
+
+
+def test_unquoted_common_words_still_use_prose_filter():
+    assert extract_hypothesis_identifiers(
+        'buffer size index overflow', 'int buffer, size, index;', 'f',
+    ) == []

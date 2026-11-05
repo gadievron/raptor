@@ -475,6 +475,12 @@ Missing or malformed GCC diagnostic output is reported as an analysis error
 or scan coverage limitation. It cannot establish a clean result, and `/audit`
 retries the analyzer if a later hypothesis needs the same translation unit.
 
+For compiler-backed hypothesis checks in `/audit`, quote variable names
+(for example, ``use-after-free of `buffer` ``) to request attribution to that
+identifier. Common names such as `buffer`, `size` and `index` are preserved
+when quoted, so they are checked as identifiers rather than interpreted as
+generic prose.
+
 ## Output
 
 ### SARIF Files
