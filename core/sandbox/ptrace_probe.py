@@ -307,9 +307,13 @@ def _try_kill_and_reap(pid: int) -> None:
     The caller must still own an unreaped child. Never call this after
     a terminal wait status or ECHILD: opening a pidfd after ownership
     was lost cannot establish the original child's identity. A pidfd
-    stabilizes signal delivery during cleanup where supported; older
-    kernels use the still-owned child PID.
+    stabilizes signal delivery during cleanup where supported. If that
+    signal API is unavailable or blocked, a PID fallback first verifies
+    that the process is still our unreaped child.
     """
+    if type(pid) is not int or not 0 < pid <= 0x7fffffff:
+        return
+    deadline = time.monotonic() + _REAP_TIMEOUT_S
     pidfd = None
     try:
         pidfd = os.pidfd_open(pid)
@@ -318,30 +322,45 @@ def _try_kill_and_reap(pid: int) -> None:
         # Python <3.9 (no os.pidfd_open). Fall through to PID-based.
         pass
 
+    needs_pid_signal = pidfd is None
     if pidfd is not None:
         try:
             try:
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
-            except (OSError, AttributeError):
-                # AttributeError on Python <3.9; OSError if the
-                # process exited between pidfd_open and the send
-                # (rare but possible — pidfd is bound to a
-                # specific process instance, so the send fails
-                # with ESRCH rather than hitting a reused PID).
-                pass
+            except AttributeError:
+                needs_pid_signal = True
+            except OSError as exc:
+                # ESRCH identifies the pinned process as gone. Other errors
+                # can mean pidfd signaling is blocked while kill still works.
+                needs_pid_signal = exc.errno != errno.ESRCH
         finally:
             try:
                 os.close(pidfd)
             except OSError:
                 pass
-    else:
+    if needs_pid_signal:
+        # Never turn pidfd failure into a signal to an unowned/reused PID.
+        # A nonblocking wait establishes that this is still our child; a
+        # terminal status already completes cleanup without another signal.
+        while True:
+            try:
+                waited, status = os.waitpid(pid, os.WNOHANG)
+            except InterruptedError:
+                if time.monotonic() >= deadline:
+                    logger.warning("ptrace probe: child ownership check timed out")
+                    return
+                continue
+            except OSError:
+                return
+            if waited and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+                return
+            break
         try:
             os.kill(pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
             pass
 
     try:
-        deadline = time.monotonic() + _REAP_TIMEOUT_S
         while True:
             _, status = _waitpid_eintr_safe(pid, 0, deadline=deadline)
             if os.WIFEXITED(status) or os.WIFSIGNALED(status):
