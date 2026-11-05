@@ -23,7 +23,16 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.processes import reap_on_exit
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
+_race_barrier = None
+
+
+def _init_race_worker(barrier) -> None:
+    # Set only in owned pool children; no parent/pytest-worker state changes.
+    global _race_barrier
+    _race_barrier = barrier
 
 
 def _race_worker(args: tuple[int, str, str]) -> int:
@@ -37,6 +46,8 @@ def _race_worker(args: tuple[int, str, str]) -> int:
         concepts=[Concept(id=f"concept_{idx:03d}",
                           description=f"from run {idx}")],
     ).save(run_model)
+    assert _race_barrier is not None
+    _race_barrier.wait(timeout=30)
     for _ in range(20):
         merge_promote_domain_model(run_model, Path(canonical))
     return idx
@@ -51,23 +62,28 @@ def test_concurrent_promoters_lose_no_runs_output(tmp_path: Path) -> None:
     import multiprocessing as mp
 
     n = 8
-    for trial in range(6):
-        canonical = tmp_path / f"t{trial}" / "domain-model.json"
-        canonical.parent.mkdir(parents=True)
-        ctx = mp.get_context("fork")
-        with ctx.Pool(n) as pool:
-            pool.map(
+    ctx = mp.get_context("fork")
+    # Imports and process startup are incidental to promotion. Reuse the
+    # workers, but give every trial fresh inputs/canonical state and align
+    # all eight workers before the first promotion so each trial still races.
+    with ctx.Pool(n, initializer=_init_race_worker,
+                  initargs=(ctx.Barrier(n),)) as pool:
+        for trial in range(6):
+            canonical = tmp_path / f"t{trial}" / "domain-model.json"
+            canonical.parent.mkdir(parents=True)
+            completed = pool.map(
                 _race_worker,
                 [(i, str(canonical), str(canonical.parent))
                  for i in range(n)],
             )
-        data = json.loads(canonical.read_text())
-        ids = sorted(c["id"] for c in data.get("concepts", []))
-        missing = [f"concept_{i:03d}" for i in range(n)
-                   if f"concept_{i:03d}" not in ids]
-        assert not missing, (
-            f"trial {trial}: lost updates {missing} (survivors: {ids})"
-        )
+            assert completed == list(range(n))
+            data = json.loads(canonical.read_text())
+            ids = sorted(c["id"] for c in data.get("concepts", []))
+            missing = [f"concept_{i:03d}" for i in range(n)
+                       if f"concept_{i:03d}" not in ids]
+            assert not missing, (
+                f"trial {trial}: lost updates {missing} (survivors: {ids})"
+            )
 
 
 def test_promoter_blocks_while_lock_held(tmp_path: Path) -> None:
@@ -97,26 +113,36 @@ def test_promoter_blocks_while_lock_held(tmp_path: Path) -> None:
     fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-        proc = subprocess.Popen(
-            [sys.executable, str(worker)], env=env, cwd=str(tmp_path),
+        home = tmp_path / "home"
+        home.mkdir()
+        env = dict(
+            os.environ, PYTHONDONTWRITEBYTECODE="1", HOME=str(home),
+            TMPDIR=str(tmp_path), XDG_CONFIG_HOME=str(home / "config"),
+            XDG_CACHE_HOME=str(home / "cache"),
+            XDG_DATA_HOME=str(home / "data"),
+            RAPTOR_REGISTRY_HOME=str(tmp_path / "registry"),
+            RAPTOR_OUT_DIR=str(tmp_path / "out"),
         )
-        try:
-            deadline = time.monotonic() + 30
-            while not (tmp_path / "ready").exists():
-                assert time.monotonic() < deadline, "worker never started"
-                time.sleep(0.01)
-            # Worker is past imports and inside the promote call; give
-            # it a full second to (wrongly) write through the held lock.
-            time.sleep(1.0)
-            assert not canonical.exists(), (
-                "promoter wrote the canonical model while another "
-                "process held the promotion lock"
-            )
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        assert proc.wait(timeout=60) == 0
-        assert canonical.is_file()
+        with reap_on_exit(subprocess.Popen(
+            [sys.executable, str(worker)], env=env, cwd=str(tmp_path),
+        )) as proc:
+            try:
+                deadline = time.monotonic() + 30
+                while not (tmp_path / "ready").exists():
+                    assert proc.poll() is None, f"worker exited early: {proc.returncode}"
+                    assert time.monotonic() < deadline, "worker never started"
+                    time.sleep(0.01)
+                # Worker is past imports and inside the promote call; give
+                # it a full second to (wrongly) write through the held lock.
+                time.sleep(1.0)
+                assert not canonical.exists(), (
+                    "promoter wrote the canonical model while another "
+                    "process held the promotion lock"
+                )
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            assert proc.wait(timeout=60) == 0
+            assert canonical.is_file()
     finally:
         os.close(fd)
 
