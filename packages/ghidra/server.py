@@ -123,6 +123,7 @@ class GhidraServer:
         self.lifetime_s = lifetime_s
         self._work_dir: Optional[Path] = None
         self._work_gpr: Optional[Path] = None
+        self._cleanup_pending = False
         self._sock: Optional[socket.socket] = None
         # Socketpair transport only: the parent's duplicate of the
         # CHILD half, OWNED by the boot's _serve thread — closed in
@@ -536,12 +537,13 @@ class GhidraServer:
                     )
         finally:
             if self._work_dir is not None and not self._thread_alive():
-                rmtree_hardened(self._work_dir)
-                # Consistent object protocol: a stopped server is
-                # stopped — restart()/start() see the nulled state
-                # instead of booting against a deleted dir.
-                self._work_dir = None
-                self._work_gpr = None
+                self._cleanup_pending = True
+                if rmtree_hardened(self._work_dir):
+                    self._work_dir = None
+                    self._work_gpr = None
+                    self._cleanup_pending = False
+                else:
+                    logger.warning("Ghidra working-copy cleanup incomplete: %r", self._work_dir)
 
     def restart(self) -> None:
         """Boot a fresh worker after the previous one died mid-run.
@@ -556,6 +558,8 @@ class GhidraServer:
         risks corrupting the working copy; the sandbox lifetime cap
         remains the backstop for that case.
         """
+        if self._cleanup_pending:
+            raise GhidraServerError("working-copy cleanup is incomplete; retry stop()")
         if self._work_dir is None or self._work_gpr is None:
             raise GhidraServerError(
                 "server not started (or already stopped)"
@@ -782,7 +786,7 @@ class GhidraServer:
     @property
     def enriched_gpr(self) -> Optional[Path]:
         """The working copy path (holds applied enrichments)."""
-        return self._work_gpr
+        return None if self._cleanup_pending else self._work_gpr
 
     def persist_enriched(self, dst_dir: Path) -> Path:
         """Copy the (possibly enriched) working copy out of the
@@ -798,28 +802,10 @@ class GhidraServer:
         """
         if self._work_gpr is None:
             raise GhidraServerError("server not started")
-        from .project_util import _copy_rep_tree
-        dst_dir = Path(dst_dir)
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        if self._work_gpr.is_symlink():
-            raise GhidraServerError(
-                "working copy .gpr is a symlink — refusing to persist"
-            )
-        dst_gpr = dst_dir / self._work_gpr.name
-        # Destination-side hardening (the docstring's lstat rationale
-        # covered the source only): exclusive-create copy so a
-        # symlink planted at the destination name is never followed.
-        dst_gpr.unlink(missing_ok=True)
-        with open(self._work_gpr, "rb") as src_fh, os.fdopen(
-            open_exclusive_artifact(dst_gpr), "wb",
-        ) as dst_fh:
-            shutil.copyfileobj(src_fh, dst_fh)
-        src_rep = self._work_gpr.with_suffix(".rep")
-        dst_rep = dst_dir / src_rep.name
-        if dst_rep.exists():
-            shutil.rmtree(dst_rep)
-        _copy_rep_tree(src_rep, dst_rep)
-        lock = dst_dir / f"{self._work_gpr.stem}.lock"
-        if lock.exists():
-            lock.unlink()
-        return dst_gpr
+        if self._cleanup_pending:
+            raise GhidraServerError("working-copy cleanup is incomplete; retry stop()")
+        from .project_util import copy_project
+        try:
+            return copy_project(self._work_gpr, Path(dst_dir))
+        except ValueError as exc:
+            raise GhidraServerError(str(exc)) from exc
