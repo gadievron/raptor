@@ -207,11 +207,11 @@ published image by digest. Run in your terminal:
 ```bash
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-docker pull docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 docker run -it \
   -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
+  docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
 
 Replace the target path with your own; omit that mount if you do not need it.
