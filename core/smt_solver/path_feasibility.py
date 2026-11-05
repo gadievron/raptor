@@ -14,7 +14,7 @@ they are jointly satisfiable.
           unsat core names the specific conflicting conditions
 - None  → Z3 unavailable or all conditions unparseable; fall back to LLM
 
-Accepted condition forms (case-insensitive):
+Accepted condition forms (case-sensitive identifiers; case-insensitive English aliases):
   size > 0
   size < 1024
   offset + length <= buffer_size
@@ -434,11 +434,8 @@ def _parse_expr(
             pos[0] += 1
             return _mk_val(v, profile.width)
         if _IDENT_RE.match(tok):
-            key = tok.lower()
-            if key not in vars_:
-                vars_[key] = _mk_var(key, profile.width)
             pos[0] += 1
-            return vars_[key]
+            return make_var(tok, vars_, profile=profile)
         return Rejection(
             text, RejectionKind.UNRECOGNIZED_OPERAND,
             f"token {tok!r} is not an identifier, NULL, or numeric literal",
@@ -1474,9 +1471,9 @@ def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     that, e.g., a verb's overflow predicate over ``count`` and a guard
     ``count < MAX`` constrain the *same* Z3 variable.
 
-    Names are lowercased to match the parser's convention.
+    Names retain case, matching the parser and source identifier identity.
     """
-    key = name.lower()
+    key = name
     if key not in vars_:
         vars_[key] = _mk_var(key, profile.width)
     return vars_[key]
@@ -1802,7 +1799,7 @@ def _exhibits_robust_contradiction(
     if not subset:
         return False
     idents = {
-        tok.lower()
+        tok
         for c in subset
         for tok in _TOKEN_RE.findall(c.text)
         if _IDENT_RE.match(tok) and not _NULL_RE.match(tok)

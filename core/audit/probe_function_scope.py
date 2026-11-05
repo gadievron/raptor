@@ -158,9 +158,9 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
     if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass"}:
         binding["hypothesis_sha256"] = hashlib.sha256(hypothesis.encode("utf-8", "surrogatepass")).hexdigest()
     if verb == "check-overflow":
-        # Same-source replies from workers predating operation admission must
-        # not inherit the current producer's contract merely by matching input.
+        # Matching source is insufficient: replies must satisfy the current
+        # operation, guard, type and case-sensitive variable-identity contract.
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "abi-typed-overflow-v4"
+        binding["query_contract"] = "case-sensitive-overflow-v5"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     return binding
