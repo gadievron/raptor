@@ -232,6 +232,11 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                 "skipped", p, _MAX_SOURCE_FILE_BYTES // (1024 * 1024),
             )
             continue
+        # Blanking and continuation folding cannot create these ASCII
+        # keywords. Keep the capped read and oversize warning above, but
+        # avoid decoding and lexical scans when no definition can match.
+        if type(raw) is bytes and b"define" not in raw and b"enum" not in raw:
+            continue
         raw_text = raw.decode("utf-8", errors="replace")
         # Comments and string literals are blanked (offsets and
         # newlines preserved) BEFORE matching: a #define living only
