@@ -102,6 +102,7 @@ class GraphServices:
         try:
             graph = FrozenGraph.copy(cpg.path, directory=self.directory,
                                      expected=source_digest)
+            entry.graph = graph
             server = self.factory(tunables, orphan_idle_ttl_s=10,
                                   graph_read_paths=(str(graph.path.parent),))
             entry.graph, entry.server = graph, server
@@ -117,21 +118,10 @@ class GraphServices:
                 entry.state = "ready"
                 self.changed.notify_all()
         except BaseException:
-            retained = False
-            if server is not None:
-                try:
-                    retained = server.stop() is False
-                except Exception:
-                    retained = True
-            if graph is not None and not retained:
-                graph.close()
             with self.changed:
-                if retained:
-                    entry.state = "retained"
-                    entry.leases.clear()
-                else:
-                    self.workers.pop(key, None)
-                self.changed.notify_all()
+                entry.leases.clear()
+            with entry.serial:
+                self._retire_worker(key, entry)
             raise
         return lease
 
@@ -223,18 +213,28 @@ class GraphServices:
         # Queries already admitted finish or observe cancellation first.
         # An acquisition cannot create a replacement while teardown runs.
         with entry.serial:
-            try:
-                stopped = server.stop()
-            except Exception:
-                stopped = False
-            with self.changed:
-                if stopped is False:
-                    entry.state = "retained"
-                else:
-                    graph.close()
-                    self.workers.pop(key, None)
-                self.changed.notify_all()
-            return stopped is not False
+            return self._retire_worker(key, entry)
+
+    def _retire_worker(self, key, entry) -> bool:
+        """Retire an unborrowed entry while its serialized lane is held.
+
+        A process or disk cleanup failure keeps both handles available for a
+        later close attempt. Frozen bytes survive until the process is stopped.
+        """
+        removed = False
+        try:
+            stopped = entry.server is None or entry.server.stop() is not False
+            if stopped:
+                removed = entry.graph is None or entry.graph.close() is not False
+        except Exception:
+            removed = False
+        with self.changed:
+            if removed:
+                self.workers.pop(key, None)
+            else:
+                entry.state = "retained"
+            self.changed.notify_all()
+        return removed
 
     def execute(self, lease: str, query: str, *, timeout: int = 300,
                 queue_timeout: float = 300, cancel_check=None,
@@ -348,3 +348,11 @@ class GraphServices:
             leases = list(self.leases)
         for lease in leases:
             self.release(lease)
+        # release consumes leases even when teardown must retain the worker.
+        # Retry those unborrowed handles on close, including repeated closes.
+        with self.changed:
+            pending = [(key, entry) for key, entry in self.workers.items()
+                       if not entry.leases and entry.state == "retained"]
+        for key, entry in pending:
+            with entry.serial:
+                self._retire_worker(key, entry)

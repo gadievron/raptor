@@ -14,7 +14,6 @@ import os
 import re
 import secrets
 import select
-import shutil
 import signal
 import socket
 import subprocess
@@ -33,6 +32,7 @@ try:
 except ImportError:
     _httpx = None  # type: ignore[assignment]
 
+from core.atomic_fs import rmtree_hardened
 from core.run.tmp_ownership import sweep_dead_owner_dirs, write_owner_marker
 
 from .heap_ledger import HeapReservation, reserve_heap_mb
@@ -161,8 +161,13 @@ def _new_workspace() -> str:
     live servers."""
     from .client import runtime_base
     workdir = tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX, dir=runtime_base())
-    write_owner_marker(workdir)
-    return workdir
+    try:
+        write_owner_marker(workdir)
+        return workdir
+    except BaseException:
+        if not rmtree_hardened(workdir):
+            logger.warning("incomplete new workspace cleanup at %r", workdir)
+        raise
 
 
 def sweep_stale_workspaces(exclude: str | None = None) -> list[Path]:
@@ -862,7 +867,7 @@ def _make_uds_dir() -> str:
     if sys.platform == "linux":
         # Both listener and client use a pinned procfs directory alias.
         return d
-    shutil.rmtree(d, ignore_errors=True)
+    rmtree_hardened(d)
     raise ValueError("Joern socket path is too long; select a shorter private TMPDIR")
 
 
@@ -1165,6 +1170,11 @@ class JoernServer:
 
         if self._proc is not None:
             return
+        # Do not overwrite paths retained by a previous failed teardown.
+        if ((self._workdir is not None or self._uds_dir is not None
+                or self._heap_reservation is not None)
+                and self.stop() is False):
+            raise RuntimeError("previous Joern worker cleanup is incomplete")
 
         binary = _repl_bridge_path() or _joern_path() or "joern"
 
@@ -1194,70 +1204,70 @@ class JoernServer:
         # server boot on the machine failed with "failed to start
         # within 120s". The workspace is incidental state (imports use
         # absolute CPG paths), so give each server a disposable one.
-        self._workdir = _new_workspace()
-        # Reclaim workspaces stranded by earlier hard-killed servers
-        # (stop() cleanup is exit-path-only). Best-effort: the sweep
-        # swallows and debug-logs its own failures.
-        sweep_stale_workspaces(exclude=self._workdir)
-
-        heap_flags: list[str] = []
-        if self._heap_mb is not None:
-            # Host-global admission BEFORE exec: N concurrent
-            # sessions each deriving a near-host-sized -Xmx summed
-            # past physical RAM and OOM-killed each other's servers.
-            # The grant — not the derivation — is what this JVM may
-            # claim; explicit operator heaps register but never
-            # reduce (see packages.joern.heap_ledger).
-            self._heap_reservation = reserve_heap_mb(
-                self._heap_mb, derived=self._heap_is_derived,
-                require_capacity=self._confined,
-            )
-            if self._heap_reservation.granted_mb != self._heap_mb:
-                logger.warning(
-                    "Joern server: derived heap %d MB reduced to "
-                    "%d MB by the host heap ledger (concurrent JVM "
-                    "reservations)",
-                    self._heap_mb, self._heap_reservation.granted_mb,
-                )
-                self._heap_mb = self._heap_reservation.granted_mb
-            # Ceiling only — no -Xms pin (measured: no benefit at any
-            # scale, boot-fragile at very large heaps).
-            heap_flags.append(f"-J-Xmx{self._heap_mb}m")
-
-        # Attempt tuned GC flags first; if the JVM rejects them (flag
-        # sets drift across JDK releases and joern launcher versions),
-        # the process dies within seconds — retry once with launcher
-        # defaults rather than failing the whole run.
-        parallelism = "-J-Djava.util.concurrent.ForkJoinPool.common.parallelism=6"
-        flag_sets = [_jvm_gc_flags() + [parallelism], [parallelism]]
-
-        # Isolation tier (see class docstring). On the fallback tier
-        # the per-boot credential on the server's argv is the only
-        # cross-user barrier — say so, loudly, like the sandbox does
-        # when one of its layers cannot engage.
-        use_netns = _netns_isolation_available()
-        if not use_netns and self._confined:
-            logger.info("Joern worker uses host-loopback TCP with a private credential argument file")
-        elif not use_netns:
-            logger.warning(
-                "Joern server: network-namespace isolation UNAVAILABLE "
-                "on this host (unprivileged user namespaces refused) — "
-                "the server listens on host-loopback TCP and its "
-                "per-boot credential is visible to other local users in "
-                "/proc/<pid>/cmdline for the server's lifetime. "
-                "Cross-user isolation of /query-sync is DEGRADED to "
-                "that credential alone."
-            )
-        # pid-namespace supervision rides ON TOP of the netns tier
-        # (same forwarder, CLONE_NEWPID added to the same single
-        # unshare call): the forwarder's death then collapses the
-        # whole namespace tree mechanically, eliminating the
-        # forwarder-dead-JVM-alive orphan class. Probed separately —
-        # hosts commonly allow USER|NET while refusing NEWPID.
-        use_pidns = use_netns and _pidns_supervision_available()
-        tier_refusal_reason: str | None = None
-
         try:
+            self._workdir = _new_workspace()
+            # Reclaim workspaces stranded by earlier hard-killed servers
+            # (stop() cleanup is exit-path-only). Best-effort: the sweep
+            # swallows and debug-logs its own failures.
+            sweep_stale_workspaces(exclude=self._workdir)
+
+            heap_flags: list[str] = []
+            if self._heap_mb is not None:
+                # Host-global admission BEFORE exec: N concurrent
+                # sessions each deriving a near-host-sized -Xmx summed
+                # past physical RAM and OOM-killed each other's servers.
+                # The grant — not the derivation — is what this JVM may
+                # claim; explicit operator heaps register but never
+                # reduce (see packages.joern.heap_ledger).
+                self._heap_reservation = reserve_heap_mb(
+                    self._heap_mb, derived=self._heap_is_derived,
+                    require_capacity=self._confined,
+                )
+                if self._heap_reservation.granted_mb != self._heap_mb:
+                    logger.warning(
+                        "Joern server: derived heap %d MB reduced to "
+                        "%d MB by the host heap ledger (concurrent JVM "
+                        "reservations)",
+                        self._heap_mb, self._heap_reservation.granted_mb,
+                    )
+                    self._heap_mb = self._heap_reservation.granted_mb
+                # Ceiling only — no -Xms pin (measured: no benefit at any
+                # scale, boot-fragile at very large heaps).
+                heap_flags.append(f"-J-Xmx{self._heap_mb}m")
+
+            # Attempt tuned GC flags first; if the JVM rejects them (flag
+            # sets drift across JDK releases and joern launcher versions),
+            # the process dies within seconds — retry once with launcher
+            # defaults rather than failing the whole run.
+            parallelism = "-J-Djava.util.concurrent.ForkJoinPool.common.parallelism=6"
+            flag_sets = [_jvm_gc_flags() + [parallelism], [parallelism]]
+
+            # Isolation tier (see class docstring). On the fallback tier
+            # the per-boot credential on the server's argv is the only
+            # cross-user barrier — say so, loudly, like the sandbox does
+            # when one of its layers cannot engage.
+            use_netns = _netns_isolation_available()
+            if not use_netns and self._confined:
+                logger.info("Joern worker uses host-loopback TCP with a private credential argument file")
+            elif not use_netns:
+                logger.warning(
+                    "Joern server: network-namespace isolation UNAVAILABLE "
+                    "on this host (unprivileged user namespaces refused) — "
+                    "the server listens on host-loopback TCP and its "
+                    "per-boot credential is visible to other local users in "
+                    "/proc/<pid>/cmdline for the server's lifetime. "
+                    "Cross-user isolation of /query-sync is DEGRADED to "
+                    "that credential alone."
+                )
+            # pid-namespace supervision rides ON TOP of the netns tier
+            # (same forwarder, CLONE_NEWPID added to the same single
+            # unshare call): the forwarder's death then collapses the
+            # whole namespace tree mechanically, eliminating the
+            # forwarder-dead-JVM-alive orphan class. Probed separately —
+            # hosts commonly allow USER|NET while refusing NEWPID.
+            use_pidns = use_netns and _pidns_supervision_available()
+            tier_refusal_reason: str | None = None
+
             attempt = 0
             while True:
                 tuning_flags = flag_sets[attempt]
@@ -1419,8 +1429,12 @@ class JoernServer:
                 # claims (stop() releases whatever it finds attached).
                 reservation, self._heap_reservation = (
                     self._heap_reservation, None)
-                self.stop()
-                self._heap_reservation = reservation
+                try:
+                    stopped = self.stop()
+                finally:
+                    self._heap_reservation = reservation
+                if stopped is False:
+                    raise RuntimeError("Joern boot retry cleanup is incomplete")
                 if use_pidns and rc in (EXIT_PIDNS_UNSHARE_REFUSED,
                                         EXIT_PIDNS_WAITER_UNARMED):
                     # Runtime refusal after a positive probe (host
@@ -1504,14 +1518,12 @@ class JoernServer:
 
             self._warmup_imports()
         except BaseException:
-            # A boot that never yielded a live server must return
-            # its heap admission: the reservation is keyed to THIS
-            # process until the post-boot rebind, and a phantom row
-            # from a failed boot would clamp sibling sessions for
-            # as long as this session lives. Idempotent with the
-            # release stop() already performed on the graceful
-            # failure path.
-            self._release_heap_reservation()
+            # Setup, capability probes and launched workers all share one
+            # owner. Stop verifies process death before releasing resources.
+            try:
+                self.stop()
+            except Exception:
+                logger.warning("failed Joern boot cleanup incomplete", exc_info=True)
             raise
 
     def _wait_for_ready(self) -> bool:
@@ -1621,13 +1633,9 @@ class JoernServer:
         if self._proc is None:
             # Admission/capability failures can happen after scratch was
             # allocated but before Popen. They still own cleanup obligations.
-            for attribute in ("_workdir", "_uds_dir"):
-                directory = getattr(self, attribute, None)
-                if directory is not None:
-                    shutil.rmtree(directory, ignore_errors=True)
-                    setattr(self, attribute, None)
+            cleaned = self._cleanup_scratch()
             self._release_heap_reservation()
-            return None
+            return None if cleaned else False
 
         pid = self._proc.pid
         pgid = self._pgid or pid
@@ -1766,12 +1774,7 @@ class JoernServer:
         self._supervision_tier = "group"
         self._tier_refusal_reason = None
 
-        if self._workdir is not None:
-            shutil.rmtree(self._workdir, ignore_errors=True)
-            self._workdir = None
-        if self._uds_dir is not None:
-            shutil.rmtree(self._uds_dir, ignore_errors=True)
-            self._uds_dir = None
+        cleaned = self._cleanup_scratch()
 
         # The JVM the group-kill above just verified dead no longer
         # holds its heap — return the admission. Sessions that never
@@ -1779,7 +1782,20 @@ class JoernServer:
         # session via the lifecycle state file) are covered by the
         # ledger's dead-row eviction instead.
         self._release_heap_reservation()
-        return None
+        return None if cleaned else False
+
+    def _cleanup_scratch(self) -> bool:
+        cleaned = True
+        for attribute in ("_workdir", "_uds_dir"):
+            directory = getattr(self, attribute, None)
+            if directory is None:
+                continue
+            if rmtree_hardened(directory):
+                setattr(self, attribute, None)
+            else:
+                cleaned = False
+                logger.warning("Joern scratch cleanup incomplete: %r", directory)
+        return cleaned
 
     def _release_heap_reservation(self) -> None:
         if self._heap_reservation is not None:
