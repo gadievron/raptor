@@ -120,7 +120,7 @@ MAX_CMD_LEN = 2048
 
 _denial_count: int = 0  # reset by set_active_run_dir per run
 
-# Parent-side memory of the audit-degraded markers THIS process wrote,
+# Parent-side memory of audit-degraded markers THIS process attempted to write,
 # keyed by resolved run-dir path. The marker file lives in the
 # target-writable run root and is written BEFORE the (unaudited)
 # workload executes — the target can simply delete it. The parent
@@ -128,7 +128,8 @@ _denial_count: int = 0  # reset by set_active_run_dir per run
 # from this record (see reassert_audit_degraded). Entries are tiny and
 # per-process run counts are low, so no eviction is needed. Guarded by
 # _lock. Each entry: {"payload": <exact dict written>, "restored":
-# <bool — a re-assert found the on-disk marker missing/altered>}.
+# <bool — a re-assert found the on-disk marker missing/altered>,
+# "persisted": <bool — the marker has reached disk successfully>}.
 _degraded_markers: dict[str, dict] = {}
 
 # Read bound for the marker file during re-assertion. An honest marker
@@ -783,32 +784,33 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     # marker in an unparseable state, and operator tooling treats
     # "corrupt marker" as "audit engaged" (safest default) — silently
     # hiding the degradation signal we needed to surface.
+    persisted = True
     try:
         write_text_atomically(
             out,
             dumps_artifact(payload, ensure_ascii=True) + "\n",
             tmp_prefix=".~audit-degraded-",
         )
-    except (OSError, ValueError, TypeError):
-        # Marker is best-effort. The log warning is the primary signal.
-        # Catch programming-error-shaped failures too (a future payload
-        # change with non-serialisable types would otherwise propagate
-        # and abort the caller's cleanup path).
+    except OSError:
+        persisted = False
+        logger.warning(
+            "record_audit_degraded: marker write failed; retaining state "
+            "for finalization retry under %s", run_dir, exc_info=True,
+        )
+    except (ValueError, TypeError):
+        # An unserialisable payload cannot be retried safely.
+        logger.warning("record_audit_degraded: marker serialization failed",
+                       exc_info=True)
         return
-    # Remember what was written so run finalisation can re-assert it
-    # if the target deletes/alters the marker (the run root is
-    # target-writable while the workload runs). Registered only after
-    # a SUCCESSFUL write — an absence at re-assert time then genuinely
-    # means the file was removed after we wrote it. A pre-existing
-    # "restored" flag is preserved: tamper evidence from an earlier
-    # re-assert must not be washed out by a later degradation site
-    # re-writing the marker.
+    # Retain both persisted markers and pending writes. Only a marker known
+    # to have reached disk can later support a deletion/tampering claim.
     run_key = str(run_dir.resolve())
     with _lock:
         prev = _degraded_markers.get(run_key)
         _degraded_markers[run_key] = {
             "payload": payload,
             "restored": bool(prev and prev.get("restored")),
+            "persisted": persisted or bool(prev and prev.get("persisted", True)),
         }
 
 
@@ -874,7 +876,8 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
     restore itself; the first caller repairs the file, later callers
     such as triage still need to see that a repair was necessary).
     Returns False when no marker was recorded by this process for
-    ``run_dir`` or the on-disk copy is intact.
+    ``run_dir`` or the on-disk copy is intact. An initial write failure
+    is retried without classifying that absence as tampering.
     """
     try:
         run_key = str(Path(run_dir).resolve())
@@ -889,6 +892,24 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
     ).encode("utf-8")
     current = _read_marker_bytes(Path(run_dir) / AUDIT_DEGRADED_FILE)
     if current == expected:
+        entry["persisted"] = True
+        return bool(entry.get("restored"))
+    if not entry.get("persisted", True):
+        # The initial write failed: retry without accusing the target of
+        # deleting a marker that never reached disk.
+        try:
+            write_text_atomically(
+                Path(run_dir) / AUDIT_DEGRADED_FILE,
+                expected.decode("utf-8"),
+                tmp_prefix=".~audit-degraded-",
+            )
+        except OSError:
+            logger.warning(
+                "reassert_audit_degraded: pending marker retry failed under %s",
+                run_dir, exc_info=True,
+            )
+        else:
+            entry["persisted"] = True
         return bool(entry.get("restored"))
     entry["restored"] = True
     logger.warning(
