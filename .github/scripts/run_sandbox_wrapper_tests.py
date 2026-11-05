@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 
@@ -72,6 +74,8 @@ def main():
     parser.add_argument('--selection-json', help='validated per-platform CI selection')
     parser.add_argument('--family', action='append', default=[])
     parser.add_argument('--include-manual', action='store_true', help='require hardware/operator-tool cells too; no skip waiver')
+    parser.add_argument('--jobs', type=int, choices=(1, 2), default=1,
+                        help='maximum concurrent families (default: 1); active families finish after a failure')
     parser.add_argument('--list', action='store_true')
     args = parser.parse_args()
     registry = load_registry()
@@ -144,7 +148,12 @@ def main():
     private_base = os.confstr(65537) if sys.platform == 'darwin' else str(report)
     results = []
     deadline = time.monotonic() + (600 if args.lane == 'contracts' else 1200)
-    for name, selectors, expected, overrides, minimum in runs:
+    stopped = threading.Event()
+
+    def run_group(group):
+        if stopped.is_set():
+            return None
+        name, selectors, expected, overrides, minimum = group
         # A fresh HOME for every group, never account-state copies.
         with tempfile.TemporaryDirectory(prefix='raptor-wrapper-ci-', dir=private_base) as private:
             root = Path(private)
@@ -169,13 +178,38 @@ def main():
                                           timeout=max(1, min(600, deadline-time.monotonic()))).returncode
             except subprocess.TimeoutExpired:
                 code = 124
+            if code:
+                stopped.set()
             problems = check_report(xml, expected=expected, minimum=minimum)
-            results.append(dict(family=name, returncode=code, coverage_errors=problems))
-            print((report/(name+'.log')).read_text()[-12000:], flush=True)
+            if problems:
+                stopped.set()
+            return dict(family=name, returncode=code, coverage_errors=problems)
+
+    def guarded_group(group):
+        try:
+            return run_group(group)
+        except Exception:
+            stopped.set()
+            raise
+
+    # Workers own private directories and per-family reports. Only this thread
+    # writes the shared summary; already active families finish and clean up.
+    order = {group[0]: index for index, group in enumerate(runs)}
+    with ThreadPoolExecutor(max_workers=min(args.jobs, len(runs))) as pool:
+        futures = [pool.submit(guarded_group, group) for group in runs]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            results.append(result)
+            results.sort(key=lambda row: order[row['family']])
+            print((report/(result['family']+'.log')).read_text()[-12000:], flush=True)
             (report/'summary.json').write_text(json.dumps(dict(plan=plan, results=results), indent=2)+'\n')
-            if code or problems:
-                print('\n'.join(problems), file=sys.stderr)
-                return code or 1
+            if result['coverage_errors']:
+                print('\n'.join(result['coverage_errors']), file=sys.stderr)
+    for result in results:
+        if result['returncode'] or result['coverage_errors']:
+            return result['returncode'] or 1
     print('Native exclusions (not acceptance passes): ' + json.dumps(unavailable), flush=True)
     return 0
 

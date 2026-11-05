@@ -165,7 +165,7 @@ jobs:
           GEM_HOME: ${{ runner.temp }}/wrapper-gems
         run: |
           "$VENV_PATH/bin/python" .github/scripts/run_sandbox_wrapper_tests.py \
-            --lane native --selection-json "$WRAPPER_SELECTION" --report-dir "$RUNNER_TEMP/wrapper-native"
+            --lane native --jobs 2 --selection-json "$WRAPPER_SELECTION" --report-dir "$RUNNER_TEMP/wrapper-native"
       - name: Retain coverage and native exclusions
         if: always() && (steps.contracts.outcome != 'skipped' || steps.native.outcome != 'skipped')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
