@@ -1705,6 +1705,11 @@
     "count": 11,
     "kind": "literal"
   },
+  "core/project/__init__.py::_LAZY_EXPORTS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "PEP 562 lazy package export dispatch map from public module/attribute names to their defining modules. This is the core.project Python API surface, including compatibility submodule aliases, not a learned target function-name vocabulary; grows only when package exports change."
+  },
   "core/project/cli.py::_MUTABLE_LIST_FIELDS": {
     "count": 13,
     "kind": "literal"
