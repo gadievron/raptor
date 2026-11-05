@@ -10,7 +10,7 @@ from core.source import open_regular_beneath
 
 
 _QUOTED_C_INCLUDE = re.compile(
-    r'^\s*#\s*include\s*"([^"\n]+\.c)"', re.MULTILINE,
+    r'^[^\S\n]*#[^\S\n]*include[^\S\n]*"([^"\n]+\.c)"', re.MULTILINE,
 )
 _MAX_OWNER_BYTES = 1024 * 1024
 
