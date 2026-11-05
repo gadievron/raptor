@@ -492,11 +492,10 @@ class TestControlErrorNotPinned:
     HYP = "use after free of `p` in f"
 
     @pytest.fixture(autouse=True)
-    def _clear_control_cache(self):
-        from core.audit.sweep import _negative_control_cache
-        _negative_control_cache.clear()
-        yield
-        _negative_control_cache.clear()
+    def _clear_control_cache(self, monkeypatch):
+        from core.audit import sweep as sweep_mod
+
+        monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
 
     def _fake_runner(self, monkeypatch):
         """Fake packages.semgrep.runner: the target scan always finds

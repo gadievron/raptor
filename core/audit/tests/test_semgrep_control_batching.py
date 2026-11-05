@@ -28,10 +28,13 @@ SOURCE = "void f(char *p) { free(p); }\n"
 
 
 @pytest.fixture(autouse=True)
-def _clear_negative_control_cache():
-    _negative_control_cache.clear()
-    yield
-    _negative_control_cache.clear()
+def _clear_negative_control_cache(monkeypatch):
+    """Keep runtime reads and this module's imported alias on one private cache."""
+    from core.audit import sweep as sweep_mod
+
+    cache = {}
+    monkeypatch.setattr(sweep_mod, "_negative_control_cache", cache)
+    monkeypatch.setitem(globals(), "_negative_control_cache", cache)
 
 
 class _Result:
