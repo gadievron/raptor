@@ -63,6 +63,7 @@ from core.sandbox.summary import (
     MAX_DENIALS_PER_RUN,
     SUMMARY_FILE,
     get_evidence_inode_mismatch,
+    get_evidence_write_failure,
     get_proxy_persist_state,
     get_run_posture,
     reassert_audit_degraded,
@@ -371,9 +372,11 @@ def _verify_summary(
         return None, _INTEGRITY_TAMPERED
     corrupt_lines = summary.get("corrupt_lines", 0)
     total_denials = summary.get("total_denials", 0)
+    evidence_write_failure = summary.get("evidence_write_failure", False)
     denials = summary.get("denials", [])
     if (type(corrupt_lines) is not int or corrupt_lines < 0
             or type(total_denials) is not int or total_denials < 0
+            or type(evidence_write_failure) is not bool
             or not isinstance(denials, list)
             or not all(isinstance(row, dict) for row in denials)
             or any(row.get(field) is not None
@@ -384,6 +387,7 @@ def _verify_summary(
     inode_mismatch = bool(summary.get("inode_mismatch"))
     planted_object = str(summary.get("planted_object") or "")
     writer_flagged = (bool(corrupt_lines) or inode_mismatch
+                      or evidence_write_failure
                       or bool(planted_object))
     token = summary.get("mac")
     if not token:
@@ -400,6 +404,7 @@ def _verify_summary(
         run=run,
         corrupt_lines=corrupt_lines,
         inode_mismatch=inode_mismatch,
+        evidence_write_failure=evidence_write_failure,
         planted_object=planted_object,
         posture=posture if isinstance(posture, dict) else None,
         floor_refusals=len(_refusals)
@@ -559,6 +564,7 @@ def triage_run(run_dir: Path, *,
     # no disk artifacts at all, but must still produce a failure report.
     _pm_persist = get_proxy_persist_state(run_dir)
     _pm_inode_mismatch = get_evidence_inode_mismatch(run_dir)
+    _pm_write_failure = get_evidence_write_failure(run_dir)
     if (raw_summary is None and not raw_proxy_events
             and raw_audit_degraded is None and not marker_restored
             and not events_read_issues):
@@ -567,7 +573,7 @@ def triage_run(run_dir: Path, *,
                                  or (_pm_persist or {}).get(
                                      "expected_count")
                                  or (_pm_persist or {}).get("flags")
-                                 or _pm_inode_mismatch):
+                                 or _pm_inode_mismatch or _pm_write_failure):
             pass  # fall through: unusable artifacts drive a report
         else:
             if not allow_legacy:
@@ -593,7 +599,7 @@ def triage_run(run_dir: Path, *,
     _run_binding = telemetry_mac.run_binding(run_dir)
     summary, summary_integrity = _verify_summary(
         raw_summary, _run_binding, allow_legacy=_verify_legacy)
-    if _pm_inode_mismatch:
+    if _pm_inode_mismatch or _pm_write_failure:
         # Parent observation is authoritative even if the disk summary is
         # missing or a later writer omitted its integrity flag.
         summary = None
@@ -750,6 +756,9 @@ def triage_run(run_dir: Path, *,
         if _pm_inode_mismatch:
             evidence.append(
                 "sandbox_summary: parent observed an evidence-file inode mismatch")
+        if _pm_write_failure:
+            evidence.append(
+                "sandbox_summary: parent observed a denial evidence write failure")
         evidence += [
             f"{name}: file present but yielded no readable content "
             f"(destroyed/replaced)" for name in sorted(destroyed)]
