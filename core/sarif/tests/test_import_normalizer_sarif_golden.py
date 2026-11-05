@@ -4,7 +4,9 @@ The golden was captured from ``findings_to_sarif`` BEFORE it moved
 onto ``core.sarif.emit``. The document is written with
 ``save_json(sort_keys=False)``, so member order is the on-disk byte
 order — including this emitter's historical ``version``-before-
-``$schema`` envelope — hence serialized comparison.
+``$schema`` envelope — hence serialized comparison. The normalized metadata
+round-trip fix deliberately moves conflicting catalog CWEs onto their own
+results so a row without a CWE does not inherit another row's classification.
 
 Input coverage: one run per tool (two tools + the ``external``
 default), rule dedup with and without CWE properties, region member

@@ -902,6 +902,14 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
     return matches[0] if len(matches) == 1 else {}
 
 
+def _scope_fingerprint(value: Any) -> str | None:
+    """Recognize normalized namespace bookkeeping, never an authority stamp."""
+    if (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value)):
+        return value
+    return None
+
+
 class ResultRuleResolver:
     """Run-owned descriptor lookup with an unambiguous legacy-ID index.
 
@@ -950,6 +958,12 @@ class ResultRuleResolver:
         owner = self._owners.get(key)
         if owner is None:
             return None
+        # Normalized exports retain an already derived namespace on the
+        # descriptor. Read it only after reference validation selected this
+        # owned rule; result property bags cannot supply a scope.
+        normalized_scope = _scope_fingerprint(_as_dict(rule.get("properties")).get("raptor_rule_scope"))
+        if normalized_scope is not None:
+            return normalized_scope
         # A unique driver ID already has the default namespace. Keep its
         # legacy shape and identity; only extensions and ambiguous driver
         # descriptors require additional provenance.

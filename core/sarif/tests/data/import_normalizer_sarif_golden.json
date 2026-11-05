@@ -8,12 +8,7 @@
           "name": "semgrep",
           "rules": [
             {
-              "id": "py.flask.xss",
-              "properties": {
-                "cwe": [
-                  "CWE-79"
-                ]
-              }
+              "id": "py.flask.xss"
             }
           ]
         }
@@ -41,6 +36,11 @@
               }
             }
           ],
+          "properties": {
+            "cwe": [
+              "CWE-79"
+            ]
+          },
           "codeFlows": [
             {
               "threadFlows": [

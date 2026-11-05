@@ -1686,3 +1686,113 @@ def test_dataflow_export_sanitizes_and_bounds_untrusted_step_properties():
     assert '\x1b' not in wrapper['properties']['tier']
     assert 'nested' not in wrapper['properties']
     assert properties['tier'] == 'bad\x1btier'
+
+
+def test_normalized_round_trips_preserve_scope_cwe_function_and_identity(tmp_path):
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    source = {
+        'tool': {'driver': {'name': 'CodeQL'}, 'extensions': [
+            {'name': name, 'rules': [{'id': 'same', 'properties': {'cwe': [cwe]}}]}
+            for name, cwe in [('first-pack', 'CWE-79'), ('second-pack', 'CWE-89')]
+        ]},
+        'results': [
+            {'rule': {'index': 0, 'toolComponent': {'index': number}},
+             'fingerprints': {'matchBasedId/v1': 'shared-native-id'},
+             'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'a.c'}, 'region': {'startLine': 1}},
+                            'logicalLocations': [{'kind': 'function', 'name': f'function_{number}'}]}],
+             'message': {'text': 'same location'}}
+            for number in range(2)
+        ],
+    }
+    report = tmp_path / 'scoped.sarif'
+    report.write_text(json.dumps({'runs': [source]}))
+    original = parse_sarif_findings(report)
+    current = original
+    for _ in range(3):
+        report.write_text(json.dumps(findings_to_sarif(current)))
+        current = parse_sarif_findings(report)
+        for key in ['finding_id', 'rule_id', 'rule_scope', 'cwe_id', 'function', 'file', 'startLine']:
+            assert [finding.get(key) for finding in current] == [finding.get(key) for finding in original], key
+        assert len(deduplicate_findings(current)) == 2
+
+
+def test_normalized_same_rule_keeps_each_findings_cwe(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    findings = [_make_finding(rule_id='same', cwe_id=cwe, startLine=number + 1)
+                for number, cwe in enumerate(['CWE-79', 'CWE-89', None])]
+    report = tmp_path / 'cwes.sarif'
+    report.write_text(json.dumps(findings_to_sarif(findings)))
+    actual = parse_sarif_findings(report)
+    assert [finding['cwe_id'] for finding in actual] == ['CWE-79', 'CWE-89', None]
+
+
+def test_scope_marker_requires_validated_descriptor_reference(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    report = tmp_path / 'unresolved.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'tool': {'driver': {'name': 'CodeQL', 'rules': [
+            {'id': 'rule', 'properties': {'raptor_rule_scope': 'a' * 64}},
+        ]}},
+        'results': [{'ruleId': 'rule', 'ruleIndex': 99, 'properties': {'raptor_rule_scope': 'b' * 64}}],
+    }]}))
+    assert 'rule_scope' not in parse_sarif_findings(report)[0]
+
+
+def test_distinct_scoped_rule_ids_share_a_run_without_losing_namespaces(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    findings = [_make_finding(rule_id=rule_id, rule_scope=scope, function='handle')
+                for rule_id, scope in [('first', 'a' * 64), ('second', 'b' * 64)]]
+    document = findings_to_sarif(findings)
+    assert len(document['runs']) == 1
+    report = tmp_path / 'compact-scopes.sarif'
+    report.write_text(json.dumps(document))
+    assert [finding['rule_scope'] for finding in parse_sarif_findings(report)] == ['a' * 64, 'b' * 64]
+
+
+@pytest.mark.parametrize('scope', [None, '', 'forged', 'g' * 64, ['a' * 64]],
+                         ids=['absent', 'empty', 'short', 'non-hex', 'non-string'])
+def test_invalid_normalized_scope_markers_cannot_supply_a_namespace(tmp_path, scope):
+    from core.sarif.parser import parse_sarif_findings
+
+    report = tmp_path / 'invalid-scope-marker.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'tool': {'driver': {'name': 'CodeQL', 'rules': [
+            {'id': 'rule', 'properties': {'raptor_rule_scope': scope}},
+        ]}}, 'results': [{'ruleId': 'rule'}],
+    }]}))
+    assert 'rule_scope' not in parse_sarif_findings(report)[0]
+
+
+def test_mixed_scoped_and_unscoped_checks_keep_their_own_namespaces(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    findings = [
+        _make_finding(rule_id='same', finding_id='plain', cwe_id=None),
+        _make_finding(rule_id='same', finding_id='scoped', rule_scope='a' * 64, cwe_id='CWE-89'),
+        _make_finding(rule_id='other', finding_id='other-finding', rule_scope='b' * 64, cwe_id='CWE-79'),
+    ]
+    document = findings_to_sarif(findings)
+    assert len(document['runs']) == 2
+    report = tmp_path / 'mixed-scopes.sarif'
+    report.write_text(json.dumps(document))
+    actual = {finding['finding_id']: finding for finding in parse_sarif_findings(report)}
+    assert actual['plain'].get('rule_scope') is None
+    assert actual['plain']['cwe_id'] is None
+    assert actual['scoped']['rule_scope'] == 'a' * 64
+    assert actual['scoped']['cwe_id'] == 'CWE-89'
+    assert actual['other-finding']['rule_scope'] == 'b' * 64
+    assert actual['other-finding']['cwe_id'] == 'CWE-79'
+
+
+def test_consistent_cwe_stays_shared_without_duplicate_result_properties():
+    document = findings_to_sarif([
+        _make_finding(rule_id='same', cwe_id='CWE-89'),
+        _make_finding(rule_id='same', cwe_id='CWE-89', startLine=2),
+    ])
+    run = document['runs'][0]
+    assert run['tool']['driver']['rules'][0]['properties']['cwe'] == ['CWE-89']
+    assert all('properties' not in result for result in run['results'])
