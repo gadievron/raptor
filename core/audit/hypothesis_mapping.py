@@ -333,6 +333,10 @@ def hypothesis_to_smt_verb(hypothesis: str) -> str | None:
     hyp_lower = hypothesis.lower()
     for keyword, verb in _SMT_HYPOTHESIS_VERBS:
         if keyword in hyp_lower:
+            if verb == "check-oob":
+                from .array_bounds import parse_array_access_claim
+                if parse_array_access_claim(hypothesis) is not None:
+                    return "check-array-bounds"
             return verb
     # Keyword-pair gaps here (and in the cocci mapping below) are
     # bounded ({0,200}): an unbounded `.*` gap makes every occurrence

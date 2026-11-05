@@ -130,7 +130,7 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     from .arithmetic_guards import guards_for_operation
     guards = guards_for_operation(bodies[0], matches[0], data, operands)
     from .arithmetic_types import model_for_operation
-    model = model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi)
+    model = model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi, language=language)
     row, column = matches[0].start_point
     return ArithmeticOperation(
         "bound", row + 1, column + 1, guards.status, guards.premises,

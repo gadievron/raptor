@@ -1463,6 +1463,11 @@ def _solve_pending(
     )
 
 
+def is_literal_identifier(name: str) -> bool:
+    """Whether the condition grammar treats an identifier token as a literal."""
+    return bool(_NULL_RE.fullmatch(name))
+
+
 def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     """Get-or-create a Z3 bitvector variable, sharing ``vars_`` with the parser.
 

@@ -2195,6 +2195,7 @@ _SMT_SHIM_DIR = Path(__file__).resolve().parents[2] / "libexec"
 
 # Verbs served only by run_smt_verb_direct() (no libexec shim).
 _SMT_DIRECT_ONLY_VERBS = frozenset({
+    "check-array-bounds",
     "check-auth-bypass",
     "check-lock-discipline",
     "check-resource-leak",
@@ -2219,6 +2220,7 @@ _SMT_VERB_ROLES = {
     # context and the base case, so it may not promote on its own.
     "invariant-preservation": "detection",
     "check-overflow": "verification",
+    "check-array-bounds": "verification",
     "check-oob": "detection",
     # A free pointer variable equaling zero does not establish a source dereference.
     "check-null-deref": "detection",
@@ -2638,6 +2640,18 @@ def run_smt_verb_direct(
     Runs in a forked subprocess so Z3 assertion failures (segfaults in
     the C++ core) return inconclusive instead of killing the parent.
     """
+    # Prefer a source safety obligation over a guessed numeric bounds model
+    # when the claim names an access and the target integer layout is known.
+    if verb == "check-oob":
+        from .array_bounds import parse_array_access_claim
+        from .integer_abi import resolve_integer_abi
+        if resolve_integer_abi(integer_abi) is not None and parse_array_access_claim(hypothesis) is not None:
+            bound = _smt_verb_in_subprocess(
+                file_path=file_path, function_name=function_name, verb="check-array-bounds",
+                source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,
+            )
+            if (bound.details or {}).get("array_bounds_status") != "unavailable":
+                return bound
     return _smt_verb_in_subprocess(
         file_path=file_path,
         function_name=function_name,
@@ -2714,7 +2728,7 @@ def _smt_verb_in_subprocess(
     from dataclasses import fields
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb == "check-overflow" and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2764,7 +2778,7 @@ def _smt_verb_in_subprocess(
                     result.matches = []
                     result.details = {**details, "source_scope_status": "unbound-worker-result"}
                 result.rule_id = f"smt:{verb}"
-            if is_diagnostic_smt_rule(verb) and result.outcome != "error":
+            if (is_diagnostic_smt_rule(verb) or verb == "check-array-bounds") and result.outcome != "error":
                 result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
                 )
@@ -2791,7 +2805,7 @@ def _run_smt_verb_inner(
     """Confined-worker admission for source-derived function observations."""
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb == "check-overflow" and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2813,7 +2827,7 @@ def _run_smt_verb_inner(
         file_path=file_path, function_name=function_name, verb=verb,
         source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab, integer_abi=abi_record,
     )
-    if binding is not None and is_diagnostic_smt_rule(verb) and result.outcome != "error":
+    if binding is not None and (is_diagnostic_smt_rule(verb) or verb == "check-array-bounds") and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
         if result.outcome != "confirmed":
             result.matches = []
@@ -2837,7 +2851,15 @@ def _run_smt_verb_on_source(
     if vocab is None:
         vocab = _verb_vocab(target_path)
     try:
-        if verb == "check-negative-bypass":
+        if verb == "check-array-bounds":
+            from .array_bounds import check_array_bounds
+            from .condition_extraction import language_for_file
+            details = check_array_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
+            outcome = "confirmed" if details.get("violation") is True else "inconclusive"
+            return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
+                               rule_id=f"smt:{verb}", outcome=outcome, details=details,
+                               matches=[details] if outcome == "confirmed" else [])
+        elif verb == "check-negative-bypass":
             from packages.exploit_feasibility.smt_verbs import check_negative_bypass
             value, limit = _extract_negative_bypass_operands(hypothesis, source)
             if not value or not limit:
@@ -2903,7 +2925,10 @@ def _run_smt_verb_on_source(
                     details={"arithmetic_type_status": "unavailable"},
                 )
             premises = list(operation.premises + operation.domains)
-            gate = _premise_gate(premises, operation.profile)
+            # Retain every reaching-path fact, but unrelated guards alone
+            # do not give unconstrained overflow arithmetic evidence value.
+            overflow_premises = premises if operation.guard_status != "no-guards" or operation.domains else []
+            gate = _premise_gate(overflow_premises, operation.profile)
             if gate is not None:
                 return SweepResult(
                     tool="smt", file_path=file_path,

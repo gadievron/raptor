@@ -5288,7 +5288,8 @@ def disprove_integer_overflow(
         )
     profile, overflow_kind = operation.profile, operation.kind
     premises = list(operation.premises + operation.domains)
-    gate = _premise_gate(premises, profile)
+    overflow_premises = premises if operation.guard_status != "no-guards" or operation.domains else []
+    gate = _premise_gate(overflow_premises, profile)
     if gate is not None:
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",

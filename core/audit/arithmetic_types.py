@@ -69,8 +69,16 @@ def integer_type(spelling, integer_abi=None):
     return kind(abi.int_bits, "unsigned" not in tokens, promote=False)
 
 
-def model_for_operation(target, data, operands, operator, premises, integer_abi=None):
-    """Resolve every arithmetic/guard name and preserve promotion domains."""
+def has_builtin_integer_type(type_node, spelling, language=None):
+    """Recognize grammar builtin types, including C's reserved _Bool token."""
+    return type_node is not None and (
+        type_node.type in {"primitive_type", "sized_type_specifier"}
+        or (language == "c" and type_node.type == "type_identifier" and spelling == "_Bool")
+    )
+
+
+def model_for_integer_terms(target, data, operands, premises, integer_abi=None, *, language=None):
+    """Resolve integer terms and guard names with their promotion domains."""
     abi = resolve_integer_abi(integer_abi)
     if abi is None:
         return ArithmeticModel("unavailable")
@@ -104,13 +112,16 @@ def model_for_operation(target, data, operands, operator, premises, integer_abi=
             return ArithmeticModel("unavailable")
     resolved = {}
     spellings = {}
+    from core.smt_solver.path_feasibility import is_literal_identifier
     for name in sorted(names):
+        if is_literal_identifier(name):
+            return ArithmeticModel("unavailable")
         record = declarations.get(name)
         if record is None or record[0] is None:
             return ArithmeticModel("unavailable")
         spelling, declaration = record
         type_node = declaration.child_by_field_name("type")
-        if type_node is None or type_node.type not in {"primitive_type", "sized_type_specifier"}:
+        if not has_builtin_integer_type(type_node, spelling, language):
             return ArithmeticModel("unavailable")
         kind = integer_type(spelling, abi)
         if kind is None:
@@ -124,8 +135,6 @@ def model_for_operation(target, data, operands, operator, premises, integer_abi=
     if len(profiles) != 1:
         return ArithmeticModel("unavailable")
     profile = profiles.pop()
-    if profile.startswith("int") and operator == "-":
-        return ArithmeticModel("unavailable")  # backend has no signed-subtract oracle
     domains = []
     for name, kind in resolved.items():
         if kind.width == kind.promoted_width:
@@ -138,3 +147,11 @@ def model_for_operation(target, data, operands, operator, premises, integer_abi=
     return ArithmeticModel("bound", profile,
                            "signed_wrap" if profile.startswith("int") else "unsigned_wrap",
                            tuple(domains), tuple(spellings.items()))
+
+
+def model_for_operation(target, data, operands, operator, premises, integer_abi=None, *, language=None):
+    """Integer facts plus the overflow oracle's supported-operation boundary."""
+    model = model_for_integer_terms(target, data, operands, premises, integer_abi, language=language)
+    if model.profile.startswith("int") and operator == "-":
+        return ArithmeticModel("unavailable")  # backend has no signed-subtract oracle
+    return model

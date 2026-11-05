@@ -361,10 +361,11 @@ def registered_spelling_role(part: str) -> str | None:
 # whole namespace is detection-grade by the channels' own
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
-    "check-overflow",
+    "check-overflow", "check-array-bounds",
 )
-_SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
-    "invariant-preservation",
+# The array-access producer mints only its bare, source-bound receipt.
+_SMT_FALLBACK_WITNESS_VERBS = (
+    "check-overflow", "invariant-preservation",
 )
 _CLASSIFIER_FALLBACK_VERIFICATION: dict[str, frozenset[str]] = {
     "joern": frozenset({"joern:flow", "joern:guard-dominance"}),

@@ -22455,7 +22455,7 @@ def _run_tool_chain(
                 )
                 _smt_oc = _observe_sweep(smt_result)
                 if _smt_oc == "confirmed":
-                    confirmed.append(f"smt:{tool_cfg['verb']}")
+                    confirmed.append(getattr(smt_result, "rule_id", "") or f"smt:{tool_cfg['verb']}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "smt", "confirmed")
                 elif _smt_oc == "error":
@@ -25620,7 +25620,7 @@ def _proactive_validate(
             if _pv_smt_oc == "refuted" and not _pv_retained:
                 _pv_smt_oc = "inconclusive"
             if _pv_smt_oc == "confirmed":
-                confirmed_tools.append(f"smt:{smt_verb}")
+                confirmed_tools.append(getattr(smt_result, "rule_id", "") or f"smt:{smt_verb}")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "smt", "confirmed")
             elif _pv_smt_oc == "refuted":
