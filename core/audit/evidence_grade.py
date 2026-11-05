@@ -362,7 +362,7 @@ def registered_spelling_role(part: str) -> str | None:
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
     "check-overflow", "check-oob", "check-null-deref",
-    "validate-path", "check-lock-discipline",
+    "check-lock-discipline",
     "check-integer-narrowing",
 )
 _SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
@@ -477,13 +477,13 @@ def _is_detection_variant(part: str) -> bool:
         )
     # smt: mirrors sweep._SMT_VERB_ROLES detection entries (":witness"
     # keeps its receipt — a concrete solver model discriminates).
-    # Exception: check-encoding-residual stays detection even with
-    # ":witness" — its model ranges over a supplied transfer
-    # description the verb never verifies against the source (mirrors
-    # sweep.is_detection_rule_id's carve-out).
+    # Supplied-predicate feasibility and encoding-description checks
+    # stay detection even with a model: neither verifies its premises
+    # against source semantics (mirrors sweep.is_detection_rule_id).
     if part.startswith("smt:"):
         verb = part.split(":", 2)[1]
-        if verb == "check-encoding-residual":
+        from .smt_evidence import is_predicate_only_smt_rule
+        if verb == "check-encoding-residual" or is_predicate_only_smt_rule(verb):
             return True
         if part.endswith(":witness"):
             return False

@@ -390,7 +390,7 @@ class TestIsToolEvidence:
     def test_namespaced_composites_accepted(self):
         assert is_tool_evidence("semgrep:rule-123")
         assert is_tool_evidence("critique:prefilter:rule-id")
-        assert is_tool_evidence("smt:path_feasibility")
+        assert not is_tool_evidence("smt:path_feasibility")
         assert is_tool_evidence("sarif_cache:hit")
         assert is_tool_evidence("dynamic:sanitizer")
         assert is_tool_evidence("frida:runtime")
@@ -495,7 +495,6 @@ class TestDetectionVariantFirewall:
             "smt:check-overflow",
             "smt:check-oob",
             "smt:check-null-deref",
-            "smt:validate-path",
             "smt:check-auth-bypass:witness",
             "dead_path_smt",
             "dead_path_smt:witness",
@@ -649,6 +648,7 @@ class TestCompositePolicy:
     parts poison; unknown pipeline producers are ignored."""
 
     def test_all_known_namespaces_accepted(self):
+        assert not is_tool_evidence("smt:path-feasible")
         assert is_tool_evidence("smt:path-feasible+lifecycle")
         assert is_tool_evidence(
             "api_boundary:caller-contract+integer_truncation:t1",

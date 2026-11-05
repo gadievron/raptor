@@ -43,6 +43,7 @@ from core.paths import strip_file_uri
 
 from ._util import is_valid_identifier, safe_join
 from .run_memo import BoundedMemo
+from .smt_evidence import is_predicate_only_smt_rule, scope_smt_feasibility as _scope_smt_feasibility
 from .substrate import (
     Coverage,
     UNKNOWN_INCONCLUSIVE,
@@ -2215,7 +2216,7 @@ _SMT_VERB_ROLES = {
     "check-null-deref": "verification",
     "check-overflow-to-oob": "detection",
     "check-negative-bypass": "detection",
-    "validate-path": "verification",
+    "validate-path": "detection",
     # Demoted to detection (corpus-verified): these verbs "confirm"
     # from lexical flow/ordering heuristics — check-early-release and
     # check-toctou never touch the solver, check-auth-bypass /
@@ -2285,10 +2286,9 @@ def is_detection_rule_id(stamp: str) -> bool:
     A ``:witness`` suffix records a concrete solver model and keeps the
     stamp's receipt; verbs the table does not name keep their current
     grading (the firewall only demotes what the channel has explicitly
-    classified as detection-role). Exception: check-encoding-residual
-    — its solver model ranges over premises (the transfer description)
-    the verb never verifies against the source, so a concrete model
-    does NOT discriminate and the ``:witness`` escape is withheld.
+    classified as detection-role). Predicate-only path receipts and
+    check-encoding-residual retain detection role even with a model:
+    their premises are not verified against source semantics.
     """
     part = stamp.split(":", 1)[1] if ":" in stamp else stamp
     if part.startswith("symbolic-") or stamp.startswith("symbolic"):
@@ -2297,6 +2297,8 @@ def is_detection_rule_id(stamp: str) -> bool:
     if ":" not in stamp:
         return False
     verb = stamp.split(":", 2)[1]
+    if is_predicate_only_smt_rule(verb):
+        return True
     if stamp.endswith(":witness"):
         return verb == "check-encoding-residual"
     return _SMT_VERB_ROLES.get(verb) == "detection"
@@ -2536,11 +2538,13 @@ def run_smt_sweep(
                     "meaningful",
                 )
 
+        outcome, scope_details = _scope_smt_feasibility(verb, outcome, result_data)
         return SweepResult(
             tool="smt",
             file_path=file_path,
             function_name=function_name,
             outcome=outcome,
+            details=scope_details,
             matches=[result_data] if outcome == "confirmed" else [],
             rule_id=f"smt:{verb}",
             raw_output=raw,
@@ -2724,7 +2728,15 @@ def _smt_verb_in_subprocess(
         # Tolerate a child from a slightly different tree revision:
         # unexpected fields degrade to the crash sentinel below.
         with contextlib.suppress(TypeError):
-            return SweepResult(**out)
+            result = SweepResult(**out)
+            if verb == "validate-path" and result.outcome != "error":
+                result.outcome, result.details = _scope_smt_feasibility(
+                    verb, result.outcome, result.details or {},
+                )
+                result.rule_id = "smt:validate-path"
+                if result.outcome != "confirmed":
+                    result.matches = []
+            return result
     logger.warning(
         "SMT subprocess failed for %s:%s verb=%s",
         file_path, function_name, verb,
@@ -3064,9 +3076,11 @@ def _run_smt_verb_inner(
         else:
             outcome = "inconclusive"
 
+        outcome, scope_details = _scope_smt_feasibility(verb, outcome, result)
         return SweepResult(
             tool="smt", file_path=file_path,
             function_name=function_name, outcome=outcome,
+            details=scope_details,
             matches=[result] if outcome == "confirmed" else [],
             rule_id=f"smt:{verb}",
             raw_output=_json.dumps(result),
