@@ -44,10 +44,12 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
     if data is None:
         return []
     events: list[dict[str, Any]] = []
-    # TextIOWrapper preserves the previous universal-newline and UTF-8
-    # replacement behavior. The input cap bounds even a single long line;
-    # the separate character cap keeps it out of the JSON decoder.
-    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace") as fh:
+    # Preserve universal newlines while deferring UTF-8 validation to each
+    # record. Strict decoding in TextIOWrapper can discard valid neighbors
+    # in the same buffer; replacement decoding would invent event content.
+    # The input cap bounds even a single long line; the character cap keeps
+    # oversized records out of the JSON decoder.
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="surrogateescape") as fh:
         for i, line in enumerate(fh):
             if i >= _MAX_LINES:
                 break
@@ -57,6 +59,9 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
             if not line:
                 continue
             try:
+                # Invalid source bytes survived only as surrogate escapes.
+                # Reject them before parsing, without altering valid Unicode.
+                line.encode("utf-8")
                 obj = json.loads(line)
                 if isinstance(obj, dict):
                     events.append(obj)
