@@ -544,19 +544,19 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
             flags=flags)
     except Exception:  # noqa: BLE001 — accounting is best-effort
         logger.debug("proxy persist accounting failed", exc_info=True)
-    token = _tmac.mint(_tmac.proxy_events_count_fields(
-        count, flags, run_binding))
-    if not token:
-        return
-    import json as _json
-    payload = _json.dumps({
-        "count": int(count),
-        "flags": flags,
-        "mac": token,
-    })
     path = os.path.join(output, _proxy_mod.PROXY_EVENTS_COUNT_FILENAME)
-    from core.atomic_fs import write_text_atomically
     try:
+        token = _tmac.mint(_tmac.proxy_events_count_fields(
+            count, flags, run_binding))
+        if not token:
+            return
+        import json as _json
+        payload = _json.dumps({
+            "count": int(count),
+            "flags": flags,
+            "mac": token,
+        })
+        from core.atomic_fs import write_text_atomically
         # Complete writes, unique temporary-file ownership, and fsync before
         # replacement come from the same primitive as other audit artifacts.
         write_text_atomically(
