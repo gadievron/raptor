@@ -1141,7 +1141,7 @@ def _load_json(path: Path) -> dict | None:
     if data is None:
         return None
     try:
-        loaded = json.loads(data.decode("utf-8", errors="replace"))
+        loaded = json.loads(data.decode("utf-8"))
     except (ValueError, RecursionError):
         return None
     return loaded if isinstance(loaded, dict) else None
@@ -1276,7 +1276,9 @@ def _parse_jsonl_line(
     if not line:
         return
     try:
-        record = json.loads(line.decode("utf-8", errors="replace"))
+        # Reject damaged bytes rather than silently changing JSON keys or
+        # values before provenance and classification checks.
+        record = json.loads(line.decode("utf-8"))
     except (ValueError, RecursionError):
         issues.add("malformed_record")
         return
