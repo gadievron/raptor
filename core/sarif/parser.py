@@ -113,9 +113,35 @@ def _sanitize_step_properties(props: Any) -> dict[str, Any]:
     return out
 
 
+def _thread_flow_location(wrapper: Any, cached_locations: Any) -> dict[str, Any] | None:
+    """Resolve one run-owned cached hop; reject conflicting or chained references.
+
+    SARIF 2.1.0 section 3.38.2 requires inline properties to agree with
+    the cached object. Only direct array indexing is used, with no traversal.
+    """
+    if not isinstance(wrapper, dict):
+        return None
+    index = wrapper.get("index", -1)
+    if type(index) is not int or index < -1:
+        return None
+    if index == -1:
+        return wrapper
+    if not isinstance(cached_locations, list) or index >= len(cached_locations):
+        return None
+    cached = cached_locations[index]
+    if not isinstance(cached, dict):
+        return None
+    if "index" in cached and (type(cached["index"]) is not int or cached["index"] != index):
+        return None
+    if any(key != "index" and value != cached.get(key) for key, value in wrapper.items()):
+        return None
+    return cached
+
+
 def _path_from_locations(
     locations: list[dict[str, Any]],
     *, resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
+    thread_flow_locations: Any = None,
 ) -> dict[str, Any] | None:
     """Build a {source, sink, steps, total_steps} dict from one
     SARIF threadFlow's locations array. Returns None if there are
@@ -133,7 +159,10 @@ def _path_from_locations(
         "steps": [],
         "total_steps": len(locations),
     }
-    for idx, loc_wrapper in enumerate(locations):
+    for idx, raw_wrapper in enumerate(locations):
+        loc_wrapper = _thread_flow_location(raw_wrapper, thread_flow_locations)
+        if loc_wrapper is None:
+            return None
         location = loc_wrapper.get("location", {})
         physical_loc = location.get("physicalLocation") or {}
         artifact = physical_loc.get("artifactLocation") or {}
@@ -176,6 +205,7 @@ def _path_from_locations(
 def extract_dataflow_path(
     code_flows: list[dict[str, Any]], *,
     resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
+    thread_flow_locations: Any = None,
 ) -> dict[str, Any] | None:
     """
     Extract dataflow path information from SARIF codeFlows.
@@ -189,7 +219,9 @@ def extract_dataflow_path(
 
     An optional run-owned URI resolver applies to every hop. Returning
     None rejects that path while leaving sibling thread flows available.
-    Without a resolver, explicit URI behavior is unchanged.
+    Without a resolver, explicit URI behavior is unchanged. The optional
+    ``thread_flow_locations`` table belongs to the same run; unresolved or
+    conflicting indexed hops reject their whole path, never bridge over it.
 
     Returns:
         Dict with `source`/`sink`/`steps`/`total_steps` for the first
@@ -212,7 +244,10 @@ def extract_dataflow_path(
             for tflow in thread_flows:
                 try:
                     locations = tflow.get("locations") or []
-                    p = _path_from_locations(locations, resolve_uri=resolve_uri)
+                    p = _path_from_locations(
+                        locations, resolve_uri=resolve_uri,
+                        thread_flow_locations=thread_flow_locations,
+                    )
                     if p is not None:
                         all_paths.append(p)
                 except Exception as e:  # noqa: BLE001
@@ -1350,7 +1385,10 @@ def parse_sarif_findings(
                 compiler_evidence = bounded
                 dataflow_path = None  # Control-flow assumptions are not taint source/sink evidence.
             else:
-                dataflow_path = extract_dataflow_path(code_flows, resolve_uri=_resolve_flow_uri) if code_flows else None
+                dataflow_path = extract_dataflow_path(
+                    code_flows, resolve_uri=_resolve_flow_uri,
+                    thread_flow_locations=run.get("threadFlowLocations"),
+                ) if code_flows else None
 
             rule_cwe, default_level, rule_scope = rule_resolver.metadata(rule)
 
