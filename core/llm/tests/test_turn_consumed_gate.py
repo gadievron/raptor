@@ -34,15 +34,17 @@ def _raptor_logger_propagates():
     raptor = logging.getLogger("raptor")
     orig = raptor.propagate
     raptor.propagate = True
-    yield
-    raptor.propagate = orig
+    try:
+        yield
+    finally:
+        raptor.propagate = orig
 
 
 @pytest.fixture(autouse=True)
-def _clean_attempt_state():
-    dispatcher_client._attempt_state.response_started = False
-    yield
-    dispatcher_client._attempt_state.response_started = False
+def _clean_attempt_state(monkeypatch):
+    monkeypatch.setattr(
+        dispatcher_client._attempt_state, "response_started", False, raising=False,
+    )
 
 
 @pytest.fixture(autouse=True)

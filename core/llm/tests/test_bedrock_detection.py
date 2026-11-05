@@ -32,12 +32,10 @@ needs_botocore = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _clear_availability_cache():
+def _clear_availability_cache(monkeypatch):
     """Each test sees a fresh availability calculation."""
     import core.llm.detection as det
-    det._cached_llm_availability = None
-    yield
-    det._cached_llm_availability = None
+    monkeypatch.setattr(det, "_cached_llm_availability", None)
 
 
 def test_bare_aws_region_is_not_bedrock_intent(monkeypatch):

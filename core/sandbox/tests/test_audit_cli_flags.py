@@ -24,20 +24,20 @@ def parser():
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
-    state._cli_sandbox_audit = False
-    state._cli_sandbox_audit_verbose = False
-    state._cli_sandbox_disabled = False
-    state._cli_sandbox_profile = None
-    state._cli_sandbox_readable_paths = None
-    state._cli_sandbox_tool_paths = None
-    yield
-    state._cli_sandbox_audit = False
-    state._cli_sandbox_audit_verbose = False
-    state._cli_sandbox_disabled = False
-    state._cli_sandbox_profile = None
-    state._cli_sandbox_readable_paths = None
-    state._cli_sandbox_tool_paths = None
+def reset_state(monkeypatch):
+    """Pin every CLI setting these tests may change, preserving borrowed state."""
+    for name, value in {
+        "_cli_sandbox_audit": False,
+        "_cli_sandbox_audit_verbose": False,
+        "_cli_sandbox_disabled": False,
+        "_cli_sandbox_profile": None,
+        "_cli_sandbox_readable_paths": None,
+        "_cli_sandbox_tool_paths": None,
+        "_cli_sandbox_audit_budget": None,
+        "_cli_sandbox_disable_consent": None,
+        "_cli_sandbox_floor": None,
+    }.items():
+        monkeypatch.setattr(state, name, value)
 
 
 class TestArgparseShape:

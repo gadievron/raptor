@@ -56,12 +56,11 @@ def _mark_response_started() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clean_attempt_state():
-    """Each test starts and ends with no recorded attempt state, so a
-    failure in one test can never steer another's retry gate."""
-    dispatcher_client._attempt_state.response_started = False
-    yield
-    dispatcher_client._attempt_state.response_started = False
+def _clean_attempt_state(monkeypatch):
+    """Start with no recorded attempt and restore the caller's thread state."""
+    monkeypatch.setattr(
+        dispatcher_client._attempt_state, "response_started", False, raising=False,
+    )
 
 
 @pytest.fixture(autouse=True)
