@@ -12,7 +12,7 @@ import os
 import re
 import stat as stat_mod
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import unquote, urlsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
@@ -340,13 +340,44 @@ def _result_key(
     return (rule_id, uri, line, end_line, start_col, fingerprint)
 
 
+def _uses_artifact_table(result: dict[str, Any]) -> bool:
+    """Detect indexed standard locations without traversing property bags.
+
+    Bound the walk to 20,000 steps / 64 iterator frames. On exhaustion,
+    retain the run context so unseen references cannot be rebound by merge.
+    Strings and wide arrays are never copied into a pending-work list.
+    """
+    stack: list[Iterator[Any]] = [iter((result,))]
+    for _ in range(20_000):
+        if not stack:
+            return False
+        try:
+            node = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        if isinstance(node, dict):
+            for name in ("artifactLocation", "analysisTarget"):
+                artifact = node.get(name)
+                if isinstance(artifact, dict) and "index" in artifact:
+                    return True
+            if len(stack) >= 64:
+                return True
+            stack.append(value for key, value in node.items() if key != "properties")
+        elif isinstance(node, list):
+            if len(stack) >= 64:
+                return True
+            stack.append(iter(node))
+    return True
+
+
 def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Merge multiple SARIF files into a single SARIF dict.
 
     ID-only runs without URI-base tables are grouped by tool name and
     deduplicated by ``_result_key`` (latest occurrence wins). Runs carrying
-    URI-base tables or qualified rule references retain their metadata;
+    URI-base tables, referenced artifacts or qualified rules retain their metadata;
     only identical contexts and exact reports are coalesced.
 
     Args:
@@ -373,11 +404,14 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 continue
             tool_name = get_tool_name(run)
             results = run.get("results") or []
+            artifacts = run.get("artifacts")
             if (_as_dict(run.get("originalUriBaseIds")) or
                     any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
-                        for result in results)):
-                # Rules and URI bases belong to this run. Combining tables
-                # can change both the referenced rule and the source file.
+                        for result in results) or
+                    (isinstance(artifacts, list) and artifacts and
+                     any(_uses_artifact_table(result) for result in results if isinstance(result, dict)))):
+                # Rules, URI bases and referenced artifacts belong to this
+                # run. Combining tables can rebind a rule or source file.
                 metadata = {key: value for key, value in run.items() if key != "results"}
                 context_key = (tool_name, content_identity(metadata))
                 if context_key not in tool_runs:
@@ -996,17 +1030,31 @@ def parse_sarif_findings(
         # path relative to wherever they happened to be running.
         # Resolve via the run's `originalUriBaseIds` table.
         uri_bases = _as_dict(run.get("originalUriBaseIds"))
+        artifacts = run.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, list) else []
+        artifact_uris: dict[int, str | None] = {}
 
         def _resolve_uri(
             art: dict[str, Any], _uri_bases=uri_bases,
         ) -> str | None:
-            """Resolve `art.uri` against the run's `originalUriBaseIds`,
-            following nested `uriBaseId` references up to a small depth
-            cap. Returns the final URI string, or None if the input
-            has no `uri`."""
+            """Resolve an explicit URI, or an index into this run's artifacts.
+
+            Explicit URIs retain precedence. Indexed table locations may
+            carry their own index, but resolution never follows index chains.
+            """
             uri = art.get("uri")
+            index = None
             if not isinstance(uri, str):
-                return None
+                index = art.get("index")
+                if type(index) is not int or not 0 <= index < len(artifacts):
+                    return None
+                if index in artifact_uris:
+                    return artifact_uris[index]
+                artifact_uris[index] = None
+                art = _as_dict(_as_dict(artifacts[index]).get("location"))
+                uri = art.get("uri")
+                if not isinstance(uri, str):
+                    return None
             base_id = art.get("uriBaseId")
             seen: set[str] = set()
             depth = 0
@@ -1027,6 +1075,8 @@ def parse_sarif_findings(
                 # absolute on its own.
                 uri = base_uri + uri.lstrip("/")
                 base_id = base.get("uriBaseId")
+            if index is not None:
+                artifact_uris[index] = uri
             return uri
 
         for result in results:

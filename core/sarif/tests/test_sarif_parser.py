@@ -1406,3 +1406,120 @@ class TestResolvedPrimaryLocationIdentity(unittest.TestCase):
         finding = self._parse(document)[0]
         self.assertEqual(finding['finding_id'], 'tool-fingerprint')
         self.assertEqual(finding['file'], 'file:///repo/same.c')
+
+
+class TestIndexedArtifactLocations(unittest.TestCase):
+    @staticmethod
+    def _document(locations, artifacts, bases=None):
+        rows = [_result(startLine=1) for _ in locations]
+        for row, location in zip(rows, locations):
+            row['locations'][0]['physicalLocation']['artifactLocation'] = location
+        document = _sarif(rows, tool='CodeQL')
+        document['runs'][0]['artifacts'] = artifacts
+        if bases is not None:
+            document['runs'][0]['originalUriBaseIds'] = bases
+        return document
+
+    @staticmethod
+    def _parse(document, root=None):
+        from core.sarif.parser import parse_sarif_findings
+        with tempfile.TemporaryDirectory() as directory:
+            return parse_sarif_findings(_write_sarif(directory, document), source_root=root)
+
+    def test_index_only_locations_have_distinct_files_and_ids(self):
+        from core.sarif.parser import deduplicate_findings
+        document = self._document([{'index': 0}, {'index': 1}],
+                                  [{'location': {'uri': 'left.c'}}, {'location': {'uri': 'right.c'}}])
+        findings = self._parse(document)
+        self.assertEqual([finding['file'] for finding in findings], ['left.c', 'right.c'])
+        self.assertEqual(len({finding['finding_id'] for finding in findings}), 2)
+        self.assertEqual(len(deduplicate_findings(findings)), 2)
+
+    def test_indexed_and_explicit_locations_share_identity(self):
+        document = self._document([{'index': 0}, {'uri': 'src/a.c', 'uriBaseId': 'ROOT'}],
+                                  [{'location': {'uri': 'src/a.c', 'uriBaseId': 'ROOT', 'index': 0}}],
+                                  {'ROOT': {'uri': 'file:///repo/'}})
+        findings = self._parse(document)
+        self.assertEqual([finding['file'] for finding in findings], ['file:///repo/src/a.c'] * 2)
+        self.assertEqual(findings[0]['finding_id'], findings[1]['finding_id'])
+
+    def test_invalid_indexes_cannot_borrow_an_artifact(self):
+        for index in [True, False, -1, -2, 1, '0', None, {}, []]:
+            with self.subTest(index=index):
+                document = self._document([{'index': index}], [{'location': {'uri': 'wrong.c'}}])
+                self.assertIsNone(self._parse(document)[0]['file'])
+
+    def test_explicit_uri_keeps_precedence_over_ancillary_index(self):
+        for index in [0, -1, True, 'invalid']:
+            with self.subTest(index=index):
+                document = self._document([{'uri': 'explicit.c', 'index': index}],
+                                          [{'location': {'uri': 'other.c'}}])
+                self.assertEqual(self._parse(document)[0]['file'], 'explicit.c')
+
+    def test_indexed_locations_keep_source_root_containment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            document = self._document([{'index': 0}, {'index': 1}],
+                                      [{'location': {'uri': 'inside.c'}},
+                                       {'location': {'uri': '../outside.c'}}])
+            findings = self._parse(document, root=Path(directory))
+        self.assertEqual([finding['file'] for finding in findings], ['inside.c'])
+
+    def test_merge_keeps_each_artifact_table_without_rule_indexes(self):
+        from core.sarif.parser import merge_sarif, parse_sarif_findings
+        with tempfile.TemporaryDirectory() as directory:
+            inputs = [_write_sarif(directory, self._document([{'index': 0}],
+                       [{'location': {'uri': uri}}]), f'{index}.sarif')
+                      for index, uri in enumerate(['left.c', 'right.c'])]
+            merged = merge_sarif([str(path) for path in inputs])
+            findings = parse_sarif_findings(_write_sarif(directory, merged, 'combined.sarif'))
+        self.assertEqual([finding['file'] for finding in findings], ['left.c', 'right.c'])
+        self.assertEqual(len({finding['finding_id'] for finding in findings}), 2)
+
+    def test_merge_preserves_artifacts_referenced_only_by_related_locations(self):
+        from core.sarif.parser import merge_sarif
+        document = self._document([{'uri': 'explicit.c'}], [{'location': {'uri': 'related.c'}}])
+        document['runs'][0]['results'][0]['relatedLocations'] = [{'physicalLocation': {
+            'artifactLocation': {'index': 0}, 'region': {'startLine': 2},
+        }}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_sarif(directory, document)
+            merged = merge_sarif([str(path)])
+        self.assertEqual(merged['runs'][0]['artifacts'], document['runs'][0]['artifacts'])
+
+    def test_missing_and_malformed_table_locations_remain_unlocated(self):
+        tables = [None, {}, 'malformed', [], [None], ['malformed'],
+                  [{'location': None}], [{'location': {'index': 0}}],
+                  [{'location': {'uri': ['malformed']}}]]
+        for table in tables:
+            with self.subTest(table=table):
+                self.assertIsNone(self._parse(self._document([{'index': 0}], table))[0]['file'])
+
+    def test_negative_cache_cannot_leak_between_runs(self):
+        from core.sarif.parser import parse_sarif_findings
+        failed = self._document([{'index': 0}], [{'location': {'index': 0}}])
+        valid = self._document([{'index': 0}], [{'location': {'uri': 'valid.c'}}])
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_sarif(directory, {'runs': failed['runs'] + valid['runs']})
+            findings = parse_sarif_findings(path)
+        self.assertEqual([finding['file'] for finding in findings], [None, 'valid.c'])
+
+    def test_bounded_merge_walk_retains_unseen_artifact_references(self):
+        from core.sarif.parser import merge_sarif
+        for shape in ['wide', 'deep', 'analysis-target']:
+            with self.subTest(shape=shape):
+                document = self._document([{'uri': 'explicit.c'}], [{'location': {'uri': 'related.c'}}])
+                result = document['runs'][0]['results'][0]
+                reference = {'artifactLocation': {'index': 0}}
+                if shape == 'wide':
+                    result['graphs'] = [{} for _ in range(20_100)]
+                    result['relatedLocations'] = [{'physicalLocation': reference}]
+                elif shape == 'analysis-target':
+                    result['analysisTarget'] = {'index': 0}
+                else:
+                    for _ in range(100):
+                        reference = {'children': [reference]}
+                    result['graphs'] = [reference]
+                with tempfile.TemporaryDirectory() as directory:
+                    path = _write_sarif(directory, document)
+                    merged = merge_sarif([str(path)])
+                self.assertEqual(merged['runs'][0]['artifacts'], document['runs'][0]['artifacts'])
