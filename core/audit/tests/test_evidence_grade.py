@@ -476,6 +476,7 @@ class TestDetectionVariantFirewall:
         for stamp in (
             "smt:check-toctou",
             "smt:check-null-propagation",
+            "smt:check-null-deref",
             "smt:check-auth-bypass",
             "smt:check-resource-leak",
             "smt:check-early-release",
@@ -494,7 +495,6 @@ class TestDetectionVariantFirewall:
             "smt",
             "smt:check-overflow",
             "smt:check-oob",
-            "smt:check-null-deref",
             "smt:check-negative-bypass:witness",
             "dead_path_smt",
             "dead_path_smt:witness",

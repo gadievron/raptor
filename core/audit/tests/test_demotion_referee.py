@@ -217,7 +217,7 @@ class TestSingleDetectionReceiptFloor:
 
     def test_verification_receipt_still_qualifies(self):
         assert _probe_backed_suspicious(
-            _outcome(evidence="smt:check-null-deref"),
+            _outcome(evidence="smt:check-overflow"),
         )
 
     def test_demoted_heuristic_verbs_do_not_qualify_alone(self):

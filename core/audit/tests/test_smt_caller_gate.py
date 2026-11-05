@@ -437,7 +437,7 @@ class TestCleanRefutedCallerGate:
         assert outcome.evidence_tool == "clean-refuted:smt:check-overflow"
         assert result.findings == 0
 
-    def test_unguarded_call_site_promotes_with_citation(
+    def test_null_caller_cannot_upgrade_a_nullability_only_receipt(
         self, tmp_path, monkeypatch,
     ):
         result, _ = self._run(tmp_path, monkeypatch, {
@@ -445,12 +445,11 @@ class TestCleanRefutedCallerGate:
             "call.c": "int trigger(void)\n{\n    return handle(NULL);\n}\n",
         }, _NULL_MECHANISM, "check-null-deref", file="req.c", func="handle")
         outcome = result.outcomes[0]
-        assert outcome.status == "finding"
-        assert outcome.evidence_tool == "clean-refuted:smt:check-null-deref"
-        assert "[smt-caller-gate:" in outcome.body
-        assert "call.c:3" in outcome.body
-        assert result.findings == 1
-        assert result.sweep_promoted == 1
+        # A null argument does not supply the missing source path/dereference proof.
+        assert outcome.status == "clean"
+        assert not outcome.evidence_tool
+        assert result.findings == 0
+        assert result.sweep_promoted == 0
 
     def test_external_only_callers_hold(self, tmp_path, monkeypatch):
         result, _ = self._run(tmp_path, monkeypatch, {
@@ -629,13 +628,11 @@ class TestCleanRefutedCallerGate:
         assert result.outcomes[0].status == "clean"
         assert calls == []
 
-    def test_hold_does_not_short_circuit_later_hypotheses(
+    def test_later_nullability_lead_preserves_the_earlier_verification_hold(
         self, tmp_path, monkeypatch,
     ):
-        # A hold resolves only its own receipt: a later ranked
-        # hypothesis carrying a caller-VIOLATING precondition still
-        # promotes, and the verdict counters stay consistent across
-        # the hold → promote sequence.
+        # A later diagnostic lead must not overwrite the earlier held
+        # verification receipt or its caller-gate record.
         target = tmp_path / "target"
         target.mkdir()
         (target / "req.c").write_text(_NULL_CALLEE)
@@ -656,7 +653,7 @@ class TestCleanRefutedCallerGate:
                 # Ranked first (higher mechanism specificity): holds
                 # (its operands are not parameters of handle).
                 {"mechanism": overflow_mech, "confidence": "refuted"},
-                # Ranked second: promotes on the literal-NULL caller.
+                # Ranked second: nullability remains diagnostic even with a null caller.
                 {"mechanism": _NULL_MECHANISM, "confidence": "refuted"},
             ],
         )
@@ -685,29 +682,21 @@ class TestCleanRefutedCallerGate:
             ),
         )
         _promote_clean_refuted(result, config, checklist=checklist)
-        assert result.outcomes[0].status == "finding"
-        assert (
-            result.outcomes[0].evidence_tool
-            == "clean-refuted:smt:check-null-deref"
-        )
+        assert result.outcomes[0].status == "suspicious"
+        assert result.outcomes[0].evidence_tool == "clean-refuted:smt:check-overflow"
         assert result.clean == 0
-        assert result.suspicious == 0
-        assert result.findings == 1
+        assert result.suspicious == 1
+        assert result.findings == 0
         assert result.refuted_rescued == 1
-        assert result.sweep_promoted == 1
+        assert result.sweep_promoted == 0
         entries = [
             json.loads(line) for line in
             (config.out_dir / ".audit-log.jsonl").read_text().splitlines()
         ]
-        actions = [e.get("action") for e in entries]
-        assert "smt_promotion_caller_gate_held" in actions
-        # The gate record must describe the PROMOTING decision — the
-        # earlier hypothesis' hold record on a finding would
-        # contradict the verdict for review_result consumers.
+        assert "smt_promotion_caller_gate_held" in [e.get("action") for e in entries]
         gate_record = result.outcomes[0].review_result["smt_caller_gate"]
-        assert gate_record["action"] == "promote"
-        assert gate_record["channel_outcome"] == "confirmed"
-        assert "call.c" in gate_record["reason"]
+        assert gate_record["action"] == "hold"
+        assert gate_record["channel_outcome"] == "unbindable"
 
     def test_lane2_after_hold_preserves_verification_stamp(
         self, tmp_path, monkeypatch,

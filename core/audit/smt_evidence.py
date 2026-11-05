@@ -27,6 +27,7 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
 
 
 _DIAGNOSTIC_ORACLE_SCOPES = {
+    "check-null-deref": "pointer-nullability-only",
     "check-lock-discipline": "lexical-lock-discipline",
     "check-integer-narrowing": "type-width-only",
     "check-auth-bypass": "source-pattern",
