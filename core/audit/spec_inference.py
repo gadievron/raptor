@@ -1327,23 +1327,34 @@ def find_peer_functions(
                     "file": file_entry.get("path", ""),
                     "line": item.get("line_start", 0),
                 })
+                if len(peers) == 5:
+                    return peers
 
-    return peers[:5]
+    return peers
+
+
+_PEER_VERSION_RE = re.compile(r"_?v\d+$")
+_PEER_SUFFIX_RE = re.compile(r"_(?:new|old|orig|fixed|safe|unsafe)$")
+_PEER_DIGITS_RE = re.compile(r"\d+$")
 
 
 def _extract_base_name(name: str) -> str:
     """Strip version suffixes and common prefixes to get the base concept."""
-    stripped = re.sub(r"_?v\d+$", "", name)
-    stripped = re.sub(r"_(?:new|old|orig|fixed|safe|unsafe)$", "", stripped)
-    return re.sub(r"\d+$", "", stripped)
+    stripped = _PEER_VERSION_RE.sub("", name)
+    stripped = _PEER_SUFFIX_RE.sub("", stripped)
+    return _PEER_DIGITS_RE.sub("", stripped)
 
 
 def _is_peer(base: str, original: str, candidate: str) -> bool:
     """Check if candidate is a peer of original given the base name."""
     if candidate == original:
         return False
-    cand_base = _extract_base_name(candidate)
-    if cand_base == base and cand_base != candidate:
-        return True
+    # Normalization only removes suffixes. The regex end anchor can
+    # also match before a final newline, so retain that exceptional path.
+    if (type(base) is not str or type(candidate) is not str
+            or candidate.endswith("\n") or candidate.startswith(base)):
+        cand_base = _extract_base_name(candidate)
+        if cand_base == base and cand_base != candidate:
+            return True
     prefix_len = len(os.path.commonprefix([original, candidate]))
     return prefix_len >= len(original) * 0.6 and prefix_len >= 4
