@@ -14,13 +14,15 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_state import isolated_module_state
+
 from core.audit import expanded_semgrep as es
 from core.audit import preprocessor_view as pv
 from core.audit.expanded_semgrep import ExpandedRuleResult
 from core.audit.sweep import run_semgrep_sweep
 
-pv._reset_probe_cache()
-HAVE_CPP = pv._preprocessor_for(False) is not None
+with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+    HAVE_CPP = pv._preprocessor_for(False) is not None
 needs_cpp = pytest.mark.skipif(
     not HAVE_CPP, reason="no C preprocessor (gcc/cpp) installed",
 )
@@ -28,11 +30,16 @@ needs_cpp = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _fresh_state():
-    pv._reset_probe_cache()
-    es._reset_process_budget()
-    yield
-    pv._reset_probe_cache()
-    es._reset_process_budget()
+    from contextlib import ExitStack
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(
+            pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            es, {"_PROCESS_BUDGET": es.ExpansionBudget()},
+        ))
+        yield
 
 
 @pytest.fixture

@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 
 from core.audit.orchestrator import _run_tool_chain
-from core.audit.substrate import _reset_substrate_caches
 from core.audit.sweep import (
     run_coccinelle_file_sweep,
     run_coccinelle_sweep,
@@ -32,9 +31,19 @@ from core.audit.sweep_memo import SweepMemo
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
-    _reset_substrate_caches()
-    yield
-    _reset_substrate_caches()
+    from contextlib import ExitStack
+
+    from core.audit import substrate
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(
+            substrate, {"_LANG_CACHE": {}}, lock=substrate._LANG_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            substrate, {"_TREE_CACHE": {}}, lock=substrate._TREE_LOCK,
+        ))
+        yield
 
 
 class _Cfg:
