@@ -980,17 +980,23 @@ def _check_escape_burst(denials: list[dict]) -> list[dict]:
             and d.get("ts") is not None]
     if len(hits) < _ESCAPE_BURST_COUNT:
         return []
-    try:
-        timestamps = sorted(_parse_ts(h["ts"]) for h in hits)
-    except (TypeError, ValueError, OverflowError, OSError):
+    timestamps = []
+    for hit in hits:
+        try:
+            timestamps.append(_parse_ts(hit["ts"]))
+        except (TypeError, ValueError, OverflowError, OSError):
+            # One damaged timestamp must not erase valid peers' timing.
+            continue
+    if len(timestamps) < _ESCAPE_BURST_COUNT:
         return []
+    timestamps.sort()
     for i in range(len(timestamps) - _ESCAPE_BURST_COUNT + 1):
         window = timestamps[i + _ESCAPE_BURST_COUNT - 1] - timestamps[i]
         if window <= _ESCAPE_BURST_WINDOW_SECS:
             return [{
                 "type": "escape_burst",
                 "severity": SEVERITY_HIGH,
-                "count": len(hits),
+                "count": len(timestamps),
                 "evidence": [
                     f"{_ESCAPE_BURST_COUNT}+ escape-primitive denials "
                     f"within {window:.1f}s window — scripted sweep"
