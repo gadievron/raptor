@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 from collections import deque
+from html import escape
 import json
 import os
 import re
@@ -134,6 +135,7 @@ class Dependencies:
         self.roots = frozenset(p.stem for p in discover_root_modules(repo))
         self.edges = {}
         self.packages = {}
+        self.opaque_sources = set()
 
     def package_exports(self, prefix: str) -> dict[str, str]:
         if prefix not in self.packages:
@@ -255,6 +257,8 @@ class Dependencies:
             if not path.endswith('.py') and not path.startswith('libexec/'):
                 continue
             deps, dynamic = self.direct(path)
+            if dynamic:
+                self.opaque_sources.add(path)
             opaque |= dynamic
             if opaque and stop_on_opaque:
                 return seen, True
@@ -262,32 +266,51 @@ class Dependencies:
         return seen, opaque
 
 
-def select(repo: Path, registry: dict, changed: list[str] | None) -> dict:
+def select(repo: Path, registry: dict, changed: list[str] | None, *, explanations: list[str] | None = None) -> dict:
+    def explain(message):
+        if explanations is not None and message not in explanations:
+            explanations.append(message)
+
     full = changed is None or any(p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS) for p in changed)
+    if changed is None:
+        if not explanations:
+            explain('Full coverage: scheduled/manual/merge-queue run or unavailable change history.')
+    else:
+        triggers = sorted(p for p in changed if p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS))
+        if triggers:
+            explain('Full coverage: shared sandbox or test-harness inputs changed: ' + ', '.join(triggers))
     # Deleted modules can no longer supply the old dependency graph.
-    full |= bool(changed and any(p.endswith('.py') and p.startswith(('core/', 'packages/', 'engine/'))
-                                and not (repo / p).is_file() for p in changed))
+    deleted = sorted(p for p in changed or [] if p.endswith('.py') and p.startswith(('core/', 'packages/', 'engine/'))
+                     and not (repo / p).is_file())
+    full |= bool(deleted)
+    if deleted:
+        explain('Full coverage: deleted Python modules require the old dependency graph: ' + ', '.join(deleted))
     bound = {row['source'] for row in registry['wrappers']}
     bound.update(selector.split('::', 1)[0] for row in registry['wrappers']
                  for selector in row['contracts'])
     relevant = lambda p: (p.startswith(('core/', 'packages/', 'engine/', '.github/scripts/')) or p in bound
                           or ('/' not in p and not p.endswith(('.md', '.txt'))))
     if not full and not any(relevant(p) for p in changed):
+        explain('No platform runners: no wrapper source, dependency or harness inputs changed.')
         return {'include': []}
     graph = Dependencies(repo)
     runtime = bool(changed and any(relevant(p) for p in changed))
     if not full and runtime and (repo / 'conftest.py').is_file():
         try:
             _, shared_opaque = graph.closure({'conftest.py'}, stop_on_opaque=True)
-        except (OSError, ValueError, SyntaxError, RecursionError):
+        except (OSError, ValueError, SyntaxError, RecursionError) as error:
+            explain('Full coverage: shared pytest dependencies could not be analysed (' + type(error).__name__ + ').')
             shared_opaque = True
         if shared_opaque:
-            return select(repo, registry, None)
+            if graph.opaque_sources:
+                explain('Full coverage: computed imports in shared pytest dependencies: ' + ', '.join(sorted(graph.opaque_sources)))
+            return select(repo, registry, None, explanations=explanations)
     def affected(seeds):
         if full:
             return True
         closure, opaque = graph.closure(set(seeds), stop_on_opaque=runtime)
         if runtime and opaque:
+            explain('Broadened selection: computed imports in wrapper dependencies: ' + ', '.join(sorted(graph.opaque_sources & closure)))
             return True
         owners = {component(p) for p in closure}
         return any(p in closure or ((not p.endswith('.py') or {'fixtures', 'testdata'} & set(Path(p).parts)) and component(p) in owners) for p in changed)
@@ -307,10 +330,15 @@ def select(repo: Path, registry: dict, changed: list[str] | None) -> dict:
                     families.append(family['id'])
             if contracts or families:
                 matrix.append(dict(os=runner, platform=platform, contracts=sorted(contracts), families=families, full=full))
-    except (OSError, ValueError, SyntaxError, RecursionError):
+    except (OSError, ValueError, SyntaxError, RecursionError) as error:
         if full:
             raise
-        return select(repo, registry, None)
+        explain('Full coverage: wrapper dependencies could not be analysed (' + type(error).__name__ + ').')
+        return select(repo, registry, None, explanations=explanations)
+    if not matrix:
+        explain('No platform runners: changed files do not affect registered wrappers or native families.')
+    elif not full and not explanations:
+        explain('Scoped coverage: changed files are reachable from selected wrapper contracts or native families.')
     return {'include': matrix}
 
 
@@ -322,11 +350,16 @@ def main() -> None:
         raise SystemExit('\n'.join(errors))
     event = os.environ.get('EVENT', '')
     changes = None if event in {'schedule', 'workflow_dispatch', 'merge_group'} else changed_paths(repo, os.environ.get('BASE_SHA', ''))
-    matrix = select(repo, registry, changes)
+    explanations = []
+    matrix = select(repo, registry, changes, explanations=explanations)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write('run=' + str(bool(matrix['include'])).lower() + '\n')
         output.write('matrix=' + json.dumps(matrix) + '\n')
-    print(json.dumps(matrix, indent=2))
+    details = dict(changed_files=changes, reasons=explanations, selection=matrix['include'])
+    print(json.dumps(details, indent=2))
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as output:
+            output.write('## Sandbox wrapper selection\n\n<pre>' + escape(json.dumps(details, indent=2)) + '</pre>\n')
 
 
 if __name__ == '__main__':
