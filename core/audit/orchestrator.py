@@ -25381,7 +25381,10 @@ def _sweep_validate(
         try:
             from .condition_smt import disprove_integer_overflow
 
-            smt_result = disprove_integer_overflow(hypothesis, source or "")
+            smt_result = disprove_integer_overflow(
+                hypothesis, source or "", file_path=outcome.file,
+                function_name=outcome.function,
+            )
             if smt_result.disproved is True:
                 logger.info(
                     "sweep_validate: %s:%s overflow disproved "
@@ -33821,7 +33824,10 @@ def _smt_demotion_reason(
         try:
             from .condition_smt import disprove_integer_overflow
 
-            smt_result = disprove_integer_overflow(hypothesis, source)
+            smt_result = disprove_integer_overflow(
+                hypothesis, source, file_path=outcome.file,
+                function_name=outcome.function,
+            )
             if smt_result.disproved is True:
                 return "[smt-disproof: integer overflow impossible (Z3 UNSAT)]"
         except Exception:
