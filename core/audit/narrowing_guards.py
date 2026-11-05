@@ -48,13 +48,13 @@ class NarrowingGuardContext:
     def __init__(self, source: str, *, language="c"):
         self.language = language
         self.source = source
-        self.lines = source.split("\n")
+        self.lines = source.split("\n")  # line-model: raw LF byte columns; retain CR for AST offsets
         self.data = source.encode("utf-8")
         self.root = None
         self.loaded = False
         self.offsets = [0]
-        for line in source.splitlines(keepends=True):
-            self.offsets.append(self.offsets[-1] + len(line.encode("utf-8")))
+        for line in self.lines[:-1]:
+            self.offsets.append(self.offsets[-1] + len(line.encode("utf-8")) + 1)
 
     def _node_source(self, node):
         return (

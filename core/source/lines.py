@@ -107,7 +107,7 @@ def join_lf_slice(text: str, start: int, end: int) -> str:
     """
     if (type(text) is not str or type(start) is not int or type(end) is not int
             or start < 0 or end < 0 or len(text) < 16 * 1024):
-        return "\n".join(text.split("\n")[start:end])
+        return "\n".join(text.split("\n")[start:end])  # line-model: raw LF slicing preserves CR and the trailing empty element
     if start >= end:
         return ""
     if end <= 128:
@@ -128,7 +128,7 @@ def join_lf_slice(text: str, start: int, end: int) -> str:
     # Split only the prefix through the requested end. Discard the
     # unsplit tail before joining, and clamp huge Python slice bounds
     # before passing them to split's Py_ssize_t maxsplit argument.
-    parts = text.split("\n", min(end, len(text)))
+    parts = text.split("\n", min(end, len(text)))  # line-model: same raw LF slice contract; retain CR
     if len(parts) > end:
         parts.pop()
     parts = parts[start:end]

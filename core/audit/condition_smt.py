@@ -3223,6 +3223,7 @@ def check_integer_narrowing(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
+    from core.source.lines import split_lines
     from .source_view import sanitized_view
     from .initializer import initializer_text
     from .narrowing_guards import NarrowingGuardContext, integer_range
@@ -3230,7 +3231,7 @@ def check_integer_narrowing(
     if language is None:
         go_view = sanitized_view(source, language="go")
         language = "go" if any(re.match(r"\s*(?:package|func)\b", line)
-                                  for line in go_view.split("\n")[:30]) else "c"
+                                  for line in split_lines(go_view)[:30]) else "c"
     if language not in {"c", "cpp", "go"}:
         return IntegerNarrowingResult(reasoning="unsupported narrowing source language")
     source = sanitized_view(source, language=language)
@@ -3241,9 +3242,9 @@ def check_integer_narrowing(
             if scope.status != "selected":
                 return IntegerNarrowingResult(reasoning=f"requested function scope {scope.status}")
             source = scope.source_span(source)
-        return _check_integer_narrowing_go(source.split("\n"))
+        return _check_integer_narrowing_go(split_lines(source))
 
-    lines = source.split("\n")
+    lines = split_lines(source)
     guards = NarrowingGuardContext(source, language=language)
     scope = guards.function_scope(function_name) if function_name is not None else None
     if scope is not None and scope.status != "selected":

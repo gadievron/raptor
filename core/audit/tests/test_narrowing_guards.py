@@ -195,3 +195,21 @@ int Read(int64_t wide) {
 )
 def test_mutation_inside_a_condition_invalidates_earlier_comparisons(prefix):
     assert check(prefix, suffix="}" if prefix.endswith("{") else "").narrowing_found
+
+
+@pytest.mark.parametrize("breaker", ["\f", "\v", "\r"], ids=["form-feed", "vertical-tab", "bare-cr"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_non_lf_whitespace_does_not_shift_guard_offsets(breaker, newline):
+    source = (
+        "int Read(size_t wide) {\n"
+        f"    int ignored = 0;{breaker}\n"
+        "    if (wide > INT_MAX) return 0;\n"
+        "    int small = wide;\n"
+        "    return 0;\n}\n"
+    ).replace("\n", newline)
+    result = condition_smt.check_integer_narrowing(source)
+    assert not result.narrowing_found, result.reasoning
+    unguarded = source.replace("if (wide > INT_MAX) return 0;", "")
+    candidate = condition_smt.check_integer_narrowing(unguarded)
+    assert candidate.narrowing_found, candidate.reasoning
+    assert candidate.assign_line == 4
