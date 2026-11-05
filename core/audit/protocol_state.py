@@ -390,6 +390,10 @@ def build_state_field_index(
             return "", ()
 
         for line_no, raw in enumerate(split_lines(source), start=1):
+            # Comment removal only shortens the line; it cannot create
+            # a field connector absent from the original native text.
+            if type(raw) is str and "." not in raw and "->" not in raw:
+                continue
             code = raw.split("//", 1)[0]
             site_code: str | None = None
             for m in chain(_FIELD_CHAIN_RE.finditer(code),
