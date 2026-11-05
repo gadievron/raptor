@@ -198,11 +198,22 @@ def _verify_proxy_events(
     count plus its tamper flags; a mismatch or flag marks the stream
     tampered, and ``count_note`` names the reason for the report's
     evidence list."""
+    # Reject malformed rows before either legacy acceptance or MAC work.
+    # Keep valid peers usable, but never attest the filtered stream as whole.
+    valid_events = [
+        event for event in events
+        if isinstance(event, dict)
+        and all(event.get(field) is None or isinstance(event[field], str)
+                for field in ("host", "result", "resolved_ip"))
+    ]
+    malformed_count = len(events) - len(valid_events)
+    events = valid_events
     count_note: str | None = None
 
     def _with_count(usable, rejected, integrity):
         nonlocal count_note
-        checked = integrity
+        rejected += malformed_count
+        checked = _INTEGRITY_TAMPERED if malformed_count else integrity
         if over_bound:
             # The file continued past the streaming caps: the tail is
             # UNVERIFIED, so completeness cannot be attested — fail
@@ -257,7 +268,7 @@ def _verify_proxy_events(
         for e in usable:
             try:
                 seqs.append(int(e.get("seq")))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         max_seq = max(seqs) if seqs else -1
         if len(usable) != count or max_seq != count - 1 or rejected:
@@ -316,7 +327,7 @@ def _verify_proxy_events(
         for e in usable:
             try:
                 seqs.append(int(e.get("seq")))  # type: ignore[arg-type]
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 integrity = _INTEGRITY_TAMPERED
         if seqs and (len(set(seqs)) != len(seqs)
                      or set(seqs) != set(range(min(seqs),
