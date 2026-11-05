@@ -82,12 +82,12 @@ system; trust must come from explicit operator intent).
 
 from __future__ import annotations
 
-import errno
 import logging
 import os
 import re
 from pathlib import Path
 
+from core.security.capped_read import path_may_exist
 from core.security._trust_common import (
     GIT_LINK_MAX_BYTES,
     RAPTOR_DIR as _RAPTOR_DIR,
@@ -296,21 +296,7 @@ _SCAN_SUBJECT = "CodeQL pack config"
 
 
 def _path_present(p: Path) -> bool:
-    # os.lstat, not pathlib exists()/is_symlink(): their OSError
-    # behavior is version-dependent (≤3.12 raises, 3.13+ swallows to
-    # False), and False on a probe error waved an uninspectable
-    # config file through as absent.
-    try:
-        os.lstat(p)
-        return True
-    except OSError as e:
-        if e.errno in (errno.ENOENT, errno.ENOTDIR):
-            return False
-        # EACCES/EIO/...: something is there in a form the probe
-        # cannot see. Report present — the per-file scanner then
-        # reads it, and an unreadable file is a blocking
-        # "oversized/unreadable" finding.
-        return True
+    return path_may_exist(p)
 
 
 # ---------------------------------------------------------------------------

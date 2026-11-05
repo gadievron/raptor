@@ -55,6 +55,7 @@ from __future__ import annotations
 import contextlib
 import errno
 from core.json import dumps_artifact
+from core.security.capped_read import path_may_exist
 import logging
 import os
 import stat as _stat
@@ -97,12 +98,13 @@ def resolve_read_path(run_dir, filename: str) -> Path:
     location so error messages point at the canonical path. Dangling
     symlinks count as present entries so no-follow readers can refuse and
     report them instead of silently falling back to older evidence.
+    Metadata errors also retain the candidate for that refusal path.
     """
     new = evidence_write_path(run_dir, filename)
-    if new.exists() or new.is_symlink():
+    if path_may_exist(new):
         return new
     old = legacy_read_path(run_dir, filename)
-    if old.exists() or old.is_symlink():
+    if path_may_exist(old):
         return old
     return new
 

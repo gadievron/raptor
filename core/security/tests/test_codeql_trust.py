@@ -14,13 +14,6 @@ from pathlib import Path
 
 import pytest
 
-# packages/cve_diff/tests/... — we ensure the repo root is on sys.path so
-# tests can run when invoked from a sub-directory pytest.
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:                                     # pragma: no cover
-    pass
-
 from core.security.codeql_trust import (
     check_repo_codeql_trust,
     set_trust_override,
@@ -146,11 +139,17 @@ class TestIncompleteEnumeration:
             return _l
 
         import errno as _errno
-        monkeypatch.setattr(_os, "lstat", _raise(_errno.EACCES))
+        from types import ModuleType
+        from core.security import capped_read
+
+        local_os = ModuleType("probe_os")
+        vars(local_os).update(vars(_os))
+        monkeypatch.setattr(capped_read, "os", local_os)
+        monkeypatch.setattr(local_os, "lstat", _raise(_errno.EACCES))
         assert _path_present(Path("/probe/denied")) is True
-        monkeypatch.setattr(_os, "lstat", _raise(_errno.ENOENT))
+        monkeypatch.setattr(local_os, "lstat", _raise(_errno.ENOENT))
         assert _path_present(Path("/probe/gone")) is False
-        monkeypatch.setattr(_os, "lstat", _raise(_errno.ENOTDIR))
+        monkeypatch.setattr(local_os, "lstat", _raise(_errno.ENOTDIR))
         assert _path_present(Path("/probe/notdir")) is False
 
     def test_unlistable_target_root_blocks(self, tmp_path, capsys):
