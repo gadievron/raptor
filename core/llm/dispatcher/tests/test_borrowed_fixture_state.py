@@ -232,10 +232,12 @@ def test_partial_fixture_setup_unwinds_every_pin(index, field, error):
     class Namespace(SimpleNamespace):
         def __setattr__(self, name, value):
             nonlocal raised
-            super().__setattr__(name, value)
+            # A failed module/thread-local assignment does not mutate its
+            # target. Pytest 9.1 records undo only after setattr succeeds.
             if armed and not raised and name == field and value is spec[2][name]:
                 raised = True
                 raise failure
+            super().__setattr__(name, value)
 
     namespace = Namespace(**originals)
     armed = True
