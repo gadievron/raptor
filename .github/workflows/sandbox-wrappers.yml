@@ -187,7 +187,12 @@ jobs:
     steps:
       - name: Verify registration and selected acceptance passed
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          # Results only: scope outputs can exceed the process environment limit.
+          NEEDS_JSON: >-
+            {
+              "scope": {"result": "${{ needs['scope'].result }}"},
+              "acceptance": {"result": "${{ needs['acceptance'].result }}"}
+            }
           GH_TOKEN: ${{ github.token }}
         shell: python
         run: |

@@ -1334,7 +1334,29 @@ jobs:
     steps:
       - name: Verify all tiers passed
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          # Results only: scope outputs can exceed the process environment limit.
+          NEEDS_JSON: >-
+            {
+              "pre_check": {"result": "${{ needs['pre_check'].result }}"},
+              "changes": {"result": "${{ needs['changes'].result }}"},
+              "deps": {"result": "${{ needs['deps'].result }}"},
+              "python-unit-tests-fast": {"result": "${{ needs['python-unit-tests-fast'].result }}"},
+              "python-unit-tests-sca": {"result": "${{ needs['python-unit-tests-sca'].result }}"},
+              "python-unit-tests-sandbox": {"result": "${{ needs['python-unit-tests-sandbox'].result }}"},
+              "python-unit-tests-sandbox-macos": {"result": "${{ needs['python-unit-tests-sandbox-macos'].result }}"},
+              "sandbox-feature-matrix": {"result": "${{ needs['sandbox-feature-matrix'].result }}"},
+              "python-unit-tests-exploit-feasibility": {"result": "${{ needs['python-unit-tests-exploit-feasibility'].result }}"},
+              "python-prompt-audit": {"result": "${{ needs['python-prompt-audit'].result }}"},
+              "ci-lint-tests": {"result": "${{ needs['ci-lint-tests'].result }}"},
+              "python-unit-tests-codeql": {"result": "${{ needs['python-unit-tests-codeql'].result }}"},
+              "python-unit-tests-llm-analysis": {"result": "${{ needs['python-unit-tests-llm-analysis'].result }}"},
+              "python-unit-tests-cve-diff": {"result": "${{ needs['python-unit-tests-cve-diff'].result }}"},
+              "python-unit-tests-source-intel": {"result": "${{ needs['python-unit-tests-source-intel'].result }}"},
+              "python-unit-tests-engine": {"result": "${{ needs['python-unit-tests-engine'].result }}"},
+              "python-unit-tests-fuzzing": {"result": "${{ needs['python-unit-tests-fuzzing'].result }}"},
+              "python-unit-tests-sage": {"result": "${{ needs['python-unit-tests-sage'].result }}"},
+              "python-unit-tests-orchestration": {"result": "${{ needs['python-unit-tests-orchestration'].result }}"}
+            }
           GH_TOKEN: ${{ github.token }}
         shell: python
         run: |
