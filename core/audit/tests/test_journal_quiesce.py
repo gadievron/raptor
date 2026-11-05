@@ -12,8 +12,8 @@ Charter safety requirements pinned here:
 7. bounded — a drain that cannot reach inflight → 0 within the bound
    abandons the attempt, dispatch resumes, the journal stands;
 8. no-restart — a fired checkpoint touches nothing beyond the
-   journal, its archive, and its state record: the Joern lifecycle,
-   the LLM dispatcher, and the prep caches are untouched (spies),
+   journal, its archive, its state record, and its compaction lock:
+   the Joern lifecycle, LLM dispatcher, and prep caches are untouched (spies),
    the run dir's other files are byte-stable (delta), the checkpoint
    modules cannot even name those subsystems (import census), and a
    prep-cache entry written before the checkpoint still HITS after it
@@ -801,7 +801,10 @@ class TestNoRestartProperty:
         }
         created = set(after) - set(before)
         assert changed <= {JOURNAL_FILENAME}
-        assert created <= {_BACKUP_NAME, CHECKPOINT_STATE_FILENAME}
+        # The run-wide compaction flock retains its inode between writers.
+        assert created <= {
+            _BACKUP_NAME, CHECKPOINT_STATE_FILENAME, ".journal-compact.lock",
+        }
 
     def test_import_census_checkpoint_modules(self) -> None:
         # The checkpoint modules cannot even NAME the restart-priced
