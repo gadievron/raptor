@@ -7869,6 +7869,8 @@ class TestPerPassWallClockPhases:
         )
 
         phases = result.cost_tracker.phases
+        # Neighbour confidence no longer adjudicates independent claims.
+        assert "confidence_propagation" not in phases
         expected = (
             "prep_macro_recovery",
             "prep_context_map",
@@ -7879,7 +7881,6 @@ class TestPerPassWallClockPhases:
             "prep_mechanical_detectors",
             "prep_finalize",
             "iterative_re_review",
-            "confidence_propagation",
             "resolve_gate_demoted",
             "auto_synthesize_rules",
             "flow_trace_review",
