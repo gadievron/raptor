@@ -18,7 +18,7 @@ from urllib.parse import unquote
 
 from core.logging import get_logger
 from core.sarif import emit
-from core.sarif.parser import _coerce_line, _sanitize_step_properties
+from core.sarif.parser import _coerce_line, _sanitize_step_properties, _scope_fingerprint
 from core.security.log_sanitisation import escape_nonprintable
 from core.source.lines import split_lines
 
@@ -785,20 +785,44 @@ def _dataflow_to_codeflows(dataflow_path: Any) -> list[dict[str, Any]]:
 def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert normalized finding dicts back to a valid SARIF 2.1.0 structure.
 
-    Groups findings by tool name and produces one run per tool.
+    Groups findings by tool and rule namespace. Scoped namespaces retain
+    their fingerprint on validated descriptors, keeping same-named checks
+    distinct without treating the fingerprint as an evidence authority.
     The output preserves normalizer patches (rebased URIs, inferred CWEs,
     synthesized snippets) so downstream consumers that re-parse from disk
     see the same data the in-memory pipeline does.
     """
-    runs_by_tool: dict[str, list] = {}
-    rules_by_tool: dict[str, dict[str, dict]] = {}
+    # Split runs only where one readable ID represents different scopes.
+    # Unique IDs can share a catalog even when their namespace fingerprints
+    # differ, avoiding a separate run for every extension rule.
+    first_scopes: dict[tuple[str, str], str | None] = {}
+    conflicting_rules: set[tuple[str, str]] = set()
+    first_cwes: dict[tuple[str, str | None, str], Any] = {}
+    conflicting_cwes: set[tuple[str, str | None, str]] = set()
+    for finding in findings:
+        key = (finding.get("tool") or "external", finding.get("rule_id") or "unknown")
+        scope = _scope_fingerprint(finding.get("rule_scope"))
+        if key in first_scopes and first_scopes[key] != scope:
+            conflicting_rules.add(key)
+        else:
+            first_scopes.setdefault(key, scope)
+        cwe_key = (key[0], scope, key[1])
+        cwe = finding.get("cwe_id") or None
+        if cwe_key in first_cwes and first_cwes[cwe_key] != cwe:
+            conflicting_cwes.add(cwe_key)
+        else:
+            first_cwes.setdefault(cwe_key, cwe)
+
+    runs_by_tool: dict[tuple[str, str | None], list] = {}
+    rules_by_tool: dict[tuple[str, str | None], dict[str, dict]] = {}
 
     for f in findings:
         tool = f.get("tool") or "external"
-        runs_by_tool.setdefault(tool, [])
-        rules_by_tool.setdefault(tool, {})
-
         rule_id = f.get("rule_id") or "unknown"
+        scope = _scope_fingerprint(f.get("rule_scope"))
+        group = (tool, scope if (tool, rule_id) in conflicting_rules else None)
+        runs_by_tool.setdefault(group, [])
+        rules_by_tool.setdefault(group, {})
 
         region: dict[str, Any] = {}
         if f.get("startLine"):
@@ -815,6 +839,13 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
             level=f.get("level") or "warning",
         )
 
+        function = f.get("function")
+        if isinstance(function, str) and function:
+            result["locations"][0]["logicalLocations"] = [{"kind": "function", "name": function}]
+        cwe = f.get("cwe_id")
+        if cwe and (tool, scope, rule_id) in conflicting_cwes:
+            result["properties"] = {"cwe": [cwe]}
+
         if f.get("has_dataflow") and f.get("dataflow_path"):
             code_flows = _dataflow_to_codeflows(f["dataflow_path"])
             if code_flows:
@@ -829,21 +860,23 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
         if fid and fid != rule_id:
             result["fingerprints"] = {"matchBasedId/v1": fid}
 
-        runs_by_tool[tool].append(result)
+        runs_by_tool[group].append(result)
 
-        if rule_id not in rules_by_tool[tool]:
+        if rule_id not in rules_by_tool[group]:
             rule_entry: dict[str, Any] = {"id": rule_id}
             cwe = f.get("cwe_id")
-            if cwe:
+            if cwe and (tool, scope, rule_id) not in conflicting_cwes:
                 rule_entry["properties"] = {"cwe": [cwe]}
-            rules_by_tool[tool][rule_id] = rule_entry
+            if scope is not None:
+                rule_entry.setdefault("properties", {})["raptor_rule_scope"] = scope
+            rules_by_tool[group][rule_id] = rule_entry
 
     return emit.document(
         [
             emit.run(
-                tool_name, list(rules_by_tool[tool_name].values()), results,
+                group[0], list(rules_by_tool[group].values()), results,
             )
-            for tool_name, results in runs_by_tool.items()
+            for group, results in runs_by_tool.items()
         ],
         schema_uri=emit.SCHEMA_URI_SCHEMASTORE,
         version_first=True,
