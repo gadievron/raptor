@@ -134,11 +134,13 @@ CORPUS: "list[bytes]" = [
 
 @pytest.fixture
 def fresh_jail():
-    """A dedicated real-worker jail, torn down after the test."""
+    """Own the worker before starting it, including partial startup failures."""
     jail = parser_jail.ParserJail()
-    jail.start()
-    yield jail
-    jail.stop()
+    try:
+        jail.start()
+        yield jail
+    finally:
+        jail.stop()
 
 
 @pytest.fixture
@@ -1012,9 +1014,22 @@ class TestDegradedFloor:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def isolated_parser_singleton():
+    """Leave the caller's parser worker running while owning test replacements."""
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(parser_jail, {"_jail": None},
+                               lock=parser_jail._jail_lock):
+        try:
+            yield
+        finally:
+            parser_jail._reset_for_tests()
+
+
 class TestSingleton:
 
-    def test_get_returns_same_jail_and_reset_tears_down(self):
+    def test_get_returns_same_jail_and_reset_tears_down(self, isolated_parser_singleton):
         parser_jail._reset_for_tests()
         try:
             jail = parser_jail.get_parser_jail()
