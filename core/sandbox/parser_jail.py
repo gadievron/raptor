@@ -567,17 +567,23 @@ class ParserJail:
     @staticmethod
     def _reap_locked(proc: subprocess.Popen) -> None:
         """Kill + wait one worker we spawned (verified-pid: our handle)."""
+        running = True
         try:
-            if proc.poll() is None:
-                proc.kill()
+            running = proc.poll() is None
         except OSError:
-            # Still attempt the bounded reap: the child may have exited
-            # while signaling failed. Cleanup must not replace a startup
-            # error or prevent parse() from returning its refusal.
             logger.warning(
-                "parser-jail: could not inspect or kill worker pid %d",
+                "parser-jail: could not inspect worker pid %d; attempting kill",
                 proc.pid, exc_info=True,
             )
+        if running:
+            try:
+                proc.kill()
+            except OSError:
+                # Still reap if the worker exited during the signal attempt.
+                logger.warning(
+                    "parser-jail: could not kill worker pid %d",
+                    proc.pid, exc_info=True,
+                )
         try:
             proc.wait(timeout=_READY_TIMEOUT_S)
         except OSError:
