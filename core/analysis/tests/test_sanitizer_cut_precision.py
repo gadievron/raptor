@@ -284,22 +284,21 @@ class TestWitnessRegistry:
 
 class TestAuditWiring:
     @pytest.fixture(autouse=True)
-    def _reset_config(self):
+    def _reset_config(self, monkeypatch):
         import os
 
         from core.dataflow import sanitizer_cut_config
-        yield
-        sanitizer_cut_config.reset()
-        # configure(export_env=True) WRITES these; monkeypatch.delenv
-        # on an initially-absent var registers no undo, so scrub
-        # explicitly or the gate silently turns on for later tests.
+
+        monkeypatch.setattr(sanitizer_cut_config, "_active", None)
+        # Snapshot absent keys too, before configure(export_env=True) writes.
         for var in (
             "RAPTOR_SANITIZER_CUT",
             "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
             "RAPTOR_SANITIZER_CUT_PARITY_LOG",
             "RAPTOR_SANITIZER_CUT_AUDIT_DIR",
         ):
-            os.environ.pop(var, None)
+            monkeypatch.setenv(var, os.environ.get(var, ""))
+            monkeypatch.delenv(var)
 
     def test_config_audit_dir_resolution(self, tmp_path):
         from core.dataflow import sanitizer_cut_config as sc
