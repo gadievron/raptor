@@ -1567,7 +1567,7 @@
     "kind": "alternation"
   },
   "core/json/__init__.py::_LAZY_EXPORTS": {
-    "count": 19,
+    "count": 20,
     "kind": "literal",
     "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface"
   },

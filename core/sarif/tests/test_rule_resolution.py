@@ -721,3 +721,50 @@ def test_location_qualified_ids_avoid_existing_ids_and_keep_original_provenance(
     assert {row['file']: row['finding_id'] for row in retained} == {
         row['file']: row['finding_id'] for row in deduplicate_findings(list(reversed([*rows, existing])))
     }
+
+
+def test_merge_identity_does_not_copy_a_whole_rule_table(monkeypatch):
+    import tracemalloc
+    import core.sarif.parser as parser
+
+    rules = [{'id': f'rule-{index}', 'shortDescription': {'text': 'x' * 1024}}
+             for index in range(4096)]
+    result = {'ruleIndex': 0, 'ruleId': 'rule-0', 'message': {'text': 'finding'}}
+    report = {'runs': [{'tool': {'driver': {'name': 'CodeQL', 'rules': rules}},
+                        'results': [result, dict(result)]}]}
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: report)
+    parser.merge_sarif(['unused.sarif'])
+    tracemalloc.start()
+    try:
+        merged = parser.merge_sarif(['unused.sarif'])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert merged['runs'][0]['tool'] is report['runs'][0]['tool']
+    assert merged['runs'][0]['results'] == [result]
+    assert peak < 1024 * 1024, f'merge identity copied the rule table: {peak} bytes'
+
+
+def test_merge_restarts_identity_after_a_partial_stream_depth_failure(monkeypatch):
+    import core.sarif.parser as parser
+
+    report = {'runs': [{'tool': {'driver': {'name': 'CodeQL', 'rules': [{'id': 'rule'}]}},
+                        'results': [{'ruleId': 'rule', 'ruleIndex': 0, 'message': {'text': 'finding'}}]}]}
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: report)
+    real_stream = parser.iterencode_canonical
+    failed = False
+
+    def fail_once(value):
+        nonlocal failed
+        if not failed:
+            failed = True
+            yield b'{"tool":'
+            raise RecursionError('synthetic streaming depth limit')
+        yield from real_stream(value)
+
+    monkeypatch.setattr(parser, 'iterencode_canonical', fail_once)
+    merged = parser.merge_sarif(['first.sarif', 'second.sarif'])
+    # A partial-prefix digest would differ from the successful retry and
+    # retain two runs. Both complete identities must still coalesce.
+    assert len(merged['runs']) == 1
+    assert merged['runs'][0]['results'] == report['runs'][0]['results']

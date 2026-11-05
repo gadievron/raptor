@@ -554,6 +554,9 @@ def dumps_canonical(data: Any) -> str:
         json.dumps(data, sort_keys=True, separators=(",", ":"),
                    default=str)
 
+    Large hash inputs can consume iterencode_canonical instead; it yields
+    the same frozen bytes without joining the complete document.
+
     This byte-matches the review-journal MAC canonical form
     (``core/coverage/journal_mac.row_sha256``): key order and
     whitespace never vary, arbitrary objects stringify via
@@ -578,6 +581,25 @@ def dumps_canonical(data: Any) -> str:
     hosts where orjson happens to be installed.
     """
     return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def iterencode_canonical(data: Any) -> Iterator[bytes]:
+    """Yield the frozen canonical JSON bytes without joining the document.
+
+    Concatenated bytes exactly match dumps_canonical(data).encode("ascii").
+    Chunks are at most 64 KiB. The stdlib encoder can still materialize one
+    escaped string value or a dictionary's sorted items, so peak allocation
+    depends on those values rather than being a constant-memory guarantee.
+    It follows the Python iterator's recursion limit; failed streams are
+    incomplete and must not be used as identities.
+    """
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), default=str)
+    for part in encoder.iterencode(data):
+        if len(part) <= 64 * 1024:
+            yield part.encode("ascii")
+        else:
+            for offset in range(0, len(part), 64 * 1024):
+                yield part[offset:offset + 64 * 1024].encode("ascii")
 
 
 def dumps_display(

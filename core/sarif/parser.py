@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit, quote
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
 from core.detectors.compiler_paths import PathBudget, PATH_KIND, attach_paths
 from core.config import RaptorConfig
-from core.json import dumps_canonical, load_json, loads
+from core.json import dumps_canonical, iterencode_canonical, load_json, loads
 from core.logging import get_logger
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -402,8 +402,20 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     # Group runs by tool name so same-tool runs get their results merged
     tool_runs: dict[str | tuple[str, str], dict[str, Any]] = {}
 
-    def content_identity(value):
-        return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
+    def content_identity(value, *, stream=False):
+        # Result records are usually small; retain the C encoder's fast
+        # path there. Run metadata can contain an entire rule/artifact table.
+        if not stream:
+            return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
+        digest = hashlib.sha256()
+        try:
+            for chunk in iterencode_canonical(value):
+                digest.update(chunk)
+        except RecursionError:
+            # The Python iterator can reach its depth limit before the C
+            # encoder. Discard the partial hash and preserve legacy support.
+            return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
+        return digest.hexdigest()
 
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
@@ -426,7 +438,7 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 # Rules, URI bases and referenced artifacts belong to this
                 # run. Combining tables can rebind a rule or source file.
                 metadata = {key: value for key, value in run.items() if key != "results"}
-                context_key = (tool_name, content_identity(metadata))
+                context_key = (tool_name, content_identity(metadata, stream=True))
                 if context_key not in tool_runs:
                     tool_runs[context_key] = {"original": metadata, "results": {}}
                 for result in results:
