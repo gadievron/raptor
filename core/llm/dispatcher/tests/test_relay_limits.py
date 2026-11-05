@@ -16,6 +16,8 @@ import os
 import threading
 import time
 
+from packages.web.tests import http_server as http_support
+
 import httpx
 import pytest
 
@@ -103,24 +105,14 @@ class _Upstream:
                     return
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = http_support.start_http_server(self._server, cleanup.callback, join_timeout=2)
             self.mode = mode
             self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
-            self._thread = threading.Thread(
-                target=self._server.serve_forever, daemon=True,
-            )
-            self._thread.start()
-        except BaseException:
-            # No serving loop exists to acknowledge shutdown() on this path.
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=2)
-        if self._thread.is_alive():
-            raise RuntimeError("relay upstream serving thread did not stop")
+        self._cleanup.close()
 
 
 @pytest.mark.parametrize("fault", ["construction", "start"])
@@ -152,6 +144,7 @@ def test_upstream_failed_startup_closes_http_listener(monkeypatch, fault):
                 HTTPServer=server, BaseHTTPRequestHandler=http.server.BaseHTTPRequestHandler,
             )))
             patcher.setattr(module, "threading", SimpleNamespace(Thread=thread))
+            patcher.setattr(http_support, "threading", SimpleNamespace(Thread=thread))
             with pytest.raises(RuntimeError, match="injected thread .* failure"):
                 _Upstream("firehose")
         assert len(servers) == 1

@@ -12,8 +12,9 @@ from __future__ import annotations
 from contextlib import ExitStack
 
 import os
-import threading
 import http.server
+
+from packages.web.tests import http_server as http_support
 
 import httpx
 import pytest
@@ -64,21 +65,17 @@ class _CaptiveUpstream:
                 self.wfile.write(resp)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = http_support.start_http_server(self._server, cleanup.callback)
             self.host, self.port = self._server.server_address
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-            self._thread.start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 @pytest.mark.upstream_forward
