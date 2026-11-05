@@ -145,8 +145,8 @@ def _read_existing_key(path: Path):
 
     Returns the raw bytes, ``None`` (absent), ``_REFUSED``
     (foreign-owned / unreadable — unattributable, never recovered),
-    or a ``_TamperedKey`` (symlink, non-regular file, group/other
-    permission bits on an own-uid file — states no honest writer
+    or a ``_TamperedKey`` (own-uid symlink, non-regular file, or
+    group/other permission bits — states no honest writer
     produces; the caller quarantines and re-keys)."""
     try:
         # O_NONBLOCK lets fstat reject a FIFO without waiting for a
@@ -157,7 +157,8 @@ def _read_existing_key(path: Path):
     except OSError as exc:
         if getattr(exc, "errno", None) == errno.ELOOP:
             try:
-                if stat.S_ISLNK(os.lstat(str(path)).st_mode):
+                st = os.lstat(str(path))
+                if st.st_uid == os.geteuid() and stat.S_ISLNK(st.st_mode):
                     return _TamperedKey("symlink planted at the key path")
             except OSError:
                 pass
@@ -169,8 +170,8 @@ def _read_existing_key(path: Path):
         return _REFUSED
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            return _TamperedKey("not a regular file")
+        # Ownership precedes shape: foreign objects are unattributable and
+        # must never enter quarantine/re-key recovery, including FIFOs/dirs.
         if st.st_uid != os.geteuid():
             _warn_once_suspect_key(
                 path,
@@ -179,6 +180,8 @@ def _read_existing_key(path: Path):
                 "0600 key file",
             )
             return _REFUSED
+        if not stat.S_ISREG(st.st_mode):
+            return _TamperedKey("not a regular file")
         if st.st_mode & 0o077:
             return _TamperedKey(
                 f"mode {stat.S_IMODE(st.st_mode):04o} grants "
