@@ -1275,12 +1275,17 @@ def _normalise_tool_name(driver_name: str) -> str:
     return _TOOL_NAME_MAP.get(driver_name.lower(), driver_name.lower())
 
 
-def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
+def generate_scan_metrics(
+    sarif_paths: list[str], *, file_count_paths: list[str] | None = None,
+) -> dict[str, Any]:
     """
     Generate metrics from scan results.
 
     Args:
-        sarif_paths: List of paths to SARIF files
+        sarif_paths: Reports whose findings are counted.
+        file_count_paths: Optional original reports for artifact-based file
+            counts when merging has discarded their artifact tables. Their
+            findings and tool names do not enter the metrics.
 
     Returns:
         Dictionary containing scan metrics
@@ -1299,7 +1304,10 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
         "tools_used": [],
     }
 
-    for sarif_path in sarif_paths:
+    inputs = [(path, True, file_count_paths is None) for path in sarif_paths]
+    if file_count_paths is not None:
+        inputs.extend((path, False, True) for path in file_count_paths)
+    for sarif_path, count_findings, count_files in inputs:
         sarif_data = load_sarif(Path(sarif_path))
         if not sarif_data:
             continue
@@ -1307,13 +1315,14 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
         for run in (sarif_data.get("runs") or []):
             if not isinstance(run, dict):
                 continue
+            if count_files:
+                artifacts = run.get("artifacts") or []
+                metrics["total_files_scanned"] += len(artifacts)
+            if not count_findings:
+                continue
             tool_name = get_tool_name(run)
             if tool_name not in metrics["tools_used"]:
                 metrics["tools_used"].append(tool_name)
-
-            # Count artifacts (files)
-            artifacts = run.get("artifacts") or []
-            metrics["total_files_scanned"] += len(artifacts)
 
             # Count findings
             results = run.get("results") or []

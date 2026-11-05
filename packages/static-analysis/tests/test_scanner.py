@@ -612,3 +612,64 @@ class TestJoinCodeQLStage:
             "child not reaped after killpg — zombie until the "
             "interrupt-catching caller exits"
         )
+
+
+@pytest.mark.parametrize('merge_fails', [False, True])
+def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypatch, merge_fails):
+    import json
+    import core.project.trust
+    import core.run.pin
+    import core.sandbox
+    import core.sandbox.summary
+    from core.sarif.parser import parse_sarif_findings
+
+    repo = tmp_path / 'target'
+    repo.mkdir()
+    (repo / 'source.py').write_text('first()\nsecond()\n')
+    out = tmp_path / 'out'
+    out.mkdir()
+    inputs = []
+    for index in range(2):
+        rows = [{'ruleId': 'rule-a', 'level': 'error', 'message': {'text': 'finding'},
+                 'locations': [{'physicalLocation': {
+                     'artifactLocation': {'uri': 'source.py'}, 'region': {'startLine': line},
+                 }}]} for line in (1, 2)]
+        path = out / f'pack-{index}.sarif'
+        path.write_text(json.dumps({'version': '2.1.0', 'runs': [{
+            'tool': {'driver': {'name': 'Semgrep', 'rules': [{'id': 'rule-a'}]}},
+            'artifacts': [{'location': {'uri': f'pack-{index}.py'}}], 'results': rows,
+        }]}))
+        inputs.append(str(path))
+    # An earlier run's report must not become authoritative on merge failure.
+    (out / 'combined.sarif').write_text(json.dumps({'version': '2.1.0', 'runs': []}))
+    monkeypatch.setattr(core.sandbox, 'apply_cli_args', lambda *a, **kw: None)
+    monkeypatch.setattr(core.project.trust, 'apply_project_sandbox_floor', lambda *a: None)
+    monkeypatch.setattr(core.run.pin, 'bootstrap_process_pin', lambda *a: None)
+    monkeypatch.setattr(core.sandbox.summary, 'set_active_run_dir', lambda *a: None)
+    monkeypatch.setattr(core.sandbox.summary, 'summarize_and_write', lambda *a: None)
+    monkeypatch.setattr(_scanner_mod, 'maybe_start_orphan_watchdog', lambda *a: None)
+    monkeypatch.setattr(_scanner_mod, '_resolve_baseline_packs', lambda *a: [])
+    monkeypatch.setattr(_scanner_mod, 'semgrep_scan_sequential', lambda *a, **kw: (inputs, []))
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, 'annotate_sarif', lambda *a: 0)
+    monkeypatch.setattr(_scanner_mod, '_finalize_scan_artifacts', lambda *a, **kw: None)
+    if merge_fails:
+        def fail_merge(*a):
+            raise ValueError('planted merge failure')
+        monkeypatch.setattr(_scanner_mod, 'merge_sarif', fail_merge)
+    monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
+                                     '--sequential', '--no-codeql', '--no-cocci',
+                                     '--no-source-wrappers', '--no-config-resolved',
+                                     '--no-graduated-rules', '--no-sanitizer-cut-postpass'])
+    with pytest.raises(SystemExit) as exit_info:
+        _scanner_mod.main()
+    assert exit_info.value.code == 0
+    metrics = json.loads((out / 'scan_metrics.json').read_text())
+    expected_count = 4 if merge_fails else 2
+    assert metrics['total_files_scanned'] == 2
+    assert metrics['total_findings'] == expected_count
+    assert metrics['findings_by_tool'] == {'semgrep': expected_count}
+    assert metrics['findings_by_rule'] == {'rule-a': expected_count}
+    assert metrics['findings_by_severity']['error'] == expected_count
+    if not merge_fails:
+        assert len(parse_sarif_findings(out / 'combined.sarif')) == expected_count
+    assert all(Path(path).exists() for path in inputs)

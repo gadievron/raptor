@@ -407,3 +407,25 @@ def test_content_identity_fallback_retains_exact_digest(tmp_path):
     for row in [result, dict(reversed(list(result.items())))]:
         path.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'tool'}}, 'results': [row]}]}))
         assert parse_sarif_findings(path)[0]['finding_id'] == expected
+
+
+def test_metrics_can_count_original_artifacts_without_recounting_findings(tmp_path):
+    import json
+    from core.sarif.parser import generate_scan_metrics
+
+    primary = tmp_path / 'combined.sarif'
+    primary.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'primary'}},
+        'artifacts': [{'location': {'uri': 'discarded-fallback.c'}}],
+        'results': [{'ruleId': 'kept', 'level': 'error'}]}]}))
+    original = tmp_path / 'original.sarif'
+    original.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'original'}},
+        'artifacts': [{'location': {'uri': 'a.c'}}, {'location': {'uri': 'b.c'}}],
+        'results': [{'ruleId': 'raw', 'level': 'warning'}] * 3}]}))
+    metrics = generate_scan_metrics([str(primary)], file_count_paths=[str(original)])
+    assert metrics['total_files_scanned'] == 2
+    assert metrics['total_findings'] == 1
+    assert metrics['tools_used'] == ['primary']
+    assert metrics['findings_by_tool'] == {'primary': 1}
+    assert metrics['findings_by_rule'] == {'kept': 1}
+    assert metrics['findings_by_severity']['error'] == 1
+    assert metrics['findings_by_severity']['warning'] == 0

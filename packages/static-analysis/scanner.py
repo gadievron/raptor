@@ -3650,19 +3650,14 @@ def main() -> None:
             except Exception as e:  # noqa: BLE001
                 logger.warning("sanitizer-cut post-pass failed: %s", e)
 
-        # Generate metrics. When --exclude-dir filtered the combined
-        # SARIF, metrics should reflect the filtered set — read from
-        # the just-written combined.sarif rather than the unfiltered
-        # individual inputs.
+        # Findings follow the committed combined report, including merge
+        # deduplication, exclusions and enforced suppression drops. Keep
+        # original artifact tables for fallback file counts: the merger can
+        # discard those tables, and canonical coverage records below may
+        # replace the fallback with the union of files actually examined.
         logger.info("Generating scan metrics...")
-        _enforced_removed = int(
-            (sanitizer_cut_postpass_stats or {}).get("enforced_removed") or 0
-        )
-        if (excluded_count or _enforced_removed) and merge_completed:
-            # The combined SARIF reflects --exclude-dir filtering and/or
-            # sanitizer-cut enforcement drops; metrics must read it, not
-            # the unfiltered per-tool forensic SARIFs.
-            metrics = generate_scan_metrics([str(merged)])
+        if merge_completed:
+            metrics = generate_scan_metrics([str(merged)], file_count_paths=sarif_inputs)
         else:
             metrics = generate_scan_metrics(sarif_inputs)
         # Record per-engine failure surfaces so downstream readers
