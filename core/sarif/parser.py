@@ -593,7 +593,8 @@ def _extract_cwe_from_rule(rule: dict[str, Any]) -> str | None:
     # `relationships[]` — SARIF spec's canonical mechanism. Each
     # relationship has a `target` reference (`{"id": "CWE-89", ...}`
     # or `{"toolComponent": {"name": "CWE"}, "id": "89"}`).
-    for rel in rule.get("relationships") or []:
+    relationships = rule.get("relationships")
+    for rel in relationships if isinstance(relationships, list) else []:
         if not isinstance(rel, dict):
             continue
         target = rel.get("target") or {}
@@ -926,6 +927,7 @@ class ResultRuleResolver:
         self._by_id: dict[str, dict[str, Any] | None] = {}
         self._owners: dict[int, tuple[str, str]] = {}
         self._scopes: dict[int, str] = {}
+        self._metadata: dict[int, tuple[str | None, str | None, str | None]] = {}
         self._references: dict[tuple, dict[str, Any] | None] = {}
         extensions = tool.get("extensions")
         for component in extensions if isinstance(extensions, list) else []:
@@ -976,6 +978,17 @@ class ResultRuleResolver:
             payload = dumps_canonical([owner, identity])
             self._scopes[key] = hashlib.sha256(payload.encode("ascii")).hexdigest()
         return self._scopes[key]
+
+    def metadata(self, rule: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+        """Return cached CWE, default severity and scope for a resolved descriptor."""
+        if not rule:
+            return None, None, None
+        key = id(rule)
+        if key not in self._metadata:
+            cwe = _extract_cwe_from_rule(rule)
+            level = rule_default_level(rule)
+            self._metadata[key] = (cwe, level, self.scope(rule, cwe=cwe, level=level))
+        return self._metadata[key]
 
     def resolve(self, result: dict[str, Any]) -> dict[str, Any]:
         index = result.get("ruleIndex", -1)
@@ -1193,7 +1206,6 @@ def parse_sarif_findings(
         tool_name = get_tool_name(run)
 
         rule_resolver = ResultRuleResolver(run)
-        rule_metadata: dict[int, tuple[str | None, str | None, str | None]] = {}
 
         uri_resolver = ArtifactUriResolver(run)
 
@@ -1312,19 +1324,7 @@ def parse_sarif_findings(
             else:
                 dataflow_path = extract_dataflow_path(code_flows, resolve_uri=_resolve_flow_uri) if code_flows else None
 
-            rule_cwe: str | None = None
-            default_level: str | None = None
-            rule_scope: str | None = None
-            if rule:
-                descriptor_key = id(rule)
-                if descriptor_key not in rule_metadata:
-                    cwe = _extract_cwe_from_rule(rule)
-                    inherited_level = rule_default_level(rule)
-                    rule_metadata[descriptor_key] = (
-                        cwe, inherited_level,
-                        rule_resolver.scope(rule, cwe=cwe, level=inherited_level),
-                    )
-                rule_cwe, default_level, rule_scope = rule_metadata[descriptor_key]
+            rule_cwe, default_level, rule_scope = rule_resolver.metadata(rule)
 
             # Containment gate at the parse boundary (opt-in via
             # source_root). Out-of-root URIs degrade the same way the
