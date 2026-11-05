@@ -1699,7 +1699,7 @@ class TestUserLimitsCacheSentinel(unittest.TestCase):
 
         # Operator fixes the file; expire the negative-cache TTL.
         self._config.write_text(json.dumps({"cpu_seconds": 5}))
-        self._state._user_limits_cache_decided_at = 0.0
+        self._state._user_limits_cache_decided_at -= self._preexec._FAIL_TTL_S + 1
         self.assertEqual(self._preexec._load_user_limits(),
                          {"cpu_seconds": 5})
 
@@ -1714,7 +1714,7 @@ class TestUserLimitsCacheSentinel(unittest.TestCase):
         # File appears; TTL expiry picks it up (missing-file stays on
         # the re-probing negative-cache path).
         self._config.write_text(json.dumps({"nproc": 8}))
-        self._state._user_limits_cache_decided_at = 0.0
+        self._state._user_limits_cache_decided_at -= self._preexec._FAIL_TTL_S + 1
         self.assertEqual(self._preexec._load_user_limits(), {"nproc": 8})
 
     def test_nonempty_success_cached_for_session(self):
