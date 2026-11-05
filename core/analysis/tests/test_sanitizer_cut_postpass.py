@@ -827,3 +827,58 @@ class TestCappedReads:
         small = tmp_path / "s.java"
         small.write_text("class A {}")
         assert scp._read_source_capped(small) == "class A {}"
+
+
+@pytest.mark.parametrize("relative_alias", [False, True])
+def test_same_line_distinct_findings_cannot_earn_line_bound_enforcement(tmp_path, relative_alias):
+    from copy import deepcopy
+
+    repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+    document = json.loads(sarif_path.read_text())
+    first = document['runs'][0]['results'][0]
+    second = deepcopy(first)
+    first['locations'][0]['physicalLocation']['region']['startColumn'] = 3
+    second['locations'][0]['physicalLocation']['region']['startColumn'] = 30
+    if relative_alias:
+        second['locations'][0]['physicalLocation']['artifactLocation']['uri'] = 'Test.java'
+    document['runs'][0]['results'].append(second)
+    sarif_path.write_text(json.dumps(document))
+    stats = run_postpass([sarif_path], repo, out)
+    assert stats['enforced'] == 0
+    assert stats['enforced_findings'] == []
+    assert stats['refused_reasons']['ambiguous-sink-location'] == 2
+    assert not (out / 'suppressions.jsonl').exists()
+
+
+def test_duplicate_scan_inputs_do_not_repeat_suppression_proof(tmp_path):
+    repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+    stats = run_postpass([sarif_path, sarif_path], repo, out)
+    assert stats['examined'] == 1
+    assert stats['enforced'] == 1
+    records = (out / 'suppressions.jsonl').read_text().splitlines()
+    assert len(records) == 1
+
+
+def test_same_native_id_with_different_paths_is_not_an_exact_duplicate(tmp_path):
+    from copy import deepcopy
+
+    repo, src, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+    document = json.loads(sarif_path.read_text())
+    first = document['runs'][0]['results'][0]
+    first['fingerprints'] = {'matchBasedId/v1': 'reused-native'}
+    second = deepcopy(first)
+    def flow(line):
+        return [{'threadFlows': [{'locations': [
+            {'location': {'physicalLocation': {
+                'artifactLocation': {'uri': str(src)}, 'region': {'startLine': line},
+            }}},
+            {'location': first['locations'][0]},
+        ]}]}]
+    first['codeFlows'] = flow(5)
+    second['codeFlows'] = flow(6)
+    document['runs'][0]['results'].append(second)
+    sarif_path.write_text(json.dumps(document))
+    stats = run_postpass([sarif_path], repo, out)
+    assert stats['enforced'] == 0
+    assert stats['refused_reasons']['ambiguous-sink-location'] == 2
+    assert not (out / 'suppressions.jsonl').exists()

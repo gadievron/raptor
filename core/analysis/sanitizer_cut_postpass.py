@@ -38,8 +38,10 @@ vocabulary, never this table.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -580,7 +582,7 @@ def run_postpass(
     extra_source_patterns: Iterable[str] = (),
     enforce: bool = True,
 ) -> dict[str, Any]:
-    """Run the record-only gate over every eligible SARIF finding.
+    """Run the sanitizer-cut gate over every eligible SARIF finding.
 
     Returns the stats dict (also logged as a one-line summary). Any
     unexpected per-finding failure is a refusal, never an exception —
@@ -633,6 +635,27 @@ def run_postpass(
         except Exception as exc:  # noqa: BLE001 — hostile/malformed SARIF must not kill the pass
             logger.warning("sanitizer-cut post-pass: unreadable SARIF %s: %s", sarif, exc)
 
+    # Avoid repeating proofs for exact scanner duplicates. The gate binds a
+    # sink by line, so distinct reports sharing its removal identity cannot
+    # safely earn separate suppression claims (columns are not proof inputs).
+    unique_findings: list[dict[str, Any]] = []
+    first_reports: dict[tuple, dict[str, Any]] = {}
+    for finding in findings:
+        key = (finding.get("tool"), finding.get("finding_id"),
+               finding.get("rule_id"), finding.get("file"), finding.get("startLine"))
+        first = first_reports.get(key)
+        if first is not None and first == finding:
+            continue
+        first_reports.setdefault(key, finding)
+        unique_findings.append(finding)
+    findings = unique_findings
+    def sink_identity(finding):
+        file = str(finding.get("file") or "")
+        return (finding.get("rule_id") or "", os.path.normpath(str(repo_root / file)),
+                finding.get("startLine") or 0)
+
+    sink_counts = Counter(sink_identity(f) for f in findings)
+
     # Group by file so the resolver's per-finding parse cost clusters;
     # the source-locator cache is per-file already.
     findings.sort(key=lambda f: str(f.get("file") or ""))
@@ -663,6 +686,11 @@ def run_postpass(
                 # the allowlist-guard idiom lives.
                 continue
         except Exception:  # noqa: BLE001
+            continue
+
+        if sink_counts[sink_identity(finding)] > 1:
+            stats.examined += 1
+            stats.refuse("ambiguous-sink-location")
             continue
 
         resolved_path = Path(file_path)
@@ -929,76 +957,109 @@ def filter_enforced_from_sarif(
     sarif_path: Path,
     enforced: list[dict[str, Any]],
 ) -> int:
-    """Remove enforced findings from one SARIF file, in place.
+    """Remove only uniquely matched, enforced findings from combined SARIF.
 
-    The scanner's drop surface for corpus-earned sanitizer-cut
-    enforcement: results matching an enforced identity (exact rule id,
-    exact start line, and URI suffix-agreement with the recorded file)
-    are removed from the combined SARIF. Per-tool SARIFs are never
-    passed here — they stay unfiltered as the forensic record, matching
-    the binary-oracle convention. Returns the number of results
-    removed. Any parse/shape failure removes nothing (0) — filtering
-    can only ever be a no-op, never corrupt a SARIF.
+    Enforcement identifies a rule, file and start line, not a column or native
+    scanner identity. If a selector matches several results, all survive.
+    Matching spans every run before mutation, so a same-tool or cross-tool
+    neighbor cannot inherit another finding's suppression. Per-tool SARIFs
+    remain unfiltered as the forensic record. Failure removes nothing.
     """
     if not enforced:
         return 0
     from core.json import load_json, save_json
+    from core.sarif.parser import _coerce_line
+    from urllib.parse import unquote, urlsplit
 
-    def _norm(s: str) -> str:
-        return str(s or "").replace("\\", "/").lstrip("./")
+    def _norm(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        value = value.replace("\\", "/")
+        # Preserve leading dots and absolute roots. Traversal cannot earn
+        # suppression by being stripped into an in-tree-looking path.
+        try:
+            parts = urlsplit(value)
+        except ValueError:
+            return ""
+        drive_path = len(parts.scheme) == 1 and value[1:3] == ":/"
+        if parts.scheme and not drive_path:
+            if parts.scheme != "file" or parts.netloc not in ("", "localhost"):
+                return ""
+        elif parts.netloc:
+            return ""
+        if ".." in unquote(value).replace("\\", "/").split("/"):
+            return ""
+        while value.startswith("./"):
+            value = value[2:]
+        return value
+
+    def _line(value: Any) -> int | None:
+        if isinstance(value, str):
+            try:
+                value = int(value)
+            except ValueError:
+                return None
+        line = _coerce_line(value)
+        return line if line is not None and line > 0 else None
 
     def _suffix_ok(longer: str, shorter: str) -> bool:
-        # Anchored suffix agreement for abs-vs-relative drift, with a
-        # component minimum: the shorter side must itself carry a
-        # directory component. Both directions of the trade-off: with
-        # no minimum, a bare-basename identity ("util.java") removed a
-        # same-rule same-line namesake in a DIFFERENT directory —
-        # enforcement removal is a finding-drop, the expensive
-        # direction; requiring full-path equality instead would stop
-        # matching the legitimate absolute-uri vs repo-relative-record
-        # drift this arm exists for.
+        # Bare basenames cannot identify a namesake in another directory.
         return "/" in shorter and longer.endswith("/" + shorter)
 
-    keys = [
-        ((e.get("rule_id") or ""), _norm(e.get("file") or ""),
-         int(e.get("line") or 0))
-        for e in enforced
-    ]
     try:
-        # 100 MiB: canonical SARIF budget (matches core.sarif.parser).
+        keys: dict[tuple[str, int], set[str]] = {}
+        for entry in enforced:
+            if not isinstance(entry, dict):
+                continue
+            rule, file, line = entry.get("rule_id"), _norm(entry.get("file")), _line(entry.get("line"))
+            if isinstance(rule, str) and rule and file and line is not None:
+                keys.setdefault((rule, line), set()).add(file)
+        if not keys:
+            return 0
+
+        # Canonical whole-SARIF read cap. No change is written until every
+        # candidate has been checked for ambiguous selector matches.
         data = load_json(sarif_path, strict=True, max_bytes=100 * 1024 * 1024)
-        removed = 0
-        for run in data.get("runs") or []:
-            results = run.get("results")
+        runs = data.get("runs")
+        if not isinstance(runs, list):
+            return 0
+        matches: dict[tuple[str, int, str], tuple[int, int] | None] = {}
+        for run_index, run in enumerate(runs):
+            results = run.get("results") if isinstance(run, dict) else None
             if not isinstance(results, list):
                 continue
-            kept = []
-            for res in results:
-                rule = res.get("ruleId") or ""
-                uri, line = "", 0
-                try:
-                    loc = (res.get("locations") or [{}])[0]
-                    phys = loc.get("physicalLocation") or {}
-                    uri = _norm(
-                        (phys.get("artifactLocation") or {}).get("uri") or "")
-                    line = int((phys.get("region") or {}).get("startLine") or 0)
-                except Exception:  # noqa: BLE001 — malformed location = keep
-                    kept.append(res)
+            for result_index, result in enumerate(results):
+                if not isinstance(result, dict):
                     continue
-                hit = any(
-                    rule == k_rule and line == k_line
-                    and (uri == k_file or _suffix_ok(uri, k_file)
-                         or _suffix_ok(k_file, uri))
-                    for (k_rule, k_file, k_line) in keys
-                )
-                if hit:
-                    removed += 1
-                else:
-                    kept.append(res)
-            run["results"] = kept
-        if removed:
-            save_json(sarif_path, data)
-        return removed
+                rule = result.get("ruleId")
+                if not isinstance(rule, str):
+                    continue
+                try:
+                    location = result["locations"][0]["physicalLocation"]
+                    line = _line(location["region"].get("startLine"))
+                    files = keys.get((rule, line), ()) if line is not None else ()
+                    if not files:
+                        continue
+                    uri = _norm(location["artifactLocation"].get("uri"))
+                except (KeyError, IndexError, TypeError, AttributeError):
+                    continue  # Malformed location stays in the report.
+                if not uri or line is None:
+                    continue
+                for file in files:
+                    if uri == file or _suffix_ok(uri, file) or _suffix_ok(file, uri):
+                        selector = (rule, line, file)
+                        matches[selector] = ((run_index, result_index)
+                                             if selector not in matches else None)
+        removed_positions = {position for position in matches.values() if position is not None}
+        if not removed_positions:
+            return 0
+        for run_index, run in enumerate(runs):
+            results = run.get("results") if isinstance(run, dict) else None
+            if isinstance(results, list):
+                run["results"] = [result for index, result in enumerate(results)
+                                  if (run_index, index) not in removed_positions]
+        save_json(sarif_path, data)
+        return len(removed_positions)
     except Exception as exc:  # noqa: BLE001 — never corrupt the SARIF
         logger.warning(
             "sanitizer-cut enforcement: SARIF filter failed on %s: %s "
