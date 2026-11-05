@@ -692,10 +692,18 @@ def parse_observe_log(run_dir, *,
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
+            # Omitted fields remain compatible with older writers. Present
+            # status fields must have the producer's exact boolean shape.
+            for field in ("reader_failed", "reader_drained"):
+                if field in rec and type(rec[field]) is not bool:
+                    profile.capture_incomplete = True
             if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
                 profile.capture_incomplete = True
             append_failures = rec.get("append_failures")
-            if type(append_failures) is int and append_failures > 0:
+            # A supplied counter is clean only as an exact integer zero;
+            # positive counts and malformed values make capture incomplete.
+            if "append_failures" in rec and (
+                    type(append_failures) is not int or append_failures != 0):
                 profile.capture_incomplete = True
             dropped = rec.get("dropped_by_category", {})
             if not isinstance(dropped, dict):
