@@ -21,7 +21,8 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis import cc_dispatch  # noqa: E402
 

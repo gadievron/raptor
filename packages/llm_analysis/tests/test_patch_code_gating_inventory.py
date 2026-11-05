@@ -35,7 +35,8 @@ from pathlib import Path
 
 # parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 PACKAGE_DIR = REPO / "packages" / "llm_analysis"
 

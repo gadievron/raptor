@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 # core/json/tests/test_cache.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.json import TTL_FOREVER, JsonCache
 

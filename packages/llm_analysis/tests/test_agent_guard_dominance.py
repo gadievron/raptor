@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 import core.orchestration.guard_dominance as gd
 from packages.llm_analysis.agent import AutonomousSecurityAgentV2

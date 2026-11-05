@@ -19,7 +19,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
 
 from core.llm.cc_adapter import parse_stream_json_lines  # noqa: E402
 from core.llm.client import LLMClient  # noqa: E402

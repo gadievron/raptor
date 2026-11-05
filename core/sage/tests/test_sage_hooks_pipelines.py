@@ -27,15 +27,18 @@ _key_patch = None
 
 def setUpModule():
     global _key_tmp, _key_patch
-    _key_tmp = tempfile.TemporaryDirectory()
-    key_path = Path(_key_tmp.name) / "rowmac.key"
-    _key_patch = patch("core.sage.rowmac._key_path", return_value=key_path)
-    _key_patch.start()
+    from core.testing.module_scope import module_fixture_setup, start_module_patch
+
+    with module_fixture_setup(globals(), ('_key_tmp', '_key_patch')) as cleanup:
+        _key_tmp = tempfile.TemporaryDirectory()
+        cleanup.callback(_key_tmp.cleanup)
+        key_path = Path(_key_tmp.name) / "rowmac.key"
+        _key_patch = patch("core.sage.rowmac._key_path", return_value=key_path)
+        start_module_patch(cleanup, _key_patch)
 
 
 def tearDownModule():
-    _key_patch.stop()
-    _key_tmp.cleanup()
+    globals()["_module_fixture_scope"].close()
 
 
 def _client_mock(query_result=None):

@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from packages.llm_analysis.orchestrator import (  # noqa: E402
     build_llm_config_from_flags,

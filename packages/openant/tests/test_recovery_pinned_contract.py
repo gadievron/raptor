@@ -24,7 +24,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from packages.openant.config import OPENANT_PINNED_COMMIT
 from packages.openant.recovery import (

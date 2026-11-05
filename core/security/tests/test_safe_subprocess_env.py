@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
 
 from core.security.env_sanitisation import (  # noqa: E402
     MINIMAL_ENV_KEEP,

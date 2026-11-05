@@ -23,7 +23,8 @@ from packages.web.tests.http_server import start_http_server
 import urllib3
 
 # core/http/tests/test_egress_backend.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.http import HttpError, default_client
 from core.http.egress_backend import EgressClient

@@ -27,7 +27,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from core.sandbox.probes import check_mount_available
 from packages.openant.config import OpenAntConfig

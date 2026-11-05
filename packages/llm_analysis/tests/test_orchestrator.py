@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # packages/llm_analysis/tests/test_orchestrator.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis.cc_dispatch import (
     build_schema,

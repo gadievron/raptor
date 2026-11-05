@@ -36,26 +36,28 @@ _xdg_patch = None
 
 def setUpModule():
     global _interactive_patch, _xdg_tmp, _xdg_patch
-    # Force the agentic-pass gate open: mock the human-terminal leg True so
-    # the full pass path runs under CI/pytest (no controlling terminal).
-    _interactive_patch = patch(
-        "core.security.rule_of_two._session_has_human_terminal",
-        return_value=True,
-    )
-    _interactive_patch.start()
-    # Checklist frames are MAC-stamped at the write chokepoint, keyed
-    # off $XDG_DATA_HOME/raptor/checklist-frame-mac.key. Pin the key
-    # dir for the whole module so (a) stamping never mints the
-    # developer's real key and (b) the per-test HOME patches don't
-    # move the key path between the stamp and the read.
-    _xdg_tmp = TemporaryDirectory(prefix="agentic-passes-xdg-")
-    _xdg_patch = patch.dict(os.environ, {"XDG_DATA_HOME": _xdg_tmp.name})
-    _xdg_patch.start()
+    from core.testing.module_scope import module_fixture_setup, start_module_patch
+
+    with module_fixture_setup(globals(), ('_interactive_patch', '_xdg_tmp', '_xdg_patch')) as cleanup:
+        # Force the agentic-pass gate open: mock the human-terminal leg True so
+        # the full pass path runs under CI/pytest (no controlling terminal).
+        _interactive_patch = patch(
+            "core.security.rule_of_two._session_has_human_terminal",
+            return_value=True,
+        )
+        start_module_patch(cleanup, _interactive_patch)
+        # Checklist frames are MAC-stamped at the write chokepoint, keyed
+        # off $XDG_DATA_HOME/raptor/checklist-frame-mac.key. Pin the key
+        # dir for the whole module so (a) stamping never mints the
+        # developer's real key and (b) the per-test HOME patches don't
+        # move the key path between the stamp and the read.
+        _xdg_tmp = TemporaryDirectory(prefix="agentic-passes-xdg-")
+        cleanup.callback(_xdg_tmp.cleanup)
+        _xdg_patch = patch.dict(os.environ, {"XDG_DATA_HOME": _xdg_tmp.name})
+        start_module_patch(cleanup, _xdg_patch)
 
 def tearDownModule():
-    _xdg_patch.stop()
-    _xdg_tmp.cleanup()
-    _interactive_patch.stop()
+    globals()["_module_fixture_scope"].close()
 
 
 def _make_target(tmp: Path) -> Path:

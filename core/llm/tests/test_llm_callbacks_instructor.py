@@ -15,7 +15,8 @@ from pydantic import BaseModel, ValidationError
 
 # Add parent directories to path for imports
 # packages/llm_analysis/tests/test_llm_callbacks_instructor.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.llm.config import ModelConfig
 from core.llm.providers import (

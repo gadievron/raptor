@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from packages.llm_analysis.agent import AutonomousSecurityAgentV2
 
