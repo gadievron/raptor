@@ -83,6 +83,16 @@ def _rst_close(conn: socket.socket) -> None:
         conn.close()
 
 
+def _close_socket(conn):
+    with contextlib.suppress(OSError):
+        conn.close()
+
+
+def _shutdown_socket(conn):
+    with contextlib.suppress(OSError):
+        conn.shutdown(socket.SHUT_RDWR)
+
+
 class MockUpstream:
     """Threaded captive upstream; see module docstring for modes."""
 
@@ -110,6 +120,7 @@ class MockUpstream:
 
         self._stop = threading.Event()
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._accept_thread = None
         try:
             self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._listener.bind(("127.0.0.1", 0))
@@ -124,32 +135,48 @@ class MockUpstream:
             )
             self._accept_thread.start()
         except BaseException:
-            self._listener.close()
+            with contextlib.ExitStack() as cleanup:
+                if self._accept_thread is not None and self._accept_thread.ident is not None:
+                    cleanup.callback(self._accept_thread.join, timeout=2.0)
+                cleanup.callback(_close_socket, self._listener)
+                cleanup.callback(_shutdown_socket, self._listener)
+                self._stop.set()
+            if (self._accept_thread is not None
+                    and self._accept_thread.ident is not None
+                    and self._accept_thread.is_alive()):
+                raise RuntimeError("MockUpstream acceptor did not stop after failed setup")
             raise
 
     # ---- lifecycle ----
 
     def shutdown(self) -> None:
-        self._stop.set()
-        # close() alone need not wake accept() in another thread.
-        with contextlib.suppress(OSError):
-            self._listener.shutdown(socket.SHUT_RDWR)
-        with contextlib.suppress(OSError):
-            self._listener.close()
-        self._accept_thread.join(timeout=2.0)
+        errors = []
+
+        def attempt(action, *args, **kwargs):
+            try:
+                action(*args, **kwargs)
+            except BaseException as exc:
+                errors.append(exc)
+
+        attempt(self._stop.set)
+        # shutdown(), unlike close(), wakes a blocked socket operation.
+        attempt(_shutdown_socket, self._listener)
+        attempt(_close_socket, self._listener)
+        attempt(self._accept_thread.join, timeout=2.0)
         # No more handlers can be added once the accept thread exits.
         with self._lock:
             clients = list(self._clients)
         for conn in clients:
-            with contextlib.suppress(OSError):
-                conn.shutdown(socket.SHUT_RDWR)
-            with contextlib.suppress(OSError):
-                conn.close()
-        for t in self._threads:
-            t.join(timeout=2.0)
+            attempt(_shutdown_socket, conn)
+        for thread in self._threads:
+            attempt(thread.join, timeout=2.0)
+        for conn in clients:
+            attempt(_close_socket, conn)
         alive = [t.name for t in (self._accept_thread, *self._threads) if t.is_alive()]
         if alive:
             raise RuntimeError(f"MockUpstream threads did not stop: {alive}")
+        if errors:
+            raise errors[0]
 
     def __enter__(self) -> MockUpstream:
         return self
@@ -184,9 +211,9 @@ class MockUpstream:
             if self._stop.is_set():
                 conn.close()
                 return
-            self._bump("connections")
             t = None
             try:
+                self._bump("connections")
                 t = threading.Thread(
                     target=self._handle, args=(conn,), daemon=True,
                 )
@@ -195,11 +222,21 @@ class MockUpstream:
                     self._threads.append(t)
                 t.start()
             except BaseException:
-                conn.close()
-                with self._lock:
-                    self._clients.discard(conn)
-                    if t in self._threads:
-                        self._threads.remove(t)
+                started = t is not None and t.ident is not None
+                try:
+                    with contextlib.ExitStack() as cleanup:
+                        cleanup.callback(_close_socket, conn)
+                        if started:
+                            cleanup.callback(t.join, timeout=2.0)
+                            cleanup.callback(_shutdown_socket, conn)
+                        self._stop.set()
+                finally:
+                    with self._lock:
+                        self._clients.discard(conn)
+                        if t in self._threads and not t.is_alive():
+                            self._threads.remove(t)
+                if started and t.is_alive():
+                    raise RuntimeError("MockUpstream handler did not stop after failed setup")
                 raise
 
     def _read_request(self, conn: socket.socket) -> bytes | None:
@@ -285,10 +322,11 @@ class MockUpstream:
         except OSError:
             pass
         finally:
-            with contextlib.suppress(OSError):
-                conn.close()
-            with self._lock:
-                self._clients.discard(conn)
+            try:
+                _close_socket(conn)
+            finally:
+                with self._lock:
+                    self._clients.discard(conn)
 
     def _on_idle_timeout(self, conn: socket.socket) -> None:
         self._bump("condemnations")

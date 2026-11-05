@@ -126,7 +126,7 @@ def test_failed_startup_closes_listener(monkeypatch, fault):
             patcher.setattr(mock_upstream, "socket", SimpleNamespace(
                 socket=socket_factory, AF_INET=socket.AF_INET,
                 SOCK_STREAM=socket.SOCK_STREAM, SOL_SOCKET=socket.SOL_SOCKET,
-                SO_REUSEADDR=socket.SO_REUSEADDR,
+                SO_REUSEADDR=socket.SO_REUSEADDR, SHUT_RDWR=socket.SHUT_RDWR,
             ))
             if fault == "thread-start":
                 patcher.setattr(mock_upstream, "threading", SimpleNamespace(
