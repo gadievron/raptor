@@ -1566,6 +1566,15 @@ def _prepare_exec_fds(pass_fds, status_w):
     os.set_inheritable(status_w, False)
 
 
+def _append_capture_chunk(chunks: list[bytes], kept: int, chunk: bytes,
+                          cap: int) -> tuple[int, bool]:
+    """Keep only remaining capture room and report discarded bytes immediately."""
+    piece = chunk[:max(0, cap - kept)]
+    if piece:
+        chunks.append(piece)
+    return kept + len(piece), len(piece) < len(chunk)
+
+
 def run_sandboxed(
     cmd: Sequence[str],
     *,
@@ -4639,17 +4648,15 @@ def run_sandboxed(
                             _parent_fds.discard(fd)
                             fds.remove(fd)
                         elif fd == out_r:
-                            if out_len < _capture_cap:
-                                stdout_chunks.append(chunk)
-                                out_len += len(chunk)
-                            else:
-                                _truncated[1] = True
+                            out_len, discarded = _append_capture_chunk(
+                                stdout_chunks, out_len, chunk, _capture_cap,
+                            )
+                            _truncated[1] |= discarded
                         else:
-                            if err_len < _capture_cap:
-                                stderr_chunks.append(chunk)
-                                err_len += len(chunk)
-                            else:
-                                _truncated[2] = True
+                            err_len, discarded = _append_capture_chunk(
+                                stderr_chunks, err_len, chunk, _capture_cap,
+                            )
+                            _truncated[2] |= discarded
                 _materialize()
                 if _truncated[1]:
                     stdout_buf += (  # type: ignore[operator]
