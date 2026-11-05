@@ -67,11 +67,31 @@ def fake(monkeypatch) -> _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch) -> None:
-    """Each test starts with no cached state and no GITHUB_TOKEN."""
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    github_client.reset_for_tests()
-    yield
-    github_client.reset_for_tests()
+    """Own memoized results, factories and warnings without flushing callers."""
+    from functools import lru_cache
+    import os
+
+    lock = github_client._warn_lock
+    try:
+        # Register absence too: direct environment writes must unwind exactly.
+        monkeypatch.setenv("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        replacements = {
+            name: github_client._cache_unless_none(getattr(github_client, name).__wrapped__)
+            for name in ("get_repo", "get_languages", "commit_exists", "_get_commit_cached")
+        }
+        for name in ("_bucket", "_client"):
+            borrowed = getattr(github_client, name)
+            replacements[name] = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+        replacements.update(_warned_token_missing=False, _warned_rate_limited=False)
+        with lock:
+            for name, value in replacements.items():
+                monkeypatch.setattr(github_client, name, value)
+        yield
+    finally:
+        # Share the patch stack with body overrides; restore under the publication lock.
+        with lock:
+            monkeypatch.undo()
 
 
 class TestGetRepo:

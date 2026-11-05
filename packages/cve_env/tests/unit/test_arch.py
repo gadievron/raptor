@@ -4,9 +4,30 @@ from __future__ import annotations
 
 import json
 from typing import Any
+import pytest
+
 from unittest.mock import MagicMock, patch
 
 from cve_env.tools.arch import HostArch, arch_decide, detect_host_arch
+
+
+
+
+@pytest.fixture(autouse=True)
+def _isolated_host_arch(monkeypatch):
+    from functools import lru_cache
+
+    from cve_env.tools import arch
+    from core.testing.module_state import isolated_module_state
+
+    borrowed = arch.detect_host_arch
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with isolated_module_state(arch, {"detect_host_arch": fresh}):
+        try:
+            monkeypatch.setitem(globals(), "detect_host_arch", fresh)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def test_host_arch_docker_platform() -> None:

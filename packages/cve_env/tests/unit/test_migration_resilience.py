@@ -16,12 +16,37 @@ regressions trivially traceable.
 from __future__ import annotations
 
 import subprocess
+import pytest
+
 from unittest.mock import patch
 
 
 # ============================================================================
 # verify._inspect_state — returns {"_error": str} on any failure
 # ============================================================================
+
+
+
+
+@pytest.fixture(autouse=True)
+def _isolated_compose_probe(monkeypatch):
+    from functools import lru_cache
+
+    from contextlib import ExitStack
+
+    from core.container import compose
+    from cve_env.tools import docker_compose_up
+    from core.testing.module_state import isolated_module_state
+
+    borrowed = compose._compose_invocation
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(compose, {"_compose_invocation": fresh}))
+        scope.enter_context(isolated_module_state(docker_compose_up, {"_compose_invocation": fresh}))
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def test_inspect_state_returns_error_on_timeout() -> None:

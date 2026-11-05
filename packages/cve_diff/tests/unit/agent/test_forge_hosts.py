@@ -15,6 +15,23 @@ import pytest
 from cve_diff.agent import tools
 
 
+
+
+@pytest.fixture(autouse=True)
+def _isolated_forge_client(monkeypatch):
+    from functools import lru_cache
+
+    from core.testing.module_state import isolated_module_state
+
+    borrowed = tools._forge_client
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with isolated_module_state(tools, {"_forge_client": fresh}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _has_host(hosts, name: str) -> bool:
     """Exact list-membership check via explicit ``==``. Phrased
     this way (rather than ``name in hosts``) to defuse CodeQL's
