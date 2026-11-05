@@ -11,6 +11,7 @@ The full subprocess-end-to-end is exercised in
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import http.server
 import json
 import os
@@ -24,6 +25,7 @@ import pytest
 from core.llm.config import ModelConfig
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher
+from packages.web.tests.http_server import start_http_server
 
 # Module-level marker — every test in this file spins up a real HTTP
 # server on 127.0.0.1 and/or a real LLMDispatcher Unix socket. Three
@@ -69,17 +71,17 @@ class _CaptiveUpstream:
                 self.wfile.write(outer._body)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        self.host, self.port = self._server.server_address
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
+        with ExitStack() as cleanup:
+            self._thread = start_http_server(self._server, cleanup.callback)
+            self.host, self.port = self._server.server_address
+            self._cleanup = cleanup.pop_all()
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 def _wired_dispatcher(creds, tmp_path, provider: str, upstream: _CaptiveUpstream):
@@ -91,14 +93,17 @@ def _wired_dispatcher(creds, tmp_path, provider: str, upstream: _CaptiveUpstream
         audit_path=tmp_path / "audit.jsonl",
         token_ttl_s=3600, token_budget=100,
     )
-    original = d._rules[provider]
-    d._rules[provider] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
-    return d
+    with ExitStack() as rollback:
+        rollback.callback(d.shutdown)
+        original = d._rules[provider]
+        d._rules[provider] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+        rollback.pop_all()
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +121,11 @@ class TestProviderRouteSelection:
         self, fake_creds, tmp_path, monkeypatch,
     ):
         pytest.importorskip("anthropic")
-        upstream = _CaptiveUpstream()
-        d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="ant-init")
             monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
             monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
@@ -140,9 +147,6 @@ class TestProviderRouteSelection:
             assert isinstance(transport, httpx.HTTPTransport)
             # The SDK's base_url on the dispatcher path is the dummy http://_/...
             assert "http://_/anthropic" in str(provider.client.base_url)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_anthropic_provider_uses_direct_sdk_when_no_socket(
         self, monkeypatch,
@@ -161,9 +165,11 @@ class TestProviderRouteSelection:
         self, fake_creds, tmp_path, monkeypatch,
     ):
         pytest.importorskip("openai")
-        upstream = _CaptiveUpstream()
-        d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="oai-init")
             monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
             monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
@@ -175,9 +181,6 @@ class TestProviderRouteSelection:
             cfg.api_key = "should-not-be-used"
             provider = OpenAICompatibleProvider(cfg)
             assert "http://_/openai" in str(provider.client.base_url)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_openai_compat_does_NOT_use_dispatcher_for_ollama(
         self, fake_creds, tmp_path, monkeypatch,
@@ -188,9 +191,11 @@ class TestProviderRouteSelection:
         ``RAPTOR_LLM_SOCKET`` set, the dispatcher path must NOT be
         taken for ``provider != "openai"``."""
         pytest.importorskip("openai")
-        upstream = _CaptiveUpstream()
-        d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "openai", upstream)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="ollama-init")
             monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
             monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
@@ -208,17 +213,16 @@ class TestProviderRouteSelection:
             # Direct path → base_url is the local Ollama endpoint
             assert "http://_/" not in str(provider.client.base_url)
             assert "11434" in str(provider.client.base_url)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_gemini_provider_uses_dispatcher_when_socket_set(
         self, fake_creds, tmp_path, monkeypatch,
     ):
         pytest.importorskip("google.genai")
-        upstream = _CaptiveUpstream()
-        d = _wired_dispatcher(fake_creds, tmp_path, "gemini", upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "gemini", upstream)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="gem-init")
             monkeypatch.setenv("RAPTOR_LLM_SOCKET", str(d.socket_path))
             monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", str(fd))
@@ -234,9 +238,6 @@ class TestProviderRouteSelection:
             # google-genai stores HttpOptions on _api_client.http_options
             base_url = client._api_client._http_options.base_url
             assert "http://_/gemini" in str(base_url)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +308,11 @@ class TestGrandchildRelay:
             "stop_sequence": None,
             "usage": {"input_tokens": 4, "output_tokens": 3},
         }).encode("utf-8")
-        upstream = _CaptiveUpstream(body=anthropic_response)
-        d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream(body=anthropic_response)
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
+            cleanup.callback(d.shutdown)
             # Parent script: read inherited token, immediately relay
             # to a grandchild that's spawned inline. Mimics what
             # raptor_agentic.py does when it spawns agent.py with
@@ -390,9 +393,6 @@ class TestGrandchildRelay:
             sent = {k.lower(): v for k, v in upstream.captured["headers"].items()}
             assert sent.get("x-api-key") == "test-anthropic-secret"
             assert "x-raptor-token" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 @pytest.fixture
@@ -472,27 +472,25 @@ class TestPhaseBChainE2E:
                 self.end_headers()
                 self.wfile.write(resp)
 
-        upstream_server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
-        upstream_thread = threading.Thread(
-            target=upstream_server.serve_forever, daemon=True,
-        )
-        upstream_thread.start()
-        upstream_base = f"http://{upstream_server.server_address[0]}:{upstream_server.server_address[1]}"
+        with ExitStack() as cleanup:
+            upstream_server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+            start_http_server(upstream_server, cleanup.callback)
+            upstream_base = f"http://{upstream_server.server_address[0]}:{upstream_server.server_address[1]}"
 
-        d = LLMDispatcher(
-            run_id="chain-e2e", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=120, token_budget=20,
-        )
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream_base,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
+            d = LLMDispatcher(
+                run_id="chain-e2e", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=120, token_budget=20,
+            )
+            cleanup.callback(d.shutdown)
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream_base,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
 
-        try:
             from core.llm.dispatcher.spawn import spawn_worker
             repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.dirname(os.path.abspath(__file__))
@@ -636,10 +634,6 @@ class TestPhaseBChainE2E:
             # one — important for the "α (relax single-use)" decision.
             assert dispatched[0]["token_id"] == dispatched[1]["token_id"]
             assert dispatched[0]["worker_label"] == dispatched[1]["worker_label"]
-        finally:
-            upstream_server.shutdown()
-            upstream_server.server_close()
-            d.shutdown()
 
 
 class TestPhaseBChainE2EGemini:
@@ -690,30 +684,28 @@ class TestPhaseBChainE2EGemini:
                 self.end_headers()
                 self.wfile.write(gemini_response)
 
-        upstream_server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
-        upstream_thread = threading.Thread(
-            target=upstream_server.serve_forever, daemon=True,
-        )
-        upstream_thread.start()
-        upstream_base = (
-            f"http://{upstream_server.server_address[0]}:"
-            f"{upstream_server.server_address[1]}"
-        )
+        with ExitStack() as cleanup:
+            upstream_server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+            start_http_server(upstream_server, cleanup.callback)
+            upstream_base = (
+                f"http://{upstream_server.server_address[0]}:"
+                f"{upstream_server.server_address[1]}"
+            )
 
-        d = LLMDispatcher(
-            run_id="chain-e2e-gemini", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=120, token_budget=20,
-        )
-        original = d._rules["gemini"]
-        d._rules["gemini"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream_base,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
+            d = LLMDispatcher(
+                run_id="chain-e2e-gemini", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=120, token_budget=20,
+            )
+            cleanup.callback(d.shutdown)
+            original = d._rules["gemini"]
+            d._rules["gemini"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream_base,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
 
-        try:
             from core.llm.dispatcher.spawn import spawn_worker
             repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.dirname(os.path.abspath(__file__))
@@ -836,10 +828,6 @@ class TestPhaseBChainE2EGemini:
             dispatched = [a for a in audit_lines if a["event"] == "request.dispatch"]
             assert len(dispatched) == 2
             assert dispatched[0]["token_id"] == dispatched[1]["token_id"]
-        finally:
-            upstream_server.shutdown()
-            upstream_server.server_close()
-            d.shutdown()
 
 
 class TestDetectLLMAvailabilityRecognizesDispatcher:
@@ -907,10 +895,11 @@ class TestEndToEndCredentialIsolationThroughProviders:
             "stop_sequence": None,
             "usage": {"input_tokens": 4, "output_tokens": 3},
         }).encode("utf-8")
-        upstream = _CaptiveUpstream(body=anthropic_response)
-        d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
-
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream(body=anthropic_response)
+            cleanup.callback(upstream.shutdown)
+            d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
+            cleanup.callback(d.shutdown)
             from core.llm.dispatcher.spawn import spawn_worker
 
             # Worker imports core.llm.providers.AnthropicProvider, builds
@@ -968,6 +957,3 @@ class TestEndToEndCredentialIsolationThroughProviders:
             assert sent.get("x-api-key") == "test-anthropic-secret"
             assert sent.get("x-api-key") != "dummy-not-used"
             assert "x-raptor-token" not in sent
-        finally:
-            upstream.shutdown()
-            d.shutdown()
