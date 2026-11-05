@@ -46,6 +46,20 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _text_value(value: Any) -> str | None:
+    """Read optional SARIF text without coercing malformed display metadata."""
+    text = _as_dict(value).get("text")
+    return text if isinstance(text, str) else None
+
+
+def _snippet_text(physical_location: Any) -> str:
+    """Prefer a region's snippet, then a usable context-region snippet."""
+    physical = _as_dict(physical_location)
+    region = _as_dict(physical.get("region"))
+    context = _as_dict(physical.get("contextRegion"))
+    return _text_value(region.get("snippet")) or _text_value(context.get("snippet")) or ""
+
+
 def _coerce_line(value: Any) -> int | None:
     """Coerce an untrusted SARIF line/column value to int, or None.
 
@@ -174,12 +188,8 @@ def _path_from_locations(
         # render) or a code snippet containing C1 controls / bidi
         # overrides could otherwise smuggle terminal-rendering
         # behaviour through the dataflow display layer.
-        message = escape_nonprintable(
-            location.get("message", {}).get("text", "") or ""
-        )
-        snippet = escape_nonprintable(
-            (region.get("snippet") or {}).get("text", "") or ""
-        )
+        message = escape_nonprintable(_text_value(location.get("message")) or "")
+        snippet = escape_nonprintable(_snippet_text(physical_loc))
         file_uri = resolve_uri(artifact) if resolve_uri is not None else artifact.get("uri", "")
         if resolve_uri is not None and file_uri is None:
             return None
@@ -1505,9 +1515,7 @@ def parse_sarif_findings(
 
             function_name = logical_location_function(first_loc, run.get("logicalLocations"))
             region = _as_dict(loc.get("region"))
-            snippet = _as_dict(region.get("snippet")).get("text", "")
-            if not isinstance(snippet, str):
-                snippet = ""
+            snippet = _snippet_text(loc)
 
             # Extract dataflow path if present
             code_flows = result.get("codeFlows") or []
@@ -1551,9 +1559,7 @@ def parse_sarif_findings(
                                              compiler_evidence.get("compiler_path_notes", []))
                 compiler_evidence = retained
 
-            message_text = _as_dict(result.get("message")).get("text")
-            if not isinstance(message_text, str):
-                message_text = None
+            message_text = _text_value(result.get("message"))
             level = result.get("level")
             if not isinstance(level, str) or not level:
                 # SARIF severity inheritance: absent result.level means
