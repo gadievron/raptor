@@ -2,19 +2,18 @@
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / '.github/scripts'
-sys.path.insert(0, str(SCRIPTS))
-try:
+with patch.object(sys, 'path', [str(SCRIPTS), *sys.path]):
     import sandbox_wrapper_tests as inventory
     spec = importlib.util.spec_from_file_location('wrapper_test_runner', SCRIPTS / 'run_sandbox_wrapper_tests.py')
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
-finally:
-    sys.path.remove(str(SCRIPTS))
 
 
 @pytest.mark.wall_budget(30)
@@ -89,7 +88,8 @@ def test_registry_refusal_preserves_evidence_without_running_pytest(tmp_path, mo
     report = tmp_path / "reports"
     monkeypatch.setattr(runner, "load_registry", lambda: {})
     monkeypatch.setattr(runner, "registry_errors", lambda *args: errors)
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **kw: pytest.fail("pytest started after refusal"))
+    monkeypatch.setattr(runner, "subprocess", SimpleNamespace(
+        run=lambda *a, **kw: pytest.fail("pytest started after refusal")))
     monkeypatch.setattr(sys, "argv", ["runner", "--lane", "contracts", "--report-dir", str(report)]
                         + (["--list"] if list_only else []))
     assert runner.main() == 1
@@ -138,7 +138,7 @@ def test_empty_scoped_native_selection_cannot_fall_back_to_all(tmp_path, monkeyp
     registry = _fixture(tmp_path)
     monkeypatch.setattr(runner, 'load_registry', lambda: registry)
     monkeypatch.setattr(runner, 'registry_errors', lambda *args: [])
-    monkeypatch.setattr(runner.sys, 'platform', 'linux')
+    monkeypatch.setattr(runner, 'sys', SimpleNamespace(**(vars(sys) | {'platform': 'linux'})))
     selection = {'platform': 'linux', 'contracts': registry['wrappers'][0]['contracts'], 'families': [], 'full': False}
     monkeypatch.setattr(sys, 'argv', ['runner', '--lane', 'native', '--report-dir', str(tmp_path / 'out'),
                                     '--selection-json', json.dumps(selection), '--list'])
@@ -154,3 +154,43 @@ def test_registry_cache_is_local_and_sees_changed_test_bodies(tmp_path):
     assert inventory.registry_errors(tmp_path, registry) == []
     (tmp_path / 'tests/test_owned.py').write_text('def test_replaced():\n    pass\n')
     assert any('missing' in error for error in inventory.registry_errors(tmp_path, registry))
+
+
+@pytest.mark.parametrize(('imports', 'call'), [
+    ('from core.sandbox import run as confined', 'confined(["true"])'),
+    ('from core.sandbox.context import sandbox as context', 'context()'),
+    ('import core.sandbox', 'core.sandbox.run(["true"])'),
+    ('import core.sandbox.context', 'core.sandbox.context.run(["true"])'),
+    ('import core.sandbox as sbx', 'sbx.run_untrusted(["true"])'),
+    ('import core.sandbox.context as sbx', 'sbx.run_untrusted_networked(["true"])'),
+    ('from core import sandbox as sbx', '(sbx).sandbox()'),
+    ('', 'state.sandbox_run(["true"])'),
+])
+def test_policy_census_preserves_aliases_and_nested_async_scopes(tmp_path, imports, call):
+    source = tmp_path / 'owned.py'
+    source.write_text(imports + '\nclass Owner:\n    async def invoke(self):\n        ' + call + '\n')
+    assert inventory.policy_entrypoints(source) == ['Owner.invoke']
+
+
+@pytest.mark.parametrize('receiver', ['other', 'factory()', 'receivers[0]', '(left or right)'])
+def test_incidental_executor_names_are_not_wrapper_calls(tmp_path, receiver):
+    source = tmp_path / 'owned.py'
+    source.write_text('import core.sandbox as sbx\ndef invoke():\n    ' + receiver + '.run(["true"])\n')
+    assert inventory.policy_entrypoints(source) == []
+
+
+def test_policy_census_still_finds_nested_calls_and_module_dispatch(tmp_path):
+    source = tmp_path / 'owned.py'
+    source.write_text('''import core.sandbox as sbx
+sbx.run(["true"])
+class Owner:
+    def invoke(self):
+        return factory(sbx.run(["true"])).run(state.sandbox_run(["true"]))
+''')
+    assert inventory.policy_entrypoints(source) == ['<module>', 'Owner.invoke']
+
+
+def test_policy_census_keeps_file_wide_import_resolution(tmp_path):
+    source = tmp_path / 'owned.py'
+    source.write_text('def invoke():\n    sbx.run(["true"])\nimport core.sandbox as sbx\n')
+    assert inventory.policy_entrypoints(source) == ['invoke']
