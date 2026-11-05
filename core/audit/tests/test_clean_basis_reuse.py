@@ -192,11 +192,8 @@ class TestProducersStampTheBasis:
         assert final.status == "dark"
         assert _basis(final) is None
 
-    def test_propagated_clean_is_stamped(self):
-        """A caller made clean by inheriting a trusted callee's clean must be
-        stamped propagated, while the callee keeps its own reviewed basis.
-        Otherwise an inherited verdict would look like a direct review of the
-        caller and be reused across runs."""
+    def test_generic_callee_clean_does_not_mint_propagated_clean(self):
+        """A clean callee has not proved the caller's NULL-return premise."""
         from core.audit.propagation import propagate_confidence
 
         callee = ReviewOutcome(
@@ -212,8 +209,9 @@ class TestProducersStampTheBasis:
             [callee, caller],
             {"p.c:handle": [{"callee_file": "p.c", "callee": "parse_hdr"}]},
         )
-        assert demotions and caller.status == "clean"
-        assert _basis(caller) == "propagated"
+        assert demotions == []
+        assert caller.status == "suspicious"
+        assert _basis(caller) is None
         # The trusted source keeps its own (reviewed) basis.
         assert _basis(callee) is None
 
