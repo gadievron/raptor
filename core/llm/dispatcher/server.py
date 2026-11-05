@@ -83,9 +83,9 @@ import httpx
 if TYPE_CHECKING:
     from core.llm.http_pool import ClientShards
 
+from core.atomic_fs import rmtree_hardened
 from core.json.jsonl import append_jsonl
 from core.run.tmp_ownership import (
-    remove_owner_marker,
     sweep_dead_owner_dirs,
     write_owner_marker,
 )
@@ -1478,97 +1478,83 @@ class LLMDispatcher:
         # Linux paths use a pinned directory descriptor as their short address;
         # clients in this PID view can resolve the owning server's procfs path.
         # No writable system-global /tmp fallback is required.
-        sweep_dead_owner_dirs(_SOCK_DIR_SWEEP_PREFIX)
-        sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id[:40]}-"))
-        socket_parent = sock_dir
-        self._socket_dir_finalizer = None
-        if len(os.fsencode(sock_dir / "llm-child.sock")) > _SUN_PATH_BUDGET:
-            if sys.platform == "linux":
-                import weakref
-                descriptor = os.open(sock_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-                self._socket_dir_finalizer = weakref.finalize(self, os.close, descriptor)
-                socket_parent = Path(f"/proc/{os.getpid()}/fd/{descriptor}")
-            else:
-                # macOS lacks the Linux procfs address. The launcher's
-                # original selected base avoids the deep session suffix while
-                # respecting custom placement and the OS-private default.
-                base = Path(_SERVICE_TMP_BASE) if _SERVICE_TMP_BASE else sock_dir.parent
-                if not base.is_absolute():
-                    sock_dir.rmdir()
-                    raise OSError("dispatcher temporary base must be absolute")
-                info = base.stat()
-                if (info.st_uid not in {0, os.geteuid()}
-                        or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
-                    sock_dir.rmdir()
-                    raise OSError("dispatcher temporary base must be owned by you or root, and private or sticky")
-                if base == sock_dir.parent:
-                    sweep_dead_owner_dirs("rll-")
-                compact = Path(tempfile.mkdtemp(prefix="rll-", dir=base))
-                sock_dir.rmdir()
-                sock_dir = socket_parent = compact
-                if len(os.fsencode(compact / "llm-child.sock")) > _SUN_PATH_BUDGET:
-                    compact.rmdir()
-                    raise OSError("dispatcher socket path too long; select a shorter temporary base")
-        self._sock_dir = sock_dir
-        # 0o700 = owner-only — the socket lives here and must not be
-        # group/other-readable on a multi-user host.
-        os.chmod(self._sock_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
-        # Ownership marker: shutdown()/atexit remove this dir, but a
-        # SIGTERM'd or SIGKILL'd owner skips both — the marker lets
-        # the next dispatcher construction's dead-owner sweep (above)
-        # reclaim the orphan instead of waiting on the 24 h age-based
-        # reaper.
-        write_owner_marker(self._sock_dir)
-        self.socket_path = socket_parent / "llm.sock"
-        # Child-plane UDS: same peer-UID gate, REDUCED surface (scoped
-        # child tokens only — no worker tokens, no /_child/* admin, no
-        # /_token/renew). This is the only dispatcher socket that may
-        # be bridged into a sandbox (see the L4 docstring): the bridge
-        # relay runs as the host UID, so anything it terminates on
-        # passes peer-UID verification and must not carry admin
-        # capability. Derivable from socket_path by name so worker-side
-        # code (skill_dispatch) can find it without a second env var.
-        self.child_socket_path = socket_parent / "llm-child.sock"
-
-        # Audit log
         self._audit_path = audit_path
         self._audit_lock = threading.Lock()
-
-        # Shutdown is wired to BOTH the context-manager exit / explicit
-        # ``shutdown()`` call AND an ``atexit`` hook (see lifecycle.py).
-        # The atexit hook fires at interpreter teardown — under pytest,
-        # after the capture streams are already closed — so a second
-        # ``shutdown()`` that did real work (rmdir on the already-removed
-        # dir, plus an audit log line) raised FileNotFoundError and then
-        # cascaded into "I/O operation on closed file" logging errors.
-        # Guard makes shutdown idempotent: the second call is a no-op.
-        self._shutdown_lock = threading.Lock()
+        self._shutdown_lock = threading.RLock()
+        self._shutdown_started = False
         self._shutdown_done = False
-
-        # Init may fail past this point (bind error, thread start
-        # failure). On failure the tempdir would otherwise leak.
+        self._cleanup_done: set[str] = set()
+        self._socket_dirs: list[Path] = []
+        self._socket_dir_finalizer = None
+        self._tcp_ready = False
         try:
+            sweep_dead_owner_dirs(_SOCK_DIR_SWEEP_PREFIX)
+            sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id[:40]}-"))
+            self._socket_dirs.append(sock_dir)
+            socket_parent = sock_dir
+            self._socket_dir_finalizer = None
+            if len(os.fsencode(sock_dir / "llm-child.sock")) > _SUN_PATH_BUDGET:
+                if sys.platform == "linux":
+                    import weakref
+                    descriptor = os.open(sock_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                    try:
+                        self._socket_dir_finalizer = weakref.finalize(self, os.close, descriptor)
+                    except BaseException:
+                        with contextlib.suppress(OSError):
+                            os.close(descriptor)
+                        raise
+                    socket_parent = Path(f"/proc/{os.getpid()}/fd/{descriptor}")
+                else:
+                    # macOS lacks the Linux procfs address. The launcher's
+                    # original selected base avoids the deep session suffix while
+                    # respecting custom placement and the OS-private default.
+                    base = Path(_SERVICE_TMP_BASE) if _SERVICE_TMP_BASE else sock_dir.parent
+                    if not base.is_absolute():
+                        sock_dir.rmdir()
+                        raise OSError("dispatcher temporary base must be absolute")
+                    info = base.stat()
+                    if (info.st_uid not in {0, os.geteuid()}
+                            or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
+                        sock_dir.rmdir()
+                        raise OSError("dispatcher temporary base must be owned by you or root, and private or sticky")
+                    if base == sock_dir.parent:
+                        sweep_dead_owner_dirs("rll-")
+                    compact = Path(tempfile.mkdtemp(prefix="rll-", dir=base))
+                    self._socket_dirs.append(compact)
+                    sock_dir.rmdir()
+                    sock_dir = socket_parent = compact
+                    if len(os.fsencode(compact / "llm-child.sock")) > _SUN_PATH_BUDGET:
+                        compact.rmdir()
+                        raise OSError("dispatcher socket path too long; select a shorter temporary base")
+            self._sock_dir = sock_dir
+            # 0o700 = owner-only — the socket lives here and must not be
+            # group/other-readable on a multi-user host.
+            os.chmod(self._sock_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
+            # Ownership marker: shutdown()/atexit remove this dir, but a
+            # SIGTERM'd or SIGKILL'd owner skips both — the marker lets
+            # the next dispatcher construction's dead-owner sweep (above)
+            # reclaim the orphan instead of waiting on the 24 h age-based
+            # reaper.
+            write_owner_marker(self._sock_dir)
+            self.socket_path = socket_parent / "llm.sock"
+            # Child-plane UDS: same peer-UID gate, REDUCED surface (scoped
+            # child tokens only — no worker tokens, no /_child/* admin, no
+            # /_token/renew). This is the only dispatcher socket that may
+            # be bridged into a sandbox (see the L4 docstring): the bridge
+            # relay runs as the host UID, so anything it terminates on
+            # passes peer-UID verification and must not carry admin
+            # capability. Derivable from socket_path by name so worker-side
+            # code (skill_dispatch) can find it without a second env var.
+            self.child_socket_path = socket_parent / "llm-child.sock"
             self._init_server(run_id)
-        except Exception:
-            # Best-effort cleanup so /tmp/raptor-llm-* doesn't
-            # accumulate after init failures.
+        except BaseException:
+            # Construction transfers ownership only after all setup succeeds.
+            # Preserve the original error even if secondary retirement fails.
             try:
-                self.socket_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            try:
-                self.child_socket_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            # The ownership marker must go before rmdir or the dir
-            # leaks with ENOTEMPTY.
-            remove_owner_marker(self._sock_dir)
-            try:
-                self._sock_dir.rmdir()
-            except OSError:
-                pass
-            if self._socket_dir_finalizer is not None:
-                self._socket_dir_finalizer()
+                self.shutdown()
+            except Exception:
+                _logger.warning("llm-dispatcher: failed construction cleanup incomplete",
+                                exc_info=True)
             raise
 
     def _init_server(self, run_id: str) -> None:
@@ -2171,8 +2157,12 @@ class LLMDispatcher:
         Bound to 127.0.0.1 with an ephemeral port; non-loopback peers
         are dropped pre-parse.
         """
-        with self._loopback_lock:
+        with self._shutdown_lock, self._loopback_lock:
+            if self._shutdown_started:
+                raise RuntimeError("dispatcher is shutting down")
             if self._tcp_server is not None:
+                if not self._tcp_ready:
+                    raise RuntimeError("loopback listener cleanup is incomplete")
                 return self._tcp_port
             dispatcher = self
 
@@ -2245,24 +2235,35 @@ class LLMDispatcher:
                     finally:
                         self._conn_slots.release()
 
-            handler_cls = _make_request_handler(dispatcher, plane="tcp")
-            self._tcp_server = _LoopbackHTTPServer(  # type: ignore[assignment]
-                ("127.0.0.1", 0), handler_cls,
-            )
-            self._tcp_port = self._tcp_server.server_address[1]  # type: ignore[attr-defined]
-            self._tcp_thread = threading.Thread(  # type: ignore[assignment]
-                target=self._tcp_server.serve_forever,  # type: ignore[attr-defined]
-                name=f"raptor-llm-dispatcher-tcp-{self.run_id}",
-                daemon=True,
-            )
-            self._tcp_thread.start()  # type: ignore[attr-defined]
-            self._audit(AuditEvent(
-                ts=time.time(), event="server.loopback_start",
-                peer_pid=None, peer_uid=None,
-                token_id=None, worker_label=None,
-                status="ok", extra={"port": self._tcp_port},
-            ))
-            return self._tcp_port
+            try:
+                handler_cls = _make_request_handler(dispatcher, plane="tcp")
+                self._tcp_server = _LoopbackHTTPServer(  # type: ignore[assignment]
+                    ("127.0.0.1", 0), handler_cls,
+                )
+                self._tcp_port = self._tcp_server.server_address[1]  # type: ignore[attr-defined]
+                self._tcp_thread = threading.Thread(  # type: ignore[assignment]
+                    target=self._tcp_server.serve_forever,  # type: ignore[attr-defined]
+                    name=f"raptor-llm-dispatcher-tcp-{self.run_id}",
+                    daemon=True,
+                )
+                self._tcp_thread.start()  # type: ignore[attr-defined]
+                self._audit(AuditEvent(
+                    ts=time.time(), event="server.loopback_start",
+                    peer_pid=None, peer_uid=None,
+                    token_id=None, worker_label=None,
+                    status="ok", extra={"port": self._tcp_port},
+                ))
+                self._tcp_ready = True
+                return self._tcp_port
+            except BaseException:
+                errors = []
+                self._retire_listener("tcp", self._tcp_server, self._tcp_thread, errors)
+                if "tcp" in self._cleanup_done:
+                    self._tcp_server = self._tcp_thread = None
+                    self._tcp_port = 0
+                    self._tcp_ready = False
+                    self._cleanup_done.discard("tcp")
+                raise
 
     def _upstream_client_shards(self) -> ClientShards:
         """The pooled forwarding-leg clients, rebuilt on proxy-env
@@ -2291,6 +2292,8 @@ class LLMDispatcher:
         """
         env = tuple(os.environ.get(v) for v in _PROXY_ENV_VARS)
         with self._upstream_http_lock:
+            if self._shutdown_started:
+                raise RuntimeError("dispatcher is shutting down")
             if self._upstream_shards is None or self._upstream_http_env != env:
                 from core.llm.http_pool import (
                     ClientShards,
@@ -2357,115 +2360,91 @@ class LLMDispatcher:
             event_hooks=response_event_hooks(),
         )
 
+    def _retire_listener(self, label, listener, thread, errors) -> None:
+        """Close every acquired listener, including one whose thread never started."""
+        if listener is None or label in self._cleanup_done:
+            return
+        closed = True
+        try:
+            # BaseServer.shutdown waits forever if serve_forever never ran.
+            if thread is not None and thread.is_alive():
+                listener.shutdown()
+        except Exception:
+            _logger.warning("llm-dispatcher: %s shutdown failed", label, exc_info=True)
+            errors.append(label + "_shutdown")
+        try:
+            listener.server_close()
+        except Exception:
+            closed = False
+            _logger.warning("llm-dispatcher: %s close failed", label, exc_info=True)
+            errors.append(label + "_close")
+        try:
+            if thread is not None and thread.ident is not None and thread is not threading.current_thread():
+                # Allow several normal serve_forever poll intervals without
+                # making teardown an unbounded wait on a stuck listener.
+                thread.join(timeout=2.0)
+        except Exception:
+            _logger.warning("llm-dispatcher: %s join failed", label, exc_info=True)
+            errors.append(label + "_join")
+        alive = thread is not None and thread.is_alive()
+        if alive:
+            errors.append(label + "_thread_alive")
+        if closed and not alive:
+            self._cleanup_done.add(label)
+
     def shutdown(self) -> None:
-        """Stop the server thread and remove the socket directory.
+        """Retire owned resources; completed shutdown is a no-op, failures retry.
 
-        Pre-fix every step silently swallowed any exception and the
-        audit event was emitted as ``status="ok"`` regardless. A
-        deadlocked-but-throwing ``server.shutdown()`` or an
-        ``unlink``/``rmdir`` blocked by a still-bound socket left the
-        dispatcher reporting clean stop while a tempdir leaked + the
-        process may have kept accepting on a half-shut server.
-        Each step's failure now logs at WARNING with the traceback,
-        and the audit event records ``status="partial"`` with a
-        reason summary when anything went wrong.
-
-        Idempotent: a second call (e.g. the ``atexit`` hook firing after
-        an explicit ``shutdown()`` / context-manager exit already ran) is
-        a no-op. This avoids a spurious ``FileNotFoundError`` on the
-        already-removed socket dir and the closed-stream logging cascade
-        it triggers during interpreter teardown.
+        A partial constructor can own bound listeners without serving threads.
+        Close them independently, retain unfinished cleanup obligations, and
+        remove private socket storage only after all listeners have stopped.
         """
         with self._shutdown_lock:
             if self._shutdown_done:
                 return
-            self._shutdown_done = True
-        errors: list[str] = []
-        if self._tcp_server is not None:
-            try:
-                self._tcp_server.shutdown()
-                self._tcp_server.server_close()
-            except Exception:
-                _logger.warning(
-                    "llm-dispatcher: loopback listener shutdown failed",
-                    exc_info=True,
-                )
-                errors.append("loopback_shutdown")
-        try:
-            self._server.shutdown()
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: server.shutdown() failed", exc_info=True,
+            self._shutdown_started = True
+            errors: list[str] = []
+            listeners = (
+                ("tcp", getattr(self, "_tcp_server", None), getattr(self, "_tcp_thread", None)),
+                ("worker", getattr(self, "_server", None), getattr(self, "_thread", None)),
+                ("child", getattr(self, "_child_server", None), getattr(self, "_child_thread", None)),
             )
-            errors.append("shutdown")
-        try:
-            self._server.server_close()
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: server.server_close() failed", exc_info=True,
-            )
-            errors.append("server_close")
-        try:
-            self._child_server.shutdown()
-            self._child_server.server_close()
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: child-plane server shutdown failed",
-                exc_info=True,
-            )
-            errors.append("child_shutdown")
-        try:
-            if self._upstream_shards is not None:
-                self._upstream_shards.close()
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: upstream client close failed", exc_info=True,
-            )
-            errors.append("upstream_http_close")
-        # Remove socket files then dir
-        try:
-            self.socket_path.unlink(missing_ok=True)
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: socket unlink failed for %s",
-                self.socket_path, exc_info=True,
-            )
-            errors.append("socket_unlink")
-        try:
-            self.child_socket_path.unlink(missing_ok=True)
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: socket unlink failed for %s",
-                self.child_socket_path, exc_info=True,
-            )
-            errors.append("child_socket_unlink")
-        # The ownership marker must go before rmdir or a clean
-        # shutdown turns into an ENOTEMPTY leak (removal is
-        # best-effort and tolerates the marker already being gone).
-        remove_owner_marker(self._sock_dir)
-        try:
-            self._sock_dir.rmdir()
-        except FileNotFoundError:
-            # Dir already gone — that IS the goal state, not a leak.
-            # (e.g. a prior shutdown removed it, or the tmp area was
-            # cleaned out from under us.) No warning, no error record.
-            pass
-        except Exception:
-            _logger.warning(
-                "llm-dispatcher: sock_dir rmdir failed for %s "
-                "(leak — operator may need to clean manually)",
-                self._sock_dir, exc_info=True,
-            )
-            errors.append("sock_dir_rmdir")
-        if self._socket_dir_finalizer is not None:
-            self._socket_dir_finalizer()
-        self._audit(AuditEvent(
-            ts=time.time(), event="server.stop",
-            peer_pid=None, peer_uid=None,
-            token_id=None, worker_label=None,
-            status="ok" if not errors else "partial",
-            reason=",".join(errors) if errors else None,
-        ))
+            for label, listener, thread in listeners:
+                self._retire_listener(label, listener, thread, errors)
+            if "upstream" not in self._cleanup_done:
+                try:
+                    with self._upstream_http_lock:
+                        if self._upstream_shards is not None:
+                            self._upstream_shards.close()
+                    self._cleanup_done.add("upstream")
+                except Exception:
+                    _logger.warning("llm-dispatcher: upstream client close failed", exc_info=True)
+                    errors.append("upstream_http_close")
+            if all(listener is None or label in self._cleanup_done
+                   for label, listener, thread in listeners):
+                pending = []
+                for directory in self._socket_dirs:
+                    if not rmtree_hardened(directory):
+                        pending.append(directory)
+                        _logger.warning("llm-dispatcher: socket directory cleanup incomplete: %r", directory)
+                        errors.append("sock_dir_cleanup")
+                self._socket_dirs[:] = pending
+                if not pending and "directory_pin" not in self._cleanup_done:
+                    try:
+                        if self._socket_dir_finalizer is not None:
+                            self._socket_dir_finalizer()
+                        self._cleanup_done.add("directory_pin")
+                    except Exception:
+                        _logger.warning("llm-dispatcher: directory pin close failed", exc_info=True)
+                        errors.append("directory_pin_close")
+            self._shutdown_done = not errors
+            self._audit(AuditEvent(
+                ts=time.time(), event="server.stop",
+                peer_pid=None, peer_uid=None,
+                token_id=None, worker_label=None,
+                status="ok" if not errors else "partial",
+                reason=",".join(errors) if errors else None,
+            ))
 
     # ---- internal ----
 
