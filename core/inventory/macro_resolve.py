@@ -75,10 +75,39 @@ _ENUM_HEAD_RE = re.compile(r"\benum\s*(?:\w{1,256}\s*)?\{")
 _ENUMERATOR_NAME_RE = re.compile(r"\b(\w+)\s*=\s*")
 
 
+_MACRO_SPARSE_MIN_SOURCE = 16 * 1024
+_MACRO_SPARSE_MIN_CHARS_PER_HASH = 512
+
+
+def _iter_sparse_macro_definitions(
+    text: str, candidate: re.Match[str] | None,
+) -> Iterator[re.Match[str]]:
+    """Apply the original pattern only at prefix-bearing line starts."""
+    while candidate is not None:
+        line_start = text.rfind("\n", 0, candidate.start()) + 1
+        match = _MACRO_DEF_RE.match(text, line_start)
+        if match is not None:
+            yield match
+            pos = match.end()
+        else:
+            # No other start on this LF-delimited line can satisfy '^'.
+            # Skipping it also avoids retrying a long indent repeatedly.
+            line_end = text.find("\n", candidate.start())
+            if line_end < 0:
+                return
+            pos = line_end + 1
+        candidate = _MACRO_DEFINE_PREFIX_RE.search(text, pos)
+
+
 def _iter_macro_definitions(text: str) -> Iterator[re.Match[str]]:
-    """Iterate unchanged definition matches, skipping definition-free text."""
-    if type(text) is str and _MACRO_DEFINE_PREFIX_RE.search(text) is None:
-        return iter(())
+    """Yield definition matches with the original groups and spans."""
+    if type(text) is str:
+        candidate = _MACRO_DEFINE_PREFIX_RE.search(text)
+        if candidate is None:
+            return iter(())
+        if (len(text) >= _MACRO_SPARSE_MIN_SOURCE
+                and text.count("#") <= len(text) // _MACRO_SPARSE_MIN_CHARS_PER_HASH):
+            return _iter_sparse_macro_definitions(text, candidate)
     return _MACRO_DEF_RE.finditer(text)
 
 
