@@ -887,7 +887,9 @@ def test_legacy_merge_releases_replaced_driver_rules_without_mutating_inputs(mon
         if len(rules) >= 2:
             assert rules[0]() is None, 'first driver table retained a replaced rule'
             assert rules[-1]() is not None, 'latest definition must remain owned'
-        rule = Tracked(id='rule', name=str(path))
+        # Equivalent descriptor objects may replace one another; conflicting
+        # definitions now remain in separate owning contexts.
+        rule = Tracked(id='rule', name='same')
         rules.append(weakref.ref(rule))
         return {'runs': [{'tool': {'driver': {'name': 'tool', 'version': '1', 'rules': [rule]}},
                           'results': [{'ruleId': 'rule', 'message': {'text': 'finding'}}]}]}
@@ -957,7 +959,7 @@ def test_legacy_merge_preserves_original_rule_table_until_a_valid_union_exists(m
     import core.sarif.parser as parser
 
     first = {'tool': {'driver': {'name': 'tool', 'rules': rules, 'version': 'first'}}}
-    later = {'tool': {'driver': {'name': 'tool', 'rules': [{'id': 'valid'}], 'version': 'later'}}}
+    later = {'tool': {'driver': {'name': 'tool', 'rules': [{'id': 'valid'}], 'version': 'first'}}}
     before = copy.deepcopy(first)
     monkeypatch.setattr(parser, 'load_sarif', lambda path: {'runs': [first if str(path) == 'first' else later]})
     assert parser.merge_sarif(['first'])['runs'][0]['tool'] == first['tool']

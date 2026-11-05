@@ -456,12 +456,16 @@ def _uses_artifact_table(result: dict[str, Any]) -> bool:
     return True
 
 
+# Searching more incompatible groups may improve compaction, never correctness.
+_MERGE_COMPATIBILITY_CHECKS = 16
+
+
 def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Merge multiple SARIF files into a single SARIF dict.
 
-    ID-only runs without URI-base tables are grouped by tool name and
-    deduplicated by ``_result_key`` (latest occurrence wins). Runs carrying
+    ID-only runs with compatible tool headers and rule bindings are grouped
+    and deduplicated by ``_result_key`` (latest occurrence wins). Runs carrying
     URI-base tables, referenced artifacts, cached logical/dataflow locations or
     qualified rules retain their metadata;
     only identical contexts and exact reports are coalesced.
@@ -470,10 +474,11 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
         sarif_paths: List of paths to SARIF files
 
     Returns:
-        Merged SARIF dict with deduplicated results per tool
+        Merged SARIF dict with deduplicated results per compatible context
     """
     # Group runs by tool name so same-tool runs get their results merged
     tool_runs: dict[str | tuple[str, str], dict[str, Any]] = {}
+    legacy_groups: dict[str, list[dict[str, Any]]] = {}
 
     def content_identity(value, *, stream=False):
         # Result records are usually small; retain the C encoder's fast
@@ -503,12 +508,28 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
             tool_name = get_tool_name(run)
             results = run.get("results") or []
             artifacts = run.get("artifacts")
-            if (_as_dict(run.get("originalUriBaseIds")) or
-                    any(name in run for name in ("logicalLocations", "threadFlowLocations")) or
-                    any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
-                        for result in results) or
-                    (isinstance(artifacts, list) and artifacts and
-                     any(_uses_artifact_table(result) for result in results if isinstance(result, dict)))):
+            tool = _as_dict(run.get("tool"))
+            driver = _as_dict(tool.get("driver"))
+            context_owned = bool(
+                _as_dict(run.get("originalUriBaseIds")) or tool.get("extensions")
+                or any(name in run for name in ("logicalLocations", "threadFlowLocations"))
+                or any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
+                       for result in results)
+                or (isinstance(artifacts, list) and artifacts
+                    and any(_uses_artifact_table(result) for result in results if isinstance(result, dict)))
+            )
+            rules: dict[str, dict[str, Any]] = {}
+            ambiguous_rules = False
+            if not context_owned:
+                driver_rules = driver.get("rules")
+                for descriptor in driver_rules if isinstance(driver_rules, list) else []:
+                    rule_id = _as_dict(descriptor).get("id")
+                    if isinstance(rule_id, str) and rule_id:
+                        if rule_id in rules:
+                            ambiguous_rules = True
+                            break
+                        rules[rule_id] = descriptor
+            if context_owned or ambiguous_rules:
                 # Rules, URI bases and cached locations belong to this run.
                 # Combining tables can rebind rules, functions or evidence hops.
                 metadata = {key: value for key, value in run.items() if key != "results"}
@@ -519,46 +540,54 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                     if isinstance(result, dict):
                         tool_runs[context_key]["results"][content_identity(result)] = result
                 continue
-            if tool_name not in tool_runs:
-                tool_runs[tool_name] = {
-                    "tool": _as_dict(run.get("tool")),
-                    # Track rules by id so we union the rule list across
-                    # same-tool runs without duplicates. Pre-fix the
-                    # `tool` block was set once (first run wins) and any
-                    # rules emitted in subsequent runs' tool.driver.rules
-                    # were silently dropped — downstream consumers
-                    # looking up `result.ruleId` against the merged
-                    # rule index missed those rules entirely (CWE
-                    # lookup, severity inheritance, etc. all returned
-                    # None for the dropped rules).
-                    "rules_by_id": {},
-                    "results": {},  # keyed by _result_key for dedup
-                    # Each source invocation remains a distinct timing /
-                    # exit-status record in the ID-only merged run.
-                    "invocations": [],
+            header = {**tool, "driver": {key: value for key, value in driver.items() if key != "rules"}}
+            referenced = {result["ruleId"] for result in results
+                          if isinstance(result, dict) and isinstance(result.get("ruleId"), str)}
+            unresolved = referenced - rules.keys()
+            group = None
+            groups = legacy_groups.setdefault(tool_name, [])
+            for candidate in groups[:_MERGE_COMPATIBILITY_CHECKS]:
+                if candidate["header"] != header:
+                    continue
+                old_rules = candidate["rules_by_id"]
+                if (unresolved & old_rules.keys()
+                        or rules.keys() & candidate["unresolved_ids"]):
+                    continue  # A missing descriptor cannot borrow a neighbor's.
+                if any(rule_id in old_rules and old_rules[rule_id] != descriptor
+                       for rule_id, descriptor in rules.items()):
+                    continue
+                group = candidate
+                break
+            if group is None:
+                group = {
+                    "tool": tool, "header": header,
+                    "rules_by_id": {}, "unresolved_ids": set(),
+                    "results": {}, "invocations": [],
                 }
-            # Union this run's rules into the per-tool index. Same-id
-            # rules from later runs win on collision (matches the
-            # latest-occurrence-wins semantic the result dedup uses).
-            tool_runs[tool_name]["rules_by_id"].update(get_rules(run))
+                tool_runs[(tool_name, f"id-only:{len(groups)}")] = group
+                groups.append(group)
+            # Equal descriptors and disjoint bindings can share a table. Keep
+            # latest equal objects so superseded input descriptors are released.
+            group["rules_by_id"].update(rules)
+            group["unresolved_ids"].update(unresolved)
             # The final driver table comes from rules_by_id. Keep a private
-            # header without the original table so replaced descriptors die.
-            header = tool_runs[tool_name]["tool"]
+            # header without the original table so replaced equivalent descriptors die.
+            header = group["tool"]
             header_driver = _as_dict(header.get("driver"))
-            if tool_runs[tool_name]["rules_by_id"] and "rules" in header_driver:
-                tool_runs[tool_name]["tool"] = {
+            if group["rules_by_id"] and "rules" in header_driver:
+                group["tool"] = {
                     **header, "driver": {key: value for key, value in header_driver.items() if key != "rules"},
                 }
             # Append invocations — each input run is its own
             # invocation record; multiple legitimately coexist.
             for inv in run.get("invocations") or []:
                 if isinstance(inv, dict):
-                    tool_runs[tool_name]["invocations"].append(inv)
+                    group["invocations"].append(inv)
             for result in run.get("results") or []:
                 if not isinstance(result, dict):
                     continue
                 key = _result_key(result)
-                tool_runs[tool_name]["results"][key] = result
+                group["results"][key] = result
 
     # Release each input's temporary document/run/result references before
     # loading the next. Only the metadata and findings selected above survive.
