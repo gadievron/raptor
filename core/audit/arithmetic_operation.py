@@ -1,8 +1,9 @@
 """Bind a proposed arithmetic query to one source operation.
 
 This binds syntax, occurrence identity, and predicates from supported
-structured paths. It does not establish operand types or complete source
-reachability. Callers supply source restricted to the requested function.
+structured paths, plus supported operand types under an explicit target ABI.
+It does not establish complete source reachability. Callers supply source
+restricted to the requested function.
 """
 
 import logging
@@ -22,6 +23,11 @@ class ArithmeticOperation:
     column: int = 0
     guard_status: str = "unavailable"
     premises: tuple[str, ...] = ()
+    type_status: str = "unavailable"
+    profile: str = ""
+    kind: str = ""
+    domains: tuple[str, ...] = ()
+    types: tuple[tuple[str, str], ...] = ()
 
 
 def _unwrap(node):
@@ -33,7 +39,7 @@ def _unwrap(node):
     return node
 
 
-def bind_arithmetic_operation(source, operands, operator, *, language):
+def bind_arithmetic_operation(source, operands, operator, *, language, integer_abi=None):
     """Select a unique atomic binary operation or decline the query.
 
     C/C++ parenthesized identifiers preserve operand identity. Casts,
@@ -123,5 +129,10 @@ def bind_arithmetic_operation(source, operands, operator, *, language):
         return ArithmeticOperation("unbound")
     from .arithmetic_guards import guards_for_operation
     guards = guards_for_operation(bodies[0], matches[0], data, operands)
+    from .arithmetic_types import model_for_operation
+    model = model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi)
     row, column = matches[0].start_point
-    return ArithmeticOperation("bound", row + 1, column + 1, guards.status, guards.premises)
+    return ArithmeticOperation(
+        "bound", row + 1, column + 1, guards.status, guards.premises,
+        model.status, model.profile, model.kind, model.domains, model.types,
+    )

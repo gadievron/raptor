@@ -146,7 +146,7 @@ def source_for_function(source: str, file_path: str, function_name: str):
         return FunctionScope("unavailable"), None
 
 
-def source_binding(source: str, function_name: str, *, verb: str) -> dict[str, str]:
+def source_binding(source: str, function_name: str, *, verb: str, integer_abi=None, hypothesis: str = "") -> dict:
     """A worker receipt must describe the exact scoped input it analyzed."""
     import hashlib
 
@@ -155,8 +155,12 @@ def source_binding(source: str, function_name: str, *, verb: str) -> dict[str, s
         "verb": verb,
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
+    if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass"}:
+        binding["hypothesis_sha256"] = hashlib.sha256(hypothesis.encode("utf-8", "surrogatepass")).hexdigest()
     if verb == "check-overflow":
         # Same-source replies from workers predating operation admission must
         # not inherit the current producer's contract merely by matching input.
-        binding["query_contract"] = "dominating-overflow-guards-v2"
+        from .integer_abi import integer_abi_record
+        binding["query_contract"] = "abi-typed-overflow-v4"
+        binding["integer_abi"] = integer_abi_record(integer_abi)
     return binding

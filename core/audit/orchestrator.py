@@ -284,6 +284,8 @@ if TYPE_CHECKING:
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
 
+from .integer_abi import IntegerABIInput, integer_abi_record as _integer_abi_record, integer_abi_key as _integer_abi_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -850,6 +852,9 @@ class OrchestratorConfig:
     # false positives shipping as findings. Never demotes below
     # suspicious in either setting.
     smt_promotion_caller_gate: bool = True
+    # Operator-selected target integer ABI. Never infer from the audit host
+    # or let a hypothesis/tool configuration supply this assertion.
+    integer_abi: IntegerABIInput = None
     # Wall-time bound for the zero-dispatch re-sweep: the post-loop
     # receipt-supply pass that dispatches the CWE-mapped mechanical
     # chain for every suspicious outcome whose review dispatched no
@@ -1245,6 +1250,8 @@ class OrchestratorConfig:
     )
 
     def __post_init__(self) -> None:
+        if self.integer_abi is not None and _integer_abi_record(self.integer_abi) is None:
+            raise ValueError("unknown target integer ABI")
         # Adopt the existing memo; keep constructor compatibility and one cache.
         if self.analysis_setup is None:
             self.analysis_setup = AnalysisSetup(include_dirs_memo=self.include_dirs_memo)
@@ -22429,6 +22436,7 @@ def _run_tool_chain(
                     "smt",
                     {
                         "verb": tool_cfg["verb"],
+                        "integer_abi": _integer_abi_key(getattr(config, "integer_abi", None)),
                         "source": _memo_hash_text(source or ""),
                         "hypothesis": _memo_hash_text(hypothesis),
                         "path": file_path,
@@ -22442,6 +22450,7 @@ def _run_tool_chain(
                         source=source or "",
                         hypothesis=hypothesis,
                         target_path=str(effective_target),
+                        integer_abi=getattr(config, "integer_abi", None),
                     ),
                 )
                 _smt_oc = _observe_sweep(smt_result)
@@ -25384,6 +25393,7 @@ def _sweep_validate(
             smt_result = disprove_integer_overflow(
                 hypothesis, source or "", file_path=outcome.file,
                 function_name=outcome.function,
+                integer_abi=getattr(config, "integer_abi", None),
             )
             if smt_result.disproved is True:
                 logger.info(
@@ -25599,6 +25609,7 @@ def _proactive_validate(
                 source=source_text,
                 hypothesis=outcome.hypothesis or "",
                 target_path=str(config.target_path),
+                integer_abi=getattr(config, "integer_abi", None),
             )
             _pv_smt_oc = _classify_sweep_outcome(smt_result)
             _pv_retained = _retain_probe_refutation(
@@ -33827,6 +33838,7 @@ def _smt_demotion_reason(
             smt_result = disprove_integer_overflow(
                 hypothesis, source, file_path=outcome.file,
                 function_name=outcome.function,
+                integer_abi=getattr(config, "integer_abi", None),
             )
             if smt_result.disproved is True:
                 return "[smt-disproof: integer overflow impossible (Z3 UNSAT)]"

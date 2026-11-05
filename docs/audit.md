@@ -1017,3 +1017,24 @@ Scoped runs (`--scope <dir>`) write to the same project-level output
 directory, so they accumulate into one audit trail.  In project mode,
 `libexec/raptor-coverage-summary` shows the accumulation as a
 `Progress:` trend line (reviewed counts per completed run).
+
+### Target integer ABI
+
+Source overflow checks require an explicit target integer layout. Select it
+with `raptor-audit run --integer-abi` (see `--help` for the supported layouts).
+This is an operator assertion about the target build, not host detection.
+Without it, the overflow SMT lane stays inconclusive while other review
+channels continue. The selection is pinned for resume and included in
+worker receipts and same-run memo keys. Repository build flags and model
+output cannot select it.
+
+The supported layouts use two's-complement integers without padding.
+The typed model follows supported builtin declarations and C integer
+promotions. Unresolved aliases, plain-char signedness and unsupported
+conversions remain inconclusive. Prior integer-disproof clean verdicts
+without a durable ABI binding must be reviewed again.
+
+Manual SMT shim sweeps describe the feasibility of a supplied mathematical
+model. Their `supplied-model` receipts are diagnostic, including solver
+witnesses; specifying bitvector widths alone does not bind them to target
+source. Source overflow verification uses the ABI-bound adapter above.
