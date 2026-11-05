@@ -15,11 +15,11 @@ from __future__ import annotations
 import json
 import re
 import time
-from types import SimpleNamespace
 
 import pytest
 
 import core.llm.concurrency as _conc
+from core.audit.dark_verify import DarkVerifyResult
 from core.audit.orchestrator import (
     OrchestratorConfig,
     OrchestratorResult,
@@ -74,7 +74,7 @@ def _witness_llm(calls: list[str] | None = None):
 def _stub_execute(monkeypatch, confirm: set[str]) -> None:
     def fake_execute(spec, target_root, **kw):
         verdict = "confirmed" if spec.function in confirm else "refuted"
-        return SimpleNamespace(verdict=verdict, match_detail="stubbed")
+        return DarkVerifyResult(finding_key=spec.finding_key, verdict=verdict, match_detail="stubbed", violation_observed=verdict == "confirmed")
 
     monkeypatch.setattr(
         "core.audit.dark_verify.execute_witness", fake_execute,
@@ -100,7 +100,7 @@ def _stub_execute_refusing(
         if spec.function in refuse:
             raise _floor_error()
         verdict = "confirmed" if spec.function in confirmed else "refuted"
-        return SimpleNamespace(verdict=verdict, match_detail="stubbed")
+        return DarkVerifyResult(finding_key=spec.finding_key, verdict=verdict, match_detail="stubbed", violation_observed=verdict == "confirmed")
 
     monkeypatch.setattr(
         "core.audit.dark_verify.execute_witness", fake_execute,
@@ -277,8 +277,9 @@ class TestFloorRefusalParallel:
                 finished.add(spec.function)
                 if finished >= {f"f{i}" for i in range(5)}:
                     earlier_done.set()
-            return SimpleNamespace(
-                verdict="confirmed", match_detail="stubbed",
+            return DarkVerifyResult(
+                finding_key=spec.finding_key, verdict="confirmed", match_detail="stubbed",
+                violation_observed=True,
             )
 
         monkeypatch.setattr(

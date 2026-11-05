@@ -318,14 +318,13 @@ class TestGradeReviewResult:
         assert any(e.source == EvidenceSource.SMT for e in items)
 
     def test_evidence_tool_dark_verify_confirmed(self):
-        items = grade_review_result({}, evidence_tool="dark_verify:confirmed")
+        items = grade_review_result({}, evidence_tool="dark_verify:sanitizer-violation")
         assert any(e.source == EvidenceSource.DARK_VERIFY for e in items)
 
     def test_evidence_tool_dark_verify_refuted(self):
         items = grade_review_result({}, evidence_tool="dark_verify:refuted")
         dv = [e for e in items if e.source == EvidenceSource.DARK_VERIFY]
-        assert len(dv) == 1
-        assert "refuted" in dv[0].description
+        assert dv == []
 
     def test_evidence_tool_compilation(self):
         items = grade_review_result({}, evidence_tool="compilation")
@@ -355,7 +354,7 @@ class TestGradeReviewResult:
             assert len(items) > 0, f"{cli} should grade"
 
     def test_cli_namespaced_stamps_leave_namespaced_unchanged(self):
-        for ns in ("dynamic:sanitizer", "dark_verify:confirmed", "frida:runtime"):
+        for ns in ("dynamic:sanitizer", "dark_verify:sanitizer-violation", "frida:runtime"):
             assert ":" in ns
             assert is_tool_evidence(ns)
 
@@ -395,7 +394,7 @@ class TestIsToolEvidence:
         assert is_tool_evidence("sarif_cache:hit")
         assert is_tool_evidence("dynamic:sanitizer")
         assert is_tool_evidence("frida:runtime")
-        assert is_tool_evidence("dark_verify:confirmed")
+        assert is_tool_evidence("dark_verify:sanitizer-violation")
 
     def test_llm_hallucinations_rejected(self):
         assert not is_tool_evidence("Semgrep")

@@ -2516,7 +2516,7 @@ class TestConfirmedTier:
         from core.audit.orchestrator import ReviewOutcome
         o = ReviewOutcome(
             file="f.c", function="fn", status="finding",
-            body="overflow", evidence_tool="dark_verify:confirmed",
+            body="overflow", evidence_tool="dark_verify:sanitizer-violation",
             tools_dispatched={"smt"},
         )
         assert o.compute_tier() == "confirmed"

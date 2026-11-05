@@ -107,7 +107,7 @@ VALID_EVIDENCE_TOOLS: frozenset = frozenset({
     "semgrep", "coccinelle", "codeql", "smt", "joern",
     "compiler",
     "compilation", "dynamic:sanitizer", "dynamic:crash", "frida:runtime",
-    "dark_verify:confirmed", "dark_verify:refuted",
+    "dark_verify:sanitizer-violation",
     # Differential family execution: the deviant accepted an input
     # every executed conforming peer rejected (directional divergence
     # under an acceptance contract), or a dual-controlled metamorphic
@@ -272,6 +272,12 @@ def _channel_detection_classifier(namespace: str):
 _ROLE_VERIFICATION = "verification"
 _ROLE_DETECTION = "detection"
 _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
+    # Prediction matches are observations, not independent defect oracles.
+    "dark_verify": {
+        "dark_verify:sanitizer-violation": _ROLE_VERIFICATION,
+        "dark_verify:confirmed": _ROLE_DETECTION,
+        "dark_verify:refuted": _ROLE_DETECTION,
+    },
     # CodeQL dataflow-validation verdicts whose query text is
     # LLM-AUTHORED (``dataflow_validation.method == "codeql-iris-llm"``
     # — Tier 2 template predicates, Tier 3 compile-retry, the legacy
@@ -974,7 +980,8 @@ _RECEIPT_MAP: dict[str, tuple] = {
     "codeql": (EvidenceSource.CODEQL, "confirmed by CodeQL analysis"),
     "coccinelle": (EvidenceSource.COCCINELLE, "confirmed by Coccinelle"),
     "smt": (EvidenceSource.SMT, "path feasibility confirmed by SMT solver"),
-    "dark_verify:confirmed": (EvidenceSource.DARK_VERIFY, "confirmed by executed dark witness"),
+    "dark_verify:sanitizer-violation": (EvidenceSource.DARK_VERIFY, "sanitizer violation observed in target call"),
+    "dark_verify:confirmed": (EvidenceSource.DARK_VERIFY, "legacy witness prediction matched"),
     "dark_verify:refuted": (EvidenceSource.DARK_VERIFY, "refuted by executed dark witness"),
     "dark_verify": (EvidenceSource.DARK_VERIFY, "dark verification witness"),
     "differential:confirmed": (

@@ -3098,7 +3098,7 @@ class TestRunDarkVerification:
         _run_dark_verification(result, config, llm_client=lambda s, u: "{}")
         assert result.outcomes[0].status == "clean"
 
-    def test_confirmed_witness_upgrades_to_finding(self, tmp_path):
+    def test_matched_exception_does_not_establish_a_defect(self, tmp_path):
         from core.audit.orchestrator import (
             OrchestratorConfig,
             _run_dark_verification,
@@ -3124,10 +3124,10 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].status == "finding"
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.findings == 1
-        assert result.dormant == 0
+        assert result.outcomes[0].status == "dark"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.findings == 0
+        assert result.dormant == 1
 
     def test_unreproduced_witness_keeps_dark(self, tmp_path):
         from core.audit.orchestrator import (
@@ -3309,8 +3309,8 @@ class TestRunDarkVerification:
         assert results_path.exists()
         records = json.loads(results_path.read_text(encoding="utf-8"))
         assert len(records) == 1
-        assert records[0]["status"] == "finding"
-        assert records[0]["evidence_tool"] == "dark_verify:confirmed"
+        assert records[0]["status"] == "dark"
+        assert records[0]["evidence_tool"] == ""
 
     def test_cwe_dispatch_eligibility(self, tmp_path):
         """A non-dark outcome with an auth CWE (dark_verify: True in
@@ -3342,10 +3342,12 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].status == "finding"
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.findings == 1
-        assert result.suspicious == 0
+        assert result.outcomes[0].status == "suspicious"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.findings == 0
+        assert result.suspicious == 1
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_cwe190_eligible(self, tmp_path):
         """CWE-190 (integer overflow) is dark-verify eligible."""
@@ -3376,8 +3378,10 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.outcomes[0].status == "suspicious"
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_cwe134_eligible(self, tmp_path):
         """CWE-134 (format string) is dark-verify eligible."""
@@ -3408,8 +3412,10 @@ class TestRunDarkVerification:
         })
 
         _run_dark_verification(result, config, llm_client=lambda s, u: llm_response)
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.outcomes[0].status == "suspicious"
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_cwe416_eligible(self, tmp_path):
         """CWE-416 (use-after-free) is dark-verify eligible."""
@@ -3444,8 +3450,10 @@ class TestRunDarkVerification:
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
         )
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.outcomes[0].status == "suspicious"
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_cwe457_eligible(self, tmp_path):
         """CWE-457 (uninitialised variable) is dark-verify eligible."""
@@ -3480,8 +3488,10 @@ class TestRunDarkVerification:
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
         )
-        assert result.outcomes[0].evidence_tool == "dark_verify:confirmed"
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].evidence_tool == ""
+        assert result.outcomes[0].status == "suspicious"
+        records = json.loads((tmp_path / "dark-verify-results.json").read_text())
+        assert len(records) == 1 and records[0]["verdict"] == "confirmed"
 
     def test_non_dark_verify_cwe_skipped(self, tmp_path):
         """A suspicious outcome with a non-dark-verify CWE is not eligible."""
@@ -6882,9 +6892,9 @@ class TestConfirmReceiptProvenance:
         _run_dark_verification(
             result, config, llm_client=lambda s, u: llm_response,
         )
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].status == "dark"
         parts = (result.outcomes[0].evidence_tool or "").split("+")
-        assert "dark_verify:confirmed" in parts
+        assert "dark_verify:confirmed" not in parts
         assert "smt" in parts
 
 

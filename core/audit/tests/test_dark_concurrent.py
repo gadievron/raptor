@@ -51,12 +51,16 @@ def _outcome(
     )
 
 
-class _VerifyResult:
-    """Lightweight stand-in for a witness verification result."""
+from core.audit.dark_verify import DarkVerifyResult
 
-    def __init__(self, verdict: str, match_detail: str = ""):
-        self.verdict = verdict
-        self.match_detail = match_detail
+
+class _VerifyResult(DarkVerifyResult):
+    """Typed independent-oracle stand-in for application-path tests."""
+
+    def __init__(self, verdict: str, match_detail: str = "", finding_key="a.c:foo"):
+        super().__init__(finding_key=finding_key, verdict=verdict,
+                         match_detail=match_detail, violation_observed=verdict == "confirmed")
+
 
 
 class TestSubmitDarkProbes:
@@ -148,7 +152,7 @@ class TestDrainDarkProbes:
         assert o.status == "finding"
         assert result.findings == 1
         assert result.dormant == 0
-        assert "dark_verify:confirmed" in (o.evidence_tool or "")
+        assert "dark_verify:sanitizer-violation" in (o.evidence_tool or "")
 
     def test_nonreproduction_preserves_dark(self, tmp_path):
         """A failed witness prediction leaves the original dark verdict."""
@@ -228,8 +232,8 @@ class TestDrainDarkProbes:
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         futures = [
-            executor.submit(lambda: _VerifyResult("confirmed"))
-            for _ in outcomes
+            executor.submit(lambda o=o: _VerifyResult("confirmed", finding_key=f"{o.file}:{o.function}"))
+            for o in outcomes
         ]
         concurrent.futures.wait(futures, timeout=5)
 
