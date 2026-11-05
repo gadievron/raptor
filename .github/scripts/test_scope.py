@@ -448,14 +448,11 @@ def _extract_fixture_dirs(path: Path, repo: Path) -> list[Path]:
 
     # Collect BinOp / nodes that are NOT the left child of another /.
     # This gives us only the outermost (longest) chain, not sub-chains.
-    inner_lefts: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            inner_lefts.add(id(node.left))
+    divisions = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
+    inner_lefts = {id(node.left) for node in divisions}
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
-            continue
+    for node in divisions:
         if id(node) in inner_lefts:
             continue
         parts = _resolve_path_div_chain(node)
@@ -496,13 +493,18 @@ def build_data_file_map(
 ) -> dict[Path, set[Path]]:
     """Map data files → test files that use them."""
     data_to_tests: dict[Path, set[Path]] = defaultdict(set)
+    # Many tests share the same fixtures tree. Inventory it once per dispatch;
+    # retain every consumer, and refresh listings on the next invocation.
+    directory_files: dict[Path, set[Path]] = {}
     for tf in test_files:
         fixture_dirs = _extract_fixture_dirs(tf, repo)
         if not fixture_dirs:
             continue
-        data_files = _discover_data_files(fixture_dirs, repo)
-        for df in data_files:
-            data_to_tests[df].add(tf)
+        for directory in fixture_dirs:
+            if directory not in directory_files:
+                directory_files[directory] = _discover_data_files([directory], repo)
+            for df in directory_files[directory]:
+                data_to_tests[df].add(tf)
     return dict(data_to_tests)
 
 
