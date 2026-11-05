@@ -18,6 +18,7 @@ import pytest
 
 from core.build.build_detector import BuildSystem
 from core.sage import rowmac
+from core.testing.logging_state import owned_log_handler
 
 
 @pytest.fixture(autouse=True)
@@ -88,18 +89,15 @@ def _run_with_row(agent, row, verify=None):
     """Run the agent with SAGE recall returning *row*; capture raptor log."""
     client = MagicMock()
     client.query.return_value = [row]
-    handler = _Capture()
     raptor_logger = logging.getLogger("raptor")
-    raptor_logger.addHandler(handler)
-    try:
+    handler = _Capture()
+    with owned_log_handler(raptor_logger, handler):
         ctx = (
             patch("core.sage.rowmac.verify", return_value=verify)
             if verify is not None else contextlib.nullcontext()
         )
         with patch("core.sage.hooks._get_client", return_value=client), ctx:
             agent.run_autonomous_analysis(languages=["cpp"], traced_build=True)
-    finally:
-        raptor_logger.removeHandler(handler)
     return [r.getMessage() for r in handler.records]
 
 

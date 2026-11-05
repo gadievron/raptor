@@ -18,6 +18,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.testing.logging_state import owned_log_handler
+
 
 def _doc(name: str = "f1", checked_by: list[str] | None = None) -> dict[str, Any]:
     item: dict[str, Any] = {"name": name, "line_start": 1, "line_end": 9}
@@ -45,12 +47,10 @@ class NonDictCandidateSkippedTest(unittest.TestCase):
 
     def _promote_capturing(self, proj: Path) -> str:
         from core.run.metadata import _promote_checklist
+        logger = logging.getLogger(self._LOGGER)
         handler = _CaptureHandler()
-        logging.getLogger(self._LOGGER).addHandler(handler)
-        try:
+        with owned_log_handler(logger, handler):
             _promote_checklist(proj)
-        finally:
-            logging.getLogger(self._LOGGER).removeHandler(handler)
         return " ".join(r.getMessage() for r in handler.records)
 
     def test_list_newest_skipped_next_dict_promotes(self) -> None:
