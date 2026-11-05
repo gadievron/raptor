@@ -180,6 +180,7 @@ def write_text_atomically(
     encoding: str = "utf-8",
     tmp_prefix: str = ".atomic-",
     mode: int | None = None,
+    replace: bool = True,
 ) -> None:
     """Write ``content`` (str) to ``path`` atomically.
 
@@ -195,6 +196,7 @@ def write_text_atomically(
         content.encode(encoding),
         tmp_prefix=tmp_prefix,
         mode=mode,
+        replace=replace,
     )
 
 
@@ -204,6 +206,7 @@ def write_bytes_atomically(
     *,
     tmp_prefix: str = ".atomic-",
     mode: int | None = None,
+    replace: bool = True,
 ) -> None:
     """Write bytes or an iterable of byte chunks to ``path`` atomically.
 
@@ -215,6 +218,11 @@ def write_bytes_atomically(
     encode.
 
     ``path.parent`` is created if missing.
+
+    With ``replace=False``, publish using a hard link: an occupied final
+    name raises FileExistsError and remains untouched. Readers see only
+    complete files. Filesystems without hard-link support refuse the write
+    rather than falling back to a non-atomic or overwriting publication.
 
     ``mode`` (optional): when set to an integer in ``0o000..0o777``,
     applied via ``os.fchmod`` on the tempfile BEFORE the rename so
@@ -309,7 +317,11 @@ def write_bytes_atomically(
         # tempfile sits in the same directory to guarantee that.
         # Cross-FS raises EXDEV — but tmp lives in path.parent so
         # this is unreachable in practice.
-        os.replace(tmp, path)
+        if replace:
+            os.replace(tmp, path)
+        else:
+            os.link(tmp, path)
+            tmp.unlink()
         # Best-effort durability: fsync the parent directory so the
         # rename survives a power loss. Windows + some mounts don't
         # support directory fsync — silent fallback is fine.

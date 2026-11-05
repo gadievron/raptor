@@ -27,6 +27,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 from core.llm.tool_use.types import Message, TextBlock, ToolCall, ToolResult
 
@@ -185,33 +186,17 @@ def _mkdir_private(path: Path) -> None:
 
 
 def _write_atomic(path: Path, payload: str) -> Path:
-    """O_NOFOLLOW + O_EXCL + O_CREAT atomic write. Same shape as
-    labeled_attempts/store._write_atomic but without the random-suffix
-    retry loop: a trajectory collision means duplicate run_id, which
-    is a programmer error worth surfacing.
+    """Publish a complete private record without replacing an existing name.
 
-    If the path-deterministic write loses (e.g. someone planted a
-    symlink), we retry once with a random suffix on the filename so
-    the run's trajectory still lands somewhere — but report the path
-    we ended up using.
+    Retry one occupied trajectory name with a random suffix and return the
+    actual path. Write failures do not expose a partial final record.
     """
-    # 0o600: trajectories embed prompts, tool output, and target
-    # details — keep new files owner-only. Existing files are not
-    # migrated.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     try:
-        fd = os.open(path, flags, 0o600)
+        write_text_atomically(path, payload, mode=0o600, replace=False)
     except FileExistsError:
-        # Already exists — for trajectories this is "this run_id was
-        # written before" or a planted-symlink attack. Retry with a
-        # random suffix so the run isn't lost.
         suffix = secrets.token_hex(3)
         path = path.with_name(f"{path.stem}-{suffix}{path.suffix}")
-        fd = os.open(path, flags, 0o600)
-    try:
-        os.write(fd, payload.encode("utf-8"))
-    finally:
-        os.close(fd)
+        write_text_atomically(path, payload, mode=0o600, replace=False)
     return path
 
 
