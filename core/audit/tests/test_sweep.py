@@ -1251,11 +1251,11 @@ class TestExtractOverflowToOobOperands:
         count, _elem, _index = _extract_overflow_to_oob_operands(h, src)
         assert count == "nelem"
 
-    def test_default_elem_size(self):
+    def test_missing_elem_size_stays_unknown(self):
         from core.audit.sweep import _extract_overflow_to_oob_operands
         h = "num_items multiplied by something overflows, write_offset used as index"
         _count, elem, _index = _extract_overflow_to_oob_operands(h, "")
-        assert elem == "4"
+        assert elem is None
 
 
 # ── Joern sweep ─────────────────────────────────────────────────────
@@ -1665,9 +1665,9 @@ class TestPromoteCleanRefuted:
         # inconclusive (never confirmed) without guard premises, so
         # the chain reports no confirmation and clean stands.
         ("integer overflow in size calc", "check-overflow", True),
-        ("buffer overflow in memcpy", "check-oob", True),
-        # Detection-role verbs are still skipped before the SMT lane;
-        # the cheap-channel lane still gets to test the hypothesis.
+        # Inferred bounds models are diagnostic even with guards. Their
+        # dedicated promotion lane is skipped; the cheap lane still runs.
+        ("buffer overflow in memcpy", "check-oob", False),
         ("integer overflow leading to heap", "check-overflow-to-oob", False),
     ])
     def test_vacuous_verbs_cannot_promote(

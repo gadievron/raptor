@@ -2219,7 +2219,7 @@ _SMT_VERB_ROLES = {
     # context and the base case, so it may not promote on its own.
     "invariant-preservation": "detection",
     "check-overflow": "verification",
-    "check-oob": "verification",
+    "check-oob": "detection",
     # A free pointer variable equaling zero does not establish a source dereference.
     "check-null-deref": "detection",
     "check-overflow-to-oob": "detection",
@@ -3582,8 +3582,6 @@ def _extract_overflow_to_oob_operands(
         count = next(
             (i for i in src_ids if any(k == i.lower() or i.lower().startswith(k + "_") or i.lower().endswith("_" + k) for k in count_kw)), None,
         )
-    if not elem:
-        elem = "4"
 
     return count, elem, index
 

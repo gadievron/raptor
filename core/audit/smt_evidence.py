@@ -27,6 +27,11 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
 
 
 _DIAGNOSTIC_ORACLE_SCOPES = {
+    # These adapters infer numeric operands from text but do not bind an
+    # access/allocation/conversion site, its reaching path, or target types.
+    "check-oob": "inferred-arithmetic-model",
+    "check-overflow-to-oob": "inferred-arithmetic-model",
+    "check-negative-bypass": "inferred-arithmetic-model",
     "check-null-deref": "pointer-nullability-only",
     "check-lock-discipline": "lexical-lock-discipline",
     "check-integer-narrowing": "type-width-only",
