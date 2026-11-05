@@ -755,7 +755,7 @@ def triage_run(run_dir: Path, *,
                                        - set(restored))]
         if _pm_inode_mismatch:
             evidence.append(
-                "sandbox_summary: parent observed an evidence-file inode mismatch")
+                "sandbox_summary: parent observed an evidence-file verification failure")
         if _pm_write_failure:
             evidence.append(
                 "sandbox_summary: parent observed a denial evidence write failure")
