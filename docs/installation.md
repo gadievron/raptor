@@ -99,7 +99,7 @@ and browser automation tooling.
 
 You can pull down a pre-built image:
 ```bash
-docker pull danielcuthbert/raptor:latest
+docker pull docker.io/danielcuthbert/raptor:latest
 ```
 
 or build it locally using the included `Dockerfile`:
