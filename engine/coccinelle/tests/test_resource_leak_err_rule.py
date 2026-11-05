@@ -708,6 +708,7 @@ int unsafe_init_kvmalloc(int fail) {
 """
 
 
+@pytest.mark.integration  # Combined native corpus checks cross-function attribution.
 @pytest.mark.parametrize("learned", [False, True], ids=["shipped", "rendered"])
 def test_error_path_controls(tmp_path, learned):
     source = _PATH_CONTROLS

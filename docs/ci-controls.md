@@ -82,7 +82,13 @@ This page is split into:
 
 - **Sandbox and feasibility parallelism** — broad selections use two pytest workers on the existing runner, with `--dist loadfile` keeping each module and its fixtures together. A single selected file stays serial. Job names and scoped test selections are unchanged.
 
-- **Source-intelligence native tier** — the scoped `source_intel` job in [`tests.yml`](../.github/workflows/tests.yml) runs its selected files with two workers. The default phase retains the 10-second guard; a separate `-m "(slow or integration) and not corpus"` phase runs real-tool coverage even if the first phase fails. Either failure fails the job, and skip accounting includes both JUnit reports. Axis-specific tests run only the shipped rules they assert; full-dispatch and mixed-axis cases retain the default rule root. Missing optional tools still skip on the runner fallback. Other tiers retain their default selection unless they set `native_pytest_markers`.
+- **Engine and source-intelligence worker sizing** — these tiers use two workers for multi-file selections on the existing runner. Engine uses `--dist worksteal` to balance individual cases; its tests have no shared module/class setup; source-intelligence retains `--dist loadfile` for shared module fixtures. A single selected file stays serial. Their scoped file lists are unchanged.
+
+- **Combined Coccinelle controls** — the shipped/rendered resource-cleanup corpus checks attribution across many functions with the real matcher. These two integration cases run in the scoped engine job's native phase and the existing nightly integration lane. Their fixture and assertions are retained; the fast phase keeps its 10-second guard.
+
+- **Semgrep native fixtures** — real CLI validation, positive/negative scans, and whole-pack performance checks in `test_rule_fixtures.py` run in the scoped engine job's integration phase and the existing nightly `semgrep-regressions` owner. Pure metadata checks stay in the default tier. The original fixtures and assertions remain in place.
+
+- **Source-intelligence native tier** — the scoped `source_intel` job in [`tests.yml`](../.github/workflows/tests.yml) runs its selected files with the worker sizing above. The default phase retains the 10-second guard; a separate `-m "(slow or integration) and not corpus"` phase runs real-tool coverage even if the first phase fails. Either failure fails the job, and skip accounting includes both JUnit reports. Axis-specific tests run only the shipped rules they assert; full-dispatch and mixed-axis cases retain the default rule root. Missing optional tools still skip on the runner fallback. Other tiers retain their default selection unless they set `native_pytest_markers`.
 
   **Run locally:** `python3 -m pytest -n 2 --dist loadfile packages/source_intel/tests`, then `RAPTOR_MAX_TEST_SECONDS= python3 -m pytest -n 2 --dist loadfile -m "(slow or integration) and not corpus" packages/source_intel/tests`.
 
