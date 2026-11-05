@@ -553,7 +553,9 @@ def triage_run(run_dir: Path, *,
     # that erased BOTH the events file and its count sidecar leaves
     # the on-disk artifacts consistent-empty (the sidecar mechanism's
     # documented residual) — in-lifecycle, the parent's own record
-    # says events existed, and silence would launder the erasure.
+    # says events existed, and silence would launder the erasure. Flags
+    # also matter at count zero: an initial persistence failure can leave
+    # no disk artifacts at all, but must still produce a failure report.
     _pm_persist = get_proxy_persist_state(run_dir)
     if (raw_summary is None and not raw_proxy_events
             and raw_audit_degraded is None and not marker_restored
@@ -561,7 +563,8 @@ def triage_run(run_dir: Path, *,
         if not allow_legacy and (summary_destroyed or events_destroyed
                                  or degraded_destroyed or count_present
                                  or (_pm_persist or {}).get(
-                                     "expected_count")):
+                                     "expected_count")
+                                 or (_pm_persist or {}).get("flags")):
             pass  # fall through: unusable artifacts drive a report
         else:
             if not allow_legacy:
