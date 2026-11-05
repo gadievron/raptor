@@ -344,9 +344,9 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Merge multiple SARIF files into a single SARIF dict.
 
-    ID-only runs are grouped by tool name and deduplicated by
-    ``_result_key`` (latest occurrence wins). Runs carrying indexed or
-    component-qualified rule references retain their original metadata;
+    ID-only runs without URI-base tables are grouped by tool name and
+    deduplicated by ``_result_key`` (latest occurrence wins). Runs carrying
+    URI-base tables or qualified rule references retain their metadata;
     only identical contexts and exact reports are coalesced.
 
     Args:
@@ -373,11 +373,11 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 continue
             tool_name = get_tool_name(run)
             results = run.get("results") or []
-            if any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
-                   for result in results):
-                # Rule indexes and component references are local to this
-                # run's tables. Flattening them into another driver's table
-                # silently changes what the report refers to.
+            if (_as_dict(run.get("originalUriBaseIds")) or
+                    any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
+                        for result in results)):
+                # Rules and URI bases belong to this run. Combining tables
+                # can change both the referenced rule and the source file.
                 metadata = {key: value for key, value in run.items() if key != "results"}
                 context_key = (tool_name, content_identity(metadata))
                 if context_key not in tool_runs:
@@ -400,48 +400,14 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                     # None for the dropped rules).
                     "rules_by_id": {},
                     "results": {},  # keyed by _result_key for dedup
-                    # Preserve `originalUriBaseIds` and `invocations`
-                    # across same-tool runs. Pre-fix these were
-                    # silently dropped — `parse_sarif_findings`
-                    # downstream cannot resolve relative URIs in the
-                    # results without `originalUriBaseIds`, and
-                    # consumers reasoning about run timing /
-                    # exitCode (CI gates, run-aborted detection) need
-                    # `invocations` intact. Per-id merge for the
-                    # bases (later wins on key collision); list
-                    # extend for invocations (each run is its own
-                    # logical invocation).
-                    "uri_bases": {},
+                    # Each source invocation remains a distinct timing /
+                    # exit-status record in the ID-only merged run.
                     "invocations": [],
                 }
             # Union this run's rules into the per-tool index. Same-id
             # rules from later runs win on collision (matches the
             # latest-occurrence-wins semantic the result dedup uses).
             tool_runs[tool_name]["rules_by_id"].update(get_rules(run))
-            # Merge originalUriBaseIds — keyed dict, later wins.
-            # Same-tool runs from different working trees can define
-            # the SAME base id (e.g. %SRCROOT%) with DIFFERENT uris;
-            # the merged run keeps only one, so relative URIs from the
-            # other run(s) resolve against the wrong root. SARIF has
-            # no per-result base table, so keeping per-run bases would
-            # mean keeping the runs separate — not worth breaking the
-            # one-run-per-tool merge shape. Detect the conflict and
-            # warn the operator instead of silently mis-resolving.
-            for base_id, base in _as_dict(run.get("originalUriBaseIds")).items():
-                if isinstance(base, dict):
-                    existing = tool_runs[tool_name]["uri_bases"].get(base_id)
-                    if existing is not None and existing != base:
-                        logger.warning(
-                            "SARIF merge: conflicting originalUriBaseIds "
-                            "definition for %r while merging %s "
-                            "(%r vs %r); later definition wins — "
-                            "relative URIs from earlier runs of tool "
-                            "%r may resolve against the wrong root",
-                            base_id, sarif_path,
-                            existing.get("uri"), base.get("uri"),
-                            tool_name,
-                        )
-                    tool_runs[tool_name]["uri_bases"][base_id] = base
             # Append invocations — each input run is its own
             # invocation record; multiple legitimately coexist.
             for inv in run.get("invocations") or []:
@@ -470,8 +436,6 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
         run_out: dict[str, Any] = {
             "tool": tool_block,
         }
-        if run_data["uri_bases"]:
-            run_out["originalUriBaseIds"] = run_data["uri_bases"]
         if run_data["invocations"]:
             run_out["invocations"] = run_data["invocations"]
         run_out["results"] = list(run_data["results"].values())
@@ -1077,15 +1041,20 @@ def parse_sarif_findings(
                     or compiler_diagnostic_is_candidate(rule.get("id", ""))):
                 continue
 
+            locs = result.get("locations")
+            first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
+            loc = _as_dict(first_loc.get("physicalLocation"))
+            artifact = _as_dict(loc.get("artifactLocation"))
+            file_uri = _resolve_uri(artifact)
+
             # finding_id resolution:
             #   1. SARIF tool-supplied fingerprint (best — survives
             #      reformatting / line-shifts that the tool tracked).
             #      Semgrep emits `fingerprints["matchBasedId/v1"]`, so
             #      semgrep finding_ids are unchanged by this logic.
-            #   2. Deterministic hash of the same identity material
-            #      `_result_key` uses (ruleId, uri, startLine, endLine,
-            #      startColumn, partialFingerprints) — stable across
-            #      runs, distinct per location.
+            #   2. Deterministic hash of the logical rule ID, resolved
+            #      primary URI, span, column and partialFingerprints —
+            #      stable across equivalent references and distinct files.
             #   3. Deterministic hash of the canonicalised result.
             #
             # NEVER bare ruleId. Pre-fix the chain was
@@ -1108,8 +1077,9 @@ def parse_sarif_findings(
                 finding_id = fingerprint
             else:
                 key = _result_key(result)
-                if rule_id:
-                    key = (rule_id, *key[1:])
+                # A relative URI can name different files under different
+                # bases. Use the same resolved file as the imported finding.
+                key = (rule_id or key[0], file_uri if file_uri is not None else key[1], *key[2:])
                 # Use the key-derived hash only when it carries
                 # distinguishing material beyond the ruleId (a
                 # location or a partialFingerprint). A bare
@@ -1129,9 +1099,6 @@ def parse_sarif_findings(
                         canonical = repr(sorted(result.items()))
                     finding_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-            locs = result.get("locations")
-            first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
-            loc = _as_dict(first_loc.get("physicalLocation"))
             logical_locations = first_loc.get("logicalLocations")
             function_name = None
             for logical in (logical_locations if isinstance(logical_locations, list) else []):
@@ -1143,7 +1110,6 @@ def parse_sarif_findings(
                 if isinstance(name, str) and name:
                     function_name = name
                     break
-            artifact = _as_dict(loc.get("artifactLocation"))
             region = _as_dict(loc.get("region"))
             snippet = _as_dict(region.get("snippet")).get("text", "")
             if not isinstance(snippet, str):
@@ -1178,7 +1144,6 @@ def parse_sarif_findings(
                     )
                 rule_cwe, default_level, rule_scope = rule_metadata[descriptor_key]
 
-            file_uri = _resolve_uri(artifact)
             # Containment gate at the parse boundary (opt-in via
             # source_root). Out-of-root URIs degrade the same way the
             # import normalizer treats unmappable URIs: skip + warn.
