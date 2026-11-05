@@ -317,28 +317,9 @@ def _tracked_verdict_names(scope: ast.AST,
     return tracked
 
 
-def _mentions_verdict_key(source: str) -> bool:
-    """Smoke-subset selector: does the raw text mention a verdict key?
-
-    Used ONLY to pick the default-tier smoke's file subset — it is NOT
-    a sound skip filter for the closure scan. The parser folds
-    adjacent string literals and escape sequences into plain
-    ``ast.Constant`` values (``r.get("is_" "exploitable")``,
-    ``"is_exploitabl\\x65"``), so a file can carry a scannable verdict
-    read whose source text never contains the key; only the full parse
-    in the nightly-tier scan catches those. Built on the scanned key
-    sets (bool + graded + alias) so a new verdict field widens the
-    smoke subset automatically.
-    """
-    return any(key in source
-               for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS,
-                           *_BOOL_ALIAS_GET_KEYS))
-
-
 def _violations_in(path: Path) -> list[str]:
-    # Deliberately no text prescreen before the parse: see
-    # _mentions_verdict_key — a "file never mentions a key" skip
-    # misses parser-folded key literals the AST scan does catch.
+    # Do not prescreen by literal key text: the parser folds adjacent
+    # string literals and escape sequences into AST string constants.
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -797,69 +778,10 @@ class TestVerdictIdiomClosure:
         tmp.write_text(folded, encoding="utf-8")
         assert len(_violations_in(tmp)) == 2
 
-    def test_smoke_selector_contract(self):
-        # The smoke selector must pick up every direct textual mention
-        # of every VERDICT_KEYS member (so the default-tier smoke scans
-        # all realistically-written verdict readers), and — pinned here
-        # so the docstring stays true — it does NOT see parser-folded
-        # key literals: those are exactly why the nightly full scan
-        # exists and must never be re-labelled "covered" by the smoke.
-        for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS,
-                    *_BOOL_ALIAS_GET_KEYS):
-            assert _mentions_verdict_key(f"v = r.get('{key}', False)\n")
-        assert not _mentions_verdict_key("v = r.get('status', False)\n")
-        # (The 'is_' 'exploitable' fold is no longer a valid example
-        # here: the alias key 'exploitable' is a substring of its
-        # second fragment, so the selector NOW sees that source. The
-        # is_true_positive fold keeps the pinned blind spot honest.)
-        assert not _mentions_verdict_key(
-            "v = r.get('is_' 'true_positive', False)\n"
-        )
-
-    # The key-mention pre-filter still reads every runtime file, so
-    # the smoke breached the fast tier's budget as the tree grew; it
-    # now runs in the nightly tier alongside the full scan. The
-    # fixture-level scanner tests above keep the detection itself
-    # pinned in the default tier.
-    @pytest.mark.slow
-    def test_smoke_no_misreads_in_key_mentioning_runtime_code(self):
-        # Smoke: scan only the runtime files whose text
-        # mentions a verdict key — the subset every realistically
-        # written misread lives in (the flagged idioms read the key as
-        # a string/attribute literal, which appears verbatim in source
-        # unless deliberately split/escaped). Parser-folded literals
-        # are invisible to the selector and are owned by the
-        # full scan below; the folded-shapes scanner test above keeps
-        # the detection itself pinned.
-        subset = []
-        for f in _runtime_py_files():
-            try:
-                if _mentions_verdict_key(f.read_text(encoding="utf-8")):
-                    subset.append(f)
-            except (OSError, UnicodeDecodeError):
-                continue
-        # Vacuousness guard for the subset (mirrors
-        # test_scan_sees_the_runtime_tree).
-        assert len(subset) >= 5
-        violations = []
-        for f in subset:
-            violations.extend(_violations_in(f))
-        assert violations == [], (
-            "raw tri-state verdict misread(s); route bool verdict "
-            "keys through core.run.finding_status.read_verdict, and "
-            "bind graded keys to a name with an explicit unknown "
-            "arm:\n" + "\n".join(violations)
-        )
-
-    # Full-tree scan: genuinely heavy (a full AST parse + walk of every
-    # runtime module; it breached the default tier's per-test budget on
-    # CI), so it runs in the nightly tier. Trade-off, both directions:
-    # unmarking it (or the smoke above, which later breached the same
-    # budget) puts a multi-second, contention-sensitive test back in
-    # every PR run; the cost of both waiting for nightly is that a new
-    # misread stays invisible until the next nightly run. The
-    # fixture-level scanner tests keep the detection logic itself
-    # pinned on every PR.
+    # Full-tree scan: a full AST parse + walk of every runtime module
+    # exceeds the default-tier budget, so this closure runs nightly.
+    # Fixture-level scanner tests and the single-file chokepoint check
+    # above retain default-tier coverage of the detector itself.
     @pytest.mark.slow
     def test_no_raw_tri_state_misreads_in_runtime_code(self):
         violations = []
