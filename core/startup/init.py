@@ -1256,6 +1256,7 @@ def main() -> None:
             tool_updates=tool_updates,
             codex=bool(os.environ.get("CODEX") and (
                 os.environ.get("RAPTOR_CODEX_HOOK") == "1" or not os.environ.get("CLAUDECODE"))),
+            protection_notice=notice,
         )
     except Exception:  # noqa: BLE001
         status = (textwrap.fill(notice, width=77, initial_indent="  ",
