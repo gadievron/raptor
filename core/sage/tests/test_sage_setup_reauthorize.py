@@ -57,7 +57,7 @@ authorize_boot_payload
 """
 
 
-class TestAuthorizeBootPayload(unittest.TestCase):
+class _AuthorizeBootPayloadCase(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmp = tempfile.TemporaryDirectory()
@@ -123,6 +123,8 @@ class TestAuthorizeBootPayload(unittest.TestCase):
             os.close(slave)
         return proc
 
+
+class TestAuthorizeBootPayload(_AuthorizeBootPayloadCase):
     def test_first_install_displays_and_records(self):
         proc = self._run("### initialize.instructions\nhello agent")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -263,18 +265,30 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestDisplayIntegrity(TestAuthorizeBootPayload):
+class _DisplayIntegrityCase(_AuthorizeBootPayloadCase):
+    """Shared display fixtures without inherited test scenarios."""
+
+    HOSTILE = (
+        "### initialize.instructions\n"
+        "benign line\x1b[2A\x1b[K FORGED-CLEAN\x1b[31m\x07evil"
+    )
+
+    def _break_sanitiser(self):
+        # Shadow python3 inside the driver: the nested display helper
+        # is the only python3 consumer on these paths.
+        self.driver = self.driver.replace(
+            'REAUTHORIZE="${REAUTHORIZE:-0}"',
+            'REAUTHORIZE="${REAUTHORIZE:-0}"\npython3() { return 1; }',
+        )
+
+
+class TestDisplayIntegrity(_DisplayIntegrityCase):
     """Payload text shown at the authorization TTY is server-derived —
     the hostile party in this surface's threat model. The display must
     escape non-printables (a raw ESC/CSI could re-render the diff with
     a forged clean verdict at the moment of decision) while the
     RECORDED stamp keeps the raw bytes (the guard's enforcement
     equality compares raw text)."""
-
-    HOSTILE = (
-        "### initialize.instructions\n"
-        "benign line\x1b[2A\x1b[K FORGED-CLEAN\x1b[31m\x07evil"
-    )
 
     def test_first_capture_display_escapes_stamp_keeps_raw(self):
         proc = self._run(self.HOSTILE)
@@ -300,14 +314,6 @@ class TestDisplayIntegrity(TestAuthorizeBootPayload):
         # The honest diff content is still shown.
         self.assertIn("-original payload", proc.stdout)
 
-    def _break_sanitiser(self):
-        # Shadow python3 inside the driver: the nested display helper
-        # is the only python3 consumer on these paths.
-        self.driver = self.driver.replace(
-            'REAUTHORIZE="${REAUTHORIZE:-0}"',
-            'REAUTHORIZE="${REAUTHORIZE:-0}"\npython3() { return 1; }',
-        )
-
     def test_sanitiser_failure_refuses_first_capture(self):
         """Fail closed: an un-renderable payload must not be recorded
         — recording sight-unseen is uninformed authorization."""
@@ -329,7 +335,7 @@ class TestDisplayIntegrity(TestAuthorizeBootPayload):
             "previous record must survive byte-for-byte")
 
 
-class TestCorruptHeaderReplaceDisplay(TestDisplayIntegrity):
+class TestCorruptHeaderReplaceDisplay(_DisplayIntegrityCase):
     """Stamp-replacing --reauthorize over an unparseable SHA256 header
     is an approval: the old stamp is unreadable (no hash → no diff),
     so the FULL current payload must be rendered — escaped — before
@@ -497,7 +503,7 @@ def _tools_payload(n: int = 33, schema_pad: int = 0) -> str:
     return "\n".join(lines)
 
 
-class TestFirstCaptureToolsLane(TestAuthorizeBootPayload):
+class TestFirstCaptureToolsLane(_AuthorizeBootPayloadCase):
     """First capture with a tools surface: boot instructions render
     full-text (short, readable), tools render as the reviewer's digest
     (count, names, description lengths, schema size+hash, red-flag
@@ -604,7 +610,7 @@ class TestFirstCaptureToolsLane(TestAuthorizeBootPayload):
         self.assertFalse(self.authorized.exists())
 
 
-class TestStampCreationGate(TestAuthorizeBootPayload):
+class TestStampCreationGate(_AuthorizeBootPayloadCase):
     """Stamp CREATION is TTY-gated when prior-install evidence exists:
     deleting the stamp (or uninstall && install) must not launder a
     hostile payload past the re-authorization gates non-interactively."""
@@ -639,7 +645,7 @@ class TestStampCreationGate(TestAuthorizeBootPayload):
         self.assertTrue(self.authorized.exists())
 
 
-class TestStampCreationGateComposedOrder(TestAuthorizeBootPayload):
+class TestStampCreationGateComposedOrder(_AuthorizeBootPayloadCase):
     """install_sage snapshots prior-install evidence BEFORE
     generate_mcp_entry writes the sage entry; the gate must key on the
     snapshot, not a live grep of the entry install itself created."""

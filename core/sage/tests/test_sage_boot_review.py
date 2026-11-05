@@ -225,22 +225,22 @@ class TestCompare(ReviewerBase):
         self.assertEqual(rc, 3)
 
 
-class TestMerge(ReviewerBase):
+class _MergeCase(ReviewerBase):
     def _decide(self, mode: str, auth_text: str, live_text: str) -> str:
         auth = self._write("auth", auth_text)
         live = self._write("live", live_text)
-        proc = subprocess.run(
-            ["python3", str(REVIEWER), mode,
-             "--authorized", str(auth), "--live", str(live)],
-            capture_output=True, text=True,
-            env={**os.environ, "_RAPTOR_TRUSTED": "1"},
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        return proc.stdout
+        # These cases assert merge/deny semantics. Native CLI checks below
+        # retain fresh-interpreter startup and exact stdout coverage.
+        with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}):
+            rc, out = self._main(mode, auth, live)
+        self.assertEqual(rc, 0, out)
+        return out
 
     def _merged(self, auth_text: str, live_text: str) -> str:
         return self._decide("merge", auth_text, live_text)
 
+
+class TestMerge(_MergeCase):
     def test_merge_unions_variants_and_upgrades_v1(self):
         merged = self._merged(
             v1_stamp(INIT_CLEAN, MSG_CLEAN),
@@ -287,7 +287,7 @@ class TestMerge(ReviewerBase):
         self.assertEqual(once, twice)
 
 
-class TestDeny(TestMerge):
+class TestDeny(_MergeCase):
     def test_deny_records_and_silences(self):
         # tools included: a reject decides the whole displayed capture,
         # tools too — otherwise the undecidable tools surface keeps the
@@ -391,7 +391,7 @@ class TestDeny(TestMerge):
                                       live_mixed))
 
 
-class TestToolsLane(TestMerge):
+class TestToolsLane(_MergeCase):
     """The tools/list surface goes through the same review workflow as
     the boot surfaces: compare classifies each live tool object,
     approve merges pending ones into the baseline, reject records them
@@ -1267,3 +1267,28 @@ class TestHostileCaptureBudgets(ReviewerBase):
                                                  [CONTENT_CLEAN]))
         rc, out = self._main("compare", auth, live)
         self.assertNotIn("diff truncated", out)
+
+
+@pytest.mark.parametrize("mode", ["merge", "deny"])
+def test_decision_cli_matches_main(mode, tmp_path):
+    import contextlib
+    import io
+
+    auth = tmp_path / "authorized"
+    live = tmp_path / "live"
+    auth.write_text(v1_stamp(INIT_CLEAN, MSG_CLEAN), encoding="utf-8")
+    live.write_text(live_capture(
+        [INIT_CLEAN, INIT_SAFEGUARDS], [CONTENT_CLEAN, CONTENT_EVIL],
+        tools=[TOOL_RECALL, TOOL_TURN]), encoding="utf-8")
+    args = [mode, "--authorized", str(auth), "--live", str(live)]
+    expected = io.StringIO()
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            contextlib.redirect_stdout(expected):
+        status = bpr.main(args)
+    proc = subprocess.run(
+        [sys.executable, str(REVIEWER), *args],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        timeout=30, env={**os.environ, "_RAPTOR_TRUSTED": "1"},
+    )
+    assert status == proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected.getvalue()
