@@ -162,13 +162,37 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     for a function whose tools demonstrably looked —
     and erased the did-not-look skips that keep phantom coverage out
     of class-coverage credit. A channel dispatched in either round did
-    look, so it leaves the merged skip set.
+    look, so it leaves the merged skip set. Scoped refutation receipts
+    also survive for the same occurrence; their consumers still require
+    the exact active claim and current source identity before using them.
     """
     from .evidence_grade import is_tool_evidence
     refined_tool = getattr(refined, "evidence_tool", "") or ""
     original_tool = getattr(original, "evidence_tool", "") or ""
 
     def _summed(winner: Any) -> Any:
+        from .verification_results import ClaimRefutation
+
+        # Receipts remain bound to their original claim and source identity;
+        # consumers recheck those bindings against the surviving outcome.
+        # A replacement model response must not erase checks already earned.
+        scope = (getattr(winner, "file", ""), getattr(winner, "function", ""),
+                 getattr(winner, "line", 0) or 0)
+        receipts: list[ClaimRefutation] = []
+        for outcome in (original, refined):
+            records = getattr(outcome, "claim_refutations", ()) or ()
+            if not isinstance(records, (tuple, list)):
+                continue
+            for receipt in records:
+                if (isinstance(receipt, ClaimRefutation)
+                        and (receipt.file, receipt.function, receipt.line_start) == scope
+                        and receipt not in receipts):
+                    receipts.append(receipt)
+        if receipts or getattr(winner, "claim_refutations", None):
+            try:
+                winner.claim_refutations = tuple(receipts)
+            except AttributeError:
+                pass  # duck-typed outcome without the field
         for attr in (
             "cost_usd", "duration_s", "tokens_in", "tokens_out",
             "cache_read_tokens", "cache_write_tokens",

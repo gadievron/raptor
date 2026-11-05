@@ -450,3 +450,57 @@ class TestDescribeToolResultHonesty:
             o, evidence_index={"a.c:f": self._EmptyRec()},
         )
         assert "error" in results[0]["result"].lower()
+
+
+class TestMergeScopedRefutations:
+    def _pair(self):
+        from core.audit.orchestrator import ReviewOutcome
+        from core.audit.refutation_source import SourceIdentity
+        from core.audit.verification_results import ClaimRefutation, ProbeOutcome
+
+        identity = SourceIdentity("a" * 64, (1, 2, 3))
+        original = ReviewOutcome(file="a.c", function="f", line=2, status="finding",
+                                 body="original", hypothesis="claim")
+        refined = ReviewOutcome(file="a.c", function="f", line=2, status="finding",
+                                body="refined", hypothesis="claim")
+        receipt = ClaimRefutation("a.c", "f", 2, "claim",
+                                  (ProbeOutcome("semgrep", "refuted", "fixture"),), identity)
+        return original, refined, receipt, identity
+
+    def test_refined_winner_keeps_prior_scoped_receipt(self):
+        from core.audit.verification_results import claims_refuted
+        original, refined, receipt, identity = self._pair()
+        original.claim_refutations = (receipt,)
+        refined.claim_refutations = (receipt,)
+        winner = merge_outcomes(original, refined)
+        assert winner is refined
+        assert winner.claim_refutations == (receipt,)
+        assert claims_refuted(winner, ["claim"], source_identity=identity)
+
+    def test_original_winner_keeps_new_scoped_receipt(self):
+        original, refined, receipt, _ = self._pair()
+        refined.status = "clean"
+        refined.claim_refutations = (receipt,)
+        winner = merge_outcomes(original, refined)
+        assert winner is original
+        assert winner.claim_refutations == (receipt,)
+
+    def test_retained_receipt_cannot_refute_a_changed_claim_or_source(self):
+        from core.audit.refutation_source import SourceIdentity
+        from core.audit.verification_results import claims_refuted
+        original, refined, receipt, identity = self._pair()
+        original.claim_refutations = (receipt,)
+        refined.hypothesis = "different claim"
+        winner = merge_outcomes(original, refined)
+        assert winner.claim_refutations == (receipt,)
+        assert not claims_refuted(winner, [winner.hypothesis], source_identity=identity)
+        assert not claims_refuted(winner, ["claim"], source_identity=SourceIdentity("b" * 64, (4,)))
+
+    def test_foreign_scope_and_serialized_receipts_are_not_carried(self):
+        from dataclasses import replace
+        original, refined, receipt, _ = self._pair()
+        original.claim_refutations = (replace(receipt, file="elsewhere.c"),
+                                      replace(receipt, function="g"),
+                                      replace(receipt, line_start=3), receipt.to_record())
+        winner = merge_outcomes(original, refined)
+        assert winner.claim_refutations == ()
