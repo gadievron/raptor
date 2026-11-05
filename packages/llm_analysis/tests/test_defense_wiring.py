@@ -29,6 +29,13 @@ from packages.llm_analysis.tasks import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+
+    pin_defense_telemetry(monkeypatch)
+
+
 def _finding(finding_id="F1", rule_id="CWE-120", code="strcpy(buf, input);"):
     return {
         "finding_id": finding_id,
@@ -265,13 +272,6 @@ class TestBaseDispatchTask:
 
 class TestDispatchTelemetryRecording:
 
-    @pytest.fixture(autouse=True)
-    def reset_telemetry(self):
-        from core.security.prompt_telemetry import defense_telemetry
-        defense_telemetry.reset()
-        yield
-        defense_telemetry.reset()
-
     def test_telemetry_records_response_on_success(self):
         from core.security.prompt_telemetry import defense_telemetry
 
@@ -435,13 +435,6 @@ class TestProbeProfileTaskChain:
     """Test the probe → profile selection → task instantiation chain
     without going through orchestrate(), which has many dependencies.
     This mirrors the logic in orchestrate() but in isolation."""
-
-    @pytest.fixture(autouse=True)
-    def reset_telemetry(self):
-        from core.security.prompt_telemetry import defense_telemetry
-        defense_telemetry.reset()
-        yield
-        defense_telemetry.reset()
 
     def _simulate_probe_and_select(self, model_id, probe_compatible):
         """Simulate what orchestrate() does: probe → cache → select profile."""
@@ -649,13 +642,6 @@ class TestRetryTaskProfilePropagation:
 # ============================================================
 
 class TestMultiFindingDispatchTelemetry:
-
-    @pytest.fixture(autouse=True)
-    def reset_telemetry(self):
-        from core.security.prompt_telemetry import defense_telemetry
-        defense_telemetry.reset()
-        yield
-        defense_telemetry.reset()
 
     def test_multiple_findings_each_recorded(self):
         from core.security.prompt_telemetry import defense_telemetry

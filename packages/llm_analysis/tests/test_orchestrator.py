@@ -31,6 +31,13 @@ from packages.llm_analysis.tasks import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+
+    pin_defense_telemetry(monkeypatch)
+
+
 def _make_prep_report(findings=None, mode="prep_only"):
     """Create a minimal prep report dict."""
     if findings is None:
@@ -1229,13 +1236,6 @@ class TestDefenseTelemetryKey:
     warnings fired — driven through the REAL orchestrate() attach site
     (the previous coverage re-implemented the conditional inline in
     the test and asserted on the copy)."""
-
-    @pytest.fixture(autouse=True)
-    def _reset_telemetry(self):
-        from core.security.prompt_telemetry import defense_telemetry
-        defense_telemetry.reset()
-        yield
-        defense_telemetry.reset()
 
     def _orchestration(self, tmp_path, during_dispatch=None):
         report = _make_prep_report()
