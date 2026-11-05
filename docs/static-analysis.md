@@ -561,8 +561,12 @@ finding is still reported. This is deliberate:
 
 ### Metrics
 
-`scan_metrics.json` contains timing data, per-pack finding counts,
-`nosemgrep_suppressed_count`, and a coverage-record manifest.
+`scan_metrics.json` reports finding totals by tool, rule and severity,
+`nosemgrep_suppressed_count`, and coverage information. After a successful
+merge, finding counts follow `combined.sarif`, including deduplication,
+exclusions and enforced suppression drops. If merging fails, counts use
+the retained per-tool reports. File counts come from coverage records
+when available, with the original reports’ artifact tables as a fallback.
 
 
 ## Error Handling
