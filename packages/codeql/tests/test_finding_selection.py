@@ -627,3 +627,63 @@ def test_finished_documents_and_unselected_payloads_are_released(tmp_path, monke
     gc.collect(0)
     assert all(ref() is None for ref in previous)
     assert (len(selected), count, duplicates) == (1, 6, 0)
+
+
+@pytest.mark.parametrize('strong_index', [0, 1])
+def test_indexed_duplicate_rule_ids_preserve_severity_before_cap(tmp_path, strong_index):
+    weak = _located_result('shared')
+    weak['ruleIndex'] = 0
+    strong = copy.deepcopy(weak)
+    strong['ruleIndex'] = 1
+    run = {'tool': {'driver': {'name': 'CodeQL', 'rules': [
+        {'id': 'shared', 'name': 'weak', 'defaultConfiguration': {'level': 'note'}},
+        {'id': 'shared', 'name': 'strong', 'defaultConfiguration': {'level': 'error'}},
+    ]}}, 'results': [weak, strong]}
+    for index, rule in enumerate(run['tool']['driver']['rules']):
+        rule['defaultConfiguration']['level'] = 'error' if index == strong_index else 'note'
+        rule['name'] = 'strong' if index == strong_index else 'weak'
+        rule['properties'] = {'tags': ['external/cwe/cwe-078' if index == strong_index else 'external/cwe/cwe-079']}
+    path = _write(tmp_path, 'indexed.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (count, duplicates) == (2, 0)
+    assert selected[0].result['ruleIndex'] == strong_index
+    analyzer = AutonomousCodeQLAnalyzer.__new__(AutonomousCodeQLAnalyzer)
+    finding = analyzer.parse_sarif_finding(selected[0].result, selected[0].run)
+    assert (finding.rule_name, finding.level, finding.cwe) == ('strong', 'error', 'CWE-078')
+
+
+def test_indexed_subrules_are_not_merged_by_shared_descriptor(tmp_path):
+    first = _located_result('base')
+    first.update(ruleId='base/first', ruleIndex=0)
+    second = copy.deepcopy(first)
+    second['ruleId'] = 'base/second'
+    run = {'tool': {'driver': {'name': 'CodeQL', 'rules': [{'id': 'base'}]}},
+           'results': [first, second]}
+    path = _write(tmp_path, 'subrules.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+    assert (len(selected), count, duplicates) == (2, 2, 0)
+
+
+def test_index_only_and_id_reference_to_same_rule_still_deduplicate(tmp_path):
+    first = _located_result('base')
+    first['ruleIndex'] = 0
+    second = copy.deepcopy(first)
+    del second['ruleId']
+    run = {'tool': {'driver': {'name': 'CodeQL', 'rules': [{'id': 'base'}]}},
+           'results': [first, second]}
+    path = _write(tmp_path, 'aliases.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+    assert (len(selected), count, duplicates) == (1, 2, 1)
+
+
+@pytest.mark.parametrize('reference', [
+    {'ruleIndex': True}, {'ruleIndex': 2}, {'ruleIndex': 0, 'rule': {'index': 1}},
+])
+def test_conflicting_rule_references_do_not_enable_deduplication(tmp_path, reference):
+    result = _located_result('shared')
+    result.update(reference)
+    run = {'tool': {'driver': {'name': 'CodeQL', 'rules': [{'id': 'shared'}]}},
+           'results': [result, copy.deepcopy(result)]}
+    path = _write(tmp_path, 'conflicting.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+    assert (len(selected), count, duplicates) == (2, 2, 0)
