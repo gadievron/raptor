@@ -26,6 +26,7 @@ import pytest
 from core.llm.config import ModelConfig
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher
+from core.testing.processes import reap_on_exit
 from packages.web.tests.http_server import start_http_server
 
 # Module-level marker — every test in this file spins up a real HTTP
@@ -385,7 +386,9 @@ class TestGrandchildRelay:
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
+            cleanup.enter_context(reap_on_exit(proc, process_group=True))
             # 30s rather than 20s: matches the timeout used by sibling
             # parent+grandchild subprocess tests in this file (lines
             # 573, 782) and gives parallel xdist runs enough headroom
@@ -589,7 +592,9 @@ class TestPhaseBChainE2E:
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
+            cleanup.enter_context(reap_on_exit(proc, process_group=True))
             stdout, stderr = proc.communicate(timeout=30)
             assert proc.returncode == 0, (
                 f"chain failed: rc={proc.returncode}\n"
@@ -792,7 +797,9 @@ class TestPhaseBChainE2EGemini:
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
+            cleanup.enter_context(reap_on_exit(proc, process_group=True))
             stdout, stderr = proc.communicate(timeout=30)
             assert proc.returncode == 0, (
                 f"Gemini chain failed: rc={proc.returncode}\n"
@@ -953,7 +960,9 @@ class TestEndToEndCredentialIsolationThroughProviders:
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
+            cleanup.enter_context(reap_on_exit(proc, process_group=True))
             stdout, stderr = proc.communicate(timeout=15)
             assert proc.returncode == 0, (
                 f"worker failed: rc={proc.returncode} "
