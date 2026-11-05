@@ -320,7 +320,8 @@ def record_denial(cmd_display: str, returncode: int,
     # ("type"/"cmd" detail duplicates are skipped so the explicit
     # fields always win, mirroring `record` above; denial_type /
     # returncode are named params so **details cannot collide with
-    # them).
+    # them). event_type/message must also be excluded: duplicate logger
+    # arguments raise before its own best-effort guard can run.
     _log_security_event(
         "sandbox_denial",
         f"sandbox denied {denial_type}: {cmd_safe}",
@@ -328,7 +329,7 @@ def record_denial(cmd_display: str, returncode: int,
         returncode=returncode,
         **{
             k: v for k, v in details.items()
-            if k not in ("type", "cmd")
+            if k not in ("type", "cmd", "event_type", "message")
         },
     )
     # JSONL append through the per-run held evidence fd — each line is
