@@ -97,14 +97,15 @@ malicious code that may execute (e.g via supply-chain attack). The image is larg
 starts from the Microsoft Python 3.14 devcontainer and adds static analysis, fuzzing,
 and browser automation tooling.
 
-You can pull down a pre-built image:
+The commands below pin the latest published image by digest, so pulling and running
+use the same image. You can pull it with:
 ```bash
-docker pull docker.io/danielcuthbert/raptor:latest
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
 ```
 
 or build it locally using the included `Dockerfile`:
 ```bash
-docker build -f .devcontainer/Dockerfile -t danielcuthbert/raptor:latest .
+docker build -f .devcontainer/Dockerfile -t raptor:local .
 ```
 
 The Linux image omits Windows-only packaging launchers, including copies inside
@@ -130,11 +131,11 @@ The image expects the RAPTOR framework (this repo) to be mounted into
 `/workspaces/raptor` on startup. You can optionally mount a target folder for local
 analysis.
 
-To start the container:
+To start the published image:
 ```bash
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
-  danielcuthbert/raptor:latest
+  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
 ```
 
 To mount a target folder as well:
@@ -142,8 +143,11 @@ To mount a target folder as well:
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  danielcuthbert/raptor:latest
+  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
 ```
+
+For a locally built image, replace the published image reference in these commands
+with `raptor:local`.
 
 Add `--privileged` if you need the `rr` deterministic debugger.
 

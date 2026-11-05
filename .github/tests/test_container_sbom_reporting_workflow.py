@@ -67,7 +67,7 @@ def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path
     binary_dir = tmp_path / "bin"
     binary_dir.mkdir()
     skopeo = binary_dir / "skopeo"
-    skopeo.write_text("#!/bin/sh\nset -eu\ncase \"$1\" in\ninspect) cat \"$TEST_MANIFEST\" ;;\ncopy) printf '%s\\n' \"$*\" >> \"$TEST_COPIES\" ;;\n*) exit 42 ;;\nesac\n")
+    skopeo.write_text("#!/bin/sh\nset -eu\ncase \"$1\" in\ninspect) case \"$*\" in *docker://*) cat \"${TEST_REMOTE_MANIFEST:-$TEST_MANIFEST}\" ;; *) cat \"$TEST_MANIFEST\" ;; esac ;;\ncopy) printf '%s\\n' \"$*\" >> \"$TEST_COPIES\" ;;\n*) exit 42 ;;\nesac\n")
     skopeo.chmod(0o755)
     # Stub the freshness boundary, preserving the workflow's own branching.
     python = binary_dir / "python3"
@@ -86,12 +86,18 @@ def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path
                DOCKER_CONFIG=str(tmp_path / "docker-auth"), INPUT_TAG=input_tag,
                IMAGE_INPUTS="a" * 64, TEST_FINGERPRINT="a" * 64,
                TEST_SCOPE_CALLS=str(scope_calls), TEST_SCOPE_STATUS=str(scope_status),
-               TEST_MANIFEST=str(manifest), TEST_COPIES=str(copied))
-    for status in ("gaps", "unavailable", "changed-image"):
+               TEST_MANIFEST=str(manifest), TEST_COPIES=str(copied),
+               GITHUB_OUTPUT=str(tmp_path / "outputs"))
+    remote_manifest = tmp_path / "remote-manifest.json"
+    env["TEST_REMOTE_MANIFEST"] = str(remote_manifest)
+    outputs = tmp_path / "outputs"
+    for status in ("gaps", "unavailable", "changed-image", "changed-remote"):
+        outputs.unlink(missing_ok=True)
         copied.unlink(missing_ok=True)
         scope_calls.unlink(missing_ok=True)
         (evidence / "license-report.json").write_text(json.dumps({"status": status}))
         manifest.write_bytes(raw + b"\n" if status == "changed-image" else raw)
+        remote_manifest.write_bytes(raw + b"\n" if status == "changed-remote" else raw)
         result = subprocess.run(["bash", "-c", publication_script()], env=env, text=True, capture_output=True)
         assert scope_calls.exists() is (not bool(input_tag))
         if not input_tag:
@@ -99,12 +105,36 @@ def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path
         if not input_tag and scope_status:
             assert result.returncode == (0 if scope_status == 1 else scope_status), result.stderr
             assert not copied.exists()
+            assert not outputs.exists()
             continue
         if status == "changed-image":
             assert result.returncode != 0
             assert not copied.exists()
+            assert not outputs.exists()
+        elif status == "changed-remote":
+            assert result.returncode != 0
+            assert len(copied.read_text().splitlines()) == 1
+            assert not outputs.exists()
         else:
             assert result.returncode == 0, result.stderr
+            assert "published=true" in outputs.read_text()
+            assert "digest=sha256:" + hashlib.sha256(raw).hexdigest() in outputs.read_text()
             calls = copied.read_text().splitlines()
             assert len(calls) == 2
             assert all("--preserve-digests" in call and "container-oci:verified" in call for call in calls)
+
+
+def test_documentation_updates_only_follow_verified_latest_publication():
+    workflow = (ROOT / ".github/workflows/dockerhub-publish.yml").read_text()
+    builder, docs = workflow.split("  update-image-docs:\n", 1)
+    assert "needs: [scope, build-push]" in docs
+    assert "needs.build-push.outputs.published == 'true'" in docs
+    assert "github.event.inputs.tag == ''" in docs
+    assert "contents: write" in docs and "contents: write" not in builder
+    assert "persist-credentials: false" in docs
+    assert "--sync-main" in docs
+    assert "GIT_CONFIG_VALUE_0" in docs
+    assert "published_at: ${{ steps.publish.outputs.published_at }}" in builder
+    trigger = workflow.split("  schedule:", 1)[0]
+    assert "'README.md'" not in trigger and "'docs/**'" not in trigger
+    assert "'.github/published-image.json'" not in trigger

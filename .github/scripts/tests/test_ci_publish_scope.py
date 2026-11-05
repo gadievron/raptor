@@ -45,6 +45,8 @@ def repo(tmp_path):
 
 
 @pytest.mark.parametrize('name,expected', [
+    ('README.md', False), ('docs/installation.md', False),
+    ('.github/published-image.json', False),
     ('.devcontainer/README.md', False), ('.devcontainer/test_helper.py', False),
     ('.github/scripts/report_sbom_licenses.py', False), ('core/oci/tests/test_ownership.py', False),
     ('.gitattributes', True), ('.devcontainer/.gitattributes', True),
