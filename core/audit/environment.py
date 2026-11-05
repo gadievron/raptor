@@ -80,6 +80,8 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+
+from core.run.scratch import temporary_text
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -875,12 +877,8 @@ class EnvironmentGuard:
                     return False
                 if free_inodes is not None and free_inodes < inode_floor:
                     return False
-        fd, path = tempfile.mkstemp(prefix=".env-probe-", dir=str(d))
-        try:
-            os.write(fd, b"\0" * 4096)
-        finally:
-            os.close(fd)
-            os.unlink(path)
+        with temporary_text("\0" * 4096, dir=d, prefix=".env-probe-", suffix=""):
+            pass  # The writer flushes and closes the complete canary before yielding.
         return True
 
     # ── Resource watchdog ────────────────────────────────────────────

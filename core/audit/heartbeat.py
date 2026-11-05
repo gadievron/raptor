@@ -24,12 +24,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from core.run.scratch import temporary_text
 
 logger = logging.getLogger(__name__)
 
@@ -96,20 +97,20 @@ class Heartbeat:
                 now - self._last_write < self._interval_s
             ):
                 return
-            payload: dict[str, Any] = {
-                "phase": self.phase,
-                "pid": os.getpid(),
-                "timestamp": datetime.now(timezone.utc).isoformat(
-                    timespec="seconds",
-                ),
-            }
-            if done is not None:
-                payload["done"] = int(done)
-            if total is not None:
-                payload["total"] = int(total)
-            if detail:
-                payload["detail"] = detail[:_MAX_DETAIL_CHARS]
             try:
+                payload: dict[str, Any] = {
+                    "phase": self.phase,
+                    "pid": os.getpid(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(
+                        timespec="seconds",
+                    ),
+                }
+                if done is not None:
+                    payload["done"] = int(done)
+                if total is not None:
+                    payload["total"] = int(total)
+                if detail:
+                    payload["detail"] = detail[:_MAX_DETAIL_CHARS]
                 self._write(payload)
             except Exception:  # noqa: BLE001 — diagnostics never bite
                 self._failed = True
@@ -127,29 +128,8 @@ class Heartbeat:
         never a torn write."""
         assert self._dir is not None
         target = self._dir / HEARTBEAT_FILENAME
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(self._dir), prefix=".heartbeat-", suffix=".tmp",
-        )
-        try:
-            os.write(
-                fd,
-                (json.dumps(payload, sort_keys=True) + "\n").encode(
-                    "utf-8",
-                ),
-            )
-            os.close(fd)
-            fd = -1
-            os.replace(tmp_name, str(target))
-        except BaseException:
-            if fd >= 0:
-                os.close(fd)
-            _unlink_quietly(tmp_name)
-            raise
-
-
-def _unlink_quietly(path: str) -> None:
-    """Best-effort unlink of a stranded tempfile."""
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
+        with temporary_text(
+            json.dumps(payload, sort_keys=True) + "\n",
+            dir=self._dir, prefix=".heartbeat-", suffix=".tmp",
+        ) as temporary:
+            os.replace(temporary, target)

@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["keepalive_register", "keepalive_unregister", "scratch_dir", "write_temp_text"]
+__all__ = ["keepalive_register", "keepalive_unregister", "scratch_dir", "temporary_text", "write_temp_text"]
 
 #: Keepalive refresh period. Must sit well below the reaper's age
 #: floor (default 24 h; operators can shrink it via
@@ -334,12 +334,14 @@ def scratch_dir(
             raise interrupted
 
 
-def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
+def write_temp_text(text: str, *, prefix: str, suffix: str,
+                    dir: str | Path | None = None) -> Path:
     """Write a closed UTF-8 temporary file and transfer ownership to the caller.
 
     Remove partial files on write or close failure, including interruption.
     Successful callers must unlink the returned path after use. This is
     disposable tool input, so it needs no durable atomic-write/fsync protocol.
+    ``dir`` selects an existing parent without creating missing directories.
     """
     path = None
     stream = None
@@ -349,7 +351,7 @@ def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
         # a failed close from replacing a failed write.
         stream = tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix=prefix, suffix=suffix,
-            delete=False,
+            delete=False, dir=dir,
         )
         path = Path(stream.name)
         stream.write(text)
@@ -367,3 +369,27 @@ def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
             except BaseException:
                 logger.warning("Partial temporary text retained at %s", path, exc_info=True)
         raise
+
+
+@contextlib.contextmanager
+def temporary_text(text: str, *, prefix: str, suffix: str,
+                   dir: str | Path | None = None) -> Iterator[Path]:
+    """Own a closed UTF-8 temporary file for a lexical scope.
+
+    A cleanup failure propagates on success, but cannot mask an exception
+    already raised by the body. The body may rename or remove its file.
+    """
+    path = write_temp_text(text, prefix=prefix, suffix=suffix, dir=dir)
+    failed = False
+    try:
+        yield path
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except BaseException:
+            if not failed:
+                raise
+            logger.warning("Temporary text cleanup failed for %s", path, exc_info=True)
