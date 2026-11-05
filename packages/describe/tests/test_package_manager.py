@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import functools
+import pytest
+
 from unittest.mock import patch
 
 from packages.describe.package_manager import (
     detect_package_manager,
     format_install_hint,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_package_manager_cache(monkeypatch):
+    """Keep detection results and cache statistics owned by this test."""
+    from packages.describe import package_manager
+
+    original = package_manager.detect_package_manager
+    private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+    monkeypatch.setattr(package_manager, "detect_package_manager", private)
+    monkeypatch.setitem(globals(), "detect_package_manager", private)
 
 
 def _which_only(present_pms):

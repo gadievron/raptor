@@ -1,10 +1,11 @@
 """Tests for the mechanical CodeQL query builder (Tier 1 + Tier 2)."""
 
+import functools
+import pytest
 import sys
 import textwrap
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis import dataflow_query_builder as _dqb
 from packages.llm_analysis.dataflow_query_builder import (
@@ -18,6 +19,27 @@ from packages.llm_analysis.dataflow_query_builder import (
 
 
 # Tier 1 — discovery ---------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolated_query_discovery_cache(monkeypatch, tmp_path):
+    """Own discovery memoization and keep incidental host-tool lookup local."""
+    from types import ModuleType
+    from packages.llm_analysis import dataflow_query_builder
+
+    original = dataflow_query_builder.discover_prebuilt_queries
+    private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+    monkeypatch.setattr(dataflow_query_builder, "discover_prebuilt_queries", private)
+    monkeypatch.setitem(globals(), "discover_prebuilt_queries", private)
+    # A real owned root lets the shipped-extra-pack breadth assertions run
+    # without depending on an operator-populated ~/.codeql tree.
+    pack_root = tmp_path / "packs"
+    pack_root.mkdir(parents=True)
+    monkeypatch.setattr(dataflow_query_builder, "_DEFAULT_PACK_ROOT", pack_root)
+    tools = ModuleType("shutil")
+    tools.__dict__.update(vars(dataflow_query_builder.shutil))
+    tools.which = lambda *args, **kwargs: None
+    monkeypatch.setattr(dataflow_query_builder, "shutil", tools)
 
 
 def _write_query(path: Path, *, kind: str, cwe_tag: str, qid: str = "raptor/test") -> None:
@@ -996,7 +1018,6 @@ class TestResolvedPackPointersImportGuard:
     despite the docstring's silent-failure promise."""
 
     def test_core_config_import_failure_returns_empty(self, monkeypatch):
-        import sys
         import packages.llm_analysis.dataflow_query_builder as dqb
         # codeql "on PATH" so the import site is actually reached.
         monkeypatch.setattr(dqb.shutil, "which",
