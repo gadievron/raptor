@@ -46,20 +46,16 @@ def _isolated_sca_home(monkeypatch, tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def _deterministic_typosquat_popular(monkeypatch):
-    from packages.sca.supply_chain import typosquat
+    from packages.sca.supply_chain import slopsquat, typosquat
 
-    monkeypatch.setattr(
-        typosquat, "_load_popular",
-        lambda eco: list(_CURATED_POPULAR.get(eco, [])),
-    )
-    # The derived caches (set view + length buckets) are built lazily from
-    # _load_popular and memoised per ecosystem; clear them so they re-derive
-    # from the curated list (and again on teardown so anything running after
-    # the SCA suite sees the real bundled data).
-    _caches = (typosquat._POPULAR_BY_ECO, typosquat._POPULAR_SET,
-               typosquat._POPULAR_BY_LEN)
-    for cache in _caches:
-        cache.clear()
-    yield
-    for cache in _caches:
-        cache.clear()
+    load_popular = lambda eco: list(_CURATED_POPULAR.get(eco, []))
+    monkeypatch.setattr(typosquat, "_load_popular", load_popular)
+    monkeypatch.setattr(slopsquat, "_load_popular", load_popular)
+    # Both detectors derive memoized views from the chosen popular list.
+    # Use private containers so teardown preserves the caller's warm caches.
+    for name in ("_POPULAR_BY_ECO", "_POPULAR_SET", "_POPULAR_BY_LEN",
+                 "_DENYLIST_BY_ECO", "_ALLOWLIST_BY_ECO"):
+        monkeypatch.setattr(typosquat, name, {})
+    monkeypatch.setattr(slopsquat, "_COLLAPSED_INDEX", {})
+    monkeypatch.setattr(typosquat, "_DENYLIST_RAW", None)
+    monkeypatch.setattr(typosquat, "_ALLOWLIST_RAW", None)

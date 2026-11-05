@@ -39,18 +39,12 @@ def _pin(path: Path) -> tuple[int, int, int, str]:
 
 
 @pytest.fixture()
-def pins():
-    """Save/seed/restore the identity-pin channel on RaptorConfig."""
-    prev = getattr(RaptorConfig, "BINARY_ORACLE_IDENTITY_PINS", None)
-    RaptorConfig.BINARY_ORACLE_IDENTITY_PINS = {}
-    yield RaptorConfig.BINARY_ORACLE_IDENTITY_PINS
-    if prev is None:
-        try:
-            delattr(RaptorConfig, "BINARY_ORACLE_IDENTITY_PINS")
-        except AttributeError:
-            pass
-    else:
-        RaptorConfig.BINARY_ORACLE_IDENTITY_PINS = prev
+def pins(monkeypatch):
+    """Seed a private pin channel, restoring explicit None and absence exactly."""
+    cache = {}
+    monkeypatch.setattr(RaptorConfig, "BINARY_ORACLE_IDENTITY_PINS", cache,
+                        raising=False)
+    return cache
 
 
 class _SandboxRecorder:

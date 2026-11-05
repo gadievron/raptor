@@ -64,17 +64,23 @@ def _reset_caches() -> None:
 
 @pytest.fixture
 def real_loader(tmp_path, monkeypatch):
-    """Restore the real ``_load_popular`` and point the data dir + denylist at
-    tmp files. Clears every cache on entry and exit so nothing leaks."""
+    """Use the real loader and private caches against test-owned data files."""
+    from packages.sca.supply_chain import slopsquat
+
     pop = tmp_path / "popular"
     pop.mkdir()
     monkeypatch.setattr(typosquat, "_DATA_DIR", pop)
     monkeypatch.setattr(typosquat, "_DENYLIST_PATH",
                         tmp_path / "typosquat_denylist.json")
     monkeypatch.setattr(typosquat, "_load_popular", _REAL_LOAD_POPULAR)
-    _reset_caches()
-    yield tmp_path
-    _reset_caches()
+    monkeypatch.setattr(slopsquat, "_load_popular", _REAL_LOAD_POPULAR)
+    for name in ("_POPULAR_BY_ECO", "_POPULAR_SET", "_POPULAR_BY_LEN",
+                 "_DENYLIST_BY_ECO", "_ALLOWLIST_BY_ECO"):
+        monkeypatch.setattr(typosquat, name, {})
+    monkeypatch.setattr(slopsquat, "_COLLAPSED_INDEX", {})
+    monkeypatch.setattr(typosquat, "_DENYLIST_RAW", None)
+    monkeypatch.setattr(typosquat, "_ALLOWLIST_RAW", None)
+    return tmp_path
 
 
 def _write(tmp, popular, denylist=None):

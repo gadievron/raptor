@@ -24,21 +24,11 @@ _ENV_VARS = (
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    # Each test starts from no explicit config + no env vars. Snapshot
-    # so we can restore on teardown — configure(export_env=True) writes
-    # os.environ DIRECTLY (not via monkeypatch), so it would otherwise
-    # leak into other test files and flip their suppression mode.
-    saved = {v: os.environ.get(v) for v in _ENV_VARS}
-    cfg.reset()
+    # Register even absent keys: configure(export_env=True) writes directly.
+    monkeypatch.setattr(cfg, "_active", None)
     for var in _ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-    yield
-    cfg.reset()
-    for var, val in saved.items():
-        if val is None:
-            os.environ.pop(var, None)
-        else:
-            os.environ[var] = val
+        monkeypatch.setenv(var, os.environ.get(var, ""))
+        monkeypatch.delenv(var)
 
 
 class TestModeMapping:
