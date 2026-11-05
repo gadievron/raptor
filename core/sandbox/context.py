@@ -661,10 +661,14 @@ def _persist_proxy_events(
             # rename is not affected by the planted object) so triage
             # fails toward suspicious instead of clean.
             _state["flags"].add("persist_open_failure")
-            _count = _state["next_seq"]
-            if _count is None:
-                _count = _read_proxy_count_sidecar(
-                    output, _run_binding)[0] or 0
+            # Retain the full verified anchor even when no append is possible.
+            _side_count, _side_flags, _side_invalid = (
+                _read_proxy_count_sidecar(output, _run_binding))
+            _state["flags"] |= _side_flags
+            if _side_invalid:
+                _state["flags"].add("count_sidecar_invalid")
+            _count = max(_state["next_seq"] or 0, _side_count or 0)
+            _state["next_seq"] = _count
             _write_proxy_count_sidecar(
                 output, _count, _state["flags"], _run_binding)
             return
@@ -683,10 +687,14 @@ def _persist_proxy_events(
                 os.close(_log_fd)
                 # Same tamper class as the open failure above.
                 _state["flags"].add("persist_open_failure")
-                _count = _state["next_seq"]
-                if _count is None:
-                    _count = _read_proxy_count_sidecar(
-                        output, _run_binding)[0] or 0
+                # Retain the full verified anchor even when no append is possible.
+                _side_count, _side_flags, _side_invalid = (
+                    _read_proxy_count_sidecar(output, _run_binding))
+                _state["flags"] |= _side_flags
+                if _side_invalid:
+                    _state["flags"].add("count_sidecar_invalid")
+                _count = max(_state["next_seq"] or 0, _side_count or 0)
+                _state["next_seq"] = _count
                 _write_proxy_count_sidecar(
                     output, _count, _state["flags"], _run_binding)
                 return
