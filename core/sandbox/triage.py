@@ -506,8 +506,9 @@ def triage_run(run_dir: Path, *,
     # The events JSONL streams (per-line MACs make incremental
     # verification safe) so honest chatty runs above the whole-file
     # input bound still grade on their real content.
+    events_read_issues: set[str] = set()
     raw_proxy_events, events_over_bound = _load_jsonl_stream(
-        run_dir / PROXY_EVENTS_FILENAME)
+        run_dir / PROXY_EVENTS_FILENAME, issues=events_read_issues)
     raw_audit_degraded = _load_json(run_dir / AUDIT_DEGRADED_FILE)
     raw_events_count = _load_json(run_dir / PROXY_EVENTS_COUNT_FILENAME)
 
@@ -540,7 +541,8 @@ def triage_run(run_dir: Path, *,
     # says events existed, and silence would launder the erasure.
     _pm_persist = get_proxy_persist_state(run_dir)
     if (raw_summary is None and not raw_proxy_events
-            and raw_audit_degraded is None and not marker_restored):
+            and raw_audit_degraded is None and not marker_restored
+            and not events_read_issues):
         if not allow_legacy and (summary_destroyed or events_destroyed
                                  or degraded_destroyed or count_present
                                  or (_pm_persist or {}).get(
@@ -579,6 +581,11 @@ def triage_run(run_dir: Path, *,
             count_record=(None if provenance_unavailable
                           else raw_events_count),
             over_bound=events_over_bound))
+    if events_read_issues:
+        events_integrity = _INTEGRITY_TAMPERED
+        read_note = ("proxy-events input incomplete: "
+                     + ", ".join(sorted(events_read_issues)))
+        count_note = f"{count_note}; {read_note}" if count_note else read_note
     # Parent-memory floor over the sidecar cross-check (one-way: it
     # may condemn a shortened/erased stream, never excuse anything a
     # verifier already flagged). Covers the residual the on-disk
@@ -1153,25 +1160,34 @@ _MAX_EVENTS_STREAM_BYTES = 512 * 1024 * 1024
 _MAX_EVENTS_PARSED = 500_000
 
 
-def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
+def _load_jsonl_stream(
+        path: Path, *, issues: set[str] | None = None,
+        ) -> tuple[list[dict], bool]:
     """Stream-parse a JSONL file under the streaming bounds.
 
     Returns ``(events, over_bound)``. Same open discipline as
     ``_read_bounded`` (O_NOFOLLOW + O_NONBLOCK at open, fstat
     regular-file check) but never buffers the whole file.
     ``over_bound`` is True when input continued past a cumulative cap
-    — the returned events are the verified-parseable prefix."""
+    — the returned events are the verified-parseable prefix. Optional
+    ``issues`` accumulates discarded-record and read-failure reasons."""
+    if issues is None:
+        issues = set()
     try:
         fd = os.open(
             str(path),
             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
         )
+    except FileNotFoundError:
+        return [], False
     except OSError:
+        issues.add("read_failure")
         return [], False
     out: list[dict] = []
     over_bound = False
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
+            issues.add("nonregular_input")
             return [], False
         carry = b""
         skipping_oversize_line = False
@@ -1196,7 +1212,7 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                     # cap — resynchronise at this newline.
                     skipping_oversize_line = False
                     continue
-                _parse_jsonl_line(line, out)
+                _parse_jsonl_line(line, out, issues=issues)
                 if len(out) >= _MAX_EVENTS_PARSED:
                     # Reaching a cap is not evidence that input was lost.
                     # Look ahead only when this chunk has no remaining bytes.
@@ -1206,6 +1222,7 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                     return out, over_bound
             carry = carry[start:]
             if len(carry) > _MAX_EVENT_LINE_BYTES:
+                issues.add("oversized_record")
                 # Oversize line: drop what we have and skip to the
                 # next newline (same treatment as a corrupt line).
                 carry = b""
@@ -1214,12 +1231,13 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
                 over_bound = True  # conservative if the lookahead errors
                 over_bound = total > _MAX_EVENTS_STREAM_BYTES or bool(os.read(fd, 1))
                 if not over_bound and carry and not skipping_oversize_line:
-                    _parse_jsonl_line(carry, out)
+                    _parse_jsonl_line(carry, out, issues=issues)
                 return out, over_bound
         if carry and not skipping_oversize_line:
-            _parse_jsonl_line(carry, out)
+            _parse_jsonl_line(carry, out, issues=issues)
         return out, over_bound
     except OSError:
+        issues.add("read_failure")
         return out, over_bound
     finally:
         try:
@@ -1228,10 +1246,15 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
             pass
 
 
-def _parse_jsonl_line(line: bytes, out: list[dict]) -> None:
+def _parse_jsonl_line(
+        line: bytes, out: list[dict], *, issues: set[str] | None = None,
+        ) -> None:
+    if issues is None:
+        issues = set()
     # Bound the original record bytes, matching the incomplete-line guard.
     # Stripping first made admission depend on how reads split the line.
     if len(line) > _MAX_EVENT_LINE_BYTES:
+        issues.add("oversized_record")
         return
     line = line.strip()
     if not line:
@@ -1239,9 +1262,12 @@ def _parse_jsonl_line(line: bytes, out: list[dict]) -> None:
     try:
         record = json.loads(line.decode("utf-8", errors="replace"))
     except (ValueError, RecursionError):
+        issues.add("malformed_record")
         return
     if isinstance(record, dict):
         out.append(record)
+    else:
+        issues.add("nonobject_record")
 
 
 

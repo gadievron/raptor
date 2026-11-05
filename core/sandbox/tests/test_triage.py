@@ -1114,9 +1114,12 @@ class TestDestructionFailsClosed:
         assert any(s["type"] == "telemetry_tampering"
                    for s in report["signals"])
 
-    def test_legacy_mode_keeps_old_semantics(self, tmp_path):
+    def test_legacy_mode_reports_discarded_proxy_input(self, tmp_path):
         (tmp_path / triage_mod.PROXY_EVENTS_FILENAME).write_text("junk")
-        assert triage_mod.triage_run(tmp_path, allow_legacy=True) is None
+        report = triage_mod.triage_run(tmp_path, allow_legacy=True)
+        assert report is not None
+        assert report["inputs"]["integrity"]["proxy_events"] == "tampered"
+        assert "malformed_record" in json.dumps(report)
 
     def test_truly_absent_still_none(self, tmp_path):
         assert triage_mod.triage_run(tmp_path, allow_legacy=False) is None
