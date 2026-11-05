@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import json
+from itertools import chain
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -161,7 +162,11 @@ def _scan_file(
     for run in sarif["runs"]:
         if not isinstance(run, dict) or not isinstance(run.get("results"), list):
             continue
-        run_key = _content_key({k: v for k, v in run.items() if k != "results"})
+        results = (result for result in run["results"] if isinstance(result, dict))
+        first_result = next(results, None)
+        if first_result is None:
+            continue
+        run_key: str | None = None
         rule_owners: dict[int, dict] = {}
         context_keys: dict[tuple[str, int], str] = {}
         resolved_rules: dict[str, dict] = {}
@@ -174,9 +179,7 @@ def _scan_file(
                     rule_owners.update({id(rule): component for rule in component["rules"]
                                         if isinstance(rule, dict)})
         analysis_run = None
-        for result in run["results"]:
-            if not isinstance(result, dict):
-                continue
+        for result in chain((first_result,), results):
             candidate_count += 1
             reference_key = _content_key({
                 key: result[key] for key in ("ruleId", "ruleIndex", "rule") if key in result
@@ -195,9 +198,17 @@ def _scan_file(
             signal = dict(result)
             if signal.get("level") is None:
                 signal["level"] = rule_default_level(rule) or "warning"
+            signal_key = _signal_key(signal)
+            # A strictly worse signal cannot enter the full heap, including
+            # when it repeats a retained group. Count duplicates above, but
+            # avoid serializing its full payload just for a ranking tie-break.
+            if len(heap) >= cap and signal_key > heap[0].rank[0]:
+                continue
+            if run_key is None:
+                run_key = _content_key({k: v for k, v in run.items() if k != "results"})
             # Matches stable content-sort followed by stable signal-sort.
             # Ordinal preserves the old encounter order for exact ties.
-            rank = (_signal_key(signal), _content_key(result), run_key,
+            rank = (signal_key, _content_key(result), run_key,
                     str(path), ordinal + candidate_count)
             previous = selected_groups.get(duplicate_key) if duplicate_key is not None else None
             if previous is not None:
