@@ -417,10 +417,10 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
             return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
         return digest.hexdigest()
 
-    for sarif_path in sarif_paths:
+    def accumulate_file(sarif_path: str) -> None:
         sarif_data = load_sarif(Path(sarif_path))
         if not sarif_data:
-            continue
+            return
         for run in (sarif_data.get("runs") or []):
             if not isinstance(run, dict):
                 logger.warning(
@@ -477,6 +477,11 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                     continue
                 key = _result_key(result)
                 tool_runs[tool_name]["results"][key] = result
+
+    # Release each input's temporary document/run/result references before
+    # loading the next. Only the metadata and findings selected above survive.
+    for sarif_path in sarif_paths:
+        accumulate_file(sarif_path)
 
     # Preserve qualified namespaces; rebuild only ID-based merged runs.
     merged_runs = []
