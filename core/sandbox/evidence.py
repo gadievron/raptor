@@ -190,6 +190,7 @@ class EvidenceFile:
         self._created_ino = st.st_ino
         self._minimum_size = st.st_size
         self._closed = False
+        self._fd_released = False
         self._close_result = False
         self._io_lock = threading.RLock()
         self._needs_resync = False
@@ -321,8 +322,11 @@ class EvidenceFile:
         Mismatch, truncation, missing files, and descriptor inspection
         failures emit a loud warning and return False. Bytes at this path
         can no longer be trusted as the complete original evidence.
+        After close, return its cached result without further path/fd I/O.
         """
         with self._io_lock:
+            if self._fd_released:
+                return self._close_result
             return self._verify_locked()
 
     def _verify_locked(self) -> bool:
@@ -384,6 +388,9 @@ class EvidenceFile:
                 self._close_result = self.verify() if verify else True
                 return self._close_result
             finally:
+                # close() must verify while it still owns the descriptor,
+                # then publish the final result before releasing its number.
+                self._fd_released = True
                 with contextlib.suppress(OSError):
                     os.close(self.fd)
 
