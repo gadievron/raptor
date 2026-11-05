@@ -1796,8 +1796,13 @@ class TestAgentRecordCliRecordsUnchanged:
         import os
         import subprocess
         import sys
+        from unittest.mock import patch
 
-        from core.audit.record import load_audit_log
+        from core.audit.record import (
+            append_audit_log,
+            load_audit_log,
+            load_verified_audit_log,
+        )
         from core.coverage.journal import load_entries
 
         tgt = tmp_path / "tgt"
@@ -1813,8 +1818,17 @@ class TestAgentRecordCliRecordsUnchanged:
         cli = str(_REPO / "libexec" / "raptor-audit")
         common = ["--target", str(tgt), "--file", "app.php",
                   "--function", "f", "--out", str(out)]
-        subprocess.run([sys.executable, "-B", cli, "context", *common],
-                       env=env, capture_output=True, check=False)
+        # These cases exercise record's text, journal and gate handling.
+        # Seed its context prerequisite through the real signed-log writer;
+        # TestAgentRecordCli and its mid-body case retain the fresh-process
+        # context -> record path. Use the child's key directory and verify
+        # the breadcrumb so G5 still runs against an authenticated row.
+        with patch.dict(os.environ, {"XDG_DATA_HOME": env["XDG_DATA_HOME"]}):
+            append_audit_log(out, {
+                "action": "context", "key": "app.php:f",
+                "file": "app.php", "function": "f",
+            })
+            assert [row["key"] for row in load_verified_audit_log(out)] == ["app.php:f"]
         args = [sys.executable, "-B", cli, "record", *common,
                 "--status", status]
         if hypothesis is not None:
