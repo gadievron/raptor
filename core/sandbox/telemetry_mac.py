@@ -240,6 +240,7 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
             | os.O_NONBLOCK,
             0o600,
         )
+        write_failed = False
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise OSError(errno.EINVAL, "tamper marker is not a regular file")
@@ -248,8 +249,16 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
                 # Do not retry fragments: concurrent appenders may have
                 # already written another marker after this partial one.
                 raise OSError(errno.EIO, "short tamper marker write")
+        except BaseException:
+            write_failed = True
+            raise
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                # Cleanup must not replace a primary error or cancellation.
+                if not write_failed:
+                    raise
     except OSError:
         # The quarantine + WARNING already carry the event; a marker
         # write failure must not block the re-key.
@@ -269,6 +278,7 @@ def tamper_events() -> list[dict]:
             tamper_marker_path(),
             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
         )
+        read_failed = False
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return []
@@ -282,8 +292,17 @@ def tamper_events() -> list[dict]:
                         continue
                     if isinstance(rec, dict):
                         events.append(rec)
+        except BaseException:
+            read_failed = True
+            raise
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                # Keep the original failure authoritative, including when
+                # it must escape the outer best-effort OSError handler.
+                if not read_failed:
+                    raise
     except OSError:
         # Keep recovered history when a later read or close fails.
         # Returning [] here erased valid earlier tamper evidence.
