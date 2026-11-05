@@ -367,7 +367,7 @@ def build_state_field_index(
     rhs_class, rhs}`` with ``rhs_class`` ∈ from_param /
     from_call:<callee> / from_field:<field> / from_local:<name> /
     literal_null / literal_const / unknown."""
-    from .resource_bounds import _c_function_spans
+    from .resource_bounds import _c_function_spans, _c_function_spans_from_lines
 
     fields: dict[str, dict[str, list[dict[str, Any]]]] = {}
     skipped = False
@@ -378,7 +378,12 @@ def build_state_field_index(
         # Spans are emitted in ascending start order and do not
         # overlap, so a bisect on start lines replaces the linear
         # scan the index used to run per field access.
-        spans = _c_function_spans(source)
+        if type(source) is str:
+            lines = split_lines(source)
+            spans = _c_function_spans_from_lines(lines)
+        else:
+            spans = _c_function_spans(source)
+            lines = split_lines(source)
         span_starts = [start for _name, start, _end in spans]
 
         def _function_at(line: int) -> tuple[str, tuple[str, ...]]:
@@ -389,7 +394,7 @@ def build_state_field_index(
                     return name, ()
             return "", ()
 
-        for line_no, raw in enumerate(split_lines(source), start=1):
+        for line_no, raw in enumerate(lines, start=1):
             # Comment removal only shortens the line; it cannot create
             # a field connector absent from the original native text.
             if type(raw) is str and "." not in raw and "->" not in raw:
