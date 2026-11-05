@@ -48,6 +48,7 @@ _CONDITIONAL_DIRECTIVE_RE = re.compile(r"#[^\S\n]*(if|ifdef|ifndef|endif)\b")
 _CONDITIONAL_INDENT_RE = re.compile(r"[^\S\n]*")
 
 _IDENT_RE = re.compile(r"[a-zA-Z_]")
+_INTEGER_LITERAL_RE = re.compile(r"[+-]?(?:0[xX][0-9a-fA-F]+|[0-9]+)")
 _SAFE_ARITH_RE = re.compile(
     r"^[-()\s0-9a-fA-FxX+*/%|&^~<>]+$"
 )
@@ -180,6 +181,15 @@ def _try_evaluate(body: str) -> int | None:
     cleaned = body.strip()
     if not cleaned or len(cleaned) > _MAX_BODY_LEN:
         return None
+
+    if (type(cleaned) is str and cleaned[0] in "0123456789+-"
+            and _INTEGER_LITERAL_RE.fullmatch(cleaned)):
+        try:
+            # Base zero retains Python's leading-zero and hex rules.
+            value = int(cleaned, 0)
+        except (ValueError, MemoryError):
+            return None
+        return value if abs(value) <= _MAX_LITERAL_MAGNITUDE else None
 
     if not _SAFE_ARITH_RE.match(cleaned):
         return None
