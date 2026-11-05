@@ -1620,8 +1620,8 @@ def _additive_closure_walk(
 _MARKED_ID_RE = re.compile(r"[`'\"]([A-Za-z_]\w*)[`'\"]")
 _WORD_RE = re.compile(r"[A-Za-z_]\w*")
 
-# Vulnerability-vocabulary + prose words that must not count as "the
-# hypothesis names an identifier".  Mirrors the sweep.py stop-word
+# Vulnerability-vocabulary + prose words that do not implicitly name an
+# identifier. Explicitly quoted identifiers bypass this filter.  Mirrors the sweep.py stop-word
 # convention, extended with the diagnostic families this module covers.
 _STOP_WORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "attacker", "be", "buffer",
@@ -1647,7 +1647,8 @@ def extract_hypothesis_identifiers(
 ) -> list[str]:
     """Identifiers the hypothesis names, for diagnostic attribution.
 
-    Backtick/quote-marked identifiers win (the sweep.py convention);
+    Backtick/quote-marked identifiers win, including common code names
+    such as ``buffer`` and ``size`` (the sweep.py convention);
     otherwise prose tokens are kept only when they survive the
     stop-word filter AND appear verbatim as identifiers in the TU
     source — ungrounded prose ("the buffer", "attacker") never blocks
@@ -1656,7 +1657,7 @@ def extract_hypothesis_identifiers(
     """
     marked = [
         m for m in dict.fromkeys(_MARKED_ID_RE.findall(hypothesis or ""))
-        if m.lower() not in _STOP_WORDS and m != function_name
+        if m != function_name
     ]
     if marked:
         return marked
