@@ -385,10 +385,11 @@ class TestHysteresis:
         assert outcome2.advisory and not outcome2.fired
         assert any("legitimately large" in r.message
                    for r in caplog.records)
-        # No second rewrite: exactly one archive generation exists.
+        # A legitimately large unchanged journal needs no rewrite/archive,
+        # while the same hysteresis still prevents ineffective repeat work.
         backups = list(tmp_path.glob(
             JOURNAL_FILENAME + ".pre-supersede*"))
-        assert len(backups) == 1
+        assert backups == []
 
     def test_regrowth_past_rearm_re_fires(
         self, tmp_path: Path, monkeypatch,

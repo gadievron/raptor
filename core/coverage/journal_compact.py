@@ -93,6 +93,7 @@ import json
 import logging
 import math
 import os
+import stat
 import tempfile
 import time
 from dataclasses import dataclass
@@ -107,7 +108,7 @@ if TYPE_CHECKING:
 # the loader's ``journal_spend_usd`` view. Module-level import is
 # cycle-free: ``core.audit.resume`` imports only ``core.json`` at
 # module scope.
-from core.atomic_fs.fs_lock import acquire_flock_bounded
+from core.atomic_fs.fs_lock import acquire_flock_bounded, artifact_lock
 from core.audit.resume import _MAX_SPEND_EVIDENCE_USD
 from core.json import loads
 
@@ -305,12 +306,12 @@ def _backup_path(journal_path: Path, suffix: str = _BACKUP_SUFFIX) -> Path:
     existing backup is never overwritten (it may be the only copy of a
     previous generation)."""
     base = journal_path.with_name(journal_path.name + suffix)
-    if not base.exists():
+    if not os.path.lexists(base):
         return base
     n = 2
     while True:
         candidate = base.with_name(f"{base.name}.{n}")
-        if not candidate.exists():
+        if not os.path.lexists(candidate):
             return candidate
         n += 1
 
@@ -667,6 +668,17 @@ class _SidecarWriter:
                 self._fd = None
 
 
+def _slim_payload(raw):
+    """Share the exact offload threshold between census and rewrite passes."""
+    from .journal_sidecar import OFFLOAD_FIELDS
+    extracted = {field: raw[field] for field in OFFLOAD_FIELDS if raw.get(field)}
+    if not extracted:
+        return None
+    payload_len = sum(len(json.dumps(value, separators=(",", ":"), default=str))
+                      for value in extracted.values())
+    return extracted if payload_len >= _SLIM_MIN_OFFLOAD_BYTES else None
+
+
 def _slim_stub_line(
     entry: ReviewJournalEntry,
     raw: dict[str, Any],
@@ -705,22 +717,13 @@ def _slim_stub_line(
     from core.coverage import journal_mac
 
     from .journal_sidecar import (
-        OFFLOAD_FIELDS,
         SIDECAR_FILENAME,
         SIDECAR_SCHEMA_VERSION,
         fields_sha256,
     )
 
-    extracted = {
-        f: raw[f] for f in OFFLOAD_FIELDS if raw.get(f)
-    }
-    if not extracted:
-        return None
-    payload_len = sum(
-        len(json.dumps(v, separators=(",", ":"), default=str))
-        for v in extracted.values()
-    )
-    if payload_len < _SLIM_MIN_OFFLOAD_BYTES:
+    extracted = _slim_payload(raw)
+    if extracted is None:
         return None
 
     token = raw.get(journal_mac.TOKEN_KEY)
@@ -789,6 +792,56 @@ def _slim_stub_line(
     ).encode("utf-8")
 
 
+# Separate from the legacy .~compact- namespace: older compactors sweep that
+# namespace without a run-wide lock. They must not unlink current active work.
+_COMPACT_TMP_PREFIX = ".~journal-compact-"
+_COMPACT_TMP_SWEEP_LIMIT = 16
+_COMPACT_TMP_SCAN_LIMIT = 4096
+
+
+def _sweep_compact_temps(out_dir):
+    """Reap owned orphan files only while the run-wide compaction lock is held.
+
+    Scan/deletion limits keep cleanup bounded. Lower caps leave more orphan
+    work for later passes; higher caps spend more I/O on crowded run directories.
+    Legacy names cannot be proved idle by this lock and are left alone.
+    """
+    removed = 0
+    with os.scandir(out_dir) as entries:
+        for number, entry in enumerate(entries):
+            if number >= _COMPACT_TMP_SCAN_LIMIT or removed >= _COMPACT_TMP_SWEEP_LIMIT:
+                break
+            if not entry.name.startswith(_COMPACT_TMP_PREFIX) or not entry.name.endswith(".jsonl"):
+                continue
+            try:
+                info = entry.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                    continue
+                os.unlink(entry.path)
+                removed += 1
+            except OSError:
+                continue
+
+
+def _shard_version(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _ensure_current_shard(stream, path, expected, *, linked=False):
+    try:
+        opened = _shard_version(os.fstat(stream.fileno()))
+        named = _shard_version(path.lstat())
+    except OSError as exc:
+        raise CompactRefused(f"journal changed during compaction: {path}") from exc
+    # Creating our archive hardlink changes ctime; all other fields still
+    # bind to the descriptor whose locked bytes both passes consumed.
+    if linked:
+        opened, named, expected = opened[:-1], named[:-1], expected[:-1]
+    if opened != expected or named != expected:
+        raise CompactRefused(f"journal changed during compaction: {path}")
+
+
 def compact_journal(out_dir: Path, *,
                     supersede: bool = False,
                     slim_clean: bool = False,
@@ -799,7 +852,7 @@ def compact_journal(out_dir: Path, *,
     re-emission rows. Returns aggregate before/after stats; raises
     :class:`CompactRefused` when the run is live, the journal is
     absent/unreadable, or a file's identity population exceeds the
-    tool's bounds.
+    tool's bounds. Unchanged shards retain their inode and create no archive.
 
     Bounded execution (the mid-run checkpoint's contract): pass
     ``deadline_monotonic`` (a ``time.monotonic`` timestamp) and/or
@@ -860,6 +913,32 @@ def compact_journal(out_dir: Path, *,
     would corrupt the offsets stubs are about to reference.
     """
     out_dir = Path(out_dir)
+    if should_abort is not None and should_abort():
+        raise CompactAborted("compaction aborted before writer lock acquisition (abort requested)")
+    if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+        raise CompactAborted("compaction aborted before writer lock acquisition (wall-clock bound exceeded)")
+    remaining = (max(0.0, deadline_monotonic - time.monotonic())
+                 if deadline_monotonic is not None else None)
+    # Lock order: run-wide compaction, then sidecar, then shard data.
+    # Appenders take only the data flock and retain their reopen-on-swap rule.
+    with contextlib.ExitStack() as ownership:
+        try:
+            ownership.enter_context(artifact_lock(
+                out_dir / ".journal-compact", create_parent=False, required=True,
+                subject="journal compaction", deadline_s=remaining))
+        except OSError as exc:
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise CompactAborted("compaction wall-clock bound exceeded waiting for writer lock") from exc
+            raise CompactRefused(f"journal compaction writer lock unavailable: {exc}") from exc
+        return _compact_journal_locked(
+            out_dir, supersede=supersede, slim_clean=slim_clean,
+            deadline_monotonic=deadline_monotonic, should_abort=should_abort,
+            allow_worker_pid=allow_worker_pid)
+
+
+def _compact_journal_locked(out_dir, *, supersede=False, slim_clean=False,
+                            deadline_monotonic=None, should_abort=None,
+                            allow_worker_pid=None):
     if slim_clean:
         supersede = True
     _refuse_live_run(out_dir, allow_worker_pid=allow_worker_pid)
@@ -877,6 +956,7 @@ def compact_journal(out_dir: Path, *,
         else _BACKUP_SUFFIX_SUPERSEDE if supersede
         else _BACKUP_SUFFIX
     )
+    _sweep_compact_temps(out_dir)
     shards = _journal.journal_shard_paths(out_dir)
     # ONE sidecar writer for the whole shard walk, opened (and its
     # exclusive flock taken) EAGERLY before the first shard flock —
@@ -1021,16 +1101,8 @@ def _compact_one_file(
                     )
                     raise OSError(msg)
             try:
-                # Sweep tmp files leaked by a pre-rename kill of an
-                # earlier compaction (own prefix only, bounded). Safe
-                # under the held flock: a cooperating compactor holds
-                # it across its tmp's whole lifetime, so anything
-                # matching here is stale.
-                for stale in sorted(
-                        out_dir.glob(".~compact-*.jsonl"))[:16]:
-                    with contextlib.suppress(OSError):
-                        stale.unlink()
-
+                original = _shard_version(os.fstat(fh.fileno()))
+                _ensure_current_shard(fh, journal_path, original)
                 stats.bytes_before = os.fstat(fh.fileno()).st_size
 
                 # ── pass 1: newest line per droppable identity ──
@@ -1068,6 +1140,7 @@ def _compact_one_file(
                         return True
                     return False
 
+                needs_rewrite = False
                 line_no = -1
                 in_overlong = False
                 polled = 0
@@ -1086,6 +1159,7 @@ def _compact_one_file(
                     line_no += 1
                     stripped = raw_line.strip()
                     if not stripped:
+                        needs_rewrite = True
                         continue
                     stats.rows_before += 1
                     entry, raw = _classify(stripped)
@@ -1098,12 +1172,17 @@ def _compact_one_file(
                     ts = str(raw.get("ts", "")) if raw else ""
                     ident = _reemission_identity(entry)
                     if ident is not None:
+                        needs_rewrite |= ident in winner
                         _note_winner(winner, ident, ts, line_no)
+                    if (slim_clean and _slim_eligible(entry)
+                            and raw is not None and _slim_payload(raw) is not None):
+                        needs_rewrite = True
                     if supersede:
                         sident = _supersede_identity(entry)
-                        if sident is not None and _note_winner(
-                                sup_winner, sident, ts, line_no):
-                            sup_winner_rident[sident] = ident
+                        if sident is not None:
+                            needs_rewrite |= sident in sup_winner
+                            if _note_winner(sup_winner, sident, ts, line_no):
+                                sup_winner_rident[sident] = ident
 
                 # A sup-winner the dedup arm will itself drop (only a
                 # cross-producer reused twin can outrank it — the
@@ -1124,10 +1203,21 @@ def _compact_one_file(
                             and kept[1] != sup_winner[sident][1]:
                         del sup_winner[sident]
 
+                _ensure_current_shard(fh, journal_path, original)
+                if not needs_rewrite:
+                    reason = abort_reason() if abort_reason is not None else None
+                    if reason:
+                        raise CompactAborted(f"compaction aborted after census ({reason}); shard untouched")
+                    _ensure_current_shard(fh, journal_path, original)
+                    stats.rows_after = stats.rows_before
+                    stats.bytes_after = stats.bytes_before
+                    stats.spend_usd_after = stats.spend_usd_before
+                    return stats
+
                 # ── pass 2: verbatim copy of every kept line ──
                 fh.seek(0)
                 tmp_fd, tmp_name = tempfile.mkstemp(
-                    prefix=".~compact-", suffix=".jsonl",
+                    prefix=_COMPACT_TMP_PREFIX, suffix=".jsonl",
                     dir=str(out_dir),
                 )
                 tmp_path = Path(tmp_name)
@@ -1258,10 +1348,20 @@ def _compact_one_file(
                             "compacted form and backups"
                         )
 
+                _ensure_current_shard(fh, journal_path, original)
+                # A conservative census can request a second pass that emits
+                # every original byte (e.g. clean rows below the slim threshold).
+                # Do not retain another full generation when nothing changed.
+                if (stats.bytes_after == stats.bytes_before
+                        and not stats.dropped_reemissions
+                        and not stats.dropped_superseded and not stats.slimmed_rows):
+                    return stats
+
                 # ── backup (hardlink, never deleted), then swap ──
                 backup = _backup_path(journal_path, archive_suffix)
                 os.link(str(journal_path), str(backup))
                 stats.backup_path = str(backup)
+                _ensure_current_shard(fh, journal_path, original, linked=True)
                 os.rename(str(tmp_path), str(journal_path))
                 tmp_path = None
                 # Drop this process's load-cache record explicitly —

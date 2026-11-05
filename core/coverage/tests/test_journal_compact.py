@@ -159,8 +159,9 @@ class TestCompaction:
         stats = compact_journal(tmp_path)
         assert stats.dropped_reemissions == 0
         assert (tmp_path / JOURNAL_FILENAME).read_bytes() == first
-        # Second backup name never clobbers the first.
-        assert Path(stats.backup_path).name.endswith(".pre-compact.2")
+        # No unchanged generation is archived or published a second time.
+        assert stats.backup_path == ""
+        assert not (tmp_path / (JOURNAL_FILENAME + ".pre-compact.2")).exists()
 
     def test_live_run_refused(self, tmp_path: Path) -> None:
         from core.run.metadata import RUN_METADATA_FILE

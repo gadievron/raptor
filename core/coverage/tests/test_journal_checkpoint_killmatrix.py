@@ -17,7 +17,7 @@ gate's loader (``require_complete_entries``) accepts it; the journal
 spend floor is bit-preserved; any archive that exists holds the full
 original bytes; no hysteresis state was written (a killed attempt
 must re-fire); and a follow-up compaction succeeds and sweeps any
-leaked ``.~compact-*`` tmp file.
+leaked ``.~journal-compact-*`` tmp file.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def _kill_at(phase: str, out: Path, tmp_path: Path) -> None:
 
 
 def _leaked_tmp(out: Path) -> list[Path]:
-    return sorted(out.glob(".~compact-*.jsonl"))
+    return sorted(out.glob(".~journal-compact-*.jsonl"))
 
 
 def _reviewed_functions(out: Path) -> set[str]:
