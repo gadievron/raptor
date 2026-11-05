@@ -150,7 +150,11 @@ def build_index_from_source(
                 field=f,
                 lock_held=lock_name,
             )
-            index.setdefault(f, []).append(record)
+            bucket = index.get(f)
+            if bucket is None:
+                bucket = []
+                index[f] = bucket
+            bucket.append(record)
 
     return index
 
@@ -228,6 +232,8 @@ def format_co_accessor_context(
 def _extract_fields(source: str) -> set[str]:
     """Extract struct field names from ``->field`` and ``.field`` patterns."""
     fields: set[str] = set()
+    if type(source) is str and "." not in source and "->" not in source:
+        return fields
     for m in _FIELD_ACCESS_RE.finditer(source):
         f = m.group(1)
         if len(f) >= _MIN_FIELD_LEN and f not in _NOISE_FIELDS:

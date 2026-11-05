@@ -72,7 +72,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
-from core.source.lines import split_lines
+from core.source.lines import slice_text, split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -494,18 +494,30 @@ def _classify_rhs(rhs: str) -> str:
     return "unknown"
 
 
+_LOCAL_CALL_ASSIGN_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\(",
+)
+
+
 def _local_call_sources(source: str, span: tuple[int, int] | None,
                         ) -> dict[str, str]:
     """One-hop local provenance: ``v = decode_ack_largest(frame)``
     → ``{"v": "decode_ack_largest"}`` within the function span."""
-    lines = split_lines(source)
-    seg = lines[span[0] - 1:span[1]] if span else lines
+    if (type(source) is str and len(source) >= 16 * 1024
+            and type(span) is tuple and len(span) == 2
+            and type(span[0]) is int and type(span[1]) is int
+            and span[0] > 0 and span[1] >= span[0]):
+        # slice_text already applies split_lines' single-CR trimming.
+        # Raw LF splitting here avoids trimming a second trailing CR.
+        seg = slice_text(source, span[0], span[1]).split("\n")
+    else:
+        lines = split_lines(source)
+        seg = lines[span[0] - 1:span[1]] if span else lines
     out: dict[str, str] = {}
-    assign_re = re.compile(
-        r"\b([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\(",
-    )
     for raw in seg:
-        for m in assign_re.finditer(raw.split("//", 1)[0]):
+        if type(raw) is str and ("=" not in raw or "(" not in raw):
+            continue
+        for m in _LOCAL_CALL_ASSIGN_RE.finditer(raw.split("//", 1)[0]):
             out[m.group(1)] = m.group(2)
     return out
 
