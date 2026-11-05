@@ -1619,6 +1619,13 @@ def _additive_closure_walk(
 
 _MARKED_ID_RE = re.compile(r"[`'\"]([A-Za-z_]\w*)[`'\"]")
 _WORD_RE = re.compile(r"[A-Za-z_]\w*")
+# GCC's explicit diagnostic subject is stronger than a same-line token.
+# Keep this narrow: only simple identifiers and balanced quote pairs.
+_GCC_SUBJECT_RE = re.compile(
+    r"\bof\s+(?:'([A-Za-z_]\w*)'|‘([A-Za-z_]\w*)’|"
+    r'"([A-Za-z_]\w*)"|`([A-Za-z_]\w*)`)'
+)
+
 
 # Vulnerability-vocabulary + prose words that do not implicitly name an
 # identifier. Explicitly quoted identifiers bypass this filter.  Mirrors the sweep.py stop-word
@@ -1680,13 +1687,22 @@ def _diag_implicates(
     """Does the diagnostic implicate one of the hypothesis identifiers?
 
     True when any identifier appears (word-boundary) in the diagnostic
-    message OR on the source line the diagnostic points at.  gcc quotes
-    names with typographic quotes and clang often names no variable at
-    all, so the source-line check carries the clang side.
+    message OR on the source line the diagnostic points at. An explicitly
+    named GCC subject takes precedence over these fallbacks: another token
+    on the same line cannot establish attribution to a different object.
+    Clang often names no variable, so it retains the source-line fallback.
     """
     if not identifiers:
         return True
-    hay = [str(diag.get("message", ""))]
+    message = str(diag.get("message", ""))
+    if str(diag.get("id", "")).startswith("-W"):
+        subjects = {
+            next(group for group in match.groups() if group)
+            for match in _GCC_SUBJECT_RE.finditer(message)
+        }
+        if subjects:
+            return bool(subjects.intersection(identifiers))
+    hay = [message]
     line = diag.get("line", 0)
     if isinstance(line, int) and 0 < line <= len(source_lines):
         hay.append(source_lines[line - 1])
