@@ -667,13 +667,18 @@ def parse_observe_log(run_dir, *,
                 # The writers emit nonnegative integer counts.
                 # Ignore corrupt values rather than converting NaN,
                 # infinity, booleans, or negatives into budget state.
-                profile.dropped_by_category = {
-                    str(k): v for k, v in dropped.items()
-                    if type(v) is int and v >= 0
-                }
-                profile.budget_truncated = any(
-                    profile.dropped_by_category.values()
-                )
+                # A shared output log may contain multiple audit sessions.
+                # Each tail contributes drops; a later clean tail cannot
+                # make an earlier incomplete observation complete again.
+                for key, count in dropped.items():
+                    if type(count) is not int or count < 0:
+                        continue
+                    category = str(key)
+                    profile.dropped_by_category[category] = (
+                        profile.dropped_by_category.get(category, 0) + count
+                    )
+                    if count:
+                        profile.budget_truncated = True
             continue
 
         # Skip records that explicitly carry observe=False (defensive
