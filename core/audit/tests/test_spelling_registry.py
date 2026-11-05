@@ -156,7 +156,7 @@ class TestClassifierUnavailableFailClosed:
         "smt:check-overflow:witness",
         # A concrete solver model keeps its receipt on detection
         # verbs too (mirrors sweep.is_detection_rule_id).
-        "smt:check-toctou:witness",
+        "smt:check-overflow:witness",
         "smt:disproof:sat",
         "joern",
         "joern:flow",

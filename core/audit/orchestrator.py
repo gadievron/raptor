@@ -31423,9 +31423,8 @@ def _pre_loop_smt_screen(
 ) -> list:
     """Run SMT checks before the LLM loop.
 
-    Functions with a confirmed SMT finding are recorded as outcomes
-    immediately and removed from the workqueue so they never reach the
-    (expensive) LLM review.  Returns the filtered workqueue.
+    Scope each source observation to the requested function and inject
+    mechanical leads as review context. Return the retained workqueue.
     """
     try:
         from .condition_smt import (
@@ -31482,6 +31481,13 @@ def _pre_loop_smt_screen(
             kept.append(gap)
             continue
 
+        narrowing_source = source
+        from .probe_function_scope import source_for_function
+        _, source = source_for_function(source, file_path, func_name)
+        if source is None:
+            kept.append(gap)
+            continue
+
         tool_hit = ""
         with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
             abr = check_auth_bypass(source, vocab)
@@ -31516,7 +31522,7 @@ def _pre_loop_smt_screen(
             with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 from .condition_extraction import language_for_file
                 inr = check_integer_narrowing(
-                    source, function_name=func_name or "",
+                    narrowing_source, function_name=func_name or "",
                     language=language_for_file(file_path) or "c",
                 )
                 if inr.narrowing_found:
@@ -31697,6 +31703,12 @@ def _promote_smt_clean(
         if not source:
             continue
 
+        narrowing_source = source
+        from .probe_function_scope import source_for_function
+        _, source = source_for_function(source, outcome.file, outcome.function)
+        if source is None:
+            continue
+
         tool_hit = ""
 
         try:
@@ -31752,7 +31764,7 @@ def _promote_smt_clean(
             try:
                 from .condition_extraction import language_for_file
                 inr = check_integer_narrowing(
-                    source, function_name=outcome.function or "",
+                    narrowing_source, function_name=outcome.function or "",
                     language=language_for_file(outcome.file) or "c",
                 )
                 if inr.narrowing_found:

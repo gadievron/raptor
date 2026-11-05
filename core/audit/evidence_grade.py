@@ -365,9 +365,7 @@ _SMT_FALLBACK_VERIFICATION_VERBS = (
 )
 _SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
     "invariant-preservation", "check-overflow-to-oob",
-    "check-negative-bypass", "check-auth-bypass",
-    "check-resource-leak", "check-null-propagation",
-    "check-early-release", "check-lock-domain", "check-toctou",
+    "check-negative-bypass",
 )
 _CLASSIFIER_FALLBACK_VERIFICATION: dict[str, frozenset[str]] = {
     "joern": frozenset({"joern:flow", "joern:guard-dominance"}),
@@ -475,7 +473,7 @@ def _is_detection_variant(part: str) -> bool:
         )
     # smt: mirrors sweep._SMT_VERB_ROLES detection entries (":witness"
     # keeps its receipt — a concrete solver model discriminates).
-    # Lexical lock checks, width-only narrowing, predicate feasibility and encoding checks
+    # Source patterns, width-only narrowing, predicate feasibility and encoding checks
     # stay detection even with a model: they do not verify their premises
     # against source semantics (mirrors sweep.is_detection_rule_id).
     if part.startswith("smt:"):

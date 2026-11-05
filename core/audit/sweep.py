@@ -2205,6 +2205,9 @@ _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-toctou",
 })
 
+_FUNCTION_SCOPED_SOURCE_VERBS = _SMT_DIRECT_ONLY_VERBS - {"check-integer-narrowing"}
+
+
 _SMT_VERB_ROLES = {
     # Invariant-preservation harness (core.audit.invariant_smt): a sat
     # model shows one mutation site can break the stated invariant
@@ -2217,17 +2220,10 @@ _SMT_VERB_ROLES = {
     "check-overflow-to-oob": "detection",
     "check-negative-bypass": "detection",
     "validate-path": "detection",
-    # Demoted to detection (corpus-verified): these verbs "confirm"
-    # from lexical flow/ordering heuristics — check-early-release and
-    # check-toctou never touch the solver, check-auth-bypass /
-    # check-resource-leak / check-null-propagation use Z3 only to
-    # feasibility-check text fragments, not to model the semantics
-    # their confirmation asserts (refcounts, RCU grace periods,
-    # intentional permission-tier short-circuits). Their receipts
-    # backed a cluster of machine-raised kernel false positives while
-    # every true positive they touched also survives at detection
-    # grade (a fired probe still corroborates and seeds; it no longer
-    # convicts on its own).
+    # Source-pattern and width observations use lexical ordering and
+    # optional guard feasibility, without complete control-flow, ownership
+    # or path-coverage proofs. They remain diagnostic even with a model;
+    # missing patterns likewise cannot refute a source-level claim.
     "check-auth-bypass": "detection",
     "check-lock-discipline": "detection",
     "check-resource-leak": "detection",
@@ -2597,14 +2593,11 @@ def _verb_vocab(target_path: str | None):
 
 
 def _negative_outcome(result) -> str:
-    """Outcome for a detector that found nothing.
+    """Compatibility-level outcome for a detector's own pattern query.
 
-    A detector whose prerequisites were absent (``result.applicable``
-    is False — e.g. 'no auth checks found', 'no lock acquires found')
-    never tested the hypothesis; recording 'refuted' for that model
-    miss would clear tool confirmations on the strength of an analysis
-    that did not run.  Only an APPLIED detector that scanned its
-    pattern space and found nothing counts as a refutation.
+    An applied no-match is not a source-level refutation. Source-pattern
+    admission caps it at inconclusive; absent prerequisites are already
+    inconclusive here. This helper alone grants no claim authority.
     """
     if getattr(result, "applicable", True):
         return "refuted"
@@ -2706,6 +2699,17 @@ def _smt_verb_in_subprocess(
     """
     from .subproc_json import run_json_child
     from dataclasses import fields
+    expected_binding = None
+    if verb in _FUNCTION_SCOPED_SOURCE_VERBS:
+        from .probe_function_scope import source_for_function, source_binding
+        scope, selected = source_for_function(source, file_path, function_name)
+        if selected is None:
+            return SweepResult(
+                tool="smt", file_path=file_path, function_name=function_name,
+                outcome="inconclusive", rule_id=f"smt:{verb}",
+                details={"source_scope_status": scope.status},
+            )
+        expected_binding = source_binding(selected, function_name, verb=verb)
     vocab = _verb_vocab(target_path)
     vocabulary = {f.name: sorted(getattr(vocab, f.name)) for f in fields(vocab)}
 
@@ -2729,6 +2733,15 @@ def _smt_verb_in_subprocess(
         # unexpected fields degrade to the crash sentinel below.
         with contextlib.suppress(TypeError):
             result = SweepResult(**out)
+            if expected_binding is not None and result.outcome != "error":
+                details = result.details if isinstance(result.details, dict) else {}
+                if (details.get("source_scope") != expected_binding or result.tool != "smt"
+                        or result.rule_id != f"smt:{verb}"
+                        or result.file_path != file_path or result.function_name != function_name):
+                    result.outcome = "inconclusive"
+                    result.matches = []
+                    result.details = {**details, "source_scope_status": "unbound-worker-result"}
+                result.rule_id = f"smt:{verb}"
             if is_diagnostic_smt_rule(verb) and result.outcome != "error":
                 result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
@@ -2750,6 +2763,36 @@ def _smt_verb_in_subprocess(
 
 
 def _run_smt_verb_inner(
+    *, file_path: str, function_name: str, verb: str, source: str,
+    hypothesis: str, target_path: str | None = None, vocab=None,
+) -> SweepResult:
+    """Confined-worker admission for source-derived function observations."""
+    binding = None
+    if verb in _FUNCTION_SCOPED_SOURCE_VERBS:
+        from .probe_function_scope import source_for_function, source_binding
+        scope, selected = source_for_function(source, file_path, function_name)
+        if selected is None:
+            return SweepResult(
+                tool="smt", file_path=file_path, function_name=function_name,
+                outcome="inconclusive", rule_id=f"smt:{verb}",
+                details={"source_scope_status": scope.status},
+            )
+        source = selected
+        binding = source_binding(source, function_name, verb=verb)
+    result = _run_smt_verb_on_source(
+        file_path=file_path, function_name=function_name, verb=verb,
+        source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab,
+    )
+    if verb in _FUNCTION_SCOPED_SOURCE_VERBS and result.outcome != "error":
+        result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
+        if result.outcome != "confirmed":
+            result.matches = []
+    if binding is not None:
+        result.details = {**(result.details or {}), "source_scope": binding}
+    return result
+
+
+def _run_smt_verb_on_source(
     *,
     file_path: str,
     function_name: str,

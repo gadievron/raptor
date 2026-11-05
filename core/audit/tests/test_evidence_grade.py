@@ -495,7 +495,7 @@ class TestDetectionVariantFirewall:
             "smt:check-overflow",
             "smt:check-oob",
             "smt:check-null-deref",
-            "smt:check-auth-bypass:witness",
+            "smt:check-negative-bypass:witness",
             "dead_path_smt",
             "dead_path_smt:witness",
         ):

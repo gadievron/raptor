@@ -378,13 +378,13 @@ def test_receiptless_witness_claim_never_confirms(tmp_path):
     _journal(tmp_path, [
         _entry("a.c", "f", "finding", run_id="other-run",
                line_start=5, body="claims a solver witness",
-               evidence_tools=["smt:check-toctou:witness"]),
+               evidence_tools=["smt:check-overflow:witness"]),
     ])
     graded = export_graded_from_journal(tmp_path)
     assert graded["derivation"]["foreign_run_rows"] == 1
     rec = graded["findings"][0]
     assert rec["discovery"]["evidence_tool"] \
-        == "llm-claimed:smt:check-toctou:witness"
+        == "llm-claimed:smt:check-overflow:witness"
     assert rec["discovery"]["confirmed_by"] == []
     assert rec["confidence"] != "high"
 

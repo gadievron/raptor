@@ -1,4 +1,4 @@
-"""The authority boundary between supplied predicates and source semantics."""
+"""Authority bounds for diagnostic SMT and source-pattern observations."""
 
 _PREDICATE_ONLY_RULES = frozenset({
     "validate-path", "path-feasible", "path_feasibility", "path-feasibility",
@@ -29,6 +29,12 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
 _DIAGNOSTIC_ORACLE_SCOPES = {
     "check-lock-discipline": "lexical-lock-discipline",
     "check-integer-narrowing": "type-width-only",
+    "check-auth-bypass": "source-pattern",
+    "check-resource-leak": "source-pattern",
+    "check-null-propagation": "source-pattern",
+    "check-early-release": "source-pattern",
+    "check-lock-domain": "source-pattern",
+    "check-toctou": "source-pattern",
 }
 
 
