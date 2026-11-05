@@ -225,7 +225,7 @@ def test_dataflow_rejected_paths_do_not_drop_the_finding(tmp_path):
     assert finding['dataflow_path'] is None
 
 
-def test_dataflow_invalid_artifact_index_remains_unlocated_without_borrowing_a_file(tmp_path):
+def test_invalid_artifact_index_omits_path_without_borrowing_a_file(tmp_path):
     import json
     from core.sarif.parser import parse_sarif_findings
 
@@ -238,9 +238,13 @@ def test_dataflow_invalid_artifact_index_remains_unlocated_without_borrowing_a_f
         'artifacts': [{'location': {'uri': 'not-the-source.c'}}],
         'results': [{'ruleId': 'flow', 'codeFlows': _flows(source, sink)}],
     }]}))
-    path = parse_sarif_findings(report)[0]['dataflow_path']
-    assert path['source']['file'] == ''
-    assert path['sink']['file'] == 'explicit.c'
+    finding = parse_sarif_findings(report)[0]
+    assert finding['dataflow_path'] is None
+    assert finding['has_dataflow'] is False
+    # The valid explicit sink URI still wins over its invalid index; only
+    # the unresolved source reference invalidates this path.
+    from core.sarif.parser import ArtifactUriResolver
+    assert ArtifactUriResolver({}).resolve(sink['location']['physicalLocation']['artifactLocation']) == 'explicit.c'
 
 
 @pytest.mark.parametrize('malformed_threads', ['x' * 1000, [None] * 1000],

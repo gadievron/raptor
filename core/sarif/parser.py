@@ -13,7 +13,7 @@ import re
 import stat as stat_mod
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from urllib.parse import unquote, urlsplit, quote
+from urllib.parse import unquote, urljoin, urlsplit, urlunsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
 from core.detectors.compiler_paths import PathBudget, PATH_KIND, attach_paths
@@ -179,7 +179,7 @@ def _path_from_locations(
             return None
         location = loc_wrapper.get("location", {})
         physical_loc = location.get("physicalLocation") or {}
-        artifact = physical_loc.get("artifactLocation") or {}
+        artifact = physical_loc.get("artifactLocation", {})
         region = physical_loc.get("region") or {}
         # Untrusted scanner-supplied text — escape control / format
         # bytes before surfacing into the operator-facing dataflow
@@ -1292,12 +1292,97 @@ def logical_location_function(location: Any, logical_locations: Any = None) -> s
     return None
 
 
-class ArtifactUriResolver:
-    """Resolve explicit and indexed artifact URIs using one run's tables.
+# URI expansion must stay useful for local source files, not amplify a short
+# artifact table into unbounded strings. 64 KiB exceeds ordinary native paths
+# (including percent-encoded POSIX paths). Memo admission is separately smaller.
+_MAX_RESOLVED_URI_CHARS = 64 * 1024
+_URI_CACHE_ENTRIES = 256
+_URI_CACHE_VALUE_CHARS = 4096
+_URI_CACHE_KEY_CHARS = 1024
 
-    Keep the existing 16-base depth bound and no index-chain traversal.
-    Cache indexed locations, including misses, without retaining result
-    payloads. Filesystem containment remains the caller's responsibility.
+
+def _normalize_artifact_uri(uri: str) -> str | None:
+    """Canonicalize local file authorities without decoding path bytes."""
+    if (len(uri) > _MAX_RESOLVED_URI_CHARS or uri.startswith(" ")
+            or any(ord(char) < 32 or ord(char) == 127 for char in uri)):
+        return None
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return None
+    if parts.scheme == "file" and parts.netloc.lower() in ("", "localhost"):
+        return urlunsplit(parts._replace(netloc=""))
+    return uri
+
+
+def _join_artifact_uri(base: str, relative: str) -> str | None:
+    """Join complete URI bases; preserve unresolved relative prefixes literally."""
+    try:
+        parts = urlsplit(base)
+        if relative.startswith("//"):
+            size = (len(parts.scheme) + 1 if parts.scheme else 0) + len(relative)
+        elif relative.startswith("/"):
+            size = len(urlunsplit(parts._replace(path="", query="", fragment=""))) + len(relative)
+        else:
+            size = len(base) + len(relative)
+        if size > _MAX_RESOLVED_URI_CHARS:
+            return None
+        if parts.scheme:
+            joined = urljoin(base, relative)
+            # urllib does not resolve arbitrary schemes. Never lose an
+            # absolute non-file origin and reinterpret the child as local.
+            if not urlsplit(joined).scheme:
+                return None
+        elif parts.netloc:
+            # Supply a scheme for authority/path joining, then retain the
+            # original network-relative form instead of inventing a protocol.
+            network = urljoin("file:" + base, relative)
+            joined = urlunsplit(urlsplit(network)._replace(scheme=""))
+        else:
+            # A redacted/missing root is conventionally supplied by the target
+            # directory. urljoin would erase leading '..' from relative bases.
+            joined = relative if relative.startswith("/") else base + relative
+    except ValueError:
+        return None
+    return _normalize_artifact_uri(joined)
+
+
+def sarif_uri_path(uri: Any) -> str | None:
+    """Interpret a local SARIF file reference without stripping remote authority.
+
+    Percent decoding and target-root containment remain boundary-specific;
+    this helper never fetches anything or treats a remote origin as a filename.
+    """
+    if not isinstance(uri, str):
+        return None
+    uri = _normalize_artifact_uri(uri)
+    if uri is None:
+        return None
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return None
+    if parts.netloc or (parts.scheme and parts.scheme != "file"):
+        return None
+    from core.paths import strip_file_uri
+    return strip_file_uri(uri)
+
+
+def sarif_flow_uri(artifact: Any, resolved_uri: str | None) -> str | None:
+    """Blank files are for unspecified locations, not failed explicit references."""
+    if not isinstance(artifact, dict):
+        return None
+    if resolved_uri is None and not any(key in artifact for key in ("uri", "index", "uriBaseId")):
+        return ""
+    return resolved_uri
+
+
+class ArtifactUriResolver:
+    """Run-owned URI resolution with bounded artifact and base memoization.
+
+    Only metadata is retained, never result payloads. Filesystem containment
+    remains the caller's responsibility. Missing/redacted roots retain relative
+    hints; cyclic, over-deep or oversized expansions do not invent local paths.
     """
 
     def __init__(self, run: dict[str, Any]):
@@ -1305,46 +1390,83 @@ class ArtifactUriResolver:
         artifacts = run.get("artifacts")
         self._artifacts = artifacts if isinstance(artifacts, list) else []
         self._artifact_uris: dict[int, str | None] = {}
+        self._base_uris: dict[str, str | None] = {}
+
+    @staticmethod
+    def _remember(cache, key, uri):
+        if len(cache) < _URI_CACHE_ENTRIES and (uri is None or len(uri) <= _URI_CACHE_VALUE_CHARS):
+            cache[key] = uri
+
+    def _base_uri(self, base_id: str) -> str | None:
+        memoize = len(base_id) <= _URI_CACHE_KEY_CHARS
+        if memoize and base_id in self._base_uris:
+            return self._base_uris[base_id]
+        seen: set[str] = set()
+        chain: list[str] = []
+        current = base_id
+        resolved: str | None = ""
+        for _ in range(16):
+            if current in seen:
+                resolved = None
+                break
+            seen.add(current)
+            base = _as_dict(self._uri_bases.get(current))
+            uri = base.get("uri")
+            if not isinstance(uri, str):
+                break  # Missing/redacted roots keep the established relative hint.
+            uri = _normalize_artifact_uri(uri)
+            if uri is None:
+                resolved = None
+                break
+            try:
+                parts = urlsplit(uri)
+                # Keep an empty relative base empty; it is not filesystem '/'.
+                path = parts.path + "/" if parts.path and not parts.path.endswith("/") else parts.path
+                directory = urlunsplit(parts._replace(path=path, query="", fragment=""))
+            except ValueError:
+                resolved = None
+                break
+            if parts.scheme:
+                resolved = directory
+                break  # Absolute bases never inherit another parent.
+            chain.append(directory)
+            parent = base.get("uriBaseId")
+            if not isinstance(parent, str):
+                break
+            current = parent
+        else:
+            resolved = None
+        for directory in reversed(chain):
+            if resolved is None:
+                break
+            resolved = _join_artifact_uri(resolved, directory)
+        # Cache only this requested root: intermediate failures at the depth
+        # limit need not be failures when requested with their own full budget.
+        if memoize:
+            self._remember(self._base_uris, base_id, resolved)
+        return resolved
 
     def resolve(self, artifact: dict[str, Any]) -> str | None:
         """Prefer explicit URIs; otherwise look up an exact integer index."""
         art = _as_dict(artifact)
-        uri_bases, artifacts, artifact_uris = self._uri_bases, self._artifacts, self._artifact_uris
         uri = art.get("uri")
         index = None
         if not isinstance(uri, str):
             index = art.get("index")
-            if type(index) is not int or not 0 <= index < len(artifacts):
+            if type(index) is not int or not 0 <= index < len(self._artifacts):
                 return None
-            if index in artifact_uris:
-                return artifact_uris[index]
-            artifact_uris[index] = None
-            art = _as_dict(_as_dict(artifacts[index]).get("location"))
+            if index in self._artifact_uris:
+                return self._artifact_uris[index]
+            art = _as_dict(_as_dict(self._artifacts[index]).get("location"))
             uri = art.get("uri")
-            if not isinstance(uri, str):
-                return None
-        base_id = art.get("uriBaseId")
-        seen: set[str] = set()
-        depth = 0
-        while isinstance(base_id, str) and base_id not in seen and depth < 16:
-            seen.add(base_id)
-            depth += 1
-            base = uri_bases.get(base_id)
-            if not isinstance(base, dict):
-                break
-            base_uri = base.get("uri")
-            if not isinstance(base_uri, str):
-                break
-            # SARIF spec: base URIs end in '/'. Tolerate missing
-            # separator without doubling.
-            if not base_uri.endswith("/"):
-                base_uri = base_uri + "/"
-            # Don't double-slash if the inner URI happens to be
-            # absolute on its own.
-            uri = base_uri + uri.lstrip("/")
-            base_id = base.get("uriBaseId")
+        uri = _normalize_artifact_uri(uri) if isinstance(uri, str) else None
+        if uri is not None and not urlsplit(uri).scheme:
+            base_id = art.get("uriBaseId")
+            if isinstance(base_id, str):
+                base = self._base_uri(base_id)
+                uri = _join_artifact_uri(base, uri) if base is not None else None
         if index is not None:
-            artifact_uris[index] = uri
+            self._remember(self._artifact_uris, index, uri)
         return uri
 
 
@@ -1366,7 +1488,9 @@ def _uri_escapes_root(uri: str, source_root: Path) -> bool:
     # under the root to survive).
     try:
         parts = urlsplit(uri)
-        if parts.scheme and (parts.scheme != "file" or parts.netloc not in ("", "localhost")):
+        if (parts.netloc and (parts.scheme != "file" or parts.netloc.lower() != "localhost")) or (
+            parts.scheme and parts.scheme != "file"
+        ):
             return True
         clean = unquote(parts.path if parts.scheme == "file" else uri)
         root = source_root.resolve()
@@ -1433,15 +1557,14 @@ def parse_sarif_findings(
 
         def _resolve_flow_uri(artifact: dict[str, Any]) -> str | None:
             nonlocal flow_root_warning_reported
-            uri = uri_resolver.resolve(artifact)
+            uri = sarif_flow_uri(artifact, uri_resolver.resolve(artifact))
             if uri and source_root is not None and _uri_escapes_root(uri, source_root):
                 if not flow_root_warning_reported:
                     logger.warning("SARIF parser: skipping dataflow paths with out-of-root URIs; first: %s",
                                    escape_nonprintable(uri)[:1024])
                     flow_root_warning_reported = True
                 return None
-            # Preserve the existing blank-file shape for unavailable locations.
-            return uri or ""
+            return uri
 
         for result in results:
             if not isinstance(result, dict):

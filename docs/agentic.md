@@ -69,6 +69,11 @@ scan  →  dedup  →  prep  →  analyse (per finding)
    TUs.
    External SARIF can be imported with `--sarif` instead of scanning
    (repeatable; add `--also-scan` to merge with a fresh scan).
+   URI bases resolve relative report locations before source-path rebasing.
+   An absolute URI is not prefixed with another base, and
+   `file://localhost/...` is treated as local. If an explicit dataflow hop
+   cannot be resolved, that path is omitted
+   while the finding and usable alternative paths remain available.
    `--openant` adds the [OpenAnt](commands.md#openant) LLM semantic scan
    as a further channel alongside the pattern scanners.  `--openant-only`
    replaces Semgrep/CodeQL entirely with OpenAnt (combining it with
