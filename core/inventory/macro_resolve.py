@@ -111,6 +111,10 @@ def _iter_macro_definitions(text: str) -> Iterator[re.Match[str]]:
     return _MACRO_DEF_RE.finditer(text)
 
 
+_ENUM_SPARSE_MIN_SOURCE = 16 * 1024
+_ENUM_SPARSE_MIN_CHARS_PER_KEYWORD = 512
+
+
 def _iter_enum_bodies(text: str):
     """Yield ``(block_start, body)`` per enum block, matching the old
     single-regex semantics (body = shortest non-empty run to the next
@@ -120,11 +124,23 @@ def _iter_enum_bodies(text: str):
     # still use the original bounded parser. Preserve subclass behavior.
     if type(text) is str and "enum" not in text:
         return
+    sparse = (type(text) is str and len(text) >= _ENUM_SPARSE_MIN_SOURCE
+              and text.count("enum") <= len(text) // _ENUM_SPARSE_MIN_CHARS_PER_KEYWORD)
     pos = 0
     while True:
-        head = _ENUM_HEAD_RE.search(text, pos)
-        if head is None:
-            return
+        if sparse:
+            while True:
+                candidate = text.find("enum", pos)
+                if candidate < 0:
+                    return
+                head = _ENUM_HEAD_RE.match(text, candidate)
+                if head is not None:
+                    break
+                pos = candidate + 1
+        else:
+            head = _ENUM_HEAD_RE.search(text, pos)
+            if head is None:
+                return
         close = text.find("}", head.end())
         if close == -1:
             return  # no closing brace anywhere: nothing can match
