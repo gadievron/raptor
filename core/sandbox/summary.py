@@ -1080,7 +1080,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     # New (.audit/) location preferred; legacy <run_dir>/ location
     # kept as a read fallback for runs produced by older versions.
     jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
-    if not jsonl.exists():
+    if not (jsonl.exists() or jsonl.is_symlink()):
         # Parent-memory floor refusals must survive a target that
         # DELETED the evidence file outright (the empty-file and
         # edited-file shapes are re-asserted below; whole-file
