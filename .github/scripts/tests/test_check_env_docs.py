@@ -463,3 +463,40 @@ def test_module_facts_are_collected_once_and_declaration_order_is_preserved(
         ('core/a.py', 4, 'read'),
     ]
     assert 'RAPTOR_OTHER' in inventory.vars
+
+
+@pytest.mark.parametrize("identifier", [
+    "MODE_ENV", "_ENV_MODE", "prefix_ENV_MODE", "ＭＯＤＥ_ＥＮＶ",
+])
+def test_cross_file_env_constants_survive_deferred_parsing(det, tmp_path, identifier):
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKC", identifier)
+    root = _tree(tmp_path, {
+        "core/defs.py": f"{identifier} = 'RAPTOR_DEFERRED'\n",
+        "core/consumer.py": (
+            f"import os\nfrom core.defs import {normalized}\n"
+            f"value = os.getenv({normalized})\n"
+        ),
+    })
+    inventory = det.scan_tree(root)
+    assert any(occ.file == "core/consumer.py" and occ.kind == "read"
+               for occ in inventory.vars["RAPTOR_DEFERRED"])
+
+
+def test_deferred_scan_uses_the_original_source_snapshot(det, tmp_path, monkeypatch):
+    root = _tree(tmp_path, {
+        "core/consumer.py": 'import os\nvalue = os.getenv("RAPTOR_SNAPSHOT")\n',
+        "core/last.py": "value = 0\n",
+    })
+    consumer = root / "core/consumer.py"
+
+    def changing_tree(_root):
+        yield consumer
+        consumer.write_text('import os\nvalue = os.getenv("RAPTOR_CHANGED")\n')
+        yield root / "core/last.py"
+
+    monkeypatch.setattr(det, "_iter_files", changing_tree)
+    inventory = det.scan_tree(root)
+    assert _kinds(inventory, "RAPTOR_SNAPSHOT") == ["read"]
+    assert "RAPTOR_CHANGED" not in inventory.vars

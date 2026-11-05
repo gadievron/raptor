@@ -96,6 +96,7 @@ import ast
 import json
 import re
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
@@ -702,7 +703,11 @@ _ENVISH_CONST = re.compile(r"(^_?[A-Z][A-Z0-9_]*_ENV$|_ENV_[A-Z0-9_]+$)")
 
 def scan_tree(root: Path) -> Inventory:
     inv = Inventory()
-    py: list[tuple[str, ast.Module, _ModuleFacts]] = []
+    # Cross-file resolution needs only *_ENV / _ENV_* declarations up front.
+    # Keep ASTs for their possible owners; defer parsing other source snapshots
+    # until their scan. Retaining the entire parsed tree costs several GiB and
+    # makes allocation/GC more expensive. Every file is still parsed once.
+    py: list[tuple[str, str | ast.Module, _ModuleFacts | None]] = []
     for p in _iter_files(root):
         rel = p.relative_to(root).as_posix()
         if p.suffix == ".py":
@@ -714,19 +719,27 @@ def scan_tree(root: Path) -> Inventory:
         else:
             continue
         if kind == "python":
-            try:
-                tree = ast.parse(p.read_text(encoding="utf-8",
-                                             errors="replace"))
-            except SyntaxError:
-                continue
-            py.append((rel, tree, _collect_module_facts(tree)))
+            source = p.read_text(encoding="utf-8", errors="replace")
+            parsed: str | ast.Module = source
+            facts = None
+            # Python normalizes identifiers to NFKC. Normalize only this
+            # conservative prefilter, never the source passed to the parser.
+            if "_ENV" in unicodedata.normalize("NFKC", source):
+                try:
+                    parsed = ast.parse(source)
+                except SyntaxError:
+                    continue
+                facts = _collect_module_facts(parsed)
+            py.append((rel, parsed, facts))
         elif kind == "bash":
             _scan_bash(p, rel, inv)
     # Tree-wide map of env-name constants (FOO_ENV = "RAPTOR_FOO",
     # _ENV_MODE = ...) so a key imported from a sibling module still
     # resolves. Conflicts poison the entry (kept unresolvable).
     global_consts: dict[str, str | None] = {}
-    for _rel, _tree, facts in py:
+    for _rel, _source, facts in py:
+        if facts is None:
+            continue
         for name, value in facts[3].items():
             if not _ENVISH_CONST.search(name):
                 continue
@@ -737,7 +750,11 @@ def scan_tree(root: Path) -> Inventory:
     global_consts = {
         k: v for k, v in global_consts.items() if v is not None
     }
-    for rel, tree, facts in py:
+    for rel, parsed, facts in py:
+        try:
+            tree = ast.parse(parsed) if isinstance(parsed, str) else parsed
+        except SyntaxError:
+            continue
         scanner = _PyScanner(rel, inv, tree, global_consts, module_facts=facts)
         scanner.visit(tree)
         # Env-name constants count as a read even when the actual
