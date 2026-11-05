@@ -512,8 +512,10 @@ different indexed rules at the same location remain separate findings.
 When combining findings for analysis, evidence from different tools and
 validated rule namespaces remains separate. If they reuse a finding ID,
 only the colliding IDs are qualified; `source_finding_id` retains the original
-for correlation. Rule provenance uses component and descriptor identities,
-so moving rules within their tables does not change it. Ordinary IDs remain
+for correlation. A tool reusing one ID across different files, line spans or
+rules also receives distinct analysis IDs, preventing artifact overwrites.
+Rule provenance uses component and descriptor identities, so moving rules
+within their tables does not change it. Ordinary IDs remain
 unchanged.
 
 Per-rule scan counts use these same recovered IDs; unresolved IDs are counted as `unknown`.
