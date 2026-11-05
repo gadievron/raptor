@@ -13,15 +13,13 @@ from __future__ import annotations
 
 import importlib
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
+from core.sandbox import calibrated_hosts
 
-from core.sandbox import calibrated_hosts  # noqa: E402
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class _Site:
@@ -73,15 +71,18 @@ def _isolated(monkeypatch, tmp_path):
     for key in _cc._PROVIDER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     # Point every site's override path into an empty tmp dir and
-    # reset the shared calibrate memo around each test.
+    # isolate the shared calibrate memo for each test.
     for site in _sites():
         monkeypatch.setattr(
             site.module, "_OVERRIDE_CONFIG_PATH",
             tmp_path / f"{site.override_key}-{site.module.__name__.split('.')[-1]}.json",
         )
-    calibrated_hosts.reset_cache_for_tests()
-    yield
-    calibrated_hosts.reset_cache_for_tests()
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        calibrated_hosts, {"_CACHE": {}}, lock=calibrated_hosts._CACHE_LOCK,
+    ):
+        yield
 
 
 def _configure_calibration(monkeypatch, site, profile):

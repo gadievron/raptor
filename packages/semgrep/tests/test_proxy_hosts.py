@@ -29,10 +29,17 @@ def _has_host(hosts: list, name: str) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
-    mod._reset_calibrate_cache_for_tests()
-    yield
-    mod._reset_calibrate_cache_for_tests()
+def _reset_cache(tmp_path, monkeypatch):
+    """Own the override path and calibration memo without clearing caller state."""
+    from core.sandbox import calibrated_hosts
+    from core.testing.module_state import isolated_module_state
+
+    monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH",
+                        tmp_path / "proxy-hosts.json")
+    with isolated_module_state(
+        calibrated_hosts, {"_CACHE": {}}, lock=calibrated_hosts._CACHE_LOCK,
+    ):
+        yield
 
 
 @pytest.fixture

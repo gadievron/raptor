@@ -22,17 +22,18 @@ import pytest
 from packages.sca.parsers.gradle_version_catalog import (
     CatalogLibrary,
     CatalogPlugin,
-    _reset_cache_for_tests,
     find_default_catalog,
     parse_libs_versions_toml,
 )
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
-    _reset_cache_for_tests()
-    yield
-    _reset_cache_for_tests()
+def _reset_cache(monkeypatch):
+    """Parse into a private cache and restore the caller's warm cache."""
+    from importlib import import_module
+
+    parser = import_module("packages.sca.parsers.gradle_version_catalog")
+    monkeypatch.setattr(parser, "_PARSE_CACHE", {})
 
 
 # ---------------------------------------------------------------------------

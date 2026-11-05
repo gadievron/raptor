@@ -19,12 +19,17 @@ from packages.sca.resolvers import _proxy_hosts
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
-    """Each test starts with an empty per-process memo so ordering
-    doesn't matter."""
-    _proxy_hosts._reset_calibrate_cache_for_tests()
-    yield
-    _proxy_hosts._reset_calibrate_cache_for_tests()
+def _reset_cache(tmp_path, monkeypatch):
+    """Own the override path and calibration memo without clearing caller state."""
+    from core.sandbox import calibrated_hosts
+    from core.testing.module_state import isolated_module_state
+
+    monkeypatch.setattr(_proxy_hosts, "_OVERRIDE_CONFIG_PATH",
+                        tmp_path / "proxy-hosts.json")
+    with isolated_module_state(
+        calibrated_hosts, {"_CACHE": {}}, lock=calibrated_hosts._CACHE_LOCK,
+    ):
+        yield
 
 
 @pytest.fixture
