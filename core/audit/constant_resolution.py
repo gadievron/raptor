@@ -275,20 +275,23 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             )
 
         for block_start, body in _iter_enum_bodies(text_joined):
-            if depth_at_line is None:
-                depth_at_line = _conditional_depth_lookup(text)
-            if original_line is None:
-                original_line = _definition_line_lookup(text)
-            block_line = original_line(block_start)
-            block_depth = depth_at_line(block_line)
-            # Enumerator offsets advance: count only the intervening range.
-            enum_line = block_line
+            # Implicit-only or skipped-name blocks emit no definitions.
+            enum_line: int | None = None
+            block_depth = 0
             enum_offset = 0
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
                 ename = ev.group(1).strip()
                 evalue = _parse_enumerator_value(body, ev.end())
                 if ename in _SKIP_IDENTS_C:
                     continue
+                if enum_line is None:
+                    if depth_at_line is None:
+                        depth_at_line = _conditional_depth_lookup(text)
+                    if original_line is None:
+                        original_line = _definition_line_lookup(text)
+                    enum_line = original_line(block_start)
+                    block_depth = depth_at_line(enum_line)
+                # Retain the existing member-line and block-depth models.
                 offset = ev.start()
                 enum_line += body.count("\n", enum_offset, offset)
                 enum_offset = offset
