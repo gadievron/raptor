@@ -215,8 +215,8 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
     """Retain distinct tool evidence and collapse repeated reports.
 
     Identity includes the normalized tool, validated rule scope, location,
-    rule and finding ID. When distinct tool or rule scopes reuse a finding
-    ID, qualify only those colliding IDs so downstream artifact files and
+    rule and finding ID. When distinct retained records reuse a finding ID,
+    qualify only those colliding IDs so downstream artifact files and
     ID-keyed maps remain distinct.
     The original ID is retained as source_finding_id. Input rows are not
     mutated; ordinary IDs and legacy same-tool deduplication are unchanged.
@@ -234,16 +234,13 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
             scopes[key] = dumps_canonical([tool, origin]) if origin else tool
         return scopes[key]
 
-    owners: dict[str, str] = {}
+    owners: dict[str, tuple] = {}
     collisions: set[str] = set()
     seen: set[tuple] = set()
     unique: list[dict[str, Any]] = []
     for finding in findings:
         scope = finding_scope(finding)
         fid = finding.get("finding_id")
-        if isinstance(fid, str) and fid:
-            if owners.setdefault(fid, scope) != scope:
-                collisions.add(fid)
         fp = (
             scope,
             finding.get("file"),
@@ -252,25 +249,41 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
             finding.get("rule_id"),
             fid,
         )
+        if isinstance(fid, str) and fid:
+            if owners.setdefault(fid, fp) != fp:
+                collisions.add(fid)
         if fp not in seen:
             seen.add(fp)
             unique.append(finding)
 
     if not collisions:
         return unique
-    sources = {(finding["finding_id"], finding_scope(finding)) for finding in unique
+
+    def source_key(finding):
+        return (finding["finding_id"], finding_scope(finding), finding.get("file"),
+                finding.get("startLine"), finding.get("endLine"), finding.get("rule_id"))
+
+    sources = {source_key(finding) for finding in unique
                if isinstance(finding.get("finding_id"), str)
                and finding["finding_id"] in collisions}
-    qualified: dict[tuple[str, str], str] = {}
+    scope_counts: dict[tuple, int] = {}
+    for source in sources:
+        scope_counts[source[:2]] = scope_counts.get(source[:2], 0) + 1
+    qualified: dict[tuple, str] = {}
     reserved = set(owners)
     # Deterministic order also makes collision avoidance independent of
     # report ordering. Reserve original IDs, not just generated ones.
-    for fid, scope in sorted(sources):
+    for source in sorted(sources, key=lambda value: (value[0], value[1], dumps_canonical(value[2:]))):
+        fid, scope = source[:2]
+        # Keep existing cross-scope IDs byte-for-byte. Add location/rule
+        # material only when a single scope itself reuses the source ID.
+        if scope_counts[source[:2]] > 1:
+            scope = dumps_canonical([scope, *source[2:]])
         for salt in range(len(reserved) + 1):
             payload = dumps_canonical(["raptor:tool-finding-id:v1", fid, scope, salt])
             candidate = hashlib.sha256(payload.encode("ascii")).hexdigest()
             if candidate not in reserved:
-                qualified[(fid, scope)] = candidate
+                qualified[source] = candidate
                 reserved.add(candidate)
                 break
         else:
@@ -281,7 +294,7 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
             source_id = finding.get("source_finding_id")
             if not isinstance(source_id, str) or not source_id:
                 source_id = fid
-            unique[index] = dict(finding, finding_id=qualified[(fid, finding_scope(finding))],
+            unique[index] = dict(finding, finding_id=qualified[source_key(finding)],
                                  source_finding_id=source_id)
     return unique
 

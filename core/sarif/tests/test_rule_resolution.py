@@ -645,3 +645,79 @@ def test_anonymous_duplicate_descriptors_keep_distinct_inherited_evidence(tmp_pa
     retained = deduplicate_findings(parse_sarif_findings(path))
     assert len(retained) == len({finding['finding_id'] for finding in retained}) == 2
     assert len({(finding['cwe_id'], finding['level']) for finding in retained}) == 2
+
+
+@pytest.mark.parametrize('change', [
+    {'file': 'b.c'}, {'startLine': 2}, {'endLine': 3}, {'rule_id': 'other'},
+    {'file': None}, {'endLine': None},
+])
+def test_reused_id_cannot_overwrite_distinct_retained_locations(change):
+    import copy
+    from core.sarif.parser import deduplicate_findings
+
+    first = dict(tool='Semgrep', file='a.c', startLine=1, endLine=1,
+                 rule_id='rule', finding_id='reused')
+    second = dict(first, **change)
+    rows = [first, second, dict(first), dict(second)]
+    original = copy.deepcopy(rows)
+    retained = deduplicate_findings(rows)
+    assert len(retained) == len({row['finding_id']: row for row in retained}) == 2
+    assert {row['source_finding_id'] for row in retained} == {'reused'}
+    assert rows == original
+    assert deduplicate_findings(retained) == retained
+    fields = ('file', 'startLine', 'endLine', 'rule_id')
+    assert {tuple(row.get(field) for field in fields): row['finding_id']
+            for row in deduplicate_findings(list(reversed(rows)))} == {
+                tuple(row.get(field) for field in fields): row['finding_id'] for row in retained
+            }
+
+
+def test_indexed_files_with_one_tool_fingerprint_keep_distinct_artifact_ids(tmp_path):
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    rows = [{'ruleId': 'rule', 'fingerprints': {'matchBasedId/v1': 'shared'},
+             'message': {'text': 'finding'}, 'locations': [{'physicalLocation': {
+                 'artifactLocation': {'index': index}, 'region': {'startLine': 1},
+             }}]} for index in range(2)]
+    path = tmp_path / 'reused-indexed-fingerprint.sarif'
+    path.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'Semgrep'}},
+        'artifacts': [{'location': {'uri': file}} for file in ['left.c', 'right.c']],
+        'results': rows}]}))
+    parsed = parse_sarif_findings(path)
+    assert [row['finding_id'] for row in parsed] == ['shared', 'shared']
+    retained = deduplicate_findings(parsed)
+    assert len({row['finding_id']: row for row in retained}) == 2
+    assert {row['file'] for row in retained} == {'left.c', 'right.c'}
+
+
+def test_existing_cross_tool_qualified_ids_keep_their_byte_contract():
+    from core.sarif.parser import deduplicate_findings
+
+    rows = [dict(file='a.c', startLine=1, endLine=1, rule_id='shared',
+                 finding_id='shared', tool=tool) for tool in ['Semgrep', 'CodeQL']]
+    # Captured from the previous implementation before adding location
+    # disambiguation; existing cross-tool artifact names must not drift.
+    assert {row['tool']: row['finding_id'] for row in deduplicate_findings(rows)} == {
+        'Semgrep': 'f14510e0548bdfd624999bb8ab5078c3a683a53042b317c5d688d9a08603e92f',
+        'CodeQL': 'c75351778d4daf94ef68d11e40f5a590c0451e3dd5b343a89377ee24982ba773',
+    }
+
+
+def test_location_qualified_ids_avoid_existing_ids_and_keep_original_provenance():
+    import copy
+    from core.sarif.parser import deduplicate_findings
+
+    rows = [dict(tool='Semgrep', file=file, startLine=1, endLine=1, rule_id='rule',
+                 finding_id='reused', source_finding_id='original-upstream') for file in ['a.c', 'b.c']]
+    initial = deduplicate_findings(rows)
+    existing = dict(rows[0], file='existing.c', finding_id=initial[0]['finding_id'])
+    original = copy.deepcopy([*rows, existing])
+    retained = deduplicate_findings([*rows, existing])
+    assert len(retained) == len({row['finding_id'] for row in retained}) == 3
+    assert retained[-1] is existing
+    assert {row['source_finding_id'] for row in retained[:2]} == {'original-upstream'}
+    assert [*rows, existing] == original
+    assert {row['file']: row['finding_id'] for row in retained} == {
+        row['file']: row['finding_id'] for row in deduplicate_findings(list(reversed([*rows, existing])))
+    }
