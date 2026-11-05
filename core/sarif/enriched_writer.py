@@ -145,7 +145,7 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
 
     rule_id = finding.get("rule_id") or "unknown"
     message = finding.get("message") or ""
-    level = finding.get("level") or "warning"
+    level = finding.get("level") or finding.get("severity") or "warning"
     if level not in _VALID_LEVELS:
         level = "warning"
 

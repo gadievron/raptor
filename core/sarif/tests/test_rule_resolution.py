@@ -1130,3 +1130,37 @@ def test_artifact_resolver_caches_hits_and_misses_without_retaining_results():
         assert resolver.resolve({'index': 0}) == 'src/source.c'
         assert resolver.resolve({'index': 1}) is None
     assert table.reads == 2
+
+
+def test_resolved_rule_metadata_is_cached_with_the_run(monkeypatch, run):
+    import core.sarif.parser as parser
+
+    descriptor = run['tool']['extensions'][0]['rules'][0]
+    descriptor['properties'] = {'cwe': ['CWE-89']}
+    descriptor['defaultConfiguration'] = {'level': 'error'}
+    original = parser._extract_cwe_from_rule
+    reads = []
+
+    def extract(rule):
+        reads.append(1)
+        return original(rule)
+
+    monkeypatch.setattr(parser, '_extract_cwe_from_rule', extract)
+    resolver = parser.ResultRuleResolver(run)
+    reference = {'rule': {'index': 0, 'toolComponent': {'index': 0}}}
+    metadata = resolver.metadata(resolver.resolve(reference))
+    for _ in range(10):
+        assert resolver.metadata(resolver.resolve(reference)) == metadata
+    assert metadata[:2] == ('CWE-89', 'error')
+    assert metadata[2] is not None
+    assert len(reads) == 1
+
+
+@pytest.mark.parametrize('relationships', [None, True, 4, 'invalid', {'invalid': True}],
+                         ids=['null', 'bool', 'integer', 'string', 'object'])
+def test_malformed_relationship_arrays_do_not_break_rule_metadata(relationships):
+    from core.sarif.parser import ResultRuleResolver
+
+    rule = {'id': 'rule', 'relationships': relationships}
+    resolver = ResultRuleResolver({'tool': {'driver': {'rules': [rule]}}})
+    assert resolver.metadata(resolver.resolve({'ruleId': 'rule'})) == (None, None, None)

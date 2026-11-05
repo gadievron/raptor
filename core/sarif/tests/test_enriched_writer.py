@@ -652,3 +652,13 @@ def test_catalog_prepass_does_not_consume_one_shot_finding_iterators(tmp_path):
     assert write_enriched_sarif(findings, output, tool_version='test') == 2
     document = json.loads(output.read_text())
     assert [result['ruleId'] for run in document['runs'] for result in run['results']] == ['rule-0', 'rule-1']
+
+
+@pytest.mark.parametrize('level,expected', [(None, 'error'), ('warning', 'warning'), ('none', 'none')],
+                         ids=['validation-severity-alias', 'canonical-level-wins', 'explicit-none-level'])
+def test_enriched_export_uses_validation_severity_without_overriding_level(level, expected):
+    finding = {'rule_id': 'rule', 'severity': 'error'}
+    if level is not None:
+        finding['level'] = level
+    result = build_enriched_sarif([finding], tool_version='test')['runs'][0]['results'][0]
+    assert result['level'] == expected
