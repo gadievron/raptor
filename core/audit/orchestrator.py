@@ -1341,6 +1341,8 @@ class ReviewOutcome:
     clean_basis: str = ""
     semantic_confidence: str = ""
     provenance_all_trusted: bool = False
+    # Legacy names: these fields record prose mentions, not established
+    # defect ownership. They are diagnostic hints with no veto authority.
     caller_attributed: bool = False
     attributed_caller: str = ""
     _propagated: bool = field(default=False, repr=False)
@@ -19852,7 +19854,11 @@ def _apply_caller_attribution(
     outcome: ReviewOutcome,
     callers: list,
 ) -> ReviewOutcome:
-    """Tag findings that describe a bug in a caller, not the reviewed function."""
+    """Annotate caller mentions for diagnostics, without assigning ownership.
+
+    Mentioning a caller in review prose does not establish that the defect
+    belongs to it. Keep the legacy annotation fields informational only.
+    """
     if outcome.status not in ("finding", "suspicious"):
         return outcome
     if not callers:
@@ -19863,14 +19869,16 @@ def _apply_caller_attribution(
         return outcome
 
     for c in callers:
+        if not isinstance(c, dict):
+            continue
         name = c.get("name", "")
-        if not name or len(name) < 3:
+        if not isinstance(name, str) or len(name) < 3:
             continue
         if name.lower() in text:
             outcome.caller_attributed = True
             outcome.attributed_caller = name
             logger.info(
-                "caller attribution: %s:%s references caller %s",
+                "caller mention: %s:%s references caller %s",
                 outcome.file, outcome.function, name,
             )
             break
@@ -24938,9 +24946,10 @@ def _aggregate_ihv_verdicts(
     """Aggregate IHV per-hypothesis verdicts into a final status.
 
     Context validation gates run between tool confirmation and promotion:
-    1. Caller attribution — hypothesis describes a caller's bug
-    2. Guarded-sink veto — Joern says the sink is sanitised
-    3. Refuting counter — LLM identified an architectural blocker
+    1. Guarded-sink veto — Joern says the sink is sanitised
+    2. Refuting counter — LLM identified an architectural blocker
+
+    Caller mentions remain diagnostic hints, not defect-location evidence.
 
     Gates block PROMOTION, not verification — tool evidence is preserved
     for the slow path even when a gate blocks.
@@ -25050,18 +25059,17 @@ def _ihv_context_gate(
     *,
     joern_server=None,
 ) -> str | None:
-    """Run the three IHV context validation gates.
+    """Annotate caller context, then run IHV context validation gates.
 
     Returns a block reason string, or None if promotion is clear.
     """
-    # Gate 1: caller attribution — apply it first (stamps the outcome)
+    # A caller name in prose is context, not proof that a supported claim
+    # belongs elsewhere. Never turn this hint (including inherited flags)
+    # into a veto of the claim selected by the verification receipts.
     callers = (outcome.review_result or {}).get("callers") or []
     if isinstance(callers, list) and callers:
         _apply_caller_attribution(outcome, callers)
-    if getattr(outcome, "caller_attributed", False):
-        return f"caller-attributed:{outcome.attributed_caller}"
-
-    # Gate 2: guarded-sink veto
+    # Gate 1: guarded-sink veto
     if joern_server is not None:
         block = _guard_blocks_promotion(
             outcome.function, joern_server,
@@ -25070,7 +25078,7 @@ def _ihv_context_gate(
         if block:
             return f"guarded-sink:{block}"
 
-    # Gate 3: refuting counter
+    # Gate 2: refuting counter
     if _has_refuting_counter(outcome):
         return "refuting-counter"
 

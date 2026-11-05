@@ -438,7 +438,7 @@ class TestIHVContextGate:
         config = _Config()
         assert _ihv_context_gate(outcome, config) is None
 
-    def test_caller_attribution_blocks(self):
+    def test_caller_annotation_does_not_block(self):
         outcome = ReviewOutcome(
             file="a.c", function="foo", status="suspicious",
             hypothesis="callerFunc passes wrong size",
@@ -447,9 +447,9 @@ class TestIHVContextGate:
         )
         config = _Config()
         reason = _ihv_context_gate(outcome, config)
-        assert reason is not None
-        assert "caller-attributed" in reason
-        assert "callerFunc" in reason
+        assert reason is None
+        assert outcome.caller_attributed
+        assert outcome.attributed_caller == "callerFunc"
 
     def test_short_caller_name_ignored(self):
         outcome = ReviewOutcome(
@@ -505,25 +505,29 @@ class TestIHVContextGate:
 class TestAggregateWithGates:
     """_aggregate_ihv_verdicts respects context gates."""
 
-    def test_gate_blocks_promotion_preserves_evidence(self):
+    def test_gate_blocks_promotion_preserves_evidence(self, monkeypatch):
         outcome = ReviewOutcome(
             file="a.c", function="foo", status="suspicious",
             hypothesis="caller bug", body="the bug is in callerFunc",
             review_result={"callers": [{"name": "callerFunc"}]},
         )
         result = _Result()
+        monkeypatch.setattr(
+            "core.audit.orchestrator._guard_blocks_promotion",
+            lambda *args, **kwargs: "sanitised sink",
+        )
         out = _aggregate_ihv_verdicts(
             outcome, result,
             hypotheses=[{"mechanism": "caller bug", "confidence": "high"}],
             verifications=[ClaimVerification({"mechanism": "caller bug"}, ("semgrep",))],
-            config=_Config(),
+            config=_Config(), joern_server=object(),
         )
         # Gate blocked → status NOT promoted to finding
         assert out.status != "finding"
         # Evidence preserved for slow path
         assert out.review_result["ihv_tools"] == ["semgrep"]
         assert out.review_result["ihv_gate_blocked"] is not None
-        assert "caller-attributed" in out.review_result["ihv_gate_blocked"]
+        assert out.review_result["ihv_gate_blocked"] == "guarded-sink:sanitised sink"
         # NOT stamped immediate_verified — slow path can re-process
         assert "immediate_verified" not in out.review_result
         # Counter NOT incremented
