@@ -206,7 +206,7 @@ expects this checkout mounted at `/workspaces/raptor`. Run in your terminal:
 ```bash
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-docker pull danielcuthbert/raptor:latest
+docker pull docker.io/danielcuthbert/raptor:latest
 docker run -it \
   -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
