@@ -103,6 +103,10 @@ jobs:
     if: needs.scope.outputs.build == 'true' && github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      digest: ${{ steps.publish.outputs.digest }}
+      published_at: ${{ steps.publish.outputs.published_at }}
     steps:
       # Validate the dispatch input BEFORE checkout — an arbitrary
       # ref string must never flow into checkout's `ref:` field
@@ -342,6 +346,7 @@ jobs:
           retention-days: 14
 
       - name: Publish verified image
+        id: publish
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           IMAGE_INPUTS: ${{ needs.scope.outputs.fingerprint }}
@@ -361,4 +366,43 @@ jobs:
           for tag in ${TAGS//,/ }; do
             skopeo copy --preserve-digests --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
               "$source" "docker://${tag}"
+            skopeo inspect --raw --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
+              "docker://${tag}" > "${RUNNER_TEMP}/published-manifest.json"
+            test "sha256:$(sha256sum "${RUNNER_TEMP}/published-manifest.json" | cut -d ' ' -f 1)" = "$exported_digest"
           done
+          echo "digest=$exported_digest" >> "$GITHUB_OUTPUT"
+          echo "published_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+  update-image-docs:
+    needs: [scope, build-push]
+    if: >-
+      github.repository == 'gadievron/raptor' &&
+      needs.build-push.outputs.published == 'true' &&
+      github.event.inputs.tag == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout current documentation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Pin instructions to the published image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED_DIGEST: ${{ needs.build-push.outputs.digest }}
+          PUBLISHED_AT: ${{ needs.build-push.outputs.published_at }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          IMAGE_INPUTS: ${{ needs.scope.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          # Supply credentials only to this process tree, never the checkout config.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          export GIT_TERMINAL_PROMPT=0
+          python3 .github/scripts/update_published_image_docs.py --sync-main

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "image": "danielcuthbert/raptor",
+  "digest": "sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f",
+  "source_commit": "2f07bfff448c40816859993f2d08794c5a889dc2",
+  "image_inputs": "1d579e79723fa019d630091d0f1f646caeb4e6d03dbeaca5d46c8c5a166427e4",
+  "run_id": 41936587218,
+  "run_attempt": 1,
+  "published_at": 1793836631,
+  "run_url": "https://github.com/gadievron/raptor/actions/runs/41936587218"
+}

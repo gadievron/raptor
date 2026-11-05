@@ -201,16 +201,17 @@ see [manual installation](docs/installation.md#option-1-install-manually).
 ### Option 2: Run in a container (recommended)
 
 The image includes analysis, fuzzing, and browser tooling. It is large and
-expects this checkout mounted at `/workspaces/raptor`. Run in your terminal:
+expects this checkout mounted at `/workspaces/raptor`. These commands pin the latest
+published image by digest. Run in your terminal:
 
 ```bash
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-docker pull docker.io/danielcuthbert/raptor:latest
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
 docker run -it \
   -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  danielcuthbert/raptor:latest
+  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
 ```
 
 Replace the target path with your own; omit that mount if you do not need it.
