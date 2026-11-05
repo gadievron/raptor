@@ -65,9 +65,11 @@ def _raptor_logger_propagates():
     """
     raptor = logging.getLogger("raptor")
     orig = raptor.propagate
-    raptor.propagate = True
-    yield
-    raptor.propagate = orig
+    try:
+        raptor.propagate = True
+        yield
+    finally:
+        raptor.propagate = orig
 
 
 @pytest.fixture(autouse=True)

@@ -22,9 +22,11 @@ def _raptor_logger_propagates():
     """
     raptor = logging.getLogger("raptor")
     orig = raptor.propagate
-    raptor.propagate = True
-    yield
-    raptor.propagate = orig
+    try:
+        raptor.propagate = True
+        yield
+    finally:
+        raptor.propagate = orig
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
