@@ -8,6 +8,7 @@ producing findings in the same internal dict shape that
 """
 
 import os
+from collections.abc import Iterable
 import re
 import stat as _stat_mod
 import time
@@ -853,6 +854,44 @@ def _dataflow_to_codeflows(dataflow_path: Any) -> list[dict[str, Any]]:
     return flows
 
 
+def _finding_catalog_conflicts(
+    findings: Iterable[Any], default_tool: str = "external",
+) -> tuple[set[tuple[str, str]], set[tuple[str, str | None, str]]]:
+    """Plan namespace and CWE ownership for normalized and enriched exports.
+
+    Inspect only usable metadata so malformed rows can still be recorded as
+    skips by the enriched writer rather than aborting catalog bookkeeping.
+    """
+    # Split runs only where one readable ID represents different scopes.
+    # Unique IDs can share a catalog even when their namespace fingerprints
+    # differ, avoiding a separate run for every extension rule.
+    first_scopes: dict[tuple[str, str], str | None] = {}
+    conflicting_rules: set[tuple[str, str]] = set()
+    first_cwes: dict[tuple[str, str | None, str], Any] = {}
+    conflicting_cwes: set[tuple[str, str | None, str]] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        tool, rule_id = finding.get("tool"), finding.get("rule_id")
+        tool = tool if isinstance(tool, str) and tool else default_tool
+        rule_id = rule_id if isinstance(rule_id, str) and rule_id else "unknown"
+        key = (tool, rule_id)
+        scope = _scope_fingerprint(finding.get("rule_scope"))
+        if key in first_scopes and first_scopes[key] != scope:
+            conflicting_rules.add(key)
+        else:
+            first_scopes.setdefault(key, scope)
+        cwe_key = (key[0], scope, key[1])
+        value = finding.get("cwe_id")
+        cwe = value if isinstance(value, str) and value else None
+        if cwe_key in first_cwes and first_cwes[cwe_key] != cwe:
+            conflicting_cwes.add(cwe_key)
+        else:
+            first_cwes.setdefault(cwe_key, cwe)
+
+    return conflicting_rules, conflicting_cwes
+
+
 def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert normalized finding dicts back to a valid SARIF 2.1.0 structure.
 
@@ -863,26 +902,7 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     synthesized snippets) so downstream consumers that re-parse from disk
     see the same data the in-memory pipeline does.
     """
-    # Split runs only where one readable ID represents different scopes.
-    # Unique IDs can share a catalog even when their namespace fingerprints
-    # differ, avoiding a separate run for every extension rule.
-    first_scopes: dict[tuple[str, str], str | None] = {}
-    conflicting_rules: set[tuple[str, str]] = set()
-    first_cwes: dict[tuple[str, str | None, str], Any] = {}
-    conflicting_cwes: set[tuple[str, str | None, str]] = set()
-    for finding in findings:
-        key = (finding.get("tool") or "external", finding.get("rule_id") or "unknown")
-        scope = _scope_fingerprint(finding.get("rule_scope"))
-        if key in first_scopes and first_scopes[key] != scope:
-            conflicting_rules.add(key)
-        else:
-            first_scopes.setdefault(key, scope)
-        cwe_key = (key[0], scope, key[1])
-        cwe = finding.get("cwe_id") or None
-        if cwe_key in first_cwes and first_cwes[cwe_key] != cwe:
-            conflicting_cwes.add(cwe_key)
-        else:
-            first_cwes.setdefault(cwe_key, cwe)
+    conflicting_rules, conflicting_cwes = _finding_catalog_conflicts(findings)
 
     runs_by_tool: dict[tuple[str, str | None], list] = {}
     rules_by_tool: dict[tuple[str, str | None], dict[str, dict]] = {}

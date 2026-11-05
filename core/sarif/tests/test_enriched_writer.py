@@ -559,3 +559,96 @@ class TestUntrustedRowShapes:
         ]
         assert len(notes) == 1
         assert "\x1b" not in notes[0]["message"]["text"]
+
+
+def test_enriched_export_preserves_scoped_checks_and_dataflow_on_reimport(tmp_path):
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    flow = {'source': {'file': 'source.c', 'line': 1, 'properties': {'tier': 'resolved_static'}},
+            'sink': {'file': 'sink.c', 'line': 2}, 'steps': [], 'total_steps': 2}
+    findings = [
+        {'tool': 'CodeQL', 'rule_id': 'same', 'rule_scope': scope, 'cwe_id': cwe,
+         'finding_id': 'shared-native-id', 'file': 'sink.c', 'startLine': 2,
+         'function': function, 'has_dataflow': True, 'dataflow_path': flow,
+         'analysis': {'is_true_positive': True}}
+        for scope, cwe, function in [('a' * 64, 'CWE-79', 'handle_a'), ('b' * 64, 'CWE-89', 'handle_b')]
+    ]
+    document = build_enriched_sarif(findings, tool_version='test')
+    results = [result for run in document['runs'] for result in run['results']]
+    assert all(result['properties']['raptor']['verdict'] == 'confirmed' for result in results)
+    report = tmp_path / 'enriched.sarif'
+    report.write_text(json.dumps(document))
+    actual = parse_sarif_findings(report)
+    assert [finding.get('rule_scope') for finding in actual] == ['a' * 64, 'b' * 64]
+    assert [finding['cwe_id'] for finding in actual] == ['CWE-79', 'CWE-89']
+    assert [finding.get('function') for finding in actual] == ['handle_a', 'handle_b']
+    assert all(finding['has_dataflow'] for finding in actual)
+    assert actual[0]['dataflow_path']['source']['properties'] == {'tier': 'resolved_static'}
+    assert len(deduplicate_findings(actual)) == 2
+
+
+def test_enriched_same_rule_keeps_conflicting_and_missing_cwes(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    findings = [{'tool': 'T', 'rule_id': 'same', 'file': 'a.c', 'startLine': number + 1, 'cwe_id': cwe}
+                for number, cwe in enumerate(['CWE-79', 'CWE-89', None])]
+    report = tmp_path / 'classifications.sarif'
+    report.write_text(json.dumps(build_enriched_sarif(findings, tool_version='test')))
+    assert [finding['cwe_id'] for finding in parse_sarif_findings(report)] == ['CWE-79', 'CWE-89', None]
+
+
+@pytest.mark.parametrize('dataflow', [None, [], [{}], {'source': None, 'sink': None, 'steps': []}],
+                         ids=['missing', 'empty-array', 'invalid-raw-flow', 'incomplete-path'])
+def test_enriched_invalid_flow_is_not_advertised_as_exported_evidence(dataflow):
+    finding = {'rule_id': 'rule', 'has_dataflow': True, 'dataflow_path': dataflow}
+    result = build_enriched_sarif([finding], tool_version='test')['runs'][0]['results'][0]
+    assert 'codeFlows' not in result
+    assert 'has_dataflow' not in result['properties']['raptor']
+
+
+def test_enriched_scoped_catalog_stays_compact_and_uses_function_alias(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    findings = [{'rule_id': rule, 'rule_scope': scope, 'function_name': 'handle', 'tool': 'T'}
+                for rule, scope in [('first', 'a' * 64), ('second', 'b' * 64)]]
+    document = build_enriched_sarif(findings, tool_version='test')
+    assert len(document['runs']) == 1
+    report = tmp_path / 'compact.sarif'
+    report.write_text(json.dumps(document))
+    actual = parse_sarif_findings(report)
+    assert [finding['rule_scope'] for finding in actual] == ['a' * 64, 'b' * 64]
+    assert [finding['function'] for finding in actual] == ['handle', 'handle']
+
+
+def test_enriched_catalog_planning_does_not_abort_on_malformed_row_metadata():
+    good = {'tool': 'T', 'rule_id': 'good', 'rule_scope': 'a' * 64, 'cwe_id': 'CWE-79'}
+    poison = {'tool': ['invalid'], 'rule_id': ['invalid'], 'rule_scope': ['invalid'],
+              'cwe_id': {}, 'analysis': 'invalid'}
+    document = build_enriched_sarif([good, poison], tool_version='test')
+    results = [result for run in document['runs'] for result in run['results']]
+    notes = [note for run in document['runs'] for invocation in run['invocations']
+             for note in invocation.get('toolExecutionNotifications', [])]
+    assert len(results) == 1
+    assert results[0]['ruleId'] == 'good'
+    assert len(notes) == 1
+
+
+@pytest.mark.parametrize('with_valid_row', [False, True], ids=['all-skipped', 'partial-export'])
+def test_write_count_matches_emitted_results_after_malformed_row_skips(tmp_path, with_valid_row):
+    findings = [{'rule_id': 'bad', 'analysis': 'invalid'}]
+    if with_valid_row:
+        findings.append({'rule_id': 'good', 'file': 'a.c', 'startLine': 1})
+    output = tmp_path / 'counted.sarif'
+    count = write_enriched_sarif(findings, output, tool_version='test')
+    document = json.loads(output.read_text())
+    actual = sum(len(run['results']) for run in document['runs'])
+    assert count == actual == int(with_valid_row)
+
+
+def test_catalog_prepass_does_not_consume_one_shot_finding_iterators(tmp_path):
+    findings = ({'tool': 'T', 'rule_id': f'rule-{number}', 'file': 'a.c', 'startLine': number + 1}
+                for number in range(2))
+    output = tmp_path / 'iterator.sarif'
+    assert write_enriched_sarif(findings, output, tool_version='test') == 2
+    document = json.loads(output.read_text())
+    assert [result['ruleId'] for run in document['runs'] for result in run['results']] == ['rule-0', 'rule-1']

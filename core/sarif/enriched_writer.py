@@ -10,7 +10,7 @@ Consumers: ``/agentic --sarif-out``, ``/project export --sarif``,
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,8 @@ from typing import Any
 from core.json import save_json
 from core.logging import get_logger
 from core.run.finding_status import read_verdict
-from core.sarif.parser import _coerce_line
+from core.sarif.parser import _coerce_line, _scope_fingerprint, extract_dataflow_path
+from core.sarif.import_normalizer import _dataflow_to_codeflows, _finding_catalog_conflicts
 from core.security.log_sanitisation import escape_nonprintable
 
 logger = get_logger()
@@ -179,6 +180,22 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+    for key in ("function", "function_name"):
+        function = finding.get(key)
+        if isinstance(function, str) and function:
+            result["locations"][0]["logicalLocations"] = [{"kind": "function", "name": function}]
+            break
+    dataflow = finding.get("dataflow_path")
+    flows = _dataflow_to_codeflows(dataflow) if finding.get("has_dataflow") else []
+    # Legacy callers may supply raw SARIF arrays rather than parsed paths.
+    # Their presence alone must not advertise usable source-to-sink evidence.
+    if flows and isinstance(dataflow, list) and extract_dataflow_path(flows) is None:
+        flows = []
+    if flows:
+        result["codeFlows"] = flows
+    else:
+        raptor_props.pop("has_dataflow", None)
+
     # Stamp finding_id back out as the tool fingerprint ONLY when it
     # is a genuine per-finding identity. Legacy findings parsed before
     # the finding_id fix carry the bare rule_id as their finding_id —
@@ -203,7 +220,7 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_enriched_sarif(
-    findings: Sequence[dict[str, Any]],
+    findings: Iterable[dict[str, Any]],
     *,
     tool_name: str = "RAPTOR",
     tool_version: str | None = None,
@@ -211,9 +228,14 @@ def build_enriched_sarif(
     """Build a SARIF 2.1.0 document from analysed findings.
 
     Groups findings by their original tool (``finding["tool"]``),
-    creating one SARIF run per tool. Each result carries
+    splitting conflicting rule namespaces into separate runs. Each result carries
     ``properties.raptor`` with RAPTOR's verdicts.
     """
+    # Planning needs two passes. Preserve support for one-shot iterable
+    # callers without copying ordinary lists/tuples of findings.
+    if not isinstance(findings, Sequence):
+        findings = tuple(findings)
+
     if tool_version is None:
         try:
             from core.config import RaptorConfig
@@ -221,9 +243,10 @@ def build_enriched_sarif(
         except Exception:  # noqa: BLE001
             tool_version = "unknown"
 
-    runs_by_tool: dict[str, list[dict[str, Any]]] = {}
-    rules_by_tool: dict[str, dict[str, dict[str, Any]]] = {}
-    skipped_by_tool: dict[str, list[dict[str, Any]]] = {}
+    conflicting_rules, conflicting_cwes = _finding_catalog_conflicts(findings, tool_name)
+    runs_by_tool: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+    rules_by_tool: dict[tuple[str, str | None], dict[str, dict[str, Any]]] = {}
+    skipped_by_tool: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
 
     for idx, f in enumerate(findings):
         # The tool key must be a usable string BEFORE any dict use —
@@ -233,8 +256,12 @@ def build_enriched_sarif(
         tool = f.get("tool") if isinstance(f, dict) else None
         if not isinstance(tool, str) or not tool:
             tool = tool_name
-        runs_by_tool.setdefault(tool, [])
-        rules_by_tool.setdefault(tool, {})
+        rid = f.get("rule_id") if isinstance(f, dict) else None
+        rid = rid if isinstance(rid, str) and rid else "unknown"
+        scope = _scope_fingerprint(f.get("rule_scope")) if isinstance(f, dict) else None
+        group = (tool, scope if (tool, rid) in conflicting_rules else None)
+        runs_by_tool.setdefault(group, [])
+        rules_by_tool.setdefault(group, {})
 
         # Per-finding degrade: rows come back from run-directory JSON
         # (the sandbox-adjacent surface — producers vary, files are
@@ -260,7 +287,7 @@ def build_enriched_sarif(
             # The notification text carries finding-derived bytes and
             # downstream consumers render notifications to terminals —
             # escape here, same as the log line.
-            skipped_by_tool.setdefault(tool, []).append({
+            skipped_by_tool.setdefault(group, []).append({
                 "level": "error",
                 "message": {"text": (
                     f"finding {idx} ({escape_nonprintable(rid)[:100]}) "
@@ -269,23 +296,25 @@ def build_enriched_sarif(
                 )},
             })
             continue
-        runs_by_tool[tool].append(result)
+        runs_by_tool[group].append(result)
 
-        # Same containment for the rule registry: a non-string
-        # rule_id is junk (and unhashable shapes crashed the dict
-        # membership test); the row itself already exported above.
-        rid = f.get("rule_id")  # type: ignore[assignment]
-        if not isinstance(rid, str) or not rid:
-            rid = "unknown"
-        if rid not in rules_by_tool[tool]:
+        # Keep conflicting classifications on their owning result, while
+        # consistent rows share descriptor metadata without duplication.
+        cwe = f.get("cwe_id")
+        has_cwe = isinstance(cwe, str) and bool(cwe)
+        cwe_conflict = (tool, scope, rid) in conflicting_cwes
+        if has_cwe and cwe_conflict:
+            result["properties"]["cwe"] = [cwe]
+        if rid not in rules_by_tool[group]:
             rule_entry: dict[str, Any] = {"id": rid}
-            cwe = f.get("cwe_id")
-            if isinstance(cwe, str) and cwe:
+            if has_cwe and not cwe_conflict:
                 rule_entry["properties"] = {"cwe": [cwe]}
+            if scope is not None:
+                rule_entry.setdefault("properties", {})["raptor_rule_scope"] = scope
             desc = f.get("message")
             if desc:
                 rule_entry["shortDescription"] = {"text": str(desc)[:200]}
-            rules_by_tool[tool][rid] = rule_entry
+            rules_by_tool[group][rid] = rule_entry
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = []
@@ -300,7 +329,7 @@ def build_enriched_sarif(
         runs.append({
             "tool": {
                 "driver": {
-                    "name": tool_key,
+                    "name": tool_key[0],
                     "version": tool_version,
                     "rules": list(rules_by_tool[tool_key].values()),
                 },
@@ -317,13 +346,13 @@ def build_enriched_sarif(
 
 
 def write_enriched_sarif(
-    findings: Sequence[dict[str, Any]],
+    findings: Iterable[dict[str, Any]],
     output_path: Path,
     *,
     tool_name: str = "RAPTOR",
     tool_version: str | None = None,
 ) -> int:
-    """Write enriched SARIF to *output_path*. Returns finding count."""
+    """Write enriched SARIF to *output_path*. Return the emitted finding count."""
     doc = build_enriched_sarif(
         findings, tool_name=tool_name, tool_version=tool_version,
     )
@@ -332,5 +361,6 @@ def write_enriched_sarif(
     # to a predictable "<name>.sarif.tmp" sibling via open() — a
     # symlink squatted at that path would have been followed silently.
     save_json(output_path, doc)
-    logger.info("Wrote enriched SARIF: %s (%d findings)", output_path, len(findings))
-    return len(findings)
+    count = sum(len(run["results"]) for run in doc["runs"])
+    logger.info("Wrote enriched SARIF: %s (%d findings)", output_path, count)
+    return count
