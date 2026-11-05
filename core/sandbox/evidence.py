@@ -277,12 +277,12 @@ class EvidenceFile:
                     return False
                 if self._needs_resync:
                     data = b"\n" + data
-                try:
-                    written = os.write(self.fd, data)
-                except BaseException:
-                    self._needs_resync = True
-                    raise
-                self._needs_resync = written != len(data)
+                # Set this before I/O: cancellation after a short write
+                # returns must not bypass the recovery-state update.
+                self._needs_resync = True
+                written = os.write(self.fd, data)
+                if written == len(data):
+                    self._needs_resync = False
             if written != len(data):
                 # Do not retry fragments: another appender may have
                 # written a record after this partial write.
