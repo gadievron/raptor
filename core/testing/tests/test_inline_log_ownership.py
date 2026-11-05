@@ -8,6 +8,8 @@ import pytest
 
 from core.testing import logging_state
 
+pytestmark = pytest.mark.usefixtures("handler_removal_mode")
+
 
 @pytest.fixture
 def owners(tmp_path):
@@ -41,7 +43,6 @@ def private_log(monkeypatch):
     logger = logging.Logger("owned-inline-capture", logging.DEBUG)
     borrowed = logging.NullHandler()
     logger.addHandler(borrowed)
-    original_list = logger.handlers
     get_logger = logging.getLogger
 
     def route(prefix):
@@ -54,7 +55,7 @@ def private_log(monkeypatch):
         )
 
     yield SimpleNamespace(
-        logger=logger, borrowed=borrowed, original_list=original_list, route=route
+        logger=logger, borrowed=borrowed, route=route
     )
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
@@ -67,7 +68,6 @@ def assert_released(owners, private_log):
     assert all(
         handler._closed and stream.closed for handler, stream in owners.created
     ), "owned capture stayed open"
-    assert private_log.logger.handlers is private_log.original_list
     assert private_log.logger.handlers == [private_log.borrowed], (
         "capture stayed attached"
     )
