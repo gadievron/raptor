@@ -263,7 +263,8 @@ class ObserveProfile:
         it as unauthenticated observation, not verified evidence.
     capture_incomplete
         True when an accepted audit summary reports append/reader failure or an
-        undrained stream, or parsing loses records to read/format/size errors.
+        undrained stream, or parsing loses records to read, format, size,
+        schema, or attribution errors.
         Independent of budget drops; sticky across merges.
     """
     paths_read: list = field(default_factory=list)
@@ -647,6 +648,7 @@ def parse_observe_log(run_dir, *,
     summary_at_tail = False
     for rec in _iter_records(log_path, profile=profile):
         if not isinstance(rec, dict):
+            profile.capture_incomplete = True
             continue
         # Provenance: when an expected nonce is set, drop records
         # without a matching value. Records the tracer wrote carry
@@ -666,6 +668,7 @@ def parse_observe_log(run_dir, *,
         summary_at_tail = rec.get("type") == "audit_summary"
         if rec.get("parse_ambiguous"):
             summary_at_tail = False
+            profile.capture_incomplete = True
             # Tamper-suspect records (unanchorable PID field — see
             # seatbelt_audit._LOG_LINE_RE) are admitted to the JSONL
             # as EVIDENCE and get the run nonce stamped, so the nonce
@@ -713,9 +716,14 @@ def parse_observe_log(run_dir, *,
         # signal.
         name = rec.get("syscall")
         if not isinstance(name, str) or not name:
+            # Metadata records legitimately omit syscall; an explicitly
+            # malformed syscall field is a record the parser had to lose.
+            if "syscall" in rec:
+                profile.capture_incomplete = True
             continue
         path = rec.get("path")
         if path is not None and not isinstance(path, str):
+            profile.capture_incomplete = True
             continue
         if "observe" in rec and not rec.get("observe"):
             continue
