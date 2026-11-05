@@ -17,7 +17,7 @@ class FunctionScope:
         return masked.decode("utf-8")
 
 
-def _text(node, source):
+def _node_source(node, source):
     return (
         source[node.start_byte : node.end_byte].decode("utf-8")
         if node is not None
@@ -27,14 +27,14 @@ def _text(node, source):
 
 def _name(node, source, language):
     if language == "go":
-        name = _text(node.child_by_field_name("name"), source)
+        name = _node_source(node.child_by_field_name("name"), source)
         receiver = node.child_by_field_name("receiver")
         if receiver is not None:
             stack = [receiver]
             while stack:
                 item = stack.pop()
                 if item.type == "type_identifier":
-                    return _text(item, source) + "." + name
+                    return _node_source(item, source) + "." + name
                 stack.extend(reversed(item.named_children))
         return name
     declarator = node.child_by_field_name("declarator")
@@ -46,7 +46,7 @@ def _name(node, source, language):
             "destructor_name",
             "operator_name",
         }:
-            name = _text(declarator, source).replace("::", ".")
+            name = _node_source(declarator, source).replace("::", ".")
             parents = []
             parent = node.parent
             while parent is not None:
@@ -55,7 +55,7 @@ def _name(node, source, language):
                     "class_specifier",
                     "struct_specifier",
                 }:
-                    part = _text(parent.child_by_field_name("name"), source)
+                    part = _node_source(parent.child_by_field_name("name"), source)
                     if part:
                         parents.append(part.replace("::", "."))
                 parent = parent.parent
