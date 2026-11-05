@@ -176,13 +176,14 @@ def _terminal_roundtrip(tmp_path):
     pid, terminal = pty.fork()
     if pid == 0:
         code = r'''
-import pathlib,signal,sys
+import os,pathlib,signal,sys
 report=pathlib.Path(sys.argv[1])
 def interrupt(*args):
     with report.open('a') as stream: stream.write('interrupt\n')
-    print('INTERRUPTED',flush=True)
+    os.write(1,b'INTERRUPTED\n')
 signal.signal(signal.SIGINT,interrupt)
-print('READY',flush=True)
+# Ctrl-C can arrive while READY is being emitted; avoid buffered-I/O reentry.
+os.write(1,b'READY\n')
 sys.stdin.readline()
 sys.exit(7)
 '''
