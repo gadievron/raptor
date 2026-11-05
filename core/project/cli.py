@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import json
+from core.json import save_json as _save_summary_json
 from core.run.output import unique_run_suffix
 from core.security.log_sanitisation import sanitise_for_terminal
 
@@ -1998,7 +1999,6 @@ def _get_output_summary(run_dir, meta):
     back to .raptor-run.json when permitted so subsequent calls are instant.
     Cache I/O failures must not prevent displaying the computed summary.
     """
-    from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
 
     # Cache schema version — bump whenever the counting logic changes so
@@ -2054,7 +2054,7 @@ def _get_output_summary(run_dir, meta):
                     if isinstance(fresh, dict):
                         fresh["output_summary"] = result
                         fresh["output_summary_v"] = summary_version
-                        save_json(meta_path, fresh)
+                        _save_summary_json(meta_path, fresh)
 
     return result
 

@@ -175,7 +175,7 @@ def test_status_survives_unwritable_summary_cache(
         tmp_path, monkeypatch, capsys, error_number, failure_point):
     from core.project.project import ProjectManager
     from core.run import metadata as run_metadata
-    import core.json as json_io
+    from core.project import cli as project_cli
 
     target = tmp_path / 'target'
     target.mkdir()
@@ -202,7 +202,7 @@ def test_status_survives_unwritable_summary_cache(
         yield  # pragma: no cover -- contextmanager must fail on entry
 
     if failure_point == 'save':
-        monkeypatch.setattr(json_io, 'save_json', denied)
+        monkeypatch.setattr(project_cli, '_save_summary_json', denied)
     else:
         monkeypatch.setattr(run_metadata, '_metadata_lock', unavailable_lock)
     monkeypatch.setattr('sys.argv', ['raptor-project', 'status', project.name])
