@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox.context import _anon_socketpair_problem
+from core.testing.processes import reap_on_exit
 
 _needs_peercred = pytest.mark.skipif(
     not hasattr(socket, "SO_PEERCRED"),
@@ -112,38 +113,35 @@ class TestRefusedShapes:
         # pathname server. Its local end is unnamed — the peer name
         # is what betrays (and refuses) it.
         path = str(pathname_socket_dir / "srv.sock")
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
+        with ExitStack() as cleanup:
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            cleanup.callback(srv.close)
+            cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            cleanup.callback(cli.close)
             srv.bind(path)
             srv.listen(1)
             cli.connect(path)
             problem = _anon_socketpair_problem(cli.fileno())
             assert problem is not None
             assert "named" in problem
-        finally:
-            cli.close()
-            srv.close()
 
     def test_pathname_accepted_side_refused(self, pathname_socket_dir):
         # The server-side accepted connection: LOCAL end is named.
         path = str(pathname_socket_dir / "srv.sock")
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        conn = None
-        try:
+        with ExitStack() as cleanup:
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            cleanup.callback(srv.close)
+            cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            cleanup.callback(cli.close)
+            conn = None
             srv.bind(path)
             srv.listen(1)
             cli.connect(path)
             conn, _ = srv.accept()
+            cleanup.callback(conn.close)
             problem = _anon_socketpair_problem(conn.fileno())
             assert problem is not None
             assert "named" in problem
-        finally:
-            if conn is not None:
-                conn.close()
-            cli.close()
-            srv.close()
 
     @_needs_peercred
     @pytest.mark.skipif(
@@ -161,26 +159,28 @@ class TestRefusedShapes:
             "a, b = socket.socketpair()\n"
             "socket.send_fds(t, [b'x'], [a.fileno()])\n"
         )
-        t_parent, t_child = socket.socketpair()
-        received: list[int] = []
-        try:
+        with ExitStack() as cleanup:
+            t_parent, t_child = socket.socketpair()
+            cleanup.callback(t_parent.close)
+            cleanup.callback(t_child.close)
+            received: list[int] = []
+            t_parent.settimeout(30)
             proc = subprocess.Popen(
                 [sys.executable, "-c", child_src,
                  str(t_child.fileno())],
                 pass_fds=(t_child.fileno(),),
             )
+            cleanup.enter_context(reap_on_exit(proc))
             t_child.close()
             _msg, fds, _flags, _addr = socket.recv_fds(t_parent, 1, 1)
             received.extend(fds)
+            for received_fd in fds:
+                cleanup.callback(os.close, received_fd)
             assert proc.wait(timeout=30) == 0
             assert received, "child sent no fd"
             problem = _anon_socketpair_problem(received[0])
             assert problem is not None
             assert "peer pid" in problem
-        finally:
-            for fd in received:
-                os.close(fd)
-            t_parent.close()
 
     def test_closed_fd_refused(self):
         a, b = socket.socketpair()
