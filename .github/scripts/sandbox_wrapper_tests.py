@@ -27,17 +27,7 @@ def policy_entrypoints(path: Path) -> list[str]:
         tree = ast.parse(text)
     except (SyntaxError, UnicodeError):
         return []  # non-Python libexec launchers
-    names, modules = set(), set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module in ('core.sandbox', 'core.sandbox.context'):
-                names.update(alias.asname or alias.name for alias in node.names if alias.name in _EXECUTORS)
-            if node.module == 'core':
-                modules.update(alias.asname or alias.name for alias in node.names if alias.name == 'sandbox')
-        elif isinstance(node, ast.Import):
-            modules.update(alias.asname or alias.name for alias in node.names
-                           if alias.name in ('core.sandbox', 'core.sandbox.context'))
-    found = set()
+    names, modules, calls = set(), set(), []
     class Visitor(ast.NodeVisitor):
         def __init__(self):
             self.scope = []
@@ -50,16 +40,45 @@ def policy_entrypoints(path: Path) -> list[str]:
             self.generic_visit(node)
             self.scope.pop()
         visit_AsyncFunctionDef = visit_FunctionDef
+        def visit_ImportFrom(self, node):
+            if node.module in ('core.sandbox', 'core.sandbox.context'):
+                names.update(alias.asname or alias.name for alias in node.names if alias.name in _EXECUTORS)
+            if node.module == 'core':
+                modules.update(alias.asname or alias.name for alias in node.names if alias.name == 'sandbox')
+        def visit_Import(self, node):
+            modules.update(alias.asname or alias.name for alias in node.names
+                           if alias.name in ('core.sandbox', 'core.sandbox.context'))
         def visit_Call(self, node):
             target = node.func
-            direct = isinstance(target, ast.Name) and target.id in names
-            dotted = ast.unparse(target) if isinstance(target, ast.Attribute) else ''
-            qualified = any(dotted == module + '.' + executor for module in modules for executor in _EXECUTORS)
-            injected = isinstance(target, ast.Attribute) and target.attr == 'sandbox_run'
-            if direct or qualified or injected:
-                found.add('.'.join(self.scope) or '<module>')
+            if (isinstance(target, ast.Name)
+                    or isinstance(target, ast.Attribute) and (target.attr in _EXECUTORS or target.attr == 'sandbox_run')):
+                calls.append((target, tuple(self.scope)))
             self.generic_visit(node)
+        def visit_Name(self, node):
+            pass  # Names and constants cannot contain calls, imports or scopes.
+        visit_Constant = visit_Name
     Visitor().visit(tree)
+    # Imports have always been collected file-wide, including those appearing
+    # after a call. Keep that behavior while visiting each node only once.
+    qualified_names = {module + '.' + executor for module in modules for executor in _EXECUTORS}
+    found = set()
+    for target, scope in calls:
+        direct = isinstance(target, ast.Name) and target.id in names
+        qualified = False
+        if qualified_names and isinstance(target, ast.Attribute) and target.attr in _EXECUTORS:
+            # Imported modules/aliases are dotted names. Arbitrary receiver
+            # expressions cannot match them, so never unparse incidental
+            # method calls (or their potentially large receiver subtrees).
+            parts = []
+            receiver = target
+            while isinstance(receiver, ast.Attribute):
+                parts.append(receiver.attr)
+                receiver = receiver.value
+            if isinstance(receiver, ast.Name):
+                qualified = '.'.join([receiver.id, *reversed(parts)]) in qualified_names
+        injected = isinstance(target, ast.Attribute) and target.attr == 'sandbox_run'
+        if direct or qualified or injected:
+            found.add('.'.join(scope) or '<module>')
     return sorted(found)
 
 
