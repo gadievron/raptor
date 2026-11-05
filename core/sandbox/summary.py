@@ -84,11 +84,13 @@ from .escalation_signatures import (
 logger = logging.getLogger(__name__)
 
 # Module-level active-run state. Set by start_run, cleared at run end.
-# Reads happen unlocked (Python attribute access is atomic — readers see
-# either the old or new pointer, never a torn read). Writes are serialised
+# get_active_run_dir() reads unlocked (attribute access is atomic — readers see
+# either the old or new pointer, never a torn read). Denial writers snapshot
+# the run and generation under _lock. State writes are serialised
 # via _lock so concurrent set/clear can't interleave (matters for
 # tests that exercise the lifecycle from multiple threads).
 _active_run_dir: Path | None = None
+_active_run_generation = 0  # changes even when the same directory is reactivated
 _lock = threading.Lock()
 
 # Per-run held evidence fd (core/sandbox/evidence.EvidenceFile) for
@@ -171,7 +173,7 @@ def set_active_run_dir(run_dir: Path | None) -> None:
     previous run is finalised (inode-verified, then closed).
     """
     global _active_run_dir, _denial_count, _evidence_handle
-    global _evidence_open_failed
+    global _evidence_open_failed, _active_run_generation
     with _lock:
         if _evidence_handle is not None:
             _evidence_handle.close()
@@ -179,6 +181,7 @@ def set_active_run_dir(run_dir: Path | None) -> None:
         _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
         _denial_count = 0
+        _active_run_generation += 1
     if run_dir is not None:
         # Bare-run attribution anchor: a run activated while the CLI
         # sandbox disable is in force gets its disable recorded here.
@@ -232,9 +235,6 @@ def record_denial(cmd_display: str, returncode: int,
     details vary by type — `path` for write, `profile` for seccomp, etc.
     """
     global _denial_count
-    run_dir = _active_run_dir
-    if run_dir is None:
-        return
     # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN.
     # Logs once at the boundary so a developer can find it.
     #
@@ -255,6 +255,10 @@ def record_denial(cmd_display: str, returncode: int,
     # same `_denial_count` global) across the increment + boundary
     # check + early return so the boundary log fires exactly once.
     with _lock:
+        run_dir = _active_run_dir
+        if run_dir is None:
+            return
+        generation = _active_run_generation
         _denial_count += 1
         local_count = _denial_count
         is_boundary = (local_count == MAX_DENIALS_PER_RUN + 1)
@@ -345,6 +349,8 @@ def record_denial(cmd_display: str, returncode: int,
     try:
         line = dumps_artifact(record, indent=None, ensure_ascii=True) + "\n"
         with _lock:
+            if generation != _active_run_generation:
+                raise OSError("active run changed while preparing denial evidence")
             handle = _get_evidence_handle_locked(run_dir)
             if handle is None:
                 msg = f"evidence file unavailable under {run_dir}"
