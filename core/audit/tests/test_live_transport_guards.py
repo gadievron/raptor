@@ -1627,6 +1627,8 @@ class TestCompilerSurfaceFences:
         # analyzer execution, and preprocessing to pin product behavior.
         # Nested raw calls also count for the enclosing test function.
         assert _callers_of(calls, "run_compiler_analyzer_sweep") == {
+            "test_relative_header_diagnostic_does_not_confirm_tu_hypothesis",
+            "test_encoded_sarif_primary_location_confirms_its_actual_file",
             "test_both_missing_is_error",
             "test_shared_clang_checker_unknown_wording",
             "test_corrupt_gcc_output_errors_without_poisoning_audit_cache",
