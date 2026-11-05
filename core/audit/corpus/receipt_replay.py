@@ -109,7 +109,7 @@ def replay(cases: list[dict]) -> dict:
     implementation = hashlib.sha256()
     for name in ("receipt_resolution.py", "refutation.py"):
         implementation.update(name.encode())
-        implementation.update((audit_dir / name).read_bytes())
+        implementation.update((audit_dir / name).read_bytes())  # raw-open: trusted implementation files; hash requires complete bytes
     return {
         "schema_version": 1, "scope": "receipt_decision_only",
         "implementation_sha256": implementation.hexdigest(),
