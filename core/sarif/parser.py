@@ -885,9 +885,11 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
 class ResultRuleResolver:
     """Run-owned descriptor lookup with an unambiguous legacy-ID index.
 
-    Indexed and component-qualified references use the shared validator.
+    Indexed and component-qualified references use the shared validator,
+    caching repeated references within a bounded per-run working set.
     Ordinary ID-only reports avoid scanning every rule for every result.
-    No result payloads or cross-run lookup state are retained.
+    Run metadata is treated as immutable; no result payloads or cross-run
+    lookup state are retained.
     """
 
     def __init__(self, run: dict[str, Any]):
@@ -896,6 +898,7 @@ class ResultRuleResolver:
         self._by_id: dict[str, dict[str, Any] | None] = {}
         self._owners: dict[int, tuple[str, str]] = {}
         self._scopes: dict[int, str] = {}
+        self._references: dict[tuple, dict[str, Any] | None] = {}
         extensions = tool.get("extensions")
         for component in extensions if isinstance(extensions, list) else []:
             for rule in self._rules(component, "extension"):
@@ -945,7 +948,51 @@ class ResultRuleResolver:
         if not _as_dict(result.get("rule")) and type(index) is int and index == -1:
             rid = result.get("ruleId")
             return (self._by_id.get(rid) or {}) if isinstance(rid, str) else {}
-        return get_result_rule(self._run, result)
+        reference = _as_dict(result.get("rule"))
+        descriptor_index = reference.get("index", index)
+        component = reference.get("toolComponent", {})
+        if (type(descriptor_index) is int and descriptor_index >= 0
+                and isinstance(component, dict)
+                and (not component or (type(component.get("index")) is int and component["index"] >= 0))):
+            # Fully indexed references already validate in constant time;
+            # building a cache key would cost more than the lookup itself.
+            return get_result_rule(self._run, result)
+        key = self._reference_key(result)
+        if key is not None and key in self._references:
+            return self._references[key] or {}
+        rule = get_result_rule(self._run, result)
+        # Admission limits bound bookkeeping on untrusted, all-distinct
+        # references. Oversized/unsupported keys still use full validation.
+        if key is not None and len(self._references) < 256:
+            self._references[key] = rule or None
+        return rule
+
+    @staticmethod
+    def _reference_key(result: dict[str, Any]) -> tuple | None:
+        reference = _as_dict(result.get("rule"))
+        component = reference.get("toolComponent", {})
+        if not isinstance(component, dict):
+            return None
+        parts = []
+        for mapping, names in (
+            (result, ("ruleId", "ruleIndex")),
+            (reference, ("id", "guid", "index")),
+            (component, ("name", "guid", "index")),
+        ):
+            fields = []
+            for name in names:
+                if name not in mapping:
+                    continue
+                value = mapping[name]
+                if type(value) not in (str, int, type(None)):
+                    return None
+                if isinstance(value, str) and len(value) > 1024:
+                    return None
+                fields.append((name, type(value), value))
+            parts.append(tuple(fields))
+        # Presence matters: an explicit empty toolComponent selects the
+        # driver, whereas its absence permits legacy extension fallback.
+        return ("toolComponent" in reference, *parts)
 
 
 def _result_rule_id(result: dict[str, Any], rule: dict[str, Any]) -> str | None:

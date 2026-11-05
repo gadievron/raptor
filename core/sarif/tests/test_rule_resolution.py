@@ -964,3 +964,137 @@ def test_legacy_merge_preserves_original_rule_table_until_a_valid_union_exists(m
     driver = parser.merge_sarif(['first', 'later'])['runs'][0]['tool']['driver']
     assert driver == {'name': 'tool', 'rules': [{'id': 'valid'}], 'version': 'first'}
     assert first == before
+
+
+@pytest.mark.parametrize('reference', [
+    {'rule': {'id': 'same', 'toolComponent': {'name': 'extension'}}},
+    {'rule': {'guid': 'rule-guid', 'toolComponent': {'guid': 'extension-guid'}}},
+    {'rule': {'index': 0, 'toolComponent': {'name': 'extension'}}},
+    {'rule': {'id': 'absent', 'toolComponent': {'name': 'extension'}}},
+], ids=['qualified-id', 'qualified-guid', 'indexed', 'negative'])
+def test_repeated_qualified_references_validate_once_without_retaining_results(monkeypatch, run, reference):
+    import copy
+    import gc
+    import weakref
+    import core.sarif.parser as parser
+
+    class Tracked(dict):
+        pass
+
+    original = parser.get_result_rule
+    calls = []
+
+    def validate(raw_run, result):
+        calls.append(1)
+        return original(raw_run, result)
+
+    expected = original(run, reference)
+    monkeypatch.setattr(parser, 'get_result_rule', validate)
+    resolver = parser.ResultRuleResolver(run)
+    references = []
+    for number in range(20):
+        result = Tracked(copy.deepcopy(reference), message={'text': str(number)})
+        references.append(weakref.ref(result))
+        assert resolver.resolve(result) == expected
+        del result
+    gc.collect(0)
+    assert all(ref() is None for ref in references)
+    assert len(calls) == 1
+
+
+def test_qualified_reference_cache_preserves_validation_boundaries(run):
+    import core.sarif.parser as parser
+
+    resolver = parser.ResultRuleResolver(run)
+    variants = [
+        {'rule': {'id': 'same'}},
+        {'rule': {'id': 'same', 'toolComponent': {}}},
+        {'rule': {'id': 'same', 'toolComponent': {'index': 0}}},
+        {'rule': {'id': 'same', 'toolComponent': {'index': False}}},
+        {'rule': {'id': 'same', 'index': 0, 'toolComponent': {'index': 0}}},
+        {'ruleIndex': 1, 'rule': {'id': 'same', 'index': 0, 'toolComponent': {'index': 0}}},
+        {'rule': {'guid': 'wrong', 'toolComponent': {'index': 0}}},
+        {'ruleId': 'wrong', 'rule': {'id': 'same', 'toolComponent': {'index': 0}}},
+        {'rule': {'id': 'same', 'toolComponent': {'index': 0, 'name': 'wrong'}}},
+        {'rule': {'id': 'same', 'toolComponent': {'index': 0, 'guid': 'wrong'}}},
+        {'rule': {'id': ['same'], 'toolComponent': {'index': 0}}},
+        {'rule': {'id': 'same', 'toolComponent': None}},
+        {'rule': {'index': -1}}, {'rule': {'index': 0}},
+        {'rule': {'index': None}}, {'rule': {'index': '0'}},
+    ]
+    for result in variants + list(reversed(variants)):
+        expected = parser.get_result_rule(run, result)
+        actual = resolver.resolve(result)
+        assert actual == expected, result
+        if expected:
+            assert actual is expected
+
+
+def test_qualified_reference_cache_is_bounded_and_run_owned(run):
+    import copy
+    import core.sarif.parser as parser
+
+    resolver = parser.ResultRuleResolver(run)
+    for number in range(1000):
+        result = {'rule': {'id': f'absent-{number}', 'toolComponent': {'index': 0}}}
+        assert resolver.resolve(result) == parser.get_result_rule(run, result)
+    assert len(resolver._references) == 256
+    oversized = {'rule': {'id': 'x' * 2048, 'toolComponent': {'index': 0}}}
+    fresh = parser.ResultRuleResolver(run)
+    assert fresh.resolve(oversized) == {}
+    assert fresh._references == {}
+    other_run = copy.deepcopy(run)
+    other_run['tool']['extensions'][0]['rules'][0]['name'] = 'other-run'
+    other = parser.ResultRuleResolver(other_run)
+    result = {'rule': {'id': 'same', 'toolComponent': {'index': 0}}}
+    assert resolver.resolve(result)['name'] == 'extension-rule'
+    assert other.resolve(result)['name'] == 'other-run'
+    # Callers may modify an unresolved return value without poisoning a miss.
+    fresh.resolve(result | {'ruleId': 'wrong'})['id'] = 'forged'
+    assert fresh.resolve(result | {'ruleId': 'wrong'}) == {}
+
+
+def test_fully_indexed_lookup_does_not_build_a_reference_cache_key(monkeypatch, run):
+    import core.sarif.parser as parser
+
+    resolver = parser.ResultRuleResolver(run)
+
+    def unexpected_key(result):
+        pytest.fail('constant-time indexed lookup built a cache key')
+
+    monkeypatch.setattr(resolver, '_reference_key', unexpected_key)
+    for result in [
+        {'ruleIndex': 0},
+        {'rule': {'index': 0, 'toolComponent': {'index': 0}}},
+        {'ruleId': 'wrong', 'rule': {'index': 0, 'toolComponent': {'index': 0}}},
+    ]:
+        assert resolver.resolve(result) == parser.get_result_rule(run, result)
+
+
+def test_parser_and_metrics_reuse_qualified_validation_independently(monkeypatch, tmp_path, run):
+    import json
+    import core.sarif.parser as parser
+
+    run['tool']['extensions'][0]['rules'][0]['defaultConfiguration'] = {'level': 'error'}
+    run['results'] = [
+        {'rule': {'guid': 'rule-guid', 'toolComponent': {'name': 'extension'}},
+         'message': {'text': f'finding-{number}'}}
+        for number in range(10)
+    ]
+    path = tmp_path / 'qualified.sarif'
+    path.write_text(json.dumps({'runs': [run]}))
+    original = parser.get_result_rule
+    calls = []
+
+    def validate(raw_run, result):
+        calls.append(1)
+        return original(raw_run, result)
+
+    monkeypatch.setattr(parser, 'get_result_rule', validate)
+    findings = parser.parse_sarif_findings(path)
+    metrics = parser.generate_scan_metrics([str(path)])
+    assert len(findings) == 10
+    assert {finding['level'] for finding in findings} == {'error'}
+    assert metrics['findings_by_rule'] == {'same': 10}
+    assert metrics['findings_by_severity']['error'] == 10
+    assert len(calls) == 2
