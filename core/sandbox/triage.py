@@ -119,11 +119,21 @@ def _parse_ts(ts) -> float:
 
     Records use ISO 8601 strings (datetime.now(tz).isoformat()); accept
     numeric values too for test convenience."""
+    import math
+
+    if isinstance(ts, bool):
+        raise ValueError("boolean denial timestamp")
     if isinstance(ts, (int, float)):
-        return float(ts)
-    from datetime import datetime, timezone
-    return datetime.fromisoformat(str(ts)).replace(
-        tzinfo=timezone.utc).timestamp()
+        value = float(ts)
+    else:
+        from datetime import datetime, timezone
+        parsed = datetime.fromisoformat(str(ts))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        value = parsed.timestamp()
+    if not math.isfinite(value):
+        raise ValueError("nonfinite denial timestamp")
+    return value
 
 
 # Verification outcomes for a triage input artifact. "verified" =
@@ -972,7 +982,7 @@ def _check_escape_burst(denials: list[dict]) -> list[dict]:
         return []
     try:
         timestamps = sorted(_parse_ts(h["ts"]) for h in hits)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, OSError):
         return []
     for i in range(len(timestamps) - _ESCAPE_BURST_COUNT + 1):
         window = timestamps[i + _ESCAPE_BURST_COUNT - 1] - timestamps[i]
