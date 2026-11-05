@@ -473,8 +473,12 @@ def _loop_lines(lines: list[str], start: int) -> set[int]:
     pending_loop = False
     for idx, raw in enumerate(lines):
         code = raw.split("//", 1)[0]
-        if _LOOP_RE.search(code):
+        if (type(code) is not str or "(" in code) and _LOOP_RE.search(code):
             pending_loop = True
+        if type(code) is str and "{" not in code and "}" not in code:
+            if loop_depths:
+                in_loop.add(start + idx)
+            continue
         for ch in code:
             if ch == "{":
                 depth += 1
@@ -505,6 +509,9 @@ def _enumerate_sites(
     loop_set = _loop_lines(view_lines, span_start)
     for idx, raw in enumerate(segment_lines):
         code = view_lines[idx]
+        # Every exact-name and naming-stem site pattern requires '('.
+        if type(code) is str and "(" not in code:
+            continue
         line_no = span_start + idx
         if insert_re is not None:
             m = insert_re.search(code)
@@ -643,7 +650,10 @@ def _clamp_witness(
         if line_no >= site_line:
             break
         # Match on the sanitized view; the receipt keeps the original.
-        for m in _CLAMP_RE.finditer(view_lines[idx]):
+        code = view_lines[idx]
+        if type(code) is str and "min" not in code and "MIN" not in code:
+            continue
+        for m in _CLAMP_RE.finditer(code):
             var, a, b = m.group(1), m.group(2), m.group(3)
             for bound in (a, b):
                 if _is_limit(bound):
@@ -902,6 +912,8 @@ def _caller_bound_search(
                 if callee not in source:
                     continue
                 for m_line, raw in enumerate(_view(fp), start=1):
+                    if type(raw) is str and "(" not in raw:
+                        continue
                     if not call_re.search(raw):
                         continue
                     enclosing = next(
