@@ -322,3 +322,75 @@ class TestReadContainedNewlinePassthrough:
         root = self._tree(tmp_path)
         assert read_contained(root, "a.c", newline="") == \
             'x = "li\rne"\r\nl2\n'
+
+
+@pytest.mark.parametrize('binary', [False, True])
+@pytest.mark.parametrize('cap', [1, 65535, 65536, 65537])
+@pytest.mark.parametrize('delta', [-1, 0, 1])
+def test_read_caps_remain_exact_across_large_reads(tmp_path, binary, cap, delta):
+    path = tmp_path / 'data'
+    data = b'x' * (cap + delta)
+    path.write_bytes(data)
+    got = read_bytes_capped(path, cap) if binary else read_text_capped(path, cap)
+    prefix = data[:cap] if binary else data[:cap].decode()
+    assert got == (prefix, len(data) > cap)
+
+
+@pytest.mark.parametrize('newline', [None, ''])
+@pytest.mark.parametrize('cap', [65535, 65536, 65537])
+def test_text_chunks_preserve_character_caps_and_newline_policy(tmp_path, newline, cap):
+    text = 'α🙂\r\nz\rtail\n' * 10000
+    path = tmp_path / 'unicode.c'
+    path.write_bytes(text.encode())
+    decoded = text if newline == '' else text.replace('\r\n', '\n').replace('\r', '\n')
+    expected = decoded[:cap]
+    if '\n' in expected:
+        expected = expected.rsplit('\n', 1)[0] + '\n'
+    assert read_text_capped(path, cap, newline=newline) == (expected, True)
+
+
+@pytest.mark.parametrize('binary', [False, True])
+@pytest.mark.parametrize('fail', [False, True])
+def test_short_reads_continue_and_read_failures_never_return_a_partial_result(binary, fail):
+    import io
+    from core.source.contained import _bytes_capped_from, _text_capped_from
+
+    underlying = io.BytesIO(b'abcdefgh') if binary else io.StringIO('abcdefgh')
+    class ShortReader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            underlying.close()
+
+        def read(self, size):
+            assert size > 0
+            if fail and underlying.tell():
+                raise OSError('interrupted read')
+            return underlying.read(min(size, 2))
+
+    reader = _bytes_capped_from if binary else _text_capped_from
+    result = reader(ShortReader(), 7)
+    assert result is None if fail else result == (b'abcdefg' if binary else 'abcdefg', True)
+    assert underlying.closed
+
+
+@pytest.mark.parametrize('binary', [False, True])
+def test_negative_read_cap_refuses_and_closes_the_stream(binary):
+    import io
+    from core.source.contained import _bytes_capped_from, _text_capped_from
+
+    stream = io.BytesIO(b'abcd') if binary else io.StringIO('abcd')
+    reader = _bytes_capped_from if binary else _text_capped_from
+    with pytest.raises(ValueError, match='non-negative'):
+        reader(stream, -2)
+    assert stream.closed
+
+
+@pytest.mark.parametrize('binary', [False, True])
+@pytest.mark.parametrize('data', [b'', b'x'])
+def test_zero_cap_still_probes_for_truncation(tmp_path, binary, data):
+    path = tmp_path / 'zero'
+    path.write_bytes(data)
+    result = read_bytes_capped(path, 0) if binary else read_text_capped(path, 0)
+    assert result == (b'' if binary else '', bool(data))
