@@ -3237,6 +3237,14 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
         if result.narrowing_found:
             return result
 
+    # Declarations, uses and guards must all see the same code-only view.
+    # A comment mentioning a wide variable is neither an initializer nor
+    # a range check; preserve positions for the resulting observation.
+    from .source_view import sanitized_view
+    from .initializer import initializer_text
+
+    source = sanitized_view(source, language="c")
+    lines = source.split("\n")
     params = _extract_param_types(source)
     decls = _extract_local_decls(lines)
 
@@ -3251,15 +3259,14 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
         if stripped.startswith(("//", "/*")):
             continue
 
-        m = _NARROWING_ASSIGN_RE.search(line)
-        if m:
+        for m in _NARROWING_ASSIGN_RE.finditer(line):
             dest_type = m.group(1).strip()
             dest_var = m.group(2)
             dest_width = _type_to_width(dest_type)
             if not dest_width:
                 continue
 
-            rhs = line[m.end():]
+            rhs = initializer_text(line[m.end():])
             for src_var, (src_type, src_width) in all_vars.items():
                 if src_var == dest_var:
                     continue
@@ -3437,8 +3444,7 @@ def _extract_local_decls(lines: list[str]) -> dict[str, str]:
     """Extract local variable declarations with types."""
     results: dict[str, str] = {}
     for line in lines:
-        m = _NARROWING_ASSIGN_RE.search(line)
-        if m:
+        for m in _NARROWING_ASSIGN_RE.finditer(line):
             results[m.group(2)] = m.group(1).strip()
     return results
 
