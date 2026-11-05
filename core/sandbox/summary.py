@@ -475,6 +475,20 @@ def get_proxy_persist_state(run_dir: Path) -> "dict | None":
         return {**cur, "flags": list(cur["flags"])}
 
 
+def get_evidence_inode_mismatch(run_dir: Path) -> bool:
+    """Whether this parent observed a failed evidence-inode verification.
+
+    Publication does not clear the observation. Disk artifacts may never
+    override it or make a missing summary look like a telemetry-free run.
+    """
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return False
+    with _lock:
+        return run_key in _evidence_inode_mismatches
+
+
 def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
                        restrict_reads: bool,
                        mountless_backend: bool = False,
