@@ -27,14 +27,14 @@ from cve_env.agent.tools import set_cve_version_context
 
 
 @pytest.fixture(autouse=True)
-def _reset_context() -> None:
-    """Reset module-level state before AND after each test. Without this
-    fixture, a test setting "1.0" leaks into the next test's read.
-    Module-level state is shared per-process; explicit reset matters.
-    """
-    cve_tools._CURRENT_CVE_VERSION = ""
-    yield
-    cve_tools._CURRENT_CVE_VERSION = ""
+def _reset_context(monkeypatch) -> None:
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(cve_tools, {"_CURRENT_CVE_VERSION": ""}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def test_set_then_read_roundtrip() -> None:

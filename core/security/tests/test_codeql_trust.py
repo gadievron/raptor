@@ -21,11 +21,15 @@ from core.security.codeql_trust import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_trust_override():
-    """Reset the module-level trust flag between tests."""
-    set_trust_override(False)
-    yield
-    set_trust_override(False)
+def _reset_trust_override(monkeypatch):
+    from core.security import codeql_trust as trust
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(trust, {"_trust_override_set": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 _check = check_repo_codeql_trust

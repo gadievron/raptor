@@ -582,14 +582,24 @@ class TestTracedBuildTrustIndependence:
     """
 
     @pytest.fixture(autouse=True)
-    def _reset_overrides(self):
-        import core.security.cc_trust as cct
-        import core.security.codeql_trust as qlt
-        qlt.set_trust_override(False)
-        cct.set_trust_override(False)
-        yield
-        qlt.set_trust_override(False)
-        cct.set_trust_override(False)
+    def _reset_overrides(self, monkeypatch):
+        from contextlib import ExitStack
+        from functools import lru_cache
+
+        from core.security import cc_trust as cct, codeql_trust as qlt
+        from core.testing.module_state import isolated_module_state
+
+        borrowed = cct._scan_cached
+        fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+        with ExitStack() as scope:
+            scope.enter_context(isolated_module_state(qlt, {"_trust_override_set": False}))
+            scope.enter_context(isolated_module_state(cct, {
+                "_trust_override_set": False, "_scan_cached": fresh,
+            }))
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
 
     def _run_main(self, tmp_path, extra_args):
         """Drive agent.py main() on an empty repo (no languages ->
