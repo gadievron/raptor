@@ -406,6 +406,22 @@ def _load_or_create_key() -> bytes | None:
                 remaining = remaining[written:]
         except BaseException:
             write_failed = True
+            # Only this call writes this exclusively created descriptor.
+            # A short key cannot have been used for signing, so remove our
+            # failed creation and let a later call retry. A complete key
+            # may already be in use by another reader and must survive.
+            try:
+                owned = os.fstat(fd)
+                current = path.lstat()
+                if (owned.st_size < _KEY_LEN
+                        and (owned.st_dev, owned.st_ino)
+                        == (current.st_dev, current.st_ino)):
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning("telemetry_mac: incomplete key cleanup failed",
+                               exc_info=True)
             raise
         finally:
             try:
