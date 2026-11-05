@@ -8,15 +8,23 @@ from core.inventory.macro_resolve import (
     resolve_macros,
     resolve_rust_macros,
     _extract_braced_body,
-    _table_cache,
-    _rust_table_cache,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    _table_cache.clear()
-    _rust_table_cache.clear()
+    """Build macro tables into private ordered caches for each test."""
+    from collections import OrderedDict
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+
+    macro_mod = import_module("core.inventory.macro_resolve")
+    with isolated_module_state(
+        macro_mod, {"_table_cache": OrderedDict(),
+                    "_rust_table_cache": OrderedDict()},
+    ):
+        yield
 
 
 class TestBuildMacroTable:

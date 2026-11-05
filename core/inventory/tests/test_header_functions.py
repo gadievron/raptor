@@ -6,13 +6,22 @@ from core.inventory.header_functions import (
     build_header_function_index,
     lookup_header_function,
     _extract_function_body,
-    _cache,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    _cache.clear()
+    """Build header indexes in a private ordered cache under its lock."""
+    from collections import OrderedDict
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+
+    header_mod = import_module("core.inventory.header_functions")
+    with isolated_module_state(
+        header_mod, {"_cache": OrderedDict()}, lock=header_mod._cache_lock,
+    ):
+        yield
 
 
 class TestBuildIndex:

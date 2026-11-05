@@ -20,21 +20,16 @@ from core.analysis import reach_verdict_log
 
 @pytest.fixture(autouse=True)
 def _isolated_sidecar(tmp_path, monkeypatch):
-    """Redirect the sidecar to a tmp path AND clear in-memory state
-    before every test. Without this the real sidecar would accumulate
-    test-run garbage across the suite.
+    """Record into a private accumulator and a test-owned sidecar."""
+    from core.testing.module_state import isolated_module_state
 
-    Conftest sets ``RAPTOR_REACH_VERDICT_LOG_DISABLED=1`` by default
-    (so unrelated tests don't pollute the real sidecar), but this
-    test file IS the one exercising the substrate — unset it locally
-    so ``record_verdict`` actually records.
-    """
     sidecar = tmp_path / "reach_verdict_log.json"
     monkeypatch.setenv("RAPTOR_REACH_VERDICT_LOG", str(sidecar))
     monkeypatch.delenv("RAPTOR_REACH_VERDICT_LOG_DISABLED", raising=False)
-    reach_verdict_log._IN_MEMORY.clear()
-    yield sidecar
-    reach_verdict_log._IN_MEMORY.clear()
+    with isolated_module_state(
+        reach_verdict_log, {"_IN_MEMORY": {}}, lock=reach_verdict_log._LOCK,
+    ):
+        yield sidecar
 
 
 def test_record_accumulates_in_memory(_isolated_sidecar):

@@ -56,12 +56,11 @@ def _raptor_logger_propagates():
 
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Per-test key isolation + fresh warn-once registries."""
+    """Per-test key isolation + private warn-once registries."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-    cm._warned_unstamped.clear()
-    cm._warned_relocated.clear()
-    cm._warned_key_paths.clear()
-    cm._warned_absent_key.clear()
+    for name in ("_warned_unstamped", "_warned_relocated",
+                 "_warned_key_paths", "_warned_absent_key"):
+        monkeypatch.setattr(cm, name, set())
 
 
 def _doc(n: int) -> dict[str, Any]:
