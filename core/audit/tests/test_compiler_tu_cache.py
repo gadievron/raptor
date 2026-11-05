@@ -420,3 +420,68 @@ def test_cached_families_keep_paths_and_unlocated_metadata_isolated(tmp_path, sa
     assert null.details['diagnostics_total'] == 3
     assert [match['rule_id'] for match in null.matches] == ['-Wanalyzer-null-dereference']
     assert len(_analysis_calls(sandbox_stub)) == 1
+
+
+@pytest.mark.parametrize('repeat', [0, 1, 200000])
+def test_cache_key_digest_covers_exact_file_bytes(tmp_path, repeat):
+    import hashlib
+
+    data = b'chunk\x00\xff\r\n' * repeat
+    source = tmp_path / 'tu.c'
+    source.write_bytes(data)
+    key = compiler_sweep._tu_cache_key([FAKE_GCC, '-fanalyzer', str(source)], source)
+    assert key is not None
+    assert key[-1] == hashlib.sha256(data).hexdigest()
+
+
+def test_tail_edit_beyond_source_preview_cap_changes_cache_key_with_same_stat(tmp_path):
+    import hashlib
+    import os
+    from core.source.contained import DEFAULT_MAX_SOURCE_CHARS
+
+    source = tmp_path / 'large.c'
+    with source.open('wb') as output:
+        output.seek(DEFAULT_MAX_SOURCE_CHARS + 32)
+        output.write(b'A')
+    command = [FAKE_GCC, '-fanalyzer', str(source)]
+    before_stat = source.stat()
+    before = compiler_sweep._tu_cache_key(command, source)
+    with source.open('r+b') as output:
+        output.seek(-1, 2)
+        output.write(b'B')
+    os.utime(source, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+    after = compiler_sweep._tu_cache_key(command, source)
+    assert before is not None and after is not None
+    assert source.stat().st_size == before_stat.st_size
+    assert source.stat().st_mtime_ns == before_stat.st_mtime_ns
+    assert before != after
+
+    with source.open('rb') as stream:
+        assert after[-1] == hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def test_cache_hash_read_failure_discards_partial_digest_and_closes_stream(tmp_path, monkeypatch):
+    import io
+
+    class Interrupted(io.BytesIO):
+        def read(self, size=-1):
+            if self.tell():
+                raise OSError('interrupted hash read')
+            return super().read(min(size, 2))
+
+    stream = Interrupted(b'complete contents')
+    monkeypatch.setattr(compiler_sweep, 'open_regular', lambda *a, **kw: stream)
+    source = tmp_path / 'tu.c'
+    assert compiler_sweep._tu_cache_key([FAKE_GCC, str(source)], source) is None
+    assert stream.closed
+
+
+def test_cache_hash_refuses_final_component_symlink(tmp_path):
+    import os
+    if os.name != 'posix':
+        pytest.skip('POSIX symlink behavior required')
+    source = tmp_path / 'real.c'
+    source.write_bytes(b'int x;\n')
+    alias = tmp_path / 'alias.c'
+    alias.symlink_to(source)
+    assert compiler_sweep._tu_cache_key([FAKE_GCC, str(alias)], alias) is None

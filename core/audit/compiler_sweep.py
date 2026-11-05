@@ -49,7 +49,7 @@ from pathlib import Path
 
 from core.source import open_regular, read_text_capped
 from core.source.lines import split_lines
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths, local_uri_path, valid_diagnostic_location
 
@@ -235,7 +235,7 @@ def _tu_cache_key(cmd: list[str], full_path: Path) -> tuple | None:
     binary's stat signature catches a toolchain swap at the same
     path. An unreadable TU returns None — run uncached.
     """
-    import hashlib
+    from core.hash import sha256_fileobj
 
     try:
         # Whole-file bytes BY DESIGN (a capped hash would equate TUs
@@ -245,7 +245,7 @@ def _tu_cache_key(cmd: list[str], full_path: Path) -> tuple | None:
         if fh is None:
             return None
         with fh:
-            tu_hash = hashlib.sha256(fh.read()).hexdigest()
+            tu_hash = sha256_fileobj(cast(BinaryIO, fh))
     except OSError:
         return None
     bin_sig: tuple | None
