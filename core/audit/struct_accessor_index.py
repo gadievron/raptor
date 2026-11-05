@@ -17,10 +17,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from itertools import chain, groupby, islice
+from operator import attrgetter
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,9 @@ class CoAccessorGroup:
 
     @property
     def description(self) -> str:
-        funcs = [a.function for a in self.accessors]
+        # Non-list inputs retain the original iteration behavior.
+        funcs = ([a.function for a in self.accessors]
+                 if type(self.accessors) is not list else None)
         locked = [a for a in self.accessors if a.lock_held]
         unlocked = [a for a in self.accessors if not a.lock_held]
         if locked and unlocked:
@@ -57,12 +61,27 @@ class CoAccessorGroup:
         unique_locks = {a.lock_held for a in locked}
         if len(unique_locks) > 1:
             parts = []
-            for lock in sorted(unique_locks):
-                names = [a.function for a in locked if a.lock_held == lock]
-                parts.append(f"{', '.join(names[:2])} (under {lock})")
+            # Keep direct scans for small lock families.
+            if len(unique_locks) < 4:
+                for lock in sorted(unique_locks):
+                    names = [a.function for a in locked if a.lock_held == lock]
+                    parts.append(f"{', '.join(names[:2])} (under {lock})")
+            else:
+                # Sort only the private list, preserving encounter order
+                # within each lock and avoiding a scan per distinct lock.
+                del unique_locks
+                lock_key = attrgetter("lock_held")
+                locked.sort(key=lock_key)
+                for lock, accessors in groupby(locked, key=lock_key):
+                    names = [a.function for a in islice(accessors, 2)]
+                    parts.append(f"{', '.join(names)} (under {lock})")
             return f"`{self.field}` accessed under different locks: {'; '.join(parts)}"
-        n = len(funcs)
-        names_str = ", ".join(funcs[:4])
+        if funcs is None:
+            n = len(self.accessors)
+            names_str = ", ".join([a.function for a in self.accessors[:4]])
+        else:
+            n = len(funcs)
+            names_str = ", ".join(funcs[:4])
         suffix = f" (+{n - 4} more)" if n > 4 else ""
         return f"`{self.field}` accessed by {names_str}{suffix}"
 
@@ -180,25 +199,33 @@ def get_co_accessors(
         if not mine:
             continue
 
-        others = [
-            r for r in records
-            if not (r.function == function and r.file == file)
-        ]
-        if same_file_only:
-            others = [r for r in others if r.file == file]
+        if same_file_only is True:
+            others = [
+                r for r in records
+                if not (r.function == function and r.file == file) and r.file == file
+            ]
+        else:
+            others = [
+                r for r in records
+                if not (r.function == function and r.file == file)
+            ]
+            if same_file_only:
+                others = [r for r in others if r.file == file]
 
         unique_funcs = {r.function for r in others}
         if len(unique_funcs) < min_accessors - 1:
             continue
 
-        deduped = _dedupe_accessors(mine + others)
+        deduped = _dedupe_accessors(chain(mine, others))
 
         my_locks = {r.lock_held for r in mine}
         other_locks = {r.lock_held for r in others}
+        my_nonempty = my_locks - {""}
+        other_nonempty = other_locks - {""}
         has_conflict = bool(
-            (my_locks - {""}) != (other_locks - {""})
-            or ("" in my_locks and other_locks - {""})
-            or ("" in other_locks and my_locks - {""})
+            my_nonempty != other_nonempty
+            or ("" in my_locks and other_nonempty)
+            or ("" in other_locks and my_nonempty)
         )
 
         groups.append(CoAccessorGroup(
@@ -252,7 +279,7 @@ def _detect_lock(source: str) -> str:
     return lock_m.group(1)
 
 
-def _dedupe_accessors(records: list[AccessorRecord]) -> list[AccessorRecord]:
+def _dedupe_accessors(records: Iterable[AccessorRecord]) -> list[AccessorRecord]:
     """Remove duplicate (function, file) entries, keep first."""
     seen: set[tuple[str, str]] = set()
     result: list[AccessorRecord] = []
