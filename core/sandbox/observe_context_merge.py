@@ -36,12 +36,12 @@ from __future__ import annotations
 
 import datetime
 from copy import deepcopy
+from collections.abc import Iterable
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .observe_profile import ObserveProfile
-    from collections.abc import Iterable
 
 
 # Top-level key under which the runtime observation lands. Pinned by
@@ -84,7 +84,7 @@ def _matches_path(observed: str, ep_or_sink: dict,
     or context map.
     """
     rel = ep_or_sink.get("file") or ep_or_sink.get("location")
-    if not rel:
+    if not isinstance(observed, str) or not isinstance(rel, str) or not rel:
         return False
 
     if target_dir is not None:
@@ -120,7 +120,11 @@ def _correlate_entry_points(profile: ObserveProfile,
     skipped — we can't surface an unkeyed correlation usefully.
     """
     confirmed = []
-    for ep in entry_points or []:
+    if not isinstance(entry_points, Iterable):
+        return confirmed
+    for ep in entry_points:
+        if not isinstance(ep, dict):
+            continue
         ep_id = ep.get("id")
         if not ep_id:
             continue
@@ -139,7 +143,11 @@ def _correlate_sinks(profile: ObserveProfile,
     Same shape as _correlate_entry_points but on the write side.
     """
     confirmed = []
-    for sink in sink_details or []:
+    if not isinstance(sink_details, Iterable):
+        return confirmed
+    for sink in sink_details:
+        if not isinstance(sink, dict):
+            continue
         sink_id = sink.get("id")
         if not sink_id:
             continue
