@@ -105,6 +105,7 @@ _evidence_open_failed = False
 _evidence_next_open_attempt = 0.0
 _EVIDENCE_OPEN_RETRY_S = 1.0
 # Persistent loss observation; value True means it still needs publication.
+# Duplicate observations preserve the publication state of the same flag.
 _evidence_write_failures: dict[str, bool] = {}
 # A failed held-inode verification remains authoritative across run switches
 # and summary-write retries. Guarded by _lock, keyed like other run state.
@@ -188,8 +189,8 @@ def set_active_run_dir(run_dir: Path | None) -> None:
     with _lock:
         if _evidence_handle is not None:
             if not _evidence_handle.close():
-                _evidence_inode_mismatches[
-                    str(_evidence_handle.path.parent.parent.resolve())] = True
+                _evidence_inode_mismatches.setdefault(
+                    str(_evidence_handle.path.parent.parent.resolve()), True)
             _evidence_handle = None
         _evidence_open_failed = False
         _evidence_next_open_attempt = 0.0
@@ -391,7 +392,7 @@ def record_denial(cmd_display: str, returncode: int,
                            exc_info=True)
         else:
             with _lock:
-                _evidence_write_failures[failure_key] = True
+                _evidence_write_failures.setdefault(failure_key, True)
         # WARNING (F071 W21 promote): operators rarely run with DEBUG
         # enabled, so pre-fix this swallow meant every dropped sandbox-
         # denial record was invisible — operator sees "no denials" with
@@ -1070,7 +1071,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                 and _evidence_handle.path.parent.parent.resolve()
                 == run_dir.resolve()):
             if not _evidence_handle.close():
-                _evidence_inode_mismatches[str(run_dir.resolve())] = True
+                _evidence_inode_mismatches.setdefault(str(run_dir.resolve()), True)
             _evidence_handle = None
         run_key = str(run_dir.resolve())
         inode_mismatch = run_key in _evidence_inode_mismatches
