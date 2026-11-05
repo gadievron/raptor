@@ -684,10 +684,18 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
     for xref in db.xrefs:
         if xref.kind != "call":
             continue
-        by_callee.setdefault(xref.to_addr, []).append(xref)
+        incoming = by_callee.get(xref.to_addr)
+        if incoming is None:
+            incoming = []
+            by_callee[xref.to_addr] = incoming
+        incoming.append(xref)
         caller = db.function_containing_address(xref.from_addr)
         if caller is not None:
-            by_caller.setdefault(caller.address, []).append(xref)
+            outgoing = by_caller.get(caller.address)
+            if outgoing is None:
+                outgoing = []
+                by_caller[caller.address] = outgoing
+            outgoing.append(xref)
     db._audit_xref_adjacency = (len(db.xrefs), by_callee, by_caller)
     return by_callee, by_caller
 
@@ -712,7 +720,9 @@ def _binary_callers(db, func) -> list[dict[str, Any]]:
             if caller.signature:
                 entry["signature"] = caller.signature
             callers.append(entry)
-    return callers[:15]
+            if len(callers) == 15:
+                break
+    return callers
 
 
 def _binary_callees(db, func) -> list[dict[str, Any]]:
@@ -739,7 +749,9 @@ def _binary_callees(db, func) -> list[dict[str, Any]]:
                     callee.decompilation.splitlines()[:20]
                 )
             callees.append(entry)
-    return callees[:15]
+            if len(callees) == 15:
+                break
+    return callees
 
 
 def _binary_sinks(context_map, function_name, address, func=None) -> list[str]:
