@@ -187,6 +187,7 @@ class EvidenceFile:
         self._closed = False
         self._close_result = False
         self._io_lock = threading.RLock()
+        self._needs_resync = False
 
     @classmethod
     def open(cls, run_dir, filename: str) -> EvidenceFile:
@@ -261,9 +262,10 @@ class EvidenceFile:
 
     def write_line(self, line: str) -> bool:
         """Append one JSONL line through the held fd. Returns True on
-        success, False on encoding or I/O failure. O_APPEND keeps
-        sub-PIPE_BUF writes atomic against
-        concurrent appenders sharing the same file."""
+        success, False on encoding or I/O failure. Each record uses
+        one append write; fragments are never retried. After a failed
+        append, a leading newline protects the next record from being
+        joined onto an incomplete predecessor."""
         if self._closed:
             return False
         try:
@@ -273,7 +275,14 @@ class EvidenceFile:
                 # to release this descriptor since the fast check above.
                 if self._closed:
                     return False
-                written = os.write(self.fd, data)
+                if self._needs_resync:
+                    data = b"\n" + data
+                try:
+                    written = os.write(self.fd, data)
+                except BaseException:
+                    self._needs_resync = True
+                    raise
+                self._needs_resync = written != len(data)
             if written != len(data):
                 # Do not retry fragments: another appender may have
                 # written a record after this partial write.
