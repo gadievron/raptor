@@ -1073,6 +1073,44 @@ def rule_default_level(rule: dict[str, Any]) -> str | None:
     return None
 
 
+def logical_location_function(location: Any, logical_locations: Any = None) -> str | None:
+    """Read inline or run-indexed function identity without scanning the run table.
+
+    SARIF 2.1.0 section 3.33.3 requires inline identity fields to agree
+    with the indexed object. A bad reference loses only its optional function
+    metadata. Cached objects may identify their own index, but are not chains.
+    No parent traversal or name reconstruction is needed for display names.
+    """
+    entries = _as_dict(location).get("logicalLocations")
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("index", -1)
+        if type(index) is not int or index < -1:
+            continue
+        logical = entry
+        if index >= 0:
+            if not isinstance(logical_locations, list) or index >= len(logical_locations):
+                continue
+            logical = logical_locations[index]
+            if not isinstance(logical, dict):
+                continue
+            if "index" in logical and (type(logical["index"]) is not int
+                                       or logical["index"] != index):
+                continue
+            if any(key in entry and entry[key] != logical.get(key)
+                   for key in ("name", "fullyQualifiedName", "kind", "decoratedName", "parentIndex")):
+                continue
+        if logical.get("kind") not in ("function", "method", "member"):
+            continue
+        name = logical.get("name")
+        if not isinstance(name, str) or not name:
+            name = logical.get("fullyQualifiedName")
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
 class ArtifactUriResolver:
     """Resolve explicit and indexed artifact URIs using one run's tables.
 
@@ -1293,17 +1331,7 @@ def parse_sarif_findings(
                         canonical = repr(sorted(result.items()))
                     finding_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-            logical_locations = first_loc.get("logicalLocations")
-            function_name = None
-            for logical in (logical_locations if isinstance(logical_locations, list) else []):
-                if not isinstance(logical, dict) or logical.get("kind") not in (
-                    "function", "method", "member",
-                ):
-                    continue
-                name = logical.get("name") or logical.get("fullyQualifiedName")
-                if isinstance(name, str) and name:
-                    function_name = name
-                    break
+            function_name = logical_location_function(first_loc, run.get("logicalLocations"))
             region = _as_dict(loc.get("region"))
             snippet = _as_dict(region.get("snippet")).get("text", "")
             if not isinstance(snippet, str):
