@@ -22,6 +22,7 @@ adapter's wire dialect — and stop authenticating after settlement.
 
 import argparse
 import contextlib
+import errno
 import io
 import json
 import math
@@ -817,7 +818,6 @@ class TestLoopbackReachableFromSandboxLane(unittest.TestCase):
 
     def _probe(self, **extra):
         import http.server
-        import threading
 
         from core.sandbox.context import run as sandbox_run
         from core.config import RaptorConfig
@@ -833,9 +833,11 @@ class TestLoopbackReachableFromSandboxLane(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
 
-        srv = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        try:
+        from packages.web.tests.http_server import start_http_server
+
+        with contextlib.ExitStack() as cleanup:
+            srv = http.server.HTTPServer(("127.0.0.1", 0), _H)
+            start_http_server(srv, cleanup.callback)
             with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
                 base = Path(td)
                 (base / "src").mkdir()
@@ -867,9 +869,6 @@ class TestLoopbackReachableFromSandboxLane(unittest.TestCase):
                         raise
                     self.skipTest(f"sandbox lane unavailable here: {e}")
             return proc
-        finally:
-            srv.shutdown()
-            srv.server_close()
 
     @unittest.skipUnless(sys.platform == "linux", "linux sandbox lanes")
     def test_default_lane_reaches_host_loopback(self):
@@ -931,7 +930,6 @@ class TestGatewayAgainstRealDispatcher(unittest.TestCase):
 
     def test_staged_credentials_round_trip_then_die_at_settlement(self):
         import http.server
-        import threading
 
         import httpx
 
@@ -959,16 +957,20 @@ class TestGatewayAgainstRealDispatcher(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(resp)
 
-        upstream = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        threading.Thread(target=upstream.serve_forever,
-                         daemon=True).start()
-        creds = CredentialStore.__new__(CredentialStore)
-        creds._keys = {"anthropic": "real-key-held-by-dispatcher"}
+        from packages.web.tests.http_server import start_http_server
 
-        with tempfile.TemporaryDirectory(prefix="raptor-pytest-gateway-", dir="/tmp") as td, \
-                patch("core.llm.dispatcher.server._SERVICE_TMP_BASE", td):
+        with contextlib.ExitStack() as cleanup:
+            upstream = http.server.HTTPServer(("127.0.0.1", 0), _H)
+            start_http_server(upstream, cleanup.callback)
+            creds = CredentialStore.__new__(CredentialStore)
+            creds._keys = {"anthropic": "real-key-held-by-dispatcher"}
+            td = cleanup.enter_context(tempfile.TemporaryDirectory(
+                prefix="raptor-pytest-gateway-", dir="/tmp"))
+            cleanup.enter_context(patch(
+                "core.llm.dispatcher.server._SERVICE_TMP_BASE", td))
             d = LLMDispatcher(run_id="oa-gw", creds=creds,
                               audit_path=Path(td) / "audit.jsonl")
+            cleanup.callback(d.shutdown)
             original = d._rules["anthropic"]
             d._rules["anthropic"] = ProviderRule(
                 name=original.name,
@@ -978,69 +980,82 @@ class TestGatewayAgainstRealDispatcher(unittest.TestCase):
                 strip_request_headers=original.strip_request_headers,
             )
             socket_path, token_fd = d.allocate_worker(label="oa-test")
+            token_identity = None
+
+            def close_unread_token():
+                if token_identity is None:
+                    os.close(token_fd)
+                    return
+                try:
+                    stat = os.fstat(token_fd)
+                except OSError as exc:
+                    if exc.errno != errno.EBADF:
+                        raise
+                else:
+                    if (stat.st_dev, stat.st_ino) == token_identity:
+                        os.close(token_fd)
+
+            cleanup.callback(close_unread_token)
+            token_stat = os.fstat(token_fd)
+            token_identity = (token_stat.st_dev, token_stat.st_ino)
             saved_cache = dispatcher_client._cached_token
+            cleanup.callback(setattr, dispatcher_client, "_cached_token", saved_cache)
             dispatcher_client._cached_token = None
-            try:
-                with patch.dict(os.environ, {
-                    "RAPTOR_LLM_SOCKET": socket_path,
-                    "RAPTOR_LLM_TOKEN_FD": str(token_fd),
-                }):
-                    gateway = scanner._mint_gateway_credentials(
-                        OpenAntConfig(core_path=Path(td)))
-                    out = Path(td) / "out"
-                    out.mkdir()
-                    scanner._stage_llm_config(out, "sonnet",
-                                              gateway=gateway)
-                    staged = _staged_config(out)
-                    entry = staged["llm_providers"][_GATEWAY_PROVIDER_NAME]
-                    # Dial exactly what the pinned adapter dials: the
-                    # staged base_url with the SDK's /v1/messages
-                    # appended, credential in x-api-key.
-                    with httpx.Client(timeout=10.0) as c:
-                        ok = c.post(
-                            entry["base_url"] + "/v1/messages",
-                            headers={
-                                "x-api-key": entry["api_key"],
-                                "anthropic-version": "2023-06-01",
-                            },
-                            json={"model": "claude-sonnet-4-6",
-                                  "max_tokens": 8, "messages": []},
-                        )
-                        self.assertEqual(ok.status_code, 200)
-                        # Scope holds under the staged credential.
-                        batches = c.post(
-                            entry["base_url"] + "/v1/messages/batches",
-                            headers={"x-api-key": entry["api_key"]},
-                            json={"model": "claude-sonnet-4-6",
-                                  "max_tokens": 8, "messages": []},
-                        )
-                        self.assertEqual(batches.status_code, 403)
-                        # Settlement revokes server-side: reuse of the
-                        # (still-known) token value is refused.
-                        scanner._settle_gateway(gateway, out)
-                        dead = c.post(
-                            entry["base_url"] + "/v1/messages",
-                            headers={"x-api-key": entry["api_key"]},
-                            json={"model": "claude-sonnet-4-6",
-                                  "max_tokens": 8, "messages": []},
-                        )
-                        self.assertEqual(dead.status_code, 401)
-                    spend = json.loads(
-                        (out / "openant-gateway-spend.json").read_text())
-                    self.assertEqual(spend["token_id"],
-                                     gateway["token_id"])
-                    # Both pre-revocation requests count against the
-                    # token (the 403'd path probe passed TOKEN
-                    # validation before the scope refusal); the
-                    # post-revocation attempt does not.
-                    self.assertEqual(spend["requests_made"], 2)
-                    self.assertNotIn(gateway["token"],
-                                     json.dumps(spend))
-            finally:
-                dispatcher_client._cached_token = saved_cache
-                d.shutdown()
-                upstream.shutdown()
-                upstream.server_close()
+            with patch.dict(os.environ, {
+                "RAPTOR_LLM_SOCKET": socket_path,
+                "RAPTOR_LLM_TOKEN_FD": str(token_fd),
+            }):
+                gateway = scanner._mint_gateway_credentials(
+                    OpenAntConfig(core_path=Path(td)))
+                out = Path(td) / "out"
+                out.mkdir()
+                scanner._stage_llm_config(out, "sonnet",
+                                          gateway=gateway)
+                staged = _staged_config(out)
+                entry = staged["llm_providers"][_GATEWAY_PROVIDER_NAME]
+                # Dial exactly what the pinned adapter dials: the
+                # staged base_url with the SDK's /v1/messages
+                # appended, credential in x-api-key.
+                with httpx.Client(timeout=10.0) as c:
+                    ok = c.post(
+                        entry["base_url"] + "/v1/messages",
+                        headers={
+                            "x-api-key": entry["api_key"],
+                            "anthropic-version": "2023-06-01",
+                        },
+                        json={"model": "claude-sonnet-4-6",
+                              "max_tokens": 8, "messages": []},
+                    )
+                    self.assertEqual(ok.status_code, 200)
+                    # Scope holds under the staged credential.
+                    batches = c.post(
+                        entry["base_url"] + "/v1/messages/batches",
+                        headers={"x-api-key": entry["api_key"]},
+                        json={"model": "claude-sonnet-4-6",
+                              "max_tokens": 8, "messages": []},
+                    )
+                    self.assertEqual(batches.status_code, 403)
+                    # Settlement revokes server-side: reuse of the
+                    # (still-known) token value is refused.
+                    scanner._settle_gateway(gateway, out)
+                    dead = c.post(
+                        entry["base_url"] + "/v1/messages",
+                        headers={"x-api-key": entry["api_key"]},
+                        json={"model": "claude-sonnet-4-6",
+                              "max_tokens": 8, "messages": []},
+                    )
+                    self.assertEqual(dead.status_code, 401)
+                spend = json.loads(
+                    (out / "openant-gateway-spend.json").read_text())
+                self.assertEqual(spend["token_id"],
+                                 gateway["token_id"])
+                # Both pre-revocation requests count against the
+                # token (the 403'd path probe passed TOKEN
+                # validation before the scope refusal); the
+                # post-revocation attempt does not.
+                self.assertEqual(spend["requests_made"], 2)
+                self.assertNotIn(gateway["token"],
+                                 json.dumps(spend))
 
 
 if __name__ == "__main__":
