@@ -1622,16 +1622,21 @@ class TestCompilerSurfaceFences:
 
     def test_compiler_sweep(self) -> None:
         calls = _function_call_map("test_compiler_sweep.py")
-        # The one raw caller is the deliberate toolchain fault: it
-        # MINTS the not-installed shape on purpose, so it must bypass
-        # the guard.
+        # The toolchain-fault test deliberately mints not-installed.
+        # The unknown-checker and corrupt-output tests stub discovery,
+        # analyzer execution, and preprocessing to pin product behavior.
+        # Nested raw calls also count for the enclosing test function.
         assert _callers_of(calls, "run_compiler_analyzer_sweep") == {
             "test_both_missing_is_error",
+            "test_shared_clang_checker_unknown_wording",
+            "test_corrupt_gcc_output_errors_without_poisoning_audit_cache",
+            "sweep",
         }
         assert _callers_of(
             calls, "run_compiler_analyzer_sweep_guarded",
         ) == {"_guarded_compiler_sweep"}
         assert _callers_of(calls, "_guarded_compiler_sweep") == {
+            "test_explicit_common_identifier_does_not_confirm_another_objects_bug",
             "test_cpp_leak_checker_and_cleanup_controls",
             "test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs",
             "test_aliasing_no_clang_retains_candidate",
