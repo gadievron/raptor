@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    "join_lf_slice",
     "number_lines",
     "read_context",
     "read_lines",
@@ -94,6 +95,44 @@ def split_lines(text: str) -> list[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def join_lf_slice(text: str, start: int, end: int) -> str:
+    """Equivalent to ``"\\n".join(text.split("\\n")[start:end])``.
+
+    Bounds are zero-based and half-open. Preserve CR characters and the
+    trailing empty split element: this raw LF model differs from
+    ``split_lines``. Negative bounds, subclasses, and unusual index types
+    retain the original split/slice operations.
+    """
+    if (type(text) is not str or type(start) is not int or type(end) is not int
+            or start < 0 or end < 0 or len(text) < 16 * 1024):
+        return "\n".join(text.split("\n")[start:end])
+    if start >= end:
+        return ""
+    if end <= 128:
+        # Bound Python-level searches to small windows near the start.
+        lower = 0
+        for _ in range(start):
+            found = text.find("\n", lower)
+            if found < 0:
+                return ""
+            lower = found + 1
+        upper = lower
+        for _ in range(end - start):
+            found = text.find("\n", upper)
+            if found < 0:
+                return text[lower:]
+            upper = found + 1
+        return text[lower:upper - 1]
+    # Split only the prefix through the requested end. Discard the
+    # unsplit tail before joining, and clamp huge Python slice bounds
+    # before passing them to split's Py_ssize_t maxsplit argument.
+    parts = text.split("\n", min(end, len(text)))
+    if len(parts) > end:
+        parts.pop()
+    parts = parts[start:end]
+    return "\n".join(parts)
 
 
 def slice_lines(

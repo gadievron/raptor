@@ -36,6 +36,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from core.source.lines import join_lf_slice
+
 logger = logging.getLogger(__name__)
 
 DETECTOR_NAME = "check_then_create"
@@ -224,7 +226,7 @@ def scan_gaps(
         le = gap.get("line_end") or ls
         if not ls:
             continue
-        body = "\n".join(text.split("\n")[ls - 1:le])  # line-model: source_texts reads are universal-newline (read_contained)
+        body = join_lf_slice(text, ls - 1, le)  # line-model: source_texts reads are universal-newline (read_contained)
         try:
             for f in scan_function(fp, gap.get("name", ""), body):
                 f.check_line += ls - 1
