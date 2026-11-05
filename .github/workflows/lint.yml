@@ -26,16 +26,20 @@ permissions:
   contents: read
 
 jobs:
-  # PR diff gate (blocking). Lints ONLY the .py files the PR touches.
-  # This is the required-status-check used by branch protection. A
-  # pre-existing violation in unrelated tree files never blocks an
-  # unrelated PR; only what the PR adds/modifies is judged.
+  # PR diff gate (blocking). Lints changed Python, stub and notebook files;
+  # configuration, deletions and uncertain inputs retain full-tree coverage.
+  # Known changes with no Ruff inputs skip this job. A
+  # Ordinary source edits stay bounded to their changed files; configuration
+  # and uncertain inputs run the full audit before merging.
   #
   # Runs on ``pull_request`` and ``merge_group`` so the same job name
   # satisfies branch-protection's "required status check" both at PR
   # review time and at merge-queue commit time.
   ruff-pr:
-    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [command-metadata]
+    if: >-
+      !cancelled() && needs.command-metadata.outputs.ruff_run == 'true' &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -44,9 +48,6 @@ jobs:
         with:
           # Belt-and-braces: no step in this job needs git credentials.
           persist-credentials: false
-          # Need merge-base history for ``git diff origin/main...HEAD``.
-          # Depth 200 covers any sane PR; shallower clones miss the base.
-          fetch-depth: 200
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -68,40 +69,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install "$(grep -oE 'ruff==[0-9.]+' pyproject.toml)"
 
-      - name: Compute changed Python files
-        id: changed
-        run: |
-          set -euo pipefail
-          # Fetch main's tip — needed for the merge-base diff. Best-
-          # effort; ``fetch-depth: 200`` above usually already covers it.
-          git fetch origin main:refs/remotes/origin/main --depth=200 2>/dev/null \
-            || git fetch origin main --depth=200 2>/dev/null \
-            || true
-          # Compute changed .py files vs the merge base with origin/main.
-          # Single source for both pull_request and merge_group events —
-          # avoids event-shape branching (pull_request.base.sha vs
-          # merge_group.base_sha).
-          BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
-          if [[ -z "$BASE_SHA" ]]; then
-            # Shouldn't happen with fetch-depth: 200, but degrade
-            # gracefully by linting the whole touched-by-HEAD tree.
-            echo "WARN: no merge-base found; linting all .py files in HEAD" >&2
-            CHANGED="."
-          else
-            CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' | tr '\n' ' ')
-          fi
-          echo "files=${CHANGED}" >> "$GITHUB_OUTPUT"
-          echo "Changed .py files vs origin/main: ${CHANGED:-<none>}"
-
-      - name: Run ruff (PR diff only)
-        if: steps.changed.outputs.files != ''
+      - name: Select Ruff inputs
         env:
-          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: python3 .github/scripts/ruff_scope.py --files-out "$RUNNER_TEMP/ruff-files.nul"
+
+      - name: Run ruff (selected inputs)
         run: |
           source $VENV_PATH/bin/activate
-          set -f  # disable globbing — $CHANGED_FILES needs word-split but not glob-expand
-          ruff check --output-format=github \
-            $CHANGED_FILES
+          xargs -0 -r ruff check --output-format=github -- < "$RUNNER_TEMP/ruff-files.nul"
 
   # Full-tree audit (informational). Runs on ``push: main``,
   # ``schedule`` (weekly), and ``workflow_dispatch``. Catches drift the
@@ -114,10 +91,13 @@ jobs:
   # convenient" rather than "this PR is broken." Branch protection
   # gates on ``ruff-pr`` only.
   #
-  # Full-tree auditing owns every main push and deliberate full run.
+  # Full-tree auditing owns main pushes affecting Ruff inputs and deliberate full runs.
   # A successful PR diff-only lint run cannot replace this coverage.
   ruff-tree:
-    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: [command-metadata]
+    if: >-
+      !cancelled() && needs.command-metadata.outputs.ruff_run == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -160,6 +140,8 @@ jobs:
   #
   # Pure stdlib Python; no setup beyond checkout.
   command-metadata:
+    outputs:
+      ruff_run: ${{ steps.ruff_scope.outputs.ruff_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -168,6 +150,13 @@ jobs:
         with:
           # Belt-and-braces: no step in this job needs git credentials.
           persist-credentials: false
+
+      - name: Select Ruff work before allocating lint runners
+        id: ruff_scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: python3 .github/scripts/ruff_scope.py
 
       - name: Lint slash-command metadata
         run: python3 .github/scripts/check_command_metadata.py
