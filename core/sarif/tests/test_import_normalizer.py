@@ -1796,3 +1796,115 @@ def test_consistent_cwe_stays_shared_without_duplicate_result_properties():
     run = document['runs'][0]
     assert run['tool']['driver']['rules'][0]['properties']['cwe'] == ['CWE-89']
     assert all('properties' not in result for result in run['results'])
+
+
+def test_normalization_rebases_flow_hops_without_mutating_shared_paths(tmp_path):
+    import copy
+
+    root = _source_tree(tmp_path)
+    path = {
+        'source': _df_step('/build/project/src/auth.c', 1, 'source'),
+        'sink': _df_step('/build/project/src/main.c', 2, 'sink'),
+        'steps': [_df_step('/build/project/src/auth.c', 3, 'step')],
+        'total_steps': 3, 'alternative_paths': [],
+    }
+    path['source']['properties'] = {'tier': 'resolved_static'}
+    before = copy.deepcopy(path)
+    findings = [_make_finding(file='/build/project/src/main.c', has_dataflow=True, dataflow_path=path),
+                _make_finding(file='src/auth.c', has_dataflow=True, dataflow_path=path)]
+    imported = normalize_imported_findings(findings, root)
+    assert len(imported.findings) == 2
+    for finding in imported.findings:
+        actual = finding['dataflow_path']
+        assert actual['source']['file'] == 'src/auth.c'
+        assert actual['steps'][0]['file'] == 'src/auth.c'
+        assert actual['sink']['file'] == 'src/main.c'
+        assert actual['source']['properties'] == {'tier': 'resolved_static'}
+    assert path == before
+
+
+def test_unmapped_flow_is_replaced_only_by_a_complete_valid_alternative(tmp_path):
+    root = _source_tree(tmp_path)
+    good = {'source': _df_step('src/auth.c', 1, 'source'),
+            'sink': _df_step('src/main.c', 2, 'sink'), 'steps': [], 'total_steps': 2}
+    bad = {**good, 'steps': [_df_step('missing-no-match.c', 3, 'missing')],
+           'total_steps': 3, 'alternative_paths': [good]}
+    imported = normalize_imported_findings([_make_finding(has_dataflow=True, dataflow_path=bad)], root)
+    assert len(imported.findings) == 1
+    assert imported.findings[0]['dataflow_path'] == {**good, 'alternative_paths': []}
+    assert imported.findings[0]['has_dataflow'] is True
+    assert len([warning for warning in imported.warnings if warning.field == 'dataflow_path']) == 1
+
+
+def test_unmapped_flow_hops_cannot_starve_primary_finding_resolution(tmp_path, monkeypatch):
+    import core.sarif.import_normalizer as normalizer
+
+    root = _source_tree(tmp_path)
+    (root / 'duplicate').mkdir()
+    (root / 'duplicate' / 'main.c').write_text('int duplicate;\n')
+    monkeypatch.setattr(normalizer, '_MAX_FAILED_URI_SCANS', 1)
+    bad = {'source': _df_step('missing-no-match.c', 1, 'source'),
+           'sink': _df_step('src/auth.c', 2, 'sink'), 'steps': [], 'total_steps': 2}
+    imported = normalize_imported_findings([
+        _make_finding(file='src/auth.c', has_dataflow=True, dataflow_path=bad),
+        _make_finding(file='/other/build/src/main.c'),
+    ], root)
+    assert [finding['file'] for finding in imported.findings] == ['src/auth.c', 'src/main.c']
+    assert imported.stats.findings_skipped == 0
+    assert imported.findings[0]['has_dataflow'] is False
+    assert imported.findings[0]['dataflow_path'] is None
+
+
+def test_flow_rebasing_preserves_logical_only_hops_and_round_trips(tmp_path):
+    from core.sarif.parser import parse_sarif_findings
+
+    root = _source_tree(tmp_path)
+    path = {'source': _df_step('/build/src/auth.c', 1, 'source'),
+            'sink': _df_step('/build/src/main.c', 2, 'sink'),
+            'steps': [_df_step('', 0, 'logical transition')], 'total_steps': 3}
+    imported = normalize_imported_findings([
+        _make_finding(file='/build/src/main.c', has_dataflow=True, dataflow_path=path),
+    ], root)
+    finding = imported.findings[0]
+    assert finding['dataflow_path']['steps'][0]['file'] == ''
+    assert finding['dataflow_path']['steps'][0]['label'] == 'logical transition'
+    report = tmp_path / 'rebased-flows.sarif'
+    report.write_text(json.dumps(findings_to_sarif(imported.findings)))
+    reparsed = parse_sarif_findings(report, source_root=root)[0]
+    assert reparsed['dataflow_path'] == finding['dataflow_path']
+    assert reparsed['file'] == finding['file']
+
+
+def test_flow_rebasing_rejects_symlink_escape_without_dropping_finding(tmp_path):
+    root = tmp_path / 'source'
+    root.mkdir()
+    _source_tree(root)
+    outside = tmp_path / 'outside.c'
+    outside.write_text('outside the imported tree\n')
+    (root / 'src' / 'linked.c').symlink_to(outside)
+    path = {'source': _df_step('src/linked.c', 1, 'source'),
+            'sink': _df_step('src/auth.c', 2, 'sink'), 'steps': [], 'total_steps': 2}
+    imported = normalize_imported_findings([
+        _make_finding(has_dataflow=True, dataflow_path=path),
+    ], root)
+    assert len(imported.findings) == 1
+    assert imported.findings[0]['has_dataflow'] is False
+    assert imported.findings[0]['dataflow_path'] is None
+    assert imported.stats.findings_skipped == 0
+    summary = format_import_summary(imported, ['flows.sarif'])
+    assert 'findings retained with incomplete or unmappable dataflow paths omitted' in summary
+    assert '0 dataflow paths available' in summary
+    assert 'did not include codeFlows' not in summary
+
+
+def test_flow_warnings_keep_original_finding_index_after_a_skipped_primary(tmp_path):
+    root = _source_tree(tmp_path)
+    path = {'source': _df_step('missing-file.c', 1, 'source'),
+            'sink': _df_step('src/auth.c', 2, 'sink'), 'steps': [], 'total_steps': 2}
+    imported = normalize_imported_findings([
+        _make_finding(file='no-primary-file.c'),
+        _make_finding(has_dataflow=True, dataflow_path=path),
+    ], root)
+    warning = next(warning for warning in imported.warnings if warning.field == 'dataflow_path')
+    assert warning.finding_index == 1
+    assert len(imported.findings) == 1
