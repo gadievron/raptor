@@ -2256,7 +2256,7 @@ class LLMDispatcher:
                 self._tcp_ready = True
                 return self._tcp_port
             except BaseException:
-                errors = []
+                errors: list[str] = []
                 self._retire_listener("tcp", self._tcp_server, self._tcp_thread, errors)
                 if "tcp" in self._cleanup_done:
                     self._tcp_server = self._tcp_thread = None

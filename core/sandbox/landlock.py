@@ -409,10 +409,10 @@ def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
         return (data == b"\x01" and status is not None
                 and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
     finally:
-        for fd in (r, writer):
-            if fd is not None:
+        for close_fd in (r, writer):
+            if close_fd is not None:
                 try:
-                    os.close(fd)
+                    os.close(close_fd)
                 except OSError:
                     pass
 

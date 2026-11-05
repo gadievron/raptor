@@ -67,7 +67,7 @@ def _package(tree, data: bytes) -> str | None:
 
 def _definitions(tree, data: bytes, text: str) -> dict[str, tuple[dict, list[str]]]:
     lines = split_lines(text)
-    definitions = {}
+    definitions: dict[str, tuple[dict, list[str]]] = {}
     for declaration in tree.root_node.named_children:
         if declaration.type != "type_declaration":
             continue
@@ -142,7 +142,7 @@ def resolve_go_types(target_path: Path, file_path: str, metadata: dict, source: 
         yield from nsmallest(_MAX_FILES - 1, siblings, key=lambda p: p.name)
 
     remaining = _MAX_TOTAL_BYTES
-    definitions = {}
+    definitions: dict[str, tuple[dict, list[str]]] = {}
     package = None
     seen = set()
     results = []

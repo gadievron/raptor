@@ -38,7 +38,7 @@ import datetime
 from copy import deepcopy
 from collections.abc import Callable, Iterable
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .observe_profile import ObserveProfile
@@ -142,7 +142,7 @@ def _correlate_entry_points(profile: ObserveProfile,
     (or ``location`` as a fallback). Entries without an id are
     skipped — we can't surface an unkeyed correlation usefully.
     """
-    confirmed = []
+    confirmed: list[Any] = []
     if not isinstance(entry_points, Iterable) or not entry_points:
         return confirmed
     matches = _path_matcher(profile.paths_read, target_dir)
@@ -164,7 +164,7 @@ def _correlate_sinks(profile: ObserveProfile,
 
     Same shape as _correlate_entry_points but on the write side.
     """
-    confirmed = []
+    confirmed: list[Any] = []
     if not isinstance(sink_details, Iterable) or not sink_details:
         return confirmed
     matches = _path_matcher(profile.paths_written, target_dir)

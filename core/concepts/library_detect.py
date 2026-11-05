@@ -493,10 +493,10 @@ def _extract_tarball(tarball: Path, cache_dir: Path) -> Path | None:
                             logger.info("library_detect: using cached extraction at %r", dest)
                             return dest
                     with scratch_dir(".library-extract-", dir=cache_dir) as scratch:
-                        members = []
+                        members: list[tarfile.TarInfo] = []
                         total = 0
                         regular_files = 0
-                        member = first
+                        member: tarfile.TarInfo | None = first
                         while member is not None:
                             while member.name.startswith("./"):
                                 member.name = member.name[2:]

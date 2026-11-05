@@ -36,8 +36,8 @@ from __future__ import annotations
 
 import os
 import stat as _stat_mod
+from io import BufferedReader
 from pathlib import Path
-from typing import IO
 
 __all__ = [
     "ReadBudgetExceededError",
@@ -62,7 +62,7 @@ def _open_gated(
     p: str | Path,
     *,
     follow_symlinks: bool,
-) -> tuple[IO[bytes], os.stat_result]:
+) -> tuple[BufferedReader, os.stat_result]:
     """One open, ONE fstat: the shared body behind
     :func:`open_regular_gated` and :func:`read_bytes_gated`.
 
@@ -100,7 +100,7 @@ def open_regular_gated(
     p: str | Path,
     *,
     follow_symlinks: bool = True,
-) -> IO[bytes]:
+) -> BufferedReader:
     """Raising fd-gated open of a regular file for reading.
 
     The open half of :func:`read_bytes_gated`, exposed for callers

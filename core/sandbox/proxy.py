@@ -1905,7 +1905,7 @@ class EgressProxy:
         self._client_tasks: set = set()
         self._stopping = False
         self._startup_cancelled = threading.Event()
-        self._startup_task: "asyncio.Task | None" = None
+        self._startup_task: "asyncio.Task[asyncio.Server] | None" = None
 
         # Request-line parsing is delegated to the confined parser
         # worker — this process never interprets raw CONNECT
@@ -3176,15 +3176,16 @@ class EgressProxy:
     def _stop_thread_best_effort(self) -> None:
         """Cancel startup even if the worker has not created its loop yet."""
         self._startup_cancelled.set()
-        if self._loop is not None:
+        loop = self._loop
+        if loop is not None:
             def cancel_startup() -> None:
                 task = self._startup_task
                 if task is not None and not task.done():
                     task.cancel()
                 elif self._ready.is_set():
-                    self._loop.stop()
+                    loop.stop()
             with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(cancel_startup)
+                loop.call_soon_threadsafe(cancel_startup)
         if self._thread is not None:
             with contextlib.suppress(RuntimeError):
                 self._thread.join(timeout=2.0)
@@ -3337,10 +3338,11 @@ class EgressProxy:
                     reuse_address=False,
                 )
             )
-            self._server = self._loop.run_until_complete(self._startup_task)
+            tcp_server = self._loop.run_until_complete(self._startup_task)
+            self._server = tcp_server
             if self._startup_cancelled.is_set():
                 return
-            sock = self._server.sockets[0]
+            sock = tcp_server.sockets[0]
             bound_host, bound_port = sock.getsockname()[:2]
             # Defence against a misconfigured interpreter or OS that
             # somehow bound to a non-loopback address.
@@ -3361,7 +3363,8 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            if self._startup_task is not None and not self._startup_task.done():
+            if (self._loop is not None and self._startup_task is not None
+                    and not self._startup_task.done()):
                 self._startup_task.cancel()
                 with contextlib.suppress(RuntimeError, OSError, asyncio.CancelledError):
                     self._loop.run_until_complete(self._startup_task)
@@ -3372,7 +3375,7 @@ class EgressProxy:
             self._unix_tasks.clear()
             # Loop exit can bypass public stop()/unbind calls. Closing
             # the loop itself does not close listening server sockets.
-            servers = set()
+            servers: set[asyncio.AbstractServer] = set()
             if self._server is not None:
                 servers.add(self._server)
             with self._unix_lock:

@@ -802,7 +802,7 @@ def run_rule(
                 budget_errors.append(f"cannot save semgrep --json output: {exc}")
     finally:
         try:
-            if cleanup_json:
+            if cleanup_json and json_path is not None:
                 _safe_unlink(json_path)
         finally:
             if sandbox_output is not None:
