@@ -412,18 +412,16 @@ class TestGrandchildRelay:
 
 
 @pytest.fixture
-def clear_detection_cache():
-    """``detect_llm_availability`` caches its result at module scope.
-    Tests that drive different cache values must clear it both before
-    and after they run, otherwise they pollute later tests in the
-    suite (observed: test_ollama_warning emits an extra "no LLM
-    available" warning when our test left a False-cache behind)."""
-    from core.llm import detection
-    detection._cached_llm_availability = None
-    try:
-        yield
-    finally:
-        detection._cached_llm_availability = None
+def clear_detection_cache(monkeypatch):
+    """Retain caller availability and model selections across dispatcher checks."""
+    from core.llm import config, detection
+    from core.testing.llm_state import isolated_llm_resolution
+
+    with isolated_llm_resolution(config, detection):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 class TestPhaseBChainE2E:
@@ -860,7 +858,18 @@ class TestDetectLLMAvailabilityRecognizesDispatcher:
     def test_external_llm_true_when_dispatcher_socket_set(
         self, monkeypatch, clear_detection_cache,
     ):
+        from types import ModuleType
         from core.llm import detection
+
+        # Availability is under test, not installed tools or legacy-config migration.
+        tools = ModuleType("shutil")
+        tools.__dict__.update(vars(detection.shutil))
+        tools.which = lambda *args, **kwargs: None
+        monkeypatch.setattr(detection, "shutil", tools)
+        monkeypatch.setattr(detection, "_check_litellm_installed", lambda: False)
+        monkeypatch.setattr(detection, "_check_litellm_migration", lambda: None)
+        monkeypatch.setattr(detection, "_config_has_keyed_models", lambda: False)
+        monkeypatch.setattr(detection, "_get_available_ollama_models", lambda: [])
         for k in (
             "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
             "GEMINI_API_KEY", "MISTRAL_API_KEY",
@@ -875,7 +884,18 @@ class TestDetectLLMAvailabilityRecognizesDispatcher:
     def test_external_llm_false_without_dispatcher_or_keys(
         self, monkeypatch, clear_detection_cache,
     ):
+        from types import ModuleType
         from core.llm import detection
+
+        # Availability is under test, not installed tools or legacy-config migration.
+        tools = ModuleType("shutil")
+        tools.__dict__.update(vars(detection.shutil))
+        tools.which = lambda *args, **kwargs: None
+        monkeypatch.setattr(detection, "shutil", tools)
+        monkeypatch.setattr(detection, "_check_litellm_installed", lambda: False)
+        monkeypatch.setattr(detection, "_check_litellm_migration", lambda: None)
+        monkeypatch.setattr(detection, "_config_has_keyed_models", lambda: False)
+        monkeypatch.setattr(detection, "_get_available_ollama_models", lambda: [])
         for k in (
             "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
             "GEMINI_API_KEY", "MISTRAL_API_KEY",

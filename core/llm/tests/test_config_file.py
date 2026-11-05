@@ -8,8 +8,6 @@ from unittest.mock import patch
 
 import pytest
 
-# packages/llm_analysis/tests/test_config_file.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.llm.config import (
     _get_best_thinking_model,
@@ -21,33 +19,21 @@ from core.llm.model_data import MODEL_COSTS, MODEL_LIMITS, PROVIDER_DEFAULT_MODE
 
 
 @pytest.fixture(autouse=True)
-def _restore_llm_caches():
-    """Snapshot module-level caches before each test and restore after.
-
-    Covers both the thinking-model cache in core.llm.config and the
-    detection cache in core.llm.detection.  Without the detection
-    restore, a test that runs under a stripped env (no API keys) caches
-    ``external_llm=False``; any later test calling
-    ``_get_default_fallback_models`` then short-circuits to ``[]``
-    because it trusts the stale detection result.
-    """
+def _restore_llm_caches(monkeypatch):
+    """Own cold selection and detection caches instead of exposing caller entries."""
     import core.llm.config as cfg
     import core.llm.detection as det
-    saved_checked = getattr(cfg, "_thinking_model_checked", None)
-    saved_cached = getattr(cfg, "_cached_thinking_model", None)
-    saved_override = getattr(cfg, "_operator_primary_override", None)
-    saved_avail = getattr(det, "_cached_llm_availability", None)
-    try:
-        yield
-    finally:
-        cfg._thinking_model_checked = saved_checked
-        cfg._cached_thinking_model = saved_cached
-        cfg._operator_primary_override = saved_override
-        det._cached_llm_availability = saved_avail
+    from core.testing.llm_state import isolated_llm_resolution
+
+    with isolated_llm_resolution(cfg, det):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_env(monkeypatch):
+def _hermetic_env(monkeypatch, tmp_path):
     """Strip ambient provider env signals and pin the Anthropic model
     resolver for every test in this file.
 
@@ -67,6 +53,12 @@ def _hermetic_env(monkeypatch):
       the resolver to identity so no unit test in this file can emit
       a network call (or pay the timeout) from a keyed host.
     """
+    # Default discovery and migrations must stay inside the test's own home.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("RAPTOR_CONFIG", raising=False)
+    monkeypatch.setattr("core.llm.detection._get_available_ollama_models", lambda: [])
+    monkeypatch.setattr("core.llm.config._get_available_ollama_models", lambda: [])
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
                 "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
                 "RAPTOR_LLM_SOCKET"):
