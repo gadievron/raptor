@@ -60,10 +60,13 @@ def test_temp_text_failure_removes_partial_file(tmp_path, monkeypatch, failure, 
             if failure == "write":
                 raise error
 
-        def __exit__(self, *exc):
+        def close(self):
             self.file.close()
             if failure == "close":
                 raise error
+
+        def __exit__(self, *exc):
+            self.close()
 
     monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", Broken)
     with pytest.raises(type(error)):
