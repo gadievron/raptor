@@ -111,7 +111,12 @@ class TestShutdownSafeDispatch:
         skipped (observed live: an unhandled crash hung the run after
         results were written)."""
         import concurrent.futures as cf
+        import importlib
 
+        # The driver lazily imports executor -> llm.concurrency. Initialize
+        # that dependency before patching the shared stdlib module, or its
+        # module-level pool alias retains FlakyPool after monkeypatch undo.
+        importlib.import_module("core.audit.executor")
         real_pool = cf.ThreadPoolExecutor
 
         class FlakyPool(real_pool):
