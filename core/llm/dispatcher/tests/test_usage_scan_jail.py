@@ -125,18 +125,26 @@ def _usage_only(verdict: dict) -> dict:
 
 @pytest.fixture
 def fresh_jail():
-    """A dedicated real-worker jail, torn down after the test."""
+    """Own the worker before starting it, including partial startup failures."""
     jail = usage_scan_jail.UsageScanJail()
-    jail.start()
-    yield jail
-    jail.stop()
+    try:
+        jail.start()
+        yield jail
+    finally:
+        jail.stop()
 
 
 @pytest.fixture
 def reset_singleton():
-    usage_scan_jail._reset_for_tests()
-    yield
-    usage_scan_jail._reset_for_tests()
+    """Stop only the singleton created by this test; preserve a borrowed worker."""
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(usage_scan_jail, {"_jail": None},
+                               lock=usage_scan_jail._jail_lock):
+        try:
+            yield
+        finally:
+            usage_scan_jail._reset_for_tests()
 
 
 def _send_frame(sock: socket.socket, req_id: int, payload: bytes,
