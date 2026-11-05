@@ -168,14 +168,16 @@ def _capture_name(node):
     return None
 
 
-def _qualnames(tree) -> dict:
-    """id(node) -> qualname of the innermost enclosing def / class."""
+def _qualnames(tree, *, functions=None) -> dict:
+    """Node qualnames, optionally collecting functions in the same walk."""
     out: dict = {}
 
     def visit(node, owner, prefix):
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
                                   ast.ClassDef)):
+                if functions is not None and not isinstance(child, ast.ClassDef):
+                    functions.append(child)
                 q = prefix + child.name
                 inner = q + ("." if isinstance(child, ast.ClassDef)
                              else ".<locals>.")
@@ -259,10 +261,13 @@ def _scan_function(fn, rel, reads, writes, model_dict_names=(),
                         for te, ve in zip(t.elts, value.elts)])
         return False
 
+    # Only these binding forms can add aliases during the fixed-point pass.
+    bindings = [n for n in nodes if isinstance(
+        n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
     changed = True
     while changed:
         changed = False
-        for n in nodes:
+        for n in bindings:
             if isinstance(n, ast.Assign):
                 chained = len(n.targets) > 1 and any(
                     reached(t) for t in n.targets)
@@ -464,14 +469,14 @@ def scan_full(root: Path, *, parsed_trees=None):
                     tree = ast.parse(f.read_text())
                 except (SyntaxError, UnicodeDecodeError):
                     continue
-            qualnames = _qualnames(tree)
-            for fn in ast.walk(tree):
-                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    model = ("result",) if (
-                        rel == "core/audit/llm_review.py"
-                        and fn.name == "review_fn") else ()
-                    _scan_function(fn, rel, reads, writes, model,
-                                   unresolved, qualnames)
+            functions = []
+            qualnames = _qualnames(tree, functions=functions)
+            for fn in functions:
+                model = ("result",) if (
+                    rel == "core/audit/llm_review.py"
+                    and fn.name == "review_fn") else ()
+                _scan_function(fn, rel, reads, writes, model,
+                               unresolved, qualnames)
     return reads, writes, unresolved
 
 

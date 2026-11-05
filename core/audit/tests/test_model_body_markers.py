@@ -706,6 +706,21 @@ class TestTaintAtSource:
         in any of them must not change the committed outcome."""
         from core.audit.edge_review import run_edge_pass
         from core.audit.tests import test_edge_review as er
+        # This response-parsing matrix uses fresh runs with no project pin
+        # or domain model. Keep real obligation construction and commits,
+        # without rediscovering that absence or fsyncing the same obligation
+        # artifact for every forged leaf. test_edge_review covers real
+        # persistence and domain-knowledge injection separately.
+        monkeypatch.setattr(
+            "core.run.pin.resolve_run_pin", lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr("core.coverage.journal.load_domain_model", lambda *args: None)
+        monkeypatch.setattr(
+            "core.audit.edge_obligations.write_edge_obligations", lambda *args: None,
+        )
+        monkeypatch.setattr(
+            "core.audit.edge_review._edge_knowledge_block", lambda *args: "",
+        )
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
         target = er._target(tmp_path)
         resp = {"status": "suspicious", "body": "caller passes raw input",
@@ -727,6 +742,7 @@ class TestTaintAtSource:
                 er._checklist(target), er.TestRunEdgePass()._context_map(),
                 commit_fn=lambda cfg, outcome, gap: got.append(outcome),
             )
+            assert len(got) == 1, "edge response was not committed"
             return [(o.status, _markers(o.body), _markers(o.hypothesis))
                     for o in got]
 
@@ -1346,7 +1362,8 @@ def _scan_tree(tmp_path, rel, src):
             sorted((s.qualname, s.shape, s.digest) for s in unresolved))
 
 
-@pytest.mark.slow
+# Live-tree results are shared above; individual cases scan tiny scratch
+# trees or inspect that snapshot, so the closure belongs in the default tier.
 class TestReviewKeyScannerWrites:
     """Every modelled write that reaches a review_result is either
     resolved to its exact keys or reported as an unresolved site (file,
