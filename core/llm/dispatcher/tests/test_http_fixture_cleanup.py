@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from packages.web.tests import http_server as http_support
+
 
 _CASES = [
     ("test_body_limits", "_Upstream", ()),
@@ -66,7 +68,7 @@ def test_http_helper_failed_startup_closes_listener(
                 http.server, "ThreadingHTTPServer", recording(real_threading_http)
             )
             patcher.setattr(
-                module,
+                http_support,
                 "threading",
                 SimpleNamespace(
                     **(vars(threading) | {"Thread": thread}),
