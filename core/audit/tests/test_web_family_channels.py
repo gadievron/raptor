@@ -237,10 +237,10 @@ class TestDarkVerifyEligibility:
 
         result = OrchestratorResult()
         result.outcomes = [_outcome("clean")]
-        _run_dark_verification(result, _Cfg(), llm_client=fake_llm)
+        _run_dark_verification(result, _Cfg(), llm_client=fake_llm, include_diagnostics=True)
         assert calls == [], "clean-status outcome consumed a witness call"
 
         result2 = OrchestratorResult()
         result2.outcomes = [_outcome("suspicious")]
-        _run_dark_verification(result2, _Cfg(), llm_client=fake_llm)
+        _run_dark_verification(result2, _Cfg(), llm_client=fake_llm, include_diagnostics=True)
         assert len(calls) == 1

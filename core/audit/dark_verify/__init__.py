@@ -1,10 +1,13 @@
 """Witness-execution verification for dark findings.
 
-Dark findings are tool-blind — mechanical detectors can't confirm or
-refute them.  This module re-submits each dark finding to the LLM
-asking for a *concrete witness* (function, args, expected result),
-then mechanically executes that witness against the target codebase
-to confirm or refute.
+This module generates structured witnesses and executes them against the
+bound target. Its verdicts describe whether a witness prediction matched,
+not whether the vulnerability was established or ruled out.
+
+Automatic audit dispatch requires a supported independent defect oracle.
+Observation-only probes remain available through explicit diagnostic opt-in
+and the public execute_witness entry point. Diagnostic observations never
+gain promotion authority merely by matching a model prediction.
 
 Supports Python, C/C++, Go, JavaScript, TypeScript, Ruby, PHP,
 Rust, Java, Lua, and Perl targets.

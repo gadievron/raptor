@@ -126,6 +126,7 @@ def _run(result, config, workers: int, calls=None) -> None:
         llm_client=_witness_llm(calls),
         start_time=time.monotonic(),
         max_workers=workers,
+        include_diagnostics=True,
     )
 
 
@@ -183,6 +184,7 @@ class TestBudgetStop:
             llm_client=_witness_llm(calls),
             start_time=time.monotonic() - 100.0,
             max_workers=4,
+            include_diagnostics=True,
         )
         assert calls == []
         assert all(o.status == "dark" for o in result.outcomes)
@@ -209,6 +211,7 @@ class TestBudgetStop:
             llm_client=tripping_llm,
             start_time=time.monotonic(),
             max_workers=2,
+            include_diagnostics=True,
         )
         # The first completed call trips the cap: workers already past
         # the gate finish (and their verdicts land), nothing new

@@ -68,6 +68,7 @@ class TestSubmitDarkProbes:
         result = OrchestratorResult(outcomes=[_outcome()])
         outcomes, futures, executor = _submit_dark_probes_early(
             result, _config(tmp_path), llm_client=None,
+            include_diagnostics=True,
         )
         assert outcomes == []
         assert futures == []
@@ -84,6 +85,7 @@ class TestSubmitDarkProbes:
                    return_value=False, create=True):
             outcomes, futures, executor = _submit_dark_probes_early(
                 result, _config(tmp_path), llm_client=client,
+                include_diagnostics=True,
             )
         assert outcomes == []
         assert futures == []
@@ -112,6 +114,7 @@ class TestSubmitDarkProbes:
             outcomes, futures, executor = _submit_dark_probes_early(
                 result, _config(tmp_path),
                 llm_client=lambda p, s: "response",
+                include_diagnostics=True,
             )
         assert len(outcomes) == 2
         assert len(futures) == 2
@@ -311,5 +314,6 @@ class TestDarkHandledSkip:
             result, _config(tmp_path),
             llm_client=lambda p, s: "resp",
             dark_handled={id(o1)},
+            include_diagnostics=True,
         )
         assert "f1" not in probed

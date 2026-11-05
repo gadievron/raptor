@@ -151,6 +151,7 @@ class TestDarkVerificationFloorRefusal:
             _run_dark_verification(
                 result, config, llm_client=lambda p, s: _WITNESS_JSON,
                 start_time=time.monotonic(),
+                include_diagnostics=True,
             )
 
         # The environment verdict landed on the finding's record.
@@ -191,6 +192,7 @@ class TestDarkVerificationFloorRefusal:
                 result, config,
                 llm_client=lambda p, s: llm_calls.append(p) or _WITNESS_JSON,
                 start_time=time.monotonic(),
+                include_diagnostics=True,
             )
         assert len(llm_calls) == 1
         assert len(witness_calls) == 1
@@ -213,6 +215,7 @@ class TestDarkVerificationFloorRefusal:
             _run_dark_verification(
                 result, config, llm_client=lambda p, s: _WITNESS_JSON,
                 start_time=time.monotonic(),
+                include_diagnostics=True,
             )
         assert not isinstance(excinfo.value, SandboxFloorError)
         assert not (tmp_path / "dark-verify-results.json").exists()
@@ -233,6 +236,7 @@ class TestDarkVerificationFloorRefusal:
             _run_dark_verification(
                 result, config, llm_client=lambda p, s: _WITNESS_JSON,
                 start_time=time.monotonic(),
+                include_diagnostics=True,
             )
         assert not (tmp_path / "dark-verify-results.json").exists()
 
@@ -243,6 +247,7 @@ class TestDarkVerificationFloorRefusal:
         _run_dark_verification(
             result, config, llm_client=lambda p, s: _WITNESS_JSON,
             start_time=time.monotonic(),
+            include_diagnostics=True,
         )
         assert result.outcomes[0].status == "dark"
         records = json.loads(
