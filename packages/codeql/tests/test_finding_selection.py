@@ -687,3 +687,64 @@ def test_conflicting_rule_references_do_not_enable_deduplication(tmp_path, refer
     path = _write(tmp_path, 'conflicting.sarif', run)
     selected, count, duplicates = select_findings_for_analysis([path], 2)
     assert (len(selected), count, duplicates) == (2, 2, 0)
+
+
+@pytest.mark.parametrize('results', [[], [None, 'invalid', 3]], ids=['empty', 'malformed-only'])
+def test_empty_runs_skip_metadata_processing(monkeypatch, tmp_path, results):
+    import packages.codeql.finding_selection as selection
+
+    report = {'runs': [{'tool': {'driver': {'name': 'CodeQL', 'rules': []}}, 'results': results}]}
+    monkeypatch.setattr(selection, 'load_sarif', lambda path: report)
+
+    def unexpected_hash(value):
+        pytest.fail('a run without candidate objects hashed metadata')
+
+    monkeypatch.setattr(selection, '_content_key', unexpected_hash)
+    assert selection.select_findings_for_analysis([tmp_path / 'empty.sarif'], 1) == ([], 0, 0)
+
+
+@pytest.mark.parametrize('cap', [0, -1], ids=['zero', 'negative'])
+def test_count_only_selection_skips_ranking_metadata(monkeypatch, tmp_path, cap):
+    import packages.codeql.finding_selection as selection
+
+    result = _located_result()
+    run = _run(result)
+    run['results'].append(copy.deepcopy(result))
+    run['metadata_marker'] = 'not-needed-for-counts'
+    monkeypatch.setattr(selection, 'load_sarif', lambda path: {'runs': [run]})
+    original = selection._content_key
+
+    def hash_needed_value(value):
+        assert 'metadata_marker' not in value, 'count-only selection hashed full run metadata'
+        return original(value)
+
+    monkeypatch.setattr(selection, '_content_key', hash_needed_value)
+    assert selection.select_findings_for_analysis([tmp_path / 'counts.sarif'], cap) == ([], 2, 1)
+
+
+@pytest.mark.parametrize('inherited_level', [False, True], ids=['explicit-level', 'inherited-level'])
+def test_weaker_candidates_skip_ranking_hashes_but_keep_duplicate_counts(monkeypatch, tmp_path, inherited_level):
+    import packages.codeql.finding_selection as selection
+
+    high = _located_result('high', 'error')
+    low = _located_result('low', None if inherited_level else 'note')
+    first = _run(high)
+    losing = _run(low, default='note')
+    losing['metadata_marker'] = 'losing-run'
+    losing['results'].append(copy.deepcopy(low))
+    monkeypatch.setattr(selection, 'load_sarif', lambda path: {'runs': [first, losing]})
+    original = selection._content_key
+    ranked = []
+
+    def hash_needed_value(value):
+        assert 'metadata_marker' not in value, 'strictly weaker run hashed ranking metadata'
+        assert not any(value is result for result in losing['results']), 'strictly weaker result hashed for ranking'
+        if value is high:
+            ranked.append(value)
+        return original(value)
+
+    monkeypatch.setattr(selection, '_content_key', hash_needed_value)
+    selected, count, duplicates = selection.select_findings_for_analysis([tmp_path / 'ranked.sarif'], 1)
+    assert (count, duplicates) == (3, 1)
+    assert [candidate.result for candidate in selected] == [high]
+    assert ranked == [high]
