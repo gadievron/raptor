@@ -92,9 +92,17 @@ def _invoke(state: CompilerAnalysis) -> StageResult:
 def _parse(state: CompilerAnalysis) -> StageResult:
     assert state._workdir is not None
     request = state.request
+    try:
+        diags = request.parse(state._workdir, state._stderr)
+    except CompilerDiagnosticError:
+        if state._returncode >= 0:
+            raise
+        # Signal death can leave empty or truncated structured output.
+        # Preserve the return code so callers classify transport failure.
+        diags = []
     state.record = {
         "returncode": state._returncode,
-        "diags": request.parse(state._workdir, state._stderr),
+        "diags": diags,
         "raw": state._stderr[:max(0, request.raw_limit)],
     }
     if state._returncode != 0:
