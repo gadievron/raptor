@@ -17,22 +17,14 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
 
-# Ensure the repo root is on sys.path so tests can run when invoked
-# from a sub-directory pytest (same preamble as test_codeql_trust.py).
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:                                     # pragma: no cover
-    pass
 
 import core.security.codeql_trust as codeql_trust
 from core.security.codeql_trust import (
     check_repo_codeql_trust,
-    set_trust_override,
 )
 
 _check = check_repo_codeql_trust
@@ -44,11 +36,15 @@ _DANGEROUS_PACK = "name: x\nextractor: ./evil\n"
 
 
 @pytest.fixture(autouse=True)
-def _reset_trust_override():
-    """Reset the module-level trust flag between tests."""
-    set_trust_override(False)
-    yield
-    set_trust_override(False)
+def _reset_trust_override(monkeypatch):
+    from core.security import codeql_trust as trust
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(trust, {"_trust_override_set": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _mk_linked_worktree(base: Path, name: str = "wt1") -> tuple[Path, Path]:

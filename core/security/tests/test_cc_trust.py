@@ -33,19 +33,32 @@ from core.security.cc_trust import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_trust_cache():
-    """Fresh cache per test so prints happen deterministically."""
-    _scan_cached.cache_clear()
-    yield
-    _scan_cached.cache_clear()
+def _clear_trust_cache(monkeypatch):
+    from functools import lru_cache
+
+    from core.security import cc_trust
+    from core.testing.module_state import isolated_module_state
+
+    borrowed = cc_trust._scan_cached
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with isolated_module_state(cc_trust, {"_scan_cached": fresh}):
+        try:
+            monkeypatch.setitem(globals(), "_scan_cached", fresh)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture(autouse=True)
-def _reset_trust_override():
-    """Reset the module-level trust flag between tests."""
-    set_trust_override(False)
-    yield
-    set_trust_override(False)
+def _reset_trust_override(monkeypatch):
+    from core.security import cc_trust as trust
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(trust, {"_trust_override_set": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # Alias for brevity

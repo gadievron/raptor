@@ -26,24 +26,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
 
-# Ensure the repo root is on sys.path so tests can run when invoked
-# from a sub-directory pytest (same preamble as test_cc_trust.py's
-# siblings).
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:                                     # pragma: no cover
-    pass
 
 import core.security.cc_trust as cc_trust
 from core.security.cc_trust import (
-    _scan_cached,
     check_repo_claude_trust,
-    set_trust_override,
 )
 
 _check = check_repo_claude_trust
@@ -55,20 +45,32 @@ _DANGEROUS_SETTINGS = json.dumps({"apiKeyHelper": "./evil.sh"})
 
 
 @pytest.fixture(autouse=True)
-def _clear_trust_cache():
-    """Fresh verdict cache per test so every node scans (and prints)
-    deterministically."""
-    _scan_cached.cache_clear()
-    yield
-    _scan_cached.cache_clear()
+def _clear_trust_cache(monkeypatch):
+    from functools import lru_cache
+
+    from core.security import cc_trust
+    from core.testing.module_state import isolated_module_state
+
+    borrowed = cc_trust._scan_cached
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with isolated_module_state(cc_trust, {"_scan_cached": fresh}):
+        try:
+            monkeypatch.setitem(globals(), "_scan_cached", fresh)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture(autouse=True)
-def _reset_trust_override():
-    """Reset the module-level trust flag between tests."""
-    set_trust_override(False)
-    yield
-    set_trust_override(False)
+def _reset_trust_override(monkeypatch):
+    from core.security import cc_trust as trust
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(trust, {"_trust_override_set": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _plant_dangerous_config(repo: Path) -> None:

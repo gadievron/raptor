@@ -5,16 +5,12 @@ from __future__ import annotations
 from contextlib import ExitStack
 
 import gzip
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from packages.web.tests.http_server import start_http_server
 
-# core/http/tests/test_urllib_backend.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.http import (
     DEFAULT_RETRIES,
@@ -26,19 +22,22 @@ from core.http import (
 from core.http.urllib_backend import (
     UrllibClient,
     _HostCircuitBreaker,
-    reset_default_circuit_breaker,
 )
 
 
 @pytest.fixture(autouse=True)
-def _reset_default_breaker():
-    """Fresh module-level breaker per test — earlier tests' 429/5xx
-    paths trip the singleton and would leak state into later tests
-    that share an UrllibClient without an explicit ``circuit_breaker``
-    kwarg."""
-    reset_default_circuit_breaker()
-    yield
-    reset_default_circuit_breaker()
+def _reset_default_breaker(monkeypatch):
+    from core.http import urllib_backend
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        urllib_backend, {"_DEFAULT_CIRCUIT_BREAKER": None},
+        lock=urllib_backend._DEFAULT_CIRCUIT_BREAKER_LOCK,
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _stub_response(body: bytes, *, status: int = 200,
