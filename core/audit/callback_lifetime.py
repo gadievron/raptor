@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -189,6 +190,9 @@ class SafeTeardownResult:
         }
 
 
+_SELF_HANDLER_RE = re.compile(r"=\s*container_of\s*\(")
+
+
 def check_safe_teardown(
     source: str,
     vocab: Any = None,
@@ -236,8 +240,6 @@ def check_safe_teardown(
     free_re = _call_re(_free_names(vocab))
 
     lines = sanitized_view(source, language="c").split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
-    async_lines: list[int] = []
-    free_lines: list[int] = []
     # (line, column) call positions: C statements on one line execute
     # left to right, so lexicographic order = execution order — the
     # one-line ``kfree(d); cancel_work_sync(&d->work);`` PoC needs
@@ -247,6 +249,8 @@ def check_safe_teardown(
     barrier_pos: list[tuple[int, int]] = []   # waiting or RCU calls
     waiting = rcu = False
     for i, line in enumerate(lines):
+        if type(line) is str and "(" not in line:
+            continue
         # The async pattern requires `(` directly after the name, so
         # a waiting variant (timer_delete_sync) can never match it —
         # every match IS a true async call, and all of them count.
@@ -255,10 +259,8 @@ def check_safe_teardown(
         # dropped a REAL async cancel: `del_timer(&a->t);
         # del_timer_sync(&b->t); … kfree(a);` certified safe.)
         for m in async_re.finditer(line):
-            async_lines.append(i)
             async_pos.append((i, m.start()))
         for fm in free_re.finditer(line):
-            free_lines.append(i)
             free_pos.append((i, fm.start()))
         for wm in waiting_re.finditer(line):
             waiting = True
@@ -272,25 +274,28 @@ def check_safe_teardown(
     # and non-reentrancy of the executing item makes a plain
     # cancel-then-free safe (same suppression the standing
     # teardown_lifetime cocci rule applies).
-    self_handler = any(
-        re.search(r"=\s*container_of\s*\(", line) for line in lines
+    self_handler = bool(async_pos and free_pos) and any(
+        _SELF_HANDLER_RE.search(line) for line in lines
     )
     # Column-resolved like the barrier check below: a same-line
     # ``del_timer(&d->timer); kfree(d);`` is async-cancel-then-free
     # too — the line-only comparison certified it safe whenever a
     # waiting barrier also appeared earlier.
-    for a in async_pos:
-        later = [f for f in free_pos if f > a]
-        if later and not self_handler:
+    # Both position lists are ordered. If the earliest async cancel
+    # has no later free, no later async cancel can have one either.
+    if async_pos and free_pos and not self_handler:
+        a = async_pos[0]
+        next_free = bisect_right(free_pos, a)
+        if next_free < len(free_pos):
             return SafeTeardownResult(
                 safe=False,
                 reason=(
                     f"async cancel at line {a[0] + 1} precedes a free "
-                    f"at line {later[0][0] + 1} — the "
+                    f"at line {free_pos[next_free][0] + 1} — the "
                     f"async-cancel-then-free race shape"
                 ),
             )
-    if self_handler and async_lines and free_lines:
+    if self_handler:
         return SafeTeardownResult(
             safe=True,
             reason=(
@@ -305,15 +310,13 @@ def check_safe_teardown(
         # this witness adjudicates — the mere presence of the sync
         # cancel must not read as safe. (kfree_rcu counts as its own
         # barrier: same line qualifies.)
-        unordered = [
-            f for f in free_pos
-            if not any(b <= f for b in barrier_pos)
-        ]
-        if unordered:
+        # A barrier preceding the first free also precedes every later
+        # free. Otherwise that first free is the original first offender.
+        if free_pos and not any(b <= free_pos[0] for b in barrier_pos):
             return SafeTeardownResult(
                 safe=False,
                 reason=(
-                    f"free at line {unordered[0][0] + 1} precedes "
+                    f"free at line {free_pos[0][0] + 1} precedes "
                     f"every waiting/RCU teardown — free-then-cancel "
                     f"order"
                 ),
@@ -326,7 +329,7 @@ def check_safe_teardown(
         return SafeTeardownResult(
             safe=True, reason="RCU-deferred reclamation present",
         )
-    if not free_lines:
+    if not free_pos:
         return SafeTeardownResult(
             safe=True, reason="no deallocation in scope",
             no_dealloc=True,
@@ -361,6 +364,8 @@ def check_callback_lifetime_local(
     cancels: set[int] = set()
 
     for i, line in enumerate(lines):
+        if type(line) is str and "(" not in line:
+            continue
         if register_re.search(line):
             registrations.append(i)
         if free_re.search(line):
@@ -368,13 +373,16 @@ def check_callback_lifetime_local(
         if cancel_re.search(line):
             cancels.add(i)
 
+    cancel_lines = sorted(cancels) if registrations and frees else []
     for reg_line in registrations:
-        for free_line in frees:
-            if free_line <= reg_line:
-                continue
-            has_cancel = any(
-                reg_line < c < free_line for c in cancels
-            )
+        # A cancel before the first later free protects every later
+        # free for this registration; otherwise that first free wins.
+        free_index = bisect_right(frees, reg_line)
+        if free_index < len(frees):
+            free_line = frees[free_index]
+            cancel_index = bisect_right(cancel_lines, reg_line)
+            has_cancel = (cancel_index < len(cancel_lines)
+                          and cancel_lines[cancel_index] < free_line)
             if not has_cancel:
                 return CallbackLifetimeResult(
                     violation_found=True,
@@ -388,7 +396,8 @@ def check_callback_lifetime_local(
                     ),
                 )
 
-    rcu_result = _check_rcu_kfree(lines)
+    rcu_result = (_check_rcu_kfree(lines)
+                  if type(source) is not str or "rcu_dereference" in source else None)
     if rcu_result is not None:
         return rcu_result
 
