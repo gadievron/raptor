@@ -136,48 +136,73 @@ class Dependencies:
         self.edges = {}
         self.packages = {}
         self.opaque_sources = set()
+        # One immutable checkout per selection, like the existing edge cache.
+        # Keep misses too: imported attributes repeatedly probe the same paths.
+        self._module_files = {}
+        self._resolved = {}
+        self._package_trees = {}
+        self._file_checks = {}
+
+    def _is_file(self, path: str) -> bool:
+        if path not in self._file_checks:
+            self._file_checks[path] = (self.repo / path).is_file()
+        return self._file_checks[path]
+
+    def module_files(self, prefix: str) -> frozenset[str]:
+        if prefix not in self._module_files:
+            self._module_files[prefix] = frozenset(
+                candidate for candidate in (prefix + '.py', prefix + '/__init__.py')
+                if self._is_file(candidate)
+            )
+        return self._module_files[prefix]
 
     def package_exports(self, prefix: str) -> dict[str, str]:
         if prefix not in self.packages:
             path = prefix + '/__init__.py'
-            if (self.repo / path).is_file():
+            if path in self.module_files(prefix):
                 tree = ast.parse((self.repo / path).read_text())
-                self.packages[prefix] = lazy_exports(path, tree)[0]
+                exports, ignored = lazy_exports(path, tree)
+                self.packages[prefix] = exports
+                self._package_trees[path] = tree, ignored
             else:
                 self.packages[prefix] = {}
         return self.packages[prefix]
 
     def resolve(self, module: str) -> set[str]:
+        if module in self._resolved:
+            return set(self._resolved[module])
         deps = set()
         pieces = module.split('.')
         for i in range(1, len(pieces) + 1):
             prefix = '/'.join(pieces[:i])
-            for candidate in (prefix + '.py', prefix + '/__init__.py'):
-                if (self.repo / candidate).is_file():
-                    deps.add(candidate)
+            deps.update(self.module_files(prefix))
             if i < len(pieces):
                 exported = self.package_exports(prefix).get(pieces[i])
                 if exported and exported != module:
                     # Export targets are plain literal module names, not another
                     # attribute expression. Their own imports are walked later.
                     target = exported.replace('.', '/')
-                    for candidate in (target + '.py', target + '/__init__.py'):
-                        if (self.repo / candidate).is_file():
-                            deps.add(candidate)
+                    deps.update(self.module_files(target))
+        self._resolved[module] = frozenset(deps)
         return deps
 
     def direct(self, path: str) -> tuple[set[str], bool]:
         if path in self.edges:
             return self.edges[path]
-        text = (self.repo / path).read_text()
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            if path.startswith('libexec/') and not path.endswith('.py'):
-                self.edges[path] = set(), True
-                return self.edges[path]
-            raise
-        exports, ignored = lazy_exports(path, tree)
+        cached = self._package_trees.pop(path, None)
+        if cached is None:
+            text = (self.repo / path).read_text()
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                if path.startswith('libexec/') and not path.endswith('.py'):
+                    self.edges[path] = set(), True
+                    return self.edges[path]
+                raise
+            exports, ignored = lazy_exports(path, tree)
+        else:
+            tree, ignored = cached
+            exports = self.packages[path[:-12]]
         if path.endswith('/__init__.py'):
             self.packages[path[:-12]] = exports
         tree.body = [node for node in tree.body if id(node) not in ignored]
@@ -186,12 +211,20 @@ class Dependencies:
         if modules is None:
             raise ValueError('unreadable dependency: ' + path)
         deps = set()
-        literals = [node.value for node in ast.walk(tree)
-                    if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        imports, calls, attributes, literals = [], [], [], []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                imports.append(node)
+            elif isinstance(node, ast.Call):
+                calls.append(node)
+            elif isinstance(node, ast.Attribute):
+                attributes.append(node)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                literals.append(node.value)
         for value in literals:
             modules.extend(re.findall(r'\b(?:core|packages|engine)(?:\.[A-Za-z_]\w*)+', value))
         aliases = {}
-        for node in ast.walk(tree):
+        for node in imports:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     aliases[alias.asname or alias.name.split('.')[0]] = alias.name if alias.asname else alias.name.split('.')[0]
@@ -206,18 +239,28 @@ class Dependencies:
                         modules.extend(self.package_exports(base.replace('.', '/')).values())
                     else:
                         aliases[alias.asname or alias.name] = base + '.' + alias.name
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr' and node.args:
+        for node in calls:
+            if isinstance(node.func, ast.Name) and node.func.id == 'getattr' and node.args:
                 if isinstance(node.args[0], ast.Name) and node.args[0].id in aliases:
                     base = aliases[node.args[0].id]
                     if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
                         modules.append(base + '.' + node.args[1].value)
                     else:
                         modules.extend(self.package_exports(base.replace('.', '/')).values())
-            if isinstance(node, ast.Attribute):
+        for node in attributes:
+            parts = []
+            base = node
+            while isinstance(base, ast.Attribute):
+                parts.append(base.attr)
+                base = base.value
+            if isinstance(base, ast.Name):
+                parts = [base.id, *reversed(parts)]
+            else:
+                # Keep the old treatment of calls, subscripts and arbitrary
+                # expressions; only plain dotted names avoid the unparser.
                 parts = ast.unparse(node).split('.')
-                if parts[0] in aliases:
-                    modules.append('.'.join([aliases[parts[0]], *parts[1:]]))
+            if parts[0] in aliases:
+                modules.append('.'.join([aliases[parts[0]], *parts[1:]]))
         for module in modules:
             deps.update(self.resolve(module))
         for value in literals:
@@ -226,23 +269,22 @@ class Dependencies:
                     deps.add(value)
         opaque = False
         aliases = {}
-        for node in ast.walk(tree):
+        for node in imports:
             if isinstance(node, ast.ImportFrom) and node.module in {'importlib', 'importlib.util', 'runpy'}:
                 aliases.update({alias.asname or alias.name: alias.name for alias in node.names})
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
-                name = aliases.get(name, name)
-                if name in {'import_module', '__import__', 'spec_from_file_location', 'run_path'}:
-                    index = 1 if name == 'spec_from_file_location' else 0
-                    if len(node.args) <= index or not isinstance(node.args[index], ast.Constant):
-                        opaque = True
-                    elif name in {'import_module', '__import__'} and isinstance(node.args[index].value, str):
-                        deps.update(self.resolve(node.args[index].value))
+        for node in calls:
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+            name = aliases.get(name, name)
+            if name in {'import_module', '__import__', 'spec_from_file_location', 'run_path'}:
+                index = 1 if name == 'spec_from_file_location' else 0
+                if len(node.args) <= index or not isinstance(node.args[index], ast.Constant):
+                    opaque = True
+                elif name in {'import_module', '__import__'} and isinstance(node.args[index].value, str):
+                    deps.update(self.resolve(node.args[index].value))
         for parent in Path(path).parents:
             for name in ('__init__.py', 'conftest.py'):
                 candidate = (parent / name).as_posix()
-                if candidate != path and (self.repo / candidate).is_file():
+                if candidate != path and self._is_file(candidate):
                     deps.add(candidate)
         self.edges[path] = deps, opaque
         return deps, opaque

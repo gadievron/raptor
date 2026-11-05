@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 import sys
@@ -263,3 +264,95 @@ def test_selection_summary_escapes_changed_paths(tree, monkeypatch):
     assert 'No platform runners' in summary.read_text()
     assert 'docs/&lt;owned&gt;&amp;.md' in summary.read_text()
     assert '<owned>' not in summary.read_text()
+
+
+def _counted_repo(root):
+    checks, reads = Counter(), Counter()
+
+    class CountedPath(type(root)):
+        def is_file(self):
+            checks[self.relative_to(root).as_posix()] += 1
+            return super().is_file()
+
+        def read_text(self, *args, **kwargs):
+            reads[self.relative_to(root).as_posix()] += 1
+            return super().read_text(*args, **kwargs)
+
+    return CountedPath(root), checks, reads
+
+
+def test_module_resolution_reuses_shared_prefixes_and_returns_owned_results(tree):
+    root, _ = tree
+    repo, checks, _ = _counted_repo(root)
+    graph = scope.Dependencies(repo)
+    checks.clear()
+    expected = {'core/one/wrapper.py'}
+    first = graph.resolve('core.one.wrapper')
+    assert first == expected
+    before = checks.copy()
+    first.clear()
+    assert graph.resolve('core.one.wrapper') == expected
+    assert checks == before
+    graph.resolve('core.one.missing')
+    assert checks['core/__init__.py'] == 1
+    assert checks['core/one/__init__.py'] == 1
+    assert max(checks.values()) == 1
+
+
+def test_lazy_initializer_is_read_once_when_resolution_precedes_traversal(tree):
+    root, _ = tree
+    _lazy_package(root)
+    repo, _, reads = _counted_repo(root)
+    graph = scope.Dependencies(repo)
+    assert 'core/shared/helper.py' in graph.resolve('core.lazy.chosen')
+    assert 'core/unrelated/module.py' in graph.resolve('core.lazy.other')
+    assert graph.direct('core/lazy/__init__.py')[1] is False
+    assert reads['core/lazy/__init__.py'] == 1
+
+
+def test_shared_ancestor_hooks_are_checked_once_per_analysis(tree):
+    root, _ = tree
+    repo, checks, _ = _counted_repo(root)
+    graph = scope.Dependencies(repo)
+    checks.clear()
+    graph.closure({'core/one/tests/test_wrapper.py', 'core/two/tests/test_wrapper.py'})
+    assert checks['conftest.py'] == 1
+    assert checks['core/conftest.py'] == 1
+    assert checks['core/__init__.py'] == 1
+
+
+@pytest.mark.parametrize('changed', ['module', 'initializer', 'exports'])
+def test_new_analysis_sees_new_files_and_changed_lazy_exports(tree, changed):
+    root, _ = tree
+    _lazy_package(root)
+    old = scope.Dependencies(root)
+    old.resolve('core.shared.new')
+    old.resolve('core.lazy.chosen')
+    if changed == 'module':
+        path = 'core/shared/new.py'
+        (root / path).write_text('VALUE = 2\n')
+        module = 'core.shared.new'
+    elif changed == 'initializer':
+        path = 'core/__init__.py'
+        (root / path).write_text('VALUE = 2\n')
+        module = 'core.one.wrapper'
+    else:
+        path = 'core/shared/common.py'
+        package = root / 'core/lazy/__init__.py'
+        package.write_text(package.read_text().replace('core.shared.helper', 'core.shared.common'))
+        module = 'core.lazy.chosen'
+    fresh = scope.Dependencies(root)
+    assert path in fresh.resolve(module)
+
+
+@pytest.mark.parametrize('expression', ['alias.wrapper.dispatch', 'alias.factory().dispatch',
+                                       'alias.wrapper[0].dispatch', 'alias.factory("a.b").dispatch'],
+                         ids=['dotted-name', 'call-base', 'subscript-base', 'dotted-call-argument'])
+def test_attribute_resolution_retains_non_name_expression_prefixes(tree, expression):
+    root, _ = tree
+    (root / 'core/one/__init__.py').write_text('VALUE = 1\n')
+    path = root / 'core/shared/attributes.py'
+    path.write_text('import core.one as alias\n' + expression + '\n')
+    deps, opaque = scope.Dependencies(root).direct('core/shared/attributes.py')
+    assert 'core/one/__init__.py' in deps
+    assert opaque is False
