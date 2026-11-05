@@ -706,16 +706,13 @@ class Collector:
         # separate checked_by record.
         self._append_journal_entry(outcome, gap)
 
-        # Mirror _commit_outcome: derive the verification tier once
-        # the journal chokepoint has settled the status. Without this,
-        # every collector-committed outcome kept the dataclass default
-        # ("speculative"), so propagate_confidence's trusted_clean set
-        # (tool_backed/confirmed cleans) was empty on every standard
-        # run and the caller-confidence FP demotion never fired.
+        # Mirror _commit_outcome after the journal settles the status.
+        # Clean grading needs the target root to revalidate scoped negative
+        # evidence against current source; dispatch metadata is insufficient.
         compute = getattr(outcome, "compute_tier", None)
         if callable(compute):
             try:
-                outcome.verification_tier = compute()
+                outcome.verification_tier = compute(target_path=self.target_path)
             except Exception:
                 logger.debug(
                     "verification tier compute failed for %s:%s",

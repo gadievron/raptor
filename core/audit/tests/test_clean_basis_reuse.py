@@ -517,14 +517,13 @@ class TestSilenceDerivedCleanNeverToolBacked:
     @pytest.mark.parametrize("basis, tier", [
         ("gate_resolved", "speculative"),
         ("propagated", "speculative"),
-        ("verdict", "tool_backed"),
-        (None, "tool_backed"),
+        ("verdict", "speculative"),
+        (None, "speculative"),
     ])
     def test_tier_reads_the_basis(self, basis, tier):
         """The tier computation must read the clean basis: gate-resolved and
-        propagated cleans grade speculative while reviewed or unstamped cleans
-        with a dispatched tool grade tool_backed. If the basis were ignored,
-        silence would be graded as tool evidence."""
+        propagated, reviewed, and unstamped cleans with only dispatch metadata
+        all remain speculative. A clean basis is not a negative receipt."""
         clean = _clean("b", basis=basis, dispatched={"semgrep"})
         assert clean.compute_tier() == tier
 
