@@ -1,7 +1,7 @@
 """Lexically visible C declaration types at one narrowing initializer."""
 
 
-def _text(node, source):
+def _node_source(node, source):
     return (
         source[node.start_byte : node.end_byte].decode("utf-8")
         if node is not None
@@ -14,14 +14,14 @@ def _declarations(node, source, *, before=None):
     type_node = (
         node if node.type == "enum_specifier" else node.child_by_field_name("type")
     )
-    type_name = _text(type_node, source)
+    type_name = _node_source(type_node, source)
     if type_node is not None and type_node.type == "enum_specifier":
         body = type_node.child_by_field_name("body")
         if body is not None:
             for item in body.named_children:
                 name = item.child_by_field_name("name")
                 if name is not None:
-                    result[_text(name, source)] = None
+                    result[_node_source(name, source)] = None
     for declarator in node.children_by_field_name("declarator"):
         if before is not None and declarator.start_byte > before:
             continue
@@ -41,7 +41,7 @@ def _declarations(node, source, *, before=None):
                 child = declarator.named_children[0]
             declarator = child
         if declarator is not None:
-            result[_text(declarator, source)] = type_name if plain else None
+            result[_node_source(declarator, source)] = type_name if plain else None
     return result
 
 
