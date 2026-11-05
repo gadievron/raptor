@@ -9,7 +9,7 @@ from core.logging import NOISY_THIRD_PARTY_LOGGERS
 
 
 @contextmanager
-def isolated_cli_logging():
+def isolated_cli_logging(*, logger_names=()):
     """Restore CLI logging changes and close newly attached root handlers.
 
     Use as a context manager or test-function decorator. Keeping the scope
@@ -21,19 +21,25 @@ def isolated_cli_logging():
     original_handlers = tuple(original_list)
     root_level = root.level
     handler_levels = {handler: handler.level for handler in original_handlers}
-    sdk_levels = {logging.getLogger(name): logging.getLogger(name).level
-                  for name in NOISY_THIRD_PARTY_LOGGERS}
+    names = dict.fromkeys((*NOISY_THIRD_PARTY_LOGGERS, *logger_names))
+    sdk_levels = {
+        logging.getLogger(name): logging.getLogger(name).level for name in names
+    }
     try:
         yield
     finally:
-        created = [handler for handler in root.handlers if handler not in original_handlers]
+        created = [
+            handler for handler in root.handlers if handler not in original_handlers
+        ]
         with ExitStack() as cleanup:
             for handler in created:
                 cleanup.callback(handler.close)
-            root.handlers = original_list
-            original_list[:] = original_handlers
-            for handler, level in handler_levels.items():
-                handler.setLevel(level)
-            root.setLevel(root_level)
-            for logger, level in sdk_levels.items():
-                logger.setLevel(level)
+            # Register every restoration before running one: a broken level
+            # setter must not strand later state or owned file handlers.
+            for logger, level in reversed(tuple(sdk_levels.items())):
+                cleanup.callback(logger.setLevel, level)
+            cleanup.callback(root.setLevel, root_level)
+            for handler, level in reversed(tuple(handler_levels.items())):
+                cleanup.callback(handler.setLevel, level)
+            cleanup.callback(original_list.__setitem__, slice(None), original_handlers)
+            cleanup.callback(setattr, root, "handlers", original_list)

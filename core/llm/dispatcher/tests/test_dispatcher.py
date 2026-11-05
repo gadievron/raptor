@@ -1363,24 +1363,26 @@ class TestQuietNoisyLoggersWired:
         flood. This test pins the wire."""
         import logging as _logging
 
-        from core.llm.log_quiet import _NOISY_LOGGERS
+        from core.llm.log_quiet import _NOISY_LOGGERS, _REDUNDANT_ERROR_LOGGERS
+        from core.testing.logging_state import isolated_cli_logging
 
         # Reset to a known noisy state BEFORE constructing the
         # dispatcher — otherwise a stale process-wide setLevel
         # (from a previous test that ran the dispatcher) could
         # mask a missing wire here.
-        saved: dict = {}
-        for name in _NOISY_LOGGERS:
-            lg = _logging.getLogger(name)
-            saved[name] = lg.level
-            lg.setLevel(_logging.INFO)
+        with isolated_cli_logging(
+            logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS),
+        ), ExitStack() as cleanup:
+            for name in _NOISY_LOGGERS:
+                lg = _logging.getLogger(name)
+                lg.setLevel(_logging.INFO)
 
-        audit = tmp_path / "audit.jsonl"
-        d = LLMDispatcher(
-            run_id="quiet-wire-test", audit_path=audit,
-            token_ttl_s=3600, token_budget=100, creds=fake_creds,
-        )
-        try:
+            audit = tmp_path / "audit.jsonl"
+            d = LLMDispatcher(
+                run_id="quiet-wire-test", audit_path=audit,
+                token_ttl_s=3600, token_budget=100, creds=fake_creds,
+            )
+            cleanup.callback(d.shutdown)
             # Every targeted logger landed at WARNING or stricter.
             # ``>=`` accommodates an operator override that
             # raised the level further (ERROR / CRITICAL).
@@ -1393,8 +1395,3 @@ class TestQuietNoisyLoggersWired:
                     f"LLMDispatcher._init_server still calls "
                     f"core.llm.log_quiet.quiet_noisy_loggers."
                 )
-        finally:
-            d.shutdown()
-            # Restore prior state for isolation from other tests.
-            for name, lvl in saved.items():
-                _logging.getLogger(name).setLevel(lvl)

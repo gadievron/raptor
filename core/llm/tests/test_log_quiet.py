@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import logging
 
-from core.llm.log_quiet import quiet_noisy_loggers, _NOISY_LOGGERS
+from core.llm.log_quiet import quiet_noisy_loggers, _NOISY_LOGGERS, _REDUNDANT_ERROR_LOGGERS
+from core.testing.logging_state import isolated_cli_logging
 
 
 class TestQuietNoisyLoggers:
@@ -14,49 +15,35 @@ class TestQuietNoisyLoggers:
     listed third-party loggers; it must NOT raise the root or
     RAPTOR's own loggers."""
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_default_level_is_warning(self):
         # Capture pre-state, mutate, capture post-state, restore.
-        before = {n: logging.getLogger(n).level for n in _NOISY_LOGGERS}
-        try:
-            quiet_noisy_loggers()
-            for name in _NOISY_LOGGERS:
-                assert logging.getLogger(name).level == logging.WARNING
-        finally:
-            for n, lvl in before.items():
-                logging.getLogger(n).setLevel(lvl)
+        quiet_noisy_loggers()
+        for name in _NOISY_LOGGERS:
+            assert logging.getLogger(name).level == logging.WARNING
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_explicit_level_honoured(self):
-        before = {n: logging.getLogger(n).level for n in _NOISY_LOGGERS}
-        try:
-            quiet_noisy_loggers(logging.ERROR)
-            for name in _NOISY_LOGGERS:
-                assert logging.getLogger(name).level == logging.ERROR
-        finally:
-            for n, lvl in before.items():
-                logging.getLogger(n).setLevel(lvl)
+        quiet_noisy_loggers(logging.ERROR)
+        for name in _NOISY_LOGGERS:
+            assert logging.getLogger(name).level == logging.ERROR
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_root_logger_unaffected(self):
         # Defensive: must NOT touch the root logger — that would
         # silence RAPTOR's own diagnostics globally.
         root_before = logging.getLogger().level
-        try:
-            quiet_noisy_loggers()
-            assert logging.getLogger().level == root_before
-        finally:
-            logging.getLogger().setLevel(root_before)
+        quiet_noisy_loggers()
+        assert logging.getLogger().level == root_before
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_idempotent(self):
-        before = {n: logging.getLogger(n).level for n in _NOISY_LOGGERS}
-        try:
-            quiet_noisy_loggers()
-            quiet_noisy_loggers()  # second call no-ops
-            quiet_noisy_loggers(logging.ERROR)  # raise to ERROR
-            quiet_noisy_loggers(logging.WARNING)  # back to WARNING
-            for name in _NOISY_LOGGERS:
-                assert logging.getLogger(name).level == logging.WARNING
-        finally:
-            for n, lvl in before.items():
-                logging.getLogger(n).setLevel(lvl)
+        quiet_noisy_loggers()
+        quiet_noisy_loggers()  # second call no-ops
+        quiet_noisy_loggers(logging.ERROR)  # raise to ERROR
+        quiet_noisy_loggers(logging.WARNING)  # back to WARNING
+        for name in _NOISY_LOGGERS:
+            assert logging.getLogger(name).level == logging.WARNING
 
     def test_targets_include_known_offenders(self):
         # Pin the membership so a future cleanup that drops a
@@ -192,6 +179,7 @@ class TestSdkRetrySpamQuieting:
     are quieted centrally — RAPTOR's client logs one line per retry
     sequence and the instructor funnel logs the accurate detail."""
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_anthropic_and_openai_sdks_quiet_to_warning(self):
         import logging
 
@@ -204,6 +192,7 @@ class TestSdkRetrySpamQuieting:
             assert not lg.isEnabledFor(logging.INFO), name
             assert lg.isEnabledFor(logging.WARNING), name
 
+    @isolated_cli_logging(logger_names=(*_NOISY_LOGGERS, *_REDUNDANT_ERROR_LOGGERS))
     def test_instructor_redundant_error_is_quieted(self):
         import logging
 
