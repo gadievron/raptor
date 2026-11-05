@@ -3532,12 +3532,13 @@ def test_aliasing_warning_cannot_supply_evidence(rule):
     assert is_tool_evidence("compiler:-Wanalyzer-use-after-free")
 
 
+@pytest.mark.slow
 @needs_gcc
 @pytest.mark.parametrize("body", [
     "return (int*)&value;",
     "if (0) return *(int*)&value; return 0;",
     "int *p=(int*)&value; return *p;",
-])
+], ids=["address-only", "unreachable-access", "indirect-access"])
 def test_aliasing_warning_needs_an_independent_access_proof(tmp_path, sandbox_spy, body):
     target = tmp_path / "repo"
     target.mkdir()
@@ -3558,6 +3559,7 @@ def test_aliasing_warning_needs_an_independent_access_proof(tmp_path, sandbox_sp
         assert result.details["candidate_only"]
 
 
+@pytest.mark.slow
 @needs_gcc
 @needs_clang
 def test_aliasing_proof_cannot_confirm_another_identifier(tmp_path, sandbox_spy):
@@ -3570,6 +3572,7 @@ def test_aliasing_proof_cannot_confirm_another_identifier(tmp_path, sandbox_spy)
     assert result.details["candidate_only"]
 
 
+@pytest.mark.slow
 @needs_gcc
 def test_aliasing_no_clang_retains_candidate(tmp_path, sandbox_spy, monkeypatch):
     monkeypatch.setattr(compiler_sweep, "_clang_path", lambda: None)
@@ -3582,6 +3585,7 @@ def test_aliasing_no_clang_retains_candidate(tmp_path, sandbox_spy, monkeypatch)
     assert result.details["corroboration_limitations"]
 
 
+@pytest.mark.slow
 @needs_gcc
 @needs_clang
 def test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs(tmp_path, sandbox_spy):
@@ -3603,6 +3607,7 @@ def test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs(tmp_path, sandbox_
     assert len([c for c in sandbox_spy if "-ast-dump=json" in c["cmd"]]) == 1
 
 
+@pytest.mark.slow
 @needs_gcc
 @needs_clang
 def test_incomplete_aliasing_attempt_is_not_memoized(tmp_path, sandbox_spy, monkeypatch):
