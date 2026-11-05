@@ -48,9 +48,7 @@ import ctypes.util
 import errno
 import json
 import logging
-import math
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -60,6 +58,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from . import evidence as _evidence_mod
+from ._pipe_poll import readable_fds as _readable_fds
 from ._fd_sweep import close_fds_except as _close_fds_except
 
 logger = logging.getLogger(__name__)
@@ -305,18 +304,6 @@ def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
         if pidfd is not None:
             _close_safely(pidfd)
 
-
-def _readable_fds(fds: Iterable[int], timeout: float | None) -> list[int]:
-    """Read readiness without select()'s fixed descriptor-number limit."""
-    descriptors = list(fds)
-    if not descriptors:
-        return []
-    poller = select.poll()
-    for fd in descriptors:
-        poller.register(fd, select.POLLIN)
-    milliseconds = -1 if timeout is None else max(0, math.ceil(timeout * 1000))
-    # HUP/ERR are readiness too: read() must collect buffered bytes or EOF.
-    return [fd for fd, events in poller.poll(milliseconds)]
 
 
 def _drain_pipes_until_eof(

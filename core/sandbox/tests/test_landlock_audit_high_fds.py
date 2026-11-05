@@ -8,6 +8,7 @@ import time
 import pytest
 
 from core.sandbox import _landlock_audit as audit
+from core.sandbox import _pipe_poll
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_poll_timeout_conversion_preserves_positive_waits(monkeypatch, seconds, 
             waits.append(timeout)
             return [(31, select.POLLHUP)]
 
-    monkeypatch.setattr(audit.select, 'poll', Poll)
+    monkeypatch.setattr(_pipe_poll.select, 'poll', Poll)
     assert audit._readable_fds([31], seconds) == [31]
     assert registrations == [(31, select.POLLIN)]
     assert waits == [milliseconds]

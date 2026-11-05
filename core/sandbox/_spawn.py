@@ -63,12 +63,9 @@ import os
 import platform
 import resource
 import shutil
-# Module-level, ALIASED: the setup child's step-7 go-pipe wait needs
-# select POST-FORK, where imports are banned (an import can allocate,
-# lock, and run arbitrary module code in the forked child) — and the
-# bare name `select` is function-LOCAL inside run_sandboxed (the
-# capture loop's own `import select`), so the child must reference a
-# distinct module-scope name or it hits UnboundLocalError pre-exec.
+# Import at module scope for post-fork go-pipe waits, where importing can
+# allocate or acquire inherited locks. The alias keeps those waits separate
+# from parent-side output-capture readiness.
 import select as _select_mod
 import signal
 import socket as _socket_mod
@@ -83,6 +80,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import _pathpin, state
+from ._pipe_poll import readable_fds as _readable_fds
 from ._pathpin import canonical_bind_path as _canonical_bind_path
 from ._pathpin import is_per_process_procfs as _is_per_process_procfs
 from ._fd_sweep import close_fds_except as _close_fds_except
@@ -4545,7 +4543,6 @@ def run_sandboxed(
     setup_status = None
     try:
         if capture_output:
-            import select
             fds = [out_r, err_r]
             # Exit/drain decoupling: waiting for plain pipe EOF couples
             # this run's return to every retained sibling write-end
@@ -4634,7 +4631,7 @@ def run_sandboxed(
                         # Reap-poll cadence while the child is alive
                         # (same order as the waitpid poll loop below).
                         waits.append(0.05)
-                    ready, _, _ = select.select(fds, [], [], min(waits))
+                    ready = _readable_fds(fds, min(waits))
                     for fd in ready:
                         chunk = os.read(fd, 65536)
                         if not chunk:
