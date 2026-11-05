@@ -176,3 +176,26 @@ def test_explicit_targets_and_project_scope_are_forwarded(tmp_path, monkeypatch)
     result = run_analysis(prepare=prepare, rule_config="x", timeout=7)
     assert result.status == "complete"
     assert calls == [((first, "x"), {"timeout": 7, "extra_targets": (second,), "target_root": tmp_path})]
+
+
+@pytest.mark.parametrize("coverage", [
+    {"files_failed": [{"path": "bad.c", "reason": "parse error"}]},
+    {"skipped_summary": {"total": 1}},
+    {"skipped_rules": ["requires a newer Semgrep"]},
+])
+@pytest.mark.parametrize("findings", [[], [{"line": 9}]])
+def test_incomplete_coverage_preserves_analysis_without_claiming_complete(tmp_path, monkeypatch, coverage, findings):
+    observed = []
+
+    @contextmanager
+    def prepare():
+        yield PreparedInput(tmp_path, lambda rows: (observed.extend(rows) or rows, 0))
+
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", lambda *a, **k: SimpleNamespace(
+        findings=findings, errors=[], **coverage,
+    ))
+    result = run_analysis(prepare=prepare, rule_config="x", timeout=5)
+    assert result.status == "partial"
+    assert result.value.coverage_incomplete
+    assert result.value.matches == observed == findings
+    assert [stage.name for stage in result.stages] == ["prepare", "match", "analyze"]

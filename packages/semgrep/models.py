@@ -300,7 +300,9 @@ def parse_json_output(text: str) -> dict[str, Any]:
 
     Returns a dict with keys: files_examined, files_failed,
     semgrep_version, errors, skipped_summary. Empty/malformed input
-    returns empty values rather than raising.
+    returns empty values rather than raising; malformed nonempty input also
+    records a metadata error. Missing optional fields remain compatible with
+    older Semgrep versions.
 
     ``skipped_summary`` is the bounded per-reason digest of
     ``paths.skipped`` (see :func:`_summarise_skipped`) — the record of
@@ -315,7 +317,7 @@ def parse_json_output(text: str) -> dict[str, Any]:
     with a few unparseable files is not reported as an engine failure.
 
     Over-budget input (> ``_MAX_TOOL_OUTPUT_BYTES``) returns the same
-    empty values, with the size logged by the bounded loader.
+    empty values and a metadata error, with the size logged by the bounded loader.
     """
     out: dict[str, Any] = {
         "files_examined": [],
@@ -330,17 +332,33 @@ def parse_json_output(text: str) -> dict[str, Any]:
     try:
         data = loads_bounded(text, max_bytes=_MAX_TOOL_OUTPUT_BYTES)
     except ValueError:
-        # Malformed, whitespace-only, or over-budget output.
+        out["errors"].append("invalid or over-budget Semgrep JSON metadata")
         return out
     if not isinstance(data, dict):
+        out["errors"].append("Semgrep JSON metadata must be an object")
         return out
 
-    paths = data.get("paths") or {}
-    scanned = paths.get("scanned") or []
-    out["files_examined"] = sorted(str(p) for p in scanned if p)
+    paths = data.get("paths")
+    if paths is None:
+        paths = {}
+    if not isinstance(paths, dict):
+        out["errors"].append("Semgrep paths metadata must be an object")
+        paths = {}
+    scanned = paths.get("scanned", [])
+    if not isinstance(scanned, list):
+        out["errors"].append("Semgrep scanned paths must be an array")
+        scanned = []
+    if any(not isinstance(path, str) for path in scanned):
+        out["errors"].append("Semgrep scanned paths contain invalid entries")
+    out["files_examined"] = sorted(path for path in scanned if isinstance(path, str) and path)
     out["skipped_summary"] = _summarise_skipped(paths.get("skipped"))
 
-    errors = data.get("errors") or []
+    errors = data.get("errors", [])
+    if not isinstance(errors, list):
+        out["errors"].append("Semgrep errors metadata must be an array")
+        errors = []
+    if any(not isinstance(entry, dict) for entry in errors):
+        out["errors"].append("Semgrep errors metadata contains invalid entries")
     out["files_failed"] = [
         {"path": str(e.get("path", "")), "reason": str(e.get("message", "error"))}
         for e in errors
@@ -354,12 +372,12 @@ def parse_json_output(text: str) -> dict[str, Any]:
                 and e["type"][0] == "IncompatibleRule")
         )
     ]
-    out["errors"] = [
+    out["errors"].extend(
         _render_error(e)
         for e in errors
         if isinstance(e, dict)
         and str(e.get("level", "error")).lower() in ("error", "fatal")
-    ]
+    )
 
     out["semgrep_version"] = str(data.get("version", ""))
     return out

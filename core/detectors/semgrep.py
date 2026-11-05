@@ -77,11 +77,14 @@ def _match(state: SemgrepAnalysis) -> StageResult:
     state.coverage_incomplete = bool(
         getattr(state._raw, "files_failed", ())
         or (getattr(state._raw, "skipped_summary", None) or {}).get("total", 0)
+        or getattr(state._raw, "skipped_rules", ())
     )
     if state.errors:
         if not state._raw.findings:
             return StageResult("error", "semgrep returned errors without findings")
         return StageResult("partial", "semgrep returned findings with errors")
+    if state.coverage_incomplete:
+        return StageResult("partial", "semgrep did not examine all files or rules")
     return StageResult()
 
 

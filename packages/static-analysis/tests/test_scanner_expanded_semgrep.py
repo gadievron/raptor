@@ -336,7 +336,7 @@ def test_shared_pipeline_keeps_one_corpus_and_one_call_per_pack(tmp_path, monkey
     assert not scratch_paths[0].exists()
 
 
-def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, capsys):
+def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, capsys, caplog):
     repo = _c_repo(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
@@ -353,6 +353,7 @@ def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, caps
     paths = _scanner.run_expanded_semgrep_stage(repo, out, [str(rule)], [])
     assert len(json.loads(Path(paths[0]).read_text())["runs"][0]["results"]) == 1
     assert "pack(s) failed" not in capsys.readouterr().err
+    assert "coverage is partial" in caplog.text
 
 
 def test_expanded_stage_forwards_run_setup(tmp_path, monkeypatch):

@@ -361,7 +361,7 @@ def test_budget_caches_views_per_file(tmp_path, sandbox_spy, monkeypatch):
 
 @needs_cpp
 @pytest.mark.parametrize("fortified", [False, True], ids=["system-headers", "fortified-copy-macro"])
-def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandbox_spy, monkeypatch, fortified):
+def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandbox_spy, monkeypatch, fortified, caplog):
     from core.detectors import semgrep as detector
 
     target = _write_fixture(tmp_path)
@@ -399,6 +399,7 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
     assert result.ok and result.matches[0]["line"] == _MACRO_CALL_LINE
     assert budget.used == 1
     assert len(executions) == 1 and executions[0].status == "partial"
+    assert "coverage is partial" in caplog.text
     assert not executions[0].value._input.target.exists()
 
 

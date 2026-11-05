@@ -643,6 +643,7 @@ def test_write_count_matches_emitted_results_after_malformed_row_skips(tmp_path,
     document = json.loads(output.read_text())
     actual = sum(len(run['results']) for run in document['runs'])
     assert count == actual == int(with_valid_row)
+    assert document["runs"][0]["invocations"][0]["executionSuccessful"] is False
 
 
 def test_catalog_prepass_does_not_consume_one_shot_finding_iterators(tmp_path):
