@@ -123,6 +123,20 @@ rules:
         exact: true
       - pattern: (Encoder $ENC).encodeForLDAP(...)
         exact: true
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = ESAPI.encoder().encodeForLDAP(...)
+              - pattern: $TYPE $SAFE = ESAPI.encoder().encodeForLDAP(...);
+              - pattern: $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForLDAP(...)
+              - pattern: $TYPE $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForLDAP(...);
+              - pattern: $SAFE = (Encoder $ENC).encodeForLDAP(...)
+              - pattern: $TYPE $SAFE = (Encoder $ENC).encodeForLDAP(...);
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+        exact: true
     metadata:
       cwe: ["CWE-90"]
       owasp_top_10: ["A3:2021-Injection"]

@@ -50,6 +50,18 @@ rules:
         exact: true
       - pattern: (float) $X
         exact: true
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = escapeshellarg(...)
+              - pattern: $SAFE = intval(...)
+              - pattern: $SAFE = (int) $X
+              - pattern: $SAFE = (float) $X
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
     pattern-sinks:
       - pattern: exec(...)
       - pattern: system(...)

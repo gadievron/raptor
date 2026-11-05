@@ -226,6 +226,32 @@ rules:
         exact: true
       - pattern: (Encoder $ENC).encodeForHTML(...)
         exact: true
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = StringEscapeUtils.escapeHtml4(...)
+              - pattern: $TYPE $SAFE = StringEscapeUtils.escapeHtml4(...);
+              - pattern: $SAFE = HtmlUtils.htmlEscape(...)
+              - pattern: $TYPE $SAFE = HtmlUtils.htmlEscape(...);
+              - pattern: $SAFE = Encode.forHtml(...)
+              - pattern: $TYPE $SAFE = Encode.forHtml(...);
+              - pattern: $SAFE = Encode.forHtmlContent(...)
+              - pattern: $TYPE $SAFE = Encode.forHtmlContent(...);
+              - pattern: $SAFE = Encode.forHtmlAttribute(...)
+              - pattern: $TYPE $SAFE = Encode.forHtmlAttribute(...);
+              - pattern: $SAFE = org.owasp.encoder.Encode.forHtml(...)
+              - pattern: $TYPE $SAFE = org.owasp.encoder.Encode.forHtml(...);
+              - pattern: $SAFE = ESAPI.encoder().encodeForHTML(...)
+              - pattern: $TYPE $SAFE = ESAPI.encoder().encodeForHTML(...);
+              - pattern: $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForHTML(...)
+              - pattern: $TYPE $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForHTML(...);
+              - pattern: $SAFE = (Encoder $ENC).encodeForHTML(...)
+              - pattern: $TYPE $SAFE = (Encoder $ENC).encodeForHTML(...);
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+        exact: true
     metadata:
       cwe: ["CWE-79"]
       owasp_top_10: ["A3:2021-Injection"]

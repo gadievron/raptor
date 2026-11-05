@@ -107,6 +107,25 @@ rules:
           - pattern: intval(...)
           - pattern: \intval(...)
           - pattern: (int) $X
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = htmlspecialchars(...)
+              - pattern: $SAFE = \htmlspecialchars(...)
+              - pattern: $SAFE = htmlentities(...)
+              - pattern: $SAFE = \htmlentities(...)
+              - pattern: $SAFE = urlencode(...)
+              - pattern: $SAFE = \urlencode(...)
+              - pattern: $SAFE = rawurlencode(...)
+              - pattern: $SAFE = \rawurlencode(...)
+              - pattern: $SAFE = intval(...)
+              - pattern: $SAFE = \intval(...)
+              - pattern: $SAFE = (int) $X
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
     pattern-sinks:
       # 1: single-quoted attribute opener literal, then `.` and the
       # value (which must carry the taint).

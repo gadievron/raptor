@@ -44,6 +44,18 @@ rules:
         exact: true
       - pattern: org.owasp.esapi.ESAPI.encoder().encodeForXPath(...)
         exact: true
+      # Semgrep 1.177 needs simple-local assignment results marked too.
+      # Exact matching keeps unsafe calls inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = ESAPI.encoder().encodeForXPath(...)
+              - pattern: $TYPE $SAFE = ESAPI.encoder().encodeForXPath(...);
+              - pattern: $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForXPath(...)
+              - pattern: $TYPE $SAFE = org.owasp.esapi.ESAPI.encoder().encodeForXPath(...);
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+        exact: true
     metadata:
       cwe: ["CWE-643"]
       owasp_top_10: ["A3:2021-Injection"]
