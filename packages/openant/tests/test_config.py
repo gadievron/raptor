@@ -419,6 +419,16 @@ class TestSuiteHygiene(unittest.TestCase):
                 if isinstance(node, ast.If)
                 and getattr(getattr(node.test, "left", None),
                             "id", "") == "__name__"
+                # A separate direct-execution guard may bootstrap sys.path.
+                # Only the unittest runner can strand later test classes.
+                and any(
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "main"
+                    and isinstance(child.func.value, ast.Name)
+                    and child.func.value.id == "unittest"
+                    for child in ast.walk(node)
+                )
             ]
             self.assertEqual(len(main_idx), 1, name)
             self.assertEqual(
