@@ -1640,11 +1640,19 @@ def _assemble_and_write_summary(
     # second summarize call on the same run dir (sweep-mode CLI, a
     # double terminal transition) take the deleted-evidence branch
     # and REWRITE the summary from memory alone — clobbering the
-    # denial records under a fresh valid MAC. Popped only on the
-    # success path, so a failed write keeps the re-assert armed.
+    # denial records under a fresh valid MAC. Consume only the records
+    # this write published: a producer may append or recreate the queue
+    # during persistence. Equal payloads can be separate observations.
+    # Failed writes keep the complete re-assert armed.
     if refusals:
+        published = {id(record) for record in refusals}
         with _lock:
-            _floor_refusals.pop(str(run_dir.resolve()), None)
+            run_key = str(run_dir.resolve())
+            pending = _floor_refusals.get(run_key)
+            if pending is not None:
+                pending[:] = [record for record in pending if id(record) not in published]
+                if not pending:
+                    _floor_refusals.pop(run_key, None)
     return summary
 
 
