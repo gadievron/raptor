@@ -1032,6 +1032,16 @@ def _finite_json_number(value: str) -> float:
     return number
 
 
+def _unique_evidence_object(fields: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous objects before duplicate members are overwritten."""
+    record: dict[str, Any] = {}
+    for field, value in fields:
+        if field in record:
+            raise ValueError("duplicate field in evidence object")
+        record[field] = value
+    return record
+
+
 def _iter_denial_lines(raw: bytes):
     """Yield byte records using universal file newline rules, without a list."""
     start = 0
@@ -1253,10 +1263,11 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             record = json.loads(
                 line, parse_constant=_finite_json_number,
                 parse_float=_finite_json_number,
+                object_pairs_hook=_unique_evidence_object,
             )
         except (RecursionError, ValueError):
-            # ValueError covers oversized integers and non-finite numbers;
-            # those lines are corrupt evidence, not fatal errors.
+            # ValueError covers duplicate fields, oversized integers and
+            # non-finite numbers: corrupt evidence, not fatal errors.
             # RecursionError: deeply nested input ("["*100k) raises it
             # out of json.loads instead of JSONDecodeError. The line
             # is target-writable content read AFTER the irreversible
