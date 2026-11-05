@@ -612,6 +612,7 @@ _JS_AMBIGUOUS_SLASH_RE = re.compile(r"[)\]]\s*/")
 #: char-class spelling), see the refusal-site comment.
 _JS_INVALID_SLASH_RE = re.compile(r"[)\]\"'`\w]\s*/[^\n\\]{0,1000}\\")
 _WRAPPER_RETURN_CALL_RE = re.compile(r'return\s+(\w+)\s*\(')
+_WRAPPER_RETURN_RE = re.compile(r'\breturn\b')
 # The subscript body is \S-headed ([^\]\s][^]]*): the naive
 # ``\[\s*[^]]+\]`` overlapped the whitespace span and the body on
 # whitespace — quadratic on a '['-opening expression ending in a
@@ -1874,28 +1875,42 @@ def _is_trivial_wrapper(
     return _wrapper_tail_gates(lang, body_no_sig, callee_name)
 
 
+def _multiple_wrapper_statements(body: str, separator: str) -> bool:
+    """Only two nonempty parts are needed to reject a trivial wrapper."""
+    if type(body) is not str:
+        # Keep observable split/strip calls for custom string objects.
+        return len([s.strip() for s in body.split(separator) if s.strip()]) > 1
+    found = False
+    for part in body.split(separator):
+        if part.strip():
+            if found:
+                return True
+            found = True
+    return False
+
+
 def _wrapper_tail_gates(
     lang: str, body_no_sig: str, callee_name: str,
 ) -> tuple[bool, str]:
     """Final shape gates: a trivial delegate has at most one return
     and, without one, at most a single statement."""
     if lang in ("c", "cpp"):
-        return_count = len(re.findall(r'\breturn\b', body_no_sig))
-        if return_count > 1:
+        first_return = _WRAPPER_RETURN_RE.search(body_no_sig)
+        if (first_return is not None
+                and _WRAPPER_RETURN_RE.search(body_no_sig, first_return.end()) is not None):
             return False, ""
         if not _WRAPPER_RETURN_CALL_RE.search(body_no_sig):
             if not re.search(rf'\b{re.escape(callee_name)}\s*\(', body_no_sig):
                 return False, ""
-            stmts = [s.strip() for s in body_no_sig.split(";") if s.strip()]
-            if len(stmts) > 1:
+            if _multiple_wrapper_statements(body_no_sig, ";"):
                 return False, ""
     elif lang == "python":
-        return_count = len(re.findall(r'\breturn\b', body_no_sig))
-        if return_count > 1:
+        first_return = _WRAPPER_RETURN_RE.search(body_no_sig)
+        if (first_return is not None
+                and _WRAPPER_RETURN_RE.search(body_no_sig, first_return.end()) is not None):
             return False, ""
-        if not re.search(r'\breturn\b', body_no_sig):
-            stmts = [s.strip() for s in body_no_sig.split("\n") if s.strip()]  # line-model: statement count only; strip()-normalised
-            if len(stmts) > 1:
+        if first_return is None:
+            if _multiple_wrapper_statements(body_no_sig, "\n"):  # line-model: statement count only; strip()-normalised
                 return False, ""
 
     return True, f"trivial wrapper delegating to {callee_name}()"
