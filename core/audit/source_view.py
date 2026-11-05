@@ -579,6 +579,8 @@ def _blank_c_region(chars: list[str], source: str, start: int, end: int) -> None
 
 _C_RANGE_MIN_SOURCE = 16 * 1024
 _C_RANGE_MIN_CHARS_PER_MARKER = 32
+# Blanking preserves LF alone; every other ASCII code point becomes space.
+_C_ASCII_BLANK_TABLE = bytes(10 if code == 10 else 32 for code in range(128))
 
 
 def _render_c_blank_ranges(source: str, ranges: list[tuple[int, int]]) -> str:
@@ -603,9 +605,14 @@ def _render_c_blank_ranges(source: str, ranges: list[tuple[int, int]]) -> str:
         if not newlines:
             pieces.append(" " * (end - start))
         else:
-            pieces.append("\n".join(
-                " " * len(line) for line in source[start:end].split("\n")
-            ))
+            region = source[start:end]
+            if len(region) >= 256 and region.isascii():
+                pieces.append(region.translate(_C_ASCII_BLANK_TABLE))
+            else:
+                pieces.append("\n".join(
+                    " " * len(line) for line in region.split("\n")
+                ))
+            del region
         cursor = end
     pieces.append(source[cursor:])
     return "".join(pieces)
