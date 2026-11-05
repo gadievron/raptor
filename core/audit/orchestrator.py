@@ -4727,6 +4727,7 @@ def review_one_function(
             _accumulate_observations(
                 session_observations, outcome, gap,
                 sweep_pre_status=pre_sweep_status,
+                target_path=config.target_path,
             )
 
     # ── SAGE: chain re-review status change observation ──────────────
@@ -19207,6 +19208,7 @@ def _accumulate_observations(
     gap: dict[str, Any],
     *,
     sweep_pre_status: str | None = None,
+    target_path: Path | None = None,
 ) -> None:
     """Extract LLM observations and add to session context.
 
@@ -19235,15 +19237,20 @@ def _accumulate_observations(
             _sage_store_observation(obs_text, "tool_confirmation", source)
         elif (
             sweep_pre_status == "finding" and outcome.status == "suspicious"
-            # A refutation needs a channel whose silence was probative:
-            # a demotion with no tool, or only errored / inconclusive
-            # ones, is the G2 gate speaking, not a mechanical verdict
-            # (SAGE stores this kind as one).
-            and probative_channels(outcome)
+            # Dispatch and demotion do not establish a negative verdict.
+            # Learning has the same source/claim boundary as resolution.
+            and target_path is not None
+            and outcome.hypothesis
+            and (source_identity := capture_source_identity(target_path, outcome.file))
+            and claims_refuted(
+                outcome, [outcome.hypothesis], source_identity=source_identity,
+            )
+            and (claim_text := _sanitise_observation(outcome.hypothesis))
         ):
             obs_text = (
-                f"[tool-refuted] hypothesis '{_sanitise_observation(outcome.hypothesis or '')}' "
-                f"was not confirmed by any mechanical tool — demoted"
+                f"[tool-refuted] source sha256 {source_identity.sha256}, "
+                f"line {outcome.line}: hypothesis '{claim_text}' "
+                f"was explicitly refuted"
             )
             session_observations.append(
                 {
@@ -27277,6 +27284,7 @@ def _deepen_suspicious(
                     outcome,
                     gap,
                     sweep_pre_status=prior_outcome.status,
+                    target_path=config.target_path,
                 )
 
             logger.info(
@@ -27844,6 +27852,7 @@ def _iterative_re_review(
                     outcome,
                     gap,
                     sweep_pre_status=pre_status,
+                    target_path=config.target_path,
                 )
 
             if on_progress:
@@ -34355,6 +34364,7 @@ def _re_review_joern_enriched(
                     outcome,
                     gap,
                     sweep_pre_status=prior_outcome.status,
+                    target_path=config.target_path,
                 )
 
             logger.info(
@@ -34840,6 +34850,7 @@ def _re_review_study_enriched(
                     outcome,
                     gap,
                     sweep_pre_status=prior_outcome.status,
+                    target_path=config.target_path,
                 )
 
             logger.info(

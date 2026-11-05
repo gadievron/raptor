@@ -4707,8 +4707,8 @@ class TestSessionObservations:
         assert len(confirmed) == 1
         assert "semgrep" in confirmed[0]["text"]
 
-    def test_tool_refutation_injection(self):
-        """Sweep demotion injects tool_refutation observation."""
+    def test_dispatch_alone_does_not_inject_tool_refutation(self):
+        """Sweep demotion and dispatch alone are not a refutation."""
         from core.audit.orchestrator import _accumulate_observations
 
         obs_list: list = []
@@ -4717,18 +4717,14 @@ class TestSessionObservations:
             body="maybe bof", hypothesis="strcpy overflow",
             review_result={"status": "suspicious", "body": "maybe bof"},
         )
-        # A refutation is a channel that looked and answered: the
-        # record carries the probative semgrep run (an empty record —
-        # the G2 gate speaking, no tool at all — earns no
-        # "[tool-refuted]"; see test_silence_admissibility).
+        # Dispatch alone is not evidence that the claim was refuted.
         outcome.tools_dispatched = {"semgrep"}
         _accumulate_observations(
             obs_list, outcome, {"file": "a.c", "name": "vuln"},
             sweep_pre_status="finding",
         )
         refuted = [o for o in obs_list if o.get("kind") == "tool_refutation"]
-        assert len(refuted) == 1
-        assert "refuted" in refuted[0]["text"].lower()
+        assert refuted == []
 
 
 @pytest.mark.slow
@@ -5652,8 +5648,8 @@ class TestSageObservationPathway:
             assert args[1] == "tool_confirmation"
             assert args[2] == "a.c:vuln"
 
-    def test_tool_refutation_stores_to_sage(self):
-        """_accumulate_observations stores tool refutations to SAGE."""
+    def test_dispatch_alone_does_not_store_refutation_to_sage(self):
+        """A demotion without an explicit receipt cannot teach SAGE."""
         from unittest.mock import patch as _patch
 
         from core.audit.orchestrator import _accumulate_observations
@@ -5664,10 +5660,7 @@ class TestSageObservationPathway:
             body="maybe bof", hypothesis="strcpy overflow",
             review_result={"status": "suspicious", "body": "maybe"},
         )
-        # SAGE stores tool_refutation as a MECHANICAL verdict, so the
-        # demotion must carry a channel that refuted (a probative
-        # semgrep run); with no tool, or only errored/inconclusive
-        # ones, nothing is stored (see test_silence_admissibility).
+        # SAGE must not learn a mechanical verdict from dispatch alone.
         outcome.tools_dispatched = {"semgrep"}
         gap = {"file": "a.c", "name": "vuln"}
 
@@ -5675,9 +5668,7 @@ class TestSageObservationPathway:
             _accumulate_observations(
                 obs_list, outcome, gap, sweep_pre_status="finding",
             )
-            mock_store.assert_called_once()
-            args = mock_store.call_args[0]
-            assert args[1] == "tool_refutation"
+            mock_store.assert_not_called()
 
     def test_llm_observation_not_stored_to_sage(self):
         """_accumulate_observations does NOT store plain LLM observations to SAGE."""
