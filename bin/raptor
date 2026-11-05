@@ -307,17 +307,12 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ "${1:-}" != --_scratch-sessio
                          || _rp stat -Lf '%Lp' "$_dir" 2>/dev/null \
                          || echo '')"
                 if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
-                    # claude resolved through the scrubbed PATH but may
-                    # still live in an attacker-writable tree — strip
-                    # before echoing, same discipline as the entry lanes.
                     _shown_cp="${_agent_path//[![:print:]]/}"
                     _shown_dir="${_dir//[![:print:]]/}"
                     echo "raptor: WARNING: $_agent_binary resolves under a world-writable tree: ${_shown_cp:0:200} (writable ancestor: ${_shown_dir:0:200})" >&2
                     unset _shown_cp _shown_dir
                     break
                 fi
-                # Parameter expansion, not dirname(1) — no external
-                # command per hop.
                 _dir="${_dir%/*}"
                 [ -n "$_dir" ] || _dir="/"
                 _hops=$((_hops + 1))
@@ -647,7 +642,6 @@ _raptor_local_route() {
     return 1
 }
 
-if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     for _arg in "$@"; do
         [ "$_arg" = -- ] && break
         if [ "$_arg" = --codex ]; then
@@ -655,6 +649,7 @@ if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
             exit 1
         fi
     done
+if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     # `|| true`: _raptor_local_route execs on a match (never returns); a
     # non-match returns 1, which under `set -e` would abort before the
     # guidance below — tolerate it so the error message prints.
@@ -667,12 +662,55 @@ if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     exit 1
 fi
 
+# Choose CLI: explicit --codex -> codex; else claude if present; else codex.
+if ! command -v claude >/dev/null 2>&1; then
+    _raptor_local_route "$@" || true
+    if command -v codex >/dev/null 2>&1; then
+        USE_CODEX=1
+    else
+        echo "raptor: neither claude nor codex found. Install Claude Code or Codex CLI." >&2
+        exit 1
+    fi
+fi
+
 # RAPTOR_CALLER_DIR was exported before the direct routes above.
 export RAPTOR_DIR
 # Trust marker - libexec scripts refuse to run without one of
 # CLAUDECODE or _RAPTOR_TRUSTED. We've just stripped the env, so
 # direct invocation through this launcher is the safe path.
 export _RAPTOR_TRUSTED=1
+
+# Never inherit a metadata filename from an enclosing/target environment.
+# Only this launcher's freshly-created private session directory may seed it.
+if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
+    case "$RAPTOR_REGISTRY_HOME" in
+        /*) _scratch_state="$RAPTOR_REGISTRY_HOME/sessions.d/.scratch-authorities" ;;
+        *) echo "raptor: RAPTOR_REGISTRY_HOME must be an absolute path" >&2; exit 1 ;;
+    esac
+else
+    _scratch_state="$HOME/.local/share/raptor/sessions.d/.scratch-authorities"
+fi
+if [ -z "$_scratch_inside" ]; then
+    unset _RAPTOR_LAUNCH_METADATA _RAPTOR_SCRATCH_AUTH
+    _launch_root="$(_raptor_tmp_base)" || exit 1
+    _launch_scratch_args=(--allocate --issuer "$$")
+    if ! _RAPTOR_LAUNCH_METADATA="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" "$_launch_root" "${_launch_scratch_args[@]}")"; then
+        echo "raptor: could not establish launcher scratch metadata" >&2
+        exit 1
+    fi
+
+fi
+if ! _RAPTOR_SCRATCH_AUTH="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --authorize --issuer "$$" --state-dir "$_scratch_state")"; then
+    echo "raptor: could not establish launcher scratch authority" >&2
+    exit 1
+fi
+unset _scratch_state
+export _RAPTOR_SCRATCH_AUTH
+export _RAPTOR_LAUNCH_METADATA
+export TMPDIR="${_RAPTOR_LAUNCH_METADATA%/metadata/launch.json}/tmp"
+unset _launch_root _launch_scratch_args
+
 
 # Parse RAPTOR-specific args, collect CLI args
 RAPTOR_ORIGINAL_ARGS=("$@")
@@ -699,6 +737,16 @@ while [[ $# -gt 0 ]]; do
             CLAUDE_ARGS+=("$@")
             CODEX_ARGS+=("$@")
             break
+            ;;
+        --_protected-install-stage)
+            INSTALL_GUARD_INSIDE=1
+            PROTECT_INSTALL=1
+            export RAPTOR_INSTALL_PROTECTED=1
+            shift
+            ;;
+        --protect-install)
+            PROTECT_INSTALL=1
+            shift
             ;;
         -p|--project)
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
@@ -757,6 +805,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Use the parsed flag, so a model name or passthrough value cannot select
+# protection. A requested protected launch never retries without its boundary.
+if [ -n "$PROTECT_INSTALL" ] && [ -z "$INSTALL_GUARD_INSIDE" ]; then
+    _rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --prepare-protection || exit 126
+    exec python3 -I -S -B "$RAPTOR_DIR/core/startup/install_guard.py" --frontend claude -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_protected-install-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
+
+# Keep the filesystem cleaner outside frontend mount/PID namespaces. Reentry
+# binds the actual frontend PID; the supervisor never seeds a project row.
+if [ -z "$_scratch_inside" ]; then
+    exec python3 -I "$RAPTOR_DIR/core/security/scratch_supervisor.py" \
+        --metadata "$_RAPTOR_LAUNCH_METADATA" ${_scratch_approval_arg:+"$_scratch_approval_arg"} -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_scratch-session-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
+unset _scratch_inside
+
 # Choose only after parsing so --codex never falls back silently to Claude.
 if [ -n "$USE_CODEX" ]; then
     if ! command -v codex >/dev/null 2>&1; then
@@ -764,7 +830,6 @@ if [ -n "$USE_CODEX" ]; then
         exit 1
     fi
 elif ! command -v claude >/dev/null 2>&1; then
-    # Keep existing direct analysis routing when Claude is absent.
     _raptor_local_route "${RAPTOR_ORIGINAL_ARGS[@]}" || true
     if command -v codex >/dev/null 2>&1; then
         USE_CODEX=1
@@ -924,7 +989,6 @@ if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
     esac
 fi
 _sessions_dir="$_sessions_base/sessions.d"
-# A launcher starts a new harness, not a child workflow of the calling chat.
 # Never let inherited Codex context select the new Claude/Codex session.
 unset RAPTOR_CODEX_CONTEXT_ID RAPTOR_CODEX_ENVIRONMENT RAPTOR_CODEX_HOOK RAPTOR_CODEX_HOOK_ROOT
 if [ -z "$USE_CODEX" ]; then
@@ -1054,20 +1118,13 @@ fi
 unset _sessions_dir _startup_out _seed_proj _seed_by
 
 # Codex has its own config and hooks; never pass Claude plugin/name flags.
-# SessionStart and shared RAPTOR process startup restore session context;
-# native configuration still controls ordinary shell environment inheritance.
 if [ -n "$USE_CODEX" ]; then
-    # Host hook execution must remain pinned to this reviewed installation,
-    # even when a later hook cwd is an untrusted nested or target repository.
-    # This is host-only launch state, not shell policy or hook-payload data.
     export RAPTOR_CODEX_HOOK_ROOT="$RAPTOR_DIR"
     export CODEX=1
     if [ -n "$RESUME_SESSION" ] && [ -z "$RAPTOR_LAUNCH_TARGET" ]; then
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
             codex resume --last "${CODEX_ARGS[@]}"
     fi
-    # Preserve launch data for native hooks AND the agent-driven bootstrap,
-    # separately from the short visible startup trigger.
     if ! _codex_launch_config="$(_rp python3 -I "$RAPTOR_DIR/libexec/raptor-session-init" \
             --codex-launch-config "$RAPTOR_CALLER_DIR" "$RAPTOR_LAUNCH_TARGET")"; then
         echo "raptor: could not format Codex launch context" >&2
