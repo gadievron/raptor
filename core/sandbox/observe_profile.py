@@ -586,7 +586,8 @@ def parse_observe_log(run_dir, *,
     warning; records are still parsed so the observation remains
     available as UNAUTHENTICATED signal. ``None`` (default)
     preserves the pre-existing behaviour for callers without run
-    metadata.
+    metadata. Malformed metadata is not proof of isolation: the mount flag
+    must be boolean True and a protected delivery label must be a string.
 
     Returns an empty profile if the file does not exist or cannot
     be read — a caller with no observe records gets a defaulted
@@ -595,14 +596,16 @@ def parse_observe_log(run_dir, *,
     """
     profile = ObserveProfile()
     if expected_nonce is not None and sandbox_info is not None:
-        _isolated = bool(sandbox_info.get("mount_ns_active")) or (
-            sandbox_info.get("backend") == "macos-seatbelt"
+        info = sandbox_info if isinstance(sandbox_info, dict) else {}
+        _isolated = info.get("mount_ns_active") is True or (
+            info.get("backend") == "macos-seatbelt"
         )
-        _delivery = sandbox_info.get("nonce_delivery")
-        if not _isolated and _delivery not in _PROTECTED_NONCE_DELIVERY:
+        _delivery = info.get("nonce_delivery")
+        _protected = isinstance(_delivery, str) and _delivery in _PROTECTED_NONCE_DELIVERY
+        if not _isolated and not _protected:
             logger.warning(
                 "parse_observe_log: refusing nonce-based trust for %s "
-                "— run executed on a namespace-less backend and the "
+                "— run lacks a recorded isolated backend and the "
                 "nonce delivery channel (%r) is not recorded as "
                 "protected. Records are parsed but the profile is "
                 "marked unauthenticated (nonce_trusted=False).",
