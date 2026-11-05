@@ -159,9 +159,9 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["hypothesis_sha256"] = hashlib.sha256(hypothesis.encode("utf-8", "surrogatepass")).hexdigest()
     if verb == "check-overflow":
         # Matching source is insufficient: replies must satisfy the current
-        # operation, guard, type and case-sensitive variable-identity contract.
+        # explicit claim, operation, guard, type and variable-identity contract.
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "case-sensitive-overflow-v5"
+        binding["query_contract"] = "explicit-arithmetic-claim-v6"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-oob":
         binding["query_contract"] = "explicit-bounds-roles-v1"

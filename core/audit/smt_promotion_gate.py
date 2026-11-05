@@ -26,10 +26,9 @@ suspicious, and the receipt itself is never weakened):
   false finding while a wrongly-held one keeps everything at
   suspicious-with-receipt.
 
-Operand re-derivation deliberately reuses the sweep layer's own
-extraction helpers so the gate checks exactly the variables the verb
-solved over, not a fresh guess from the hypothesis text.  Operands
-that appear in the mechanism only as member accesses (``x->y`` /
+Operand re-derivation uses the shared arithmetic-claim parser and sweep
+operand adapters so the gate checks the variables the verb solved over.
+Operands that appear in the mechanism only as member accesses (``x->y`` /
 ``x.y``) never bind: a same-named parameter would make the gate
 adjudicate the wrong variable, promoting or holding on evidence about
 a different value.
@@ -49,8 +48,8 @@ from .api_boundary import (
     adjudicate_contract,
     parse_param_names,
 )
+from .arithmetic_claim import parse_arithmetic_claim
 from .sweep import (
-    _extract_arithmetic_operands,
     _extract_oob_operands,
     _extract_ptr_operand,
 )
@@ -123,7 +122,8 @@ def receipt_preconditions(
         if ptr:
             operands = [ptr]
     elif bare_verb == "check-overflow":
-        operands = list(_extract_arithmetic_operands(mechanism, source))
+        claim = parse_arithmetic_claim(mechanism)
+        operands = list(claim.operands) if claim is not None else []
     elif bare_verb == "check-oob":
         index, size = _extract_oob_operands(mechanism, source)
         operands = [op for op in (index, size) if op]

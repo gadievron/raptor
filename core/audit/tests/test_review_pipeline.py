@@ -2835,43 +2835,6 @@ class TestLanguageGate:
         assert not _lang_has_overflow_safety("include/net/esp.h")
 
 
-# ── Operand-in-arithmetic gate (Intervention B) ────────────────
-
-class TestOperandInArithmetic:
-
-    def test_operand_present_in_arithmetic(self):
-        from core.audit.sweep import _operand_in_source_arithmetic
-        assert _operand_in_source_arithmetic("count", "total = count * elem_size;")
-        assert _operand_in_source_arithmetic("len", "offset = base + len;")
-
-    def test_operand_not_in_arithmetic(self):
-        from core.audit.sweep import _operand_in_source_arithmetic
-        assert not _operand_in_source_arithmetic("count", "return get_count(ctx);")
-        assert not _operand_in_source_arithmetic("size", "if (size == 0) return;")
-
-    def test_operand_in_comment_not_matched(self):
-        from core.audit.sweep import _operand_in_source_arithmetic
-        assert not _operand_in_source_arithmetic(
-            "count", "// total = count * size\nreturn 0;",
-        )
-
-    def test_extract_filters_non_arithmetic_operands(self):
-        from core.audit.sweep import _extract_arithmetic_operands
-        source = "return get_value(ctx);"
-        ops = _extract_arithmetic_operands(
-            "integer overflow in `count` times `elem_size`", source,
-        )
-        assert len(ops) == 0
-
-    def test_extract_keeps_real_arithmetic_operands(self):
-        from core.audit.sweep import _extract_arithmetic_operands
-        source = "total = count * elem_size;"
-        ops = _extract_arithmetic_operands(
-            "integer overflow in `count` times `elem_size`", source,
-        )
-        assert "count" in ops or "elem_size" in ops
-
-
 # ── Self-contradiction demotion (Intervention C) ────────────────
 
 class TestSelfContradictionDemotion:

@@ -1123,10 +1123,6 @@
     "count": 51,
     "kind": "literal"
   },
-  "core/audit/sweep.py::raw": {
-    "count": 22,
-    "kind": "literal"
-  },
   "core/audit/transform_sequence.py::_SECURITY_TRANSFORM_RE": {
     "count": 23,
     "kind": "alternation"
