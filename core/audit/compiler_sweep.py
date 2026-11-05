@@ -51,7 +51,7 @@ from core.source import open_regular, read_text_capped
 from core.source.lines import split_lines
 from typing import Any
 
-from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths, local_uri_path
+from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths, local_uri_path, valid_diagnostic_location
 
 from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
@@ -2107,9 +2107,27 @@ def run_compiler_analyzer_sweep(
     )
     details["hypothesis_identifiers"] = identifiers
 
-    checker_in_range = [
+    checker_diagnostics = [
         d for d in diags
         if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)
+    ]
+    unlocated = [
+        d for d in checker_diagnostics
+        if not valid_diagnostic_location(d)
+        and (
+            compiler_name == "gcc" or not spec.clang_message_re
+            or re.search(spec.clang_message_re, d["message"], re.IGNORECASE)
+            or diagnostic_cwe(d["id"], d["message"]) is None
+        )
+    ]
+    if unlocated:
+        details["unlocated_diagnostics"] = [
+            {"id": d["id"], "line": d.get("line"), "file": d.get("file")}
+            for d in unlocated[:5]
+        ]
+    checker_in_range = [
+        d for d in checker_diagnostics
+        if valid_diagnostic_location(d)
         and _same_file(d["file"], full_path)
         and _in_range(d["line"], line_start, line_end)
     ]
@@ -2165,8 +2183,8 @@ def run_compiler_analyzer_sweep(
                     pass  # An unpinnable compiler must run uncached.
             def compute_aliasing():
                 # Cache the whole TU, not the first hypothesis's range or names.
-                candidates = [{"file": file_path, "line": d["line"]} for d in diags
-                              if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)
+                candidates = [{"file": file_path, "line": d["line"]} for d in checker_diagnostics
+                              if valid_diagnostic_location(d)
                               and _same_file(d["file"], full_path)]
                 analysis = corroborate_aliasing(
                     target_path, file_path, candidates,
@@ -2247,6 +2265,15 @@ def run_compiler_analyzer_sweep(
             file_path, function_name,
             "recognized checker reported an unclassified diagnostic; "
             "cannot refute from analyzer silence",
+            details=details,
+        )
+        result.raw_output = raw
+        return result
+
+    if unlocated:
+        result = _inconclusive(
+            file_path, function_name,
+            "family diagnostics lack usable source locations; cannot establish analyzer silence",
             details=details,
         )
         result.raw_output = raw

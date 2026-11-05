@@ -90,6 +90,7 @@ from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
+from core.detectors.compiler_paths import valid_diagnostic_location
 from core.detectors.budget import DEFAULT_COMPILER_SCAN_SECONDS, WorkBudget, bounded_futures, positive_seconds
 from core.detectors.setup import AnalysisSetup
 from core.detectors.memcpy_overlap import OVERLAP_ID, run_memcpy_overlap
@@ -316,14 +317,14 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
         candidate = compiler_diagnostic_is_candidate(diag_id)
         if candidate != review_candidates or (not candidate and not _keep_diag_id(diag_id)):
             continue
+        if not valid_diagnostic_location(d):
+            continue
         rel = _rel_under_target(
             d.get("file", ""), target_path, full_path.parent,
         )
         if rel is None:
             continue
         line = d.get("line", 0)
-        if not isinstance(line, int) or line <= 0:
-            continue
         kept.append({
             "rule_id": diag_id,
             "file": rel,
@@ -401,12 +402,24 @@ def analyze_tu(
             )
         except Exception as exc:  # noqa: BLE001 — the vet only annotates; it must never cost this TU its findings
             witness, unvetted = "", f"suppression vet failed: {type(exc).__name__}"
+        unlocated = sum(
+            1 for d in record["diags"]
+            if "error" not in str(d.get("kind", ""))
+            and (_keep_diag_id(d.get("id") or "")
+                 or compiler_diagnostic_is_candidate(d.get("id") or "")
+                 or d.get("id") == STACK_RETURN_ID)
+            and not valid_diagnostic_location(d)
+        )
+        if unlocated:
+            unvetted = "; ".join(filter(None, (
+                unvetted, f"{unlocated} compiler diagnostic(s) lack usable source locations",
+            )))
         return TuDiagnostics(
             rel_path, ok=True, compiler=compiler_name, diagnostics=kept,
             suppression_witness=witness, suppression_unvetted=unvetted,
             stack_return_candidates=[d for d in record["diags"]
                                      if compiler_name == "gcc" and d.get("id") == STACK_RETURN_ID
-                                     and d.get("kind") == "warning"],
+                                     and d.get("kind") == "warning" and valid_diagnostic_location(d)],
             review_candidates=_scan_diagnostics(record["diags"], target_path, full_path,
                                                  compiler_name, rel_path, review_candidates=True),
         )

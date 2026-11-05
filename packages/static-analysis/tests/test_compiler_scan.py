@@ -1559,3 +1559,41 @@ def test_encoded_sarif_diagnostic_is_reported_at_its_real_source_path(tmp_path):
     )
     assert len(diagnostics) == 1
     assert diagnostics[0]['file'] == source.name
+
+
+@pytest.mark.parametrize('filename,line', [('source', 0), ('source', True), ('', 1)])
+@pytest.mark.parametrize('include_valid', [False, True])
+@pytest.mark.parametrize('rule_id', ['-Wanalyzer-use-after-free', _cs.STACK_RETURN_ID])
+def test_unlocated_warning_is_coverage_limitation_without_losing_valid_findings(
+    tmp_path, monkeypatch, filename, line, include_valid, rule_id,
+):
+    import json
+    import subprocess
+
+    source = tmp_path / 'a.c'
+    source.write_text('void f(void) {}\n')
+    monkeypatch.setattr(_cs, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(_cs, '_clang_path', lambda: None)
+
+    def run(command, **kwargs):
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        diagnostics = [{
+            'kind': 'warning', 'option': rule_id, 'message': 'warning',
+            'locations': [{'caret': {
+                'file': str(source) if filename == 'source' else filename, 'line': line,
+            }}],
+        }]
+        if include_valid:
+            diagnostics.append({
+                'kind': 'warning', 'option': rule_id, 'message': 'warning',
+                'locations': [{'caret': {'file': str(source), 'line': 1}}],
+            })
+        return subprocess.CompletedProcess(command, 0, '', json.dumps(diagnostics))
+
+    result = _cs.analyze_tu(tmp_path, source.name, sandbox_run=run)
+    assert result.ok
+    assert 'lack usable source locations' in result.suppression_unvetted
+    assert len(result.diagnostics) == int(include_valid and rule_id != _cs.STACK_RETURN_ID)
+    assert len(result.stack_return_candidates) == int(include_valid and rule_id == _cs.STACK_RETURN_ID)
+    assert all(type(d['line']) is int for d in result.diagnostics)

@@ -22,6 +22,14 @@ def _positive(value):
     return isinstance(value, int) and not isinstance(value, bool) and 0 < value < 2**31
 
 
+def valid_diagnostic_location(diag: dict[str, Any]) -> bool:
+    """Only a real filename and a positive integer line can carry evidence."""
+    filename = diag.get("file")
+    return (isinstance(filename, str) and bool(filename) and len(filename) <= 4096
+            and not filename.startswith("<") and _positive(diag.get("line"))
+            and not any(ord(char) < 32 for char in filename))
+
+
 def local_uri_path(uri: Any) -> str:
     """Decode one local SARIF URI once; filesystem names must bypass this.
 
