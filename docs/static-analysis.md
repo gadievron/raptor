@@ -566,7 +566,10 @@ finding is still reported. This is deliberate:
 merge, finding counts follow `combined.sarif`, including deduplication,
 exclusions and enforced suppression drops. If merging fails, counts use
 the retained per-tool reports. File counts come from coverage records
-when available, with the original reports’ artifact tables as a fallback.
+when available, with the original reports’ artifact tables as a fallback. The
+`nosemgrep_suppressed_count` includes only annotated findings still present
+in the counted report; findings removed by sanitizer enforcement are not
+subtracted again from the active finding total.
 
 
 ## Error Handling

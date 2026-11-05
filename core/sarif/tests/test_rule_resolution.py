@@ -429,3 +429,35 @@ def test_metrics_can_count_original_artifacts_without_recounting_findings(tmp_pa
     assert metrics['findings_by_rule'] == {'kept': 1}
     assert metrics['findings_by_severity']['error'] == 1
     assert metrics['findings_by_severity']['warning'] == 0
+
+
+@pytest.mark.parametrize('properties,expected', [
+    (None, 0), ('malformed', 0), ({'nosemgrep': None}, 0),
+    ({'nosemgrep': 'malformed'}, 0), ({'nosemgrep': {'suppressed': False}}, 0),
+    ({'nosemgrep': {'suppressed': 'true'}}, 0), ({'nosemgrep': {'suppressed': 1}}, 0),
+    ({'nosemgrep': {'suppressed': True}}, 1),
+])
+def test_metrics_count_only_literal_suppression_annotations(tmp_path, properties, expected):
+    import json
+    from core.sarif.parser import generate_scan_metrics
+
+    path = tmp_path / 'suppressed.sarif'
+    path.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'Semgrep'}},
+        'results': [{'ruleId': 'rule-a', 'level': 'warning', 'properties': properties}]}]}))
+    metrics = generate_scan_metrics([str(path)])
+    assert metrics['nosemgrep_suppressed_count'] == expected
+    assert metrics['total_findings'] == 1
+
+
+def test_artifact_count_inputs_cannot_inflate_suppression_count(tmp_path):
+    import json
+    from core.sarif.parser import generate_scan_metrics
+
+    primary = tmp_path / 'empty.sarif'
+    primary.write_text(json.dumps({'runs': [{'results': []}]}))
+    original = tmp_path / 'original.sarif'
+    original.write_text(json.dumps({'runs': [{'artifacts': [{'location': {'uri': 'a.py'}}],
+        'results': [{'properties': {'nosemgrep': {'suppressed': True}}}]}]}))
+    metrics = generate_scan_metrics([str(primary)], file_count_paths=[str(original)])
+    assert metrics['total_files_scanned'] == 1
+    assert metrics['total_findings'] == metrics['nosemgrep_suppressed_count'] == 0

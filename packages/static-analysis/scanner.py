@@ -3555,7 +3555,6 @@ def main() -> None:
         merge_completed = False
         exclude_globs = args.exclude_dir
         excluded_count = 0
-        nosemgrep_count = 0
         if sarif_inputs:
             logger.info("Merging %d SARIF files...", len(sarif_inputs))
             try:
@@ -3578,7 +3577,7 @@ def main() -> None:
                 # lives in result.properties.nosemgrep so any downstream
                 # consumer (/validate, external SARIF viewers) can see
                 # that a finding was developer-suppressed.
-                nosemgrep_count = semgrep_pkg.annotate_sarif(
+                semgrep_pkg.annotate_sarif(
                     merged_data, str(repo_path),
                 )
                 save_json(merged, merged_data, stream=True)
@@ -3671,7 +3670,9 @@ def main() -> None:
         # semgrep_failed_packs, which records packs that DISPATCHED and
         # then failed. Empty list means every requested pack ran.
         metrics["dropped_registry_packs"] = sorted(_dropped_registry_packs)
-        metrics["nosemgrep_suppressed_count"] = nosemgrep_count
+        # Count only annotations still present in the report selected for
+        # metrics: sanitizer enforcement may have removed annotated results.
+        nosemgrep_count = metrics["nosemgrep_suppressed_count"]
         # Record-only post-pass stats (None when disabled or no SARIFs)
         # — verdict counts, refusal reasons, budget skips. The verdicts
         # themselves live in suppressions.jsonl.
