@@ -11,9 +11,10 @@ import os
 import re
 import stat as _stat_mod
 import time
+from itertools import chain
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote
 
 from core.logging import get_logger
@@ -527,6 +528,58 @@ class ImportResult:
     stats: ImportStats = field(default_factory=ImportStats)
 
 
+def _rebase_dataflow_path(
+    dataflow: Any, resolve_file: Callable[[str], str | None],
+) -> tuple[dict[str, Any] | None, int]:
+    """Rebase complete paths without mutating shared input hops or bridging gaps."""
+    if not isinstance(dataflow, dict):
+        return None, 1
+
+    def rebase_path(path: Any) -> dict[str, Any] | None:
+        if not isinstance(path, dict):
+            return None
+        source, sink = path.get("source"), path.get("sink")
+        middle = path.get("steps")
+        if middle is None:
+            middle = []
+        if not isinstance(source, dict) or not isinstance(sink, dict) or not isinstance(middle, list):
+            return None
+        hops = []
+        for step in chain((source,), middle, (sink,)):
+            if not isinstance(step, dict):
+                return None
+            uri = step.get("file")
+            # Logical-only hops have no physical file to rebase.
+            if uri is None or uri == "":
+                mapped = ""
+            elif isinstance(uri, str):
+                resolved_file = resolve_file(uri)
+                if resolved_file is None:
+                    return None
+                mapped = resolved_file
+            else:
+                return None
+            hops.append({**step, "file": mapped})
+        result = {key: value for key, value in path.items() if key != "alternative_paths"}
+        result.update(source=hops[0], sink=hops[-1], steps=hops[1:-1], total_steps=len(hops))
+        return result
+
+    kept = []
+    rejected = 0
+    alternatives = dataflow.get("alternative_paths")
+    for path in chain((dataflow,), alternatives if isinstance(alternatives, list) else []):
+        rebased = rebase_path(path)
+        if rebased is None:
+            rejected += 1
+        else:
+            kept.append(rebased)
+    if not kept:
+        return None, rejected
+    primary = kept[0]
+    primary["alternative_paths"] = kept[1:]
+    return primary, rejected
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -555,6 +608,7 @@ def normalize_imported_findings(
     scan_budget: list[int] = [_MAX_FAILED_URI_SCANS]
     resolved_memo: dict[str, str] = {}
     scan_clock: list[float] = [0.0]
+    pending_dataflows: list[tuple[int, dict[str, Any]]] = []
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
@@ -652,6 +706,27 @@ def normalize_imported_findings(
             result.stats.sca_tagged += 1
 
         result.findings.append(finding)
+        if finding.get("has_dataflow"):
+            pending_dataflows.append((idx, finding))
+
+    # Primary finding locations get the URI scan budget first. Optional flow
+    # hops then reuse the same successes, failed-URI memo and remaining budget.
+    def resolve_flow_file(uri: str) -> str | None:
+        return _resolve_uri(
+            uri, source_root, file_index, depth_cache,
+            failed_memo=failed_memo, scan_budget=scan_budget,
+            resolved_memo=resolved_memo, scan_clock=scan_clock,
+        )
+
+    for idx, finding in pending_dataflows:
+        path, rejected = _rebase_dataflow_path(finding.get("dataflow_path"), resolve_flow_file)
+        finding["dataflow_path"] = path
+        finding["has_dataflow"] = path is not None
+        if rejected:
+            result.warnings.append(ImportWarning(
+                idx, "dataflow_path",
+                f"Omitted {rejected} incomplete or unmappable dataflow path(s); finding retained",
+            ))
 
     result.stats.total_imported = len(result.findings)
     return result
@@ -693,11 +768,17 @@ def format_import_summary(result: ImportResult, sarif_files: list[str]) -> str:
             f"— consider --also-scan for richer dependency analysis"
         )
 
+    flow_warnings = sum(warning.field == "dataflow_path" for warning in result.warnings)
+    if flow_warnings:
+        lines.append(
+            f"  → {flow_warnings} findings retained with incomplete or "
+            "unmappable dataflow paths omitted"
+        )
     no_dataflow = sum(
         1 for f in result.findings if not f.get("has_dataflow")
     )
     if no_dataflow == len(result.findings) and result.findings:
-        lines.append("  → 0 dataflow paths (SARIF did not include codeFlows)")
+        lines.append("  → 0 dataflow paths available")
     return "\n".join(lines)
 
 
