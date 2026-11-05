@@ -315,9 +315,10 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Merge multiple SARIF files into a single SARIF dict.
 
-    Groups runs by tool name, deduplicates results within each tool by
-    ``_result_key`` (ruleId, uri, startLine, endLine, startColumn,
-    fingerprint). Latest occurrence wins on collision.
+    ID-only runs are grouped by tool name and deduplicated by
+    ``_result_key`` (latest occurrence wins). Runs carrying indexed or
+    component-qualified rule references retain their original metadata;
+    only identical contexts and exact reports are coalesced.
 
     Args:
         sarif_paths: List of paths to SARIF files
@@ -326,7 +327,12 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
         Merged SARIF dict with deduplicated results per tool
     """
     # Group runs by tool name so same-tool runs get their results merged
-    tool_runs: dict[str, dict[str, Any]] = {}  # tool_name -> merged run
+    tool_runs: dict[str | tuple[str, str], dict[str, Any]] = {}
+
+    def content_identity(value):
+        return hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
 
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
@@ -339,6 +345,20 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 )
                 continue
             tool_name = get_tool_name(run)
+            results = run.get("results") or []
+            if any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
+                   for result in results):
+                # Rule indexes and component references are local to this
+                # run's tables. Flattening them into another driver's table
+                # silently changes what the report refers to.
+                metadata = {key: value for key, value in run.items() if key != "results"}
+                context_key = (tool_name, content_identity(metadata))
+                if context_key not in tool_runs:
+                    tool_runs[context_key] = {"original": metadata, "results": {}}
+                for result in results:
+                    if isinstance(result, dict):
+                        tool_runs[context_key]["results"][content_identity(result)] = result
+                continue
             if tool_name not in tool_runs:
                 tool_runs[tool_name] = {
                     "tool": _as_dict(run.get("tool")),
@@ -406,9 +426,14 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
                 key = _result_key(result)
                 tool_runs[tool_name]["results"][key] = result
 
-    # Build final SARIF with one run per tool
+    # Preserve qualified namespaces; rebuild only ID-based merged runs.
     merged_runs = []
-    for tool_name, run_data in tool_runs.items():
+    for run_data in tool_runs.values():
+        if "original" in run_data:
+            qualified_run = dict(run_data["original"])
+            qualified_run["results"] = list(run_data["results"].values())
+            merged_runs.append(qualified_run)
+            continue
         # Re-inject the unioned rule list into tool.driver.rules.
         tool_block = dict(run_data["tool"]) if run_data["tool"] else {}
         driver = dict(tool_block.get("driver") or {})
@@ -794,6 +819,44 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
     return matches[0] if len(matches) == 1 else {}
 
 
+class ResultRuleResolver:
+    """Run-owned descriptor lookup with an unambiguous legacy-ID index.
+
+    Indexed and component-qualified references use the shared validator.
+    Ordinary ID-only reports avoid scanning every rule for every result.
+    No result payloads or cross-run lookup state are retained.
+    """
+
+    def __init__(self, run: dict[str, Any]):
+        tool = _as_dict(run.get("tool"))
+        self._run = {"tool": tool}
+        self._by_id: dict[str, dict[str, Any] | None] = {}
+        extensions = tool.get("extensions")
+        for component in extensions if isinstance(extensions, list) else []:
+            for rule in self._rules(component):
+                rid = rule["id"]
+                self._by_id[rid] = None if rid in self._by_id else rule
+        driver_ids: set[str] = set()
+        for rule in self._rules(tool.get("driver")):
+            rid = rule["id"]
+            self._by_id[rid] = None if rid in driver_ids else rule
+            driver_ids.add(rid)
+
+    @staticmethod
+    def _rules(component):
+        rules = _as_dict(component).get("rules")
+        if isinstance(rules, list):
+            yield from (rule for rule in rules if isinstance(rule, dict)
+                        and isinstance(rule.get("id"), str) and rule["id"])
+
+    def resolve(self, result: dict[str, Any]) -> dict[str, Any]:
+        index = result.get("ruleIndex", -1)
+        if not _as_dict(result.get("rule")) and type(index) is int and index == -1:
+            rid = result.get("ruleId")
+            return (self._by_id.get(rid) or {}) if isinstance(rid, str) else {}
+        return get_result_rule(self._run, result)
+
+
 def rule_default_level(rule: dict[str, Any]) -> str | None:
     """The rule's ``defaultConfiguration.level``, or None.
 
@@ -887,15 +950,8 @@ def parse_sarif_findings(
 
         tool_name = get_tool_name(run)
 
-        # Build rule_id → CWE lookup
-        rules_by_id = {}
-        for rid, rule in get_rules(run).items():
-            cwe_id = _extract_cwe_from_rule(rule)
-            if rid:
-                rules_by_id[rid] = {
-                    "cwe_id": cwe_id,
-                    "default_level": rule_default_level(rule),
-                }
+        rule_resolver = ResultRuleResolver(run)
+        rule_metadata: dict[int, tuple[str | None, str | None]] = {}
 
         # Per-run originalUriBaseIds for relative-URI resolution.
         # SARIF emitters commonly emit `result.locations[*].artifactLocation
@@ -947,8 +1003,9 @@ def parse_sarif_findings(
                     run_idx + 1,
                 )
                 continue
+            rule = rule_resolver.resolve(result)
             if (compiler_diagnostic_is_candidate(result.get("ruleId", ""))
-                    or compiler_diagnostic_is_candidate(get_result_rule(run, result).get("id", ""))):
+                    or compiler_diagnostic_is_candidate(rule.get("id", ""))):
                 continue
 
             # finding_id resolution:
@@ -1036,7 +1093,15 @@ def parse_sarif_findings(
             else:
                 dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
-            rule_meta = rules_by_id.get(rule_id or "", {})
+            rule_cwe: str | None = None
+            default_level: str | None = None
+            if rule:
+                descriptor_key = id(rule)
+                if descriptor_key not in rule_metadata:
+                    rule_metadata[descriptor_key] = (
+                        _extract_cwe_from_rule(rule), rule_default_level(rule),
+                    )
+                rule_cwe, default_level = rule_metadata[descriptor_key]
 
             file_uri = _resolve_uri(artifact)
             # Containment gate at the parse boundary (opt-in via
@@ -1069,7 +1134,7 @@ def parse_sarif_findings(
                 # SARIF severity inheritance: absent result.level means
                 # the rule's defaultConfiguration.level (semgrep never
                 # emits result.level).
-                level = rule_meta.get("default_level") or "warning"
+                level = default_level or "warning"
 
             findings.append(
                 {
@@ -1086,7 +1151,7 @@ def parse_sarif_findings(
                     "endLine": _coerce_line(region.get("endLine")),
                     "snippet": snippet,
                     "level": level,
-                    "cwe_id": _extract_cwe_from_rule(result) or rule_meta.get("cwe_id"),
+                    "cwe_id": _extract_cwe_from_rule(result) or rule_cwe,
                     "tool": tool_name,
                     # Dataflow information
                     "has_dataflow": dataflow_path is not None,
@@ -1247,12 +1312,7 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
                 metrics["findings_by_tool"].get(tool_key, 0) + len(results)
             )
 
-            # SARIF severity inheritance for results without an
-            # explicit level (semgrep never emits result.level).
-            default_levels = {
-                rid: rule_default_level(rule)
-                for rid, rule in get_rules(run).items()
-            }
+            rule_resolver = ResultRuleResolver(run)
 
             for result in results:
                 if not isinstance(result, dict):
@@ -1260,11 +1320,7 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
                 # Count by severity
                 level = result.get("level")
                 if not isinstance(level, str) or not level:
-                    rid = result.get("ruleId")
-                    level = (
-                        default_levels.get(rid)
-                        if isinstance(rid, str) else None
-                    ) or "warning"
+                    level = rule_default_level(rule_resolver.resolve(result)) or "warning"
                 if level in metrics["findings_by_severity"]:
                     metrics["findings_by_severity"][level] += 1
 
