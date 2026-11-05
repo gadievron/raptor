@@ -58,11 +58,11 @@ from __future__ import annotations
 
 import errno
 import hashlib
-import io
 import json
 import logging
 import math
 import os
+import re
 import stat as _stat
 import threading
 import uuid
@@ -981,6 +981,16 @@ def _finite_json_number(value: str) -> float:
     return number
 
 
+def _iter_denial_lines(raw: bytes):
+    """Yield byte records using universal file newline rules, without a list."""
+    start = 0
+    for separator in re.finditer(rb"\r\n?|\n", raw):
+        yield raw[start:separator.start()]
+        start = separator.end()
+    if start < len(raw):
+        yield raw[start:]
+
+
 def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
@@ -1170,10 +1180,14 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             except OSError:
                 pass
 
-    # File newline rules preserve Unicode separators inside JSON strings.
-    # Iteration also avoids allocating a second list containing every line.
-    for line in io.StringIO(raw.decode("utf-8", errors="replace"), newline=None):
-        line = line.strip()
+    # Decode per record: malformed bytes must not be silently replaced
+    # and authenticated, nor discard valid records in the same read buffer.
+    for raw_line in _iter_denial_lines(raw):
+        try:
+            line = raw_line.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            corrupt_lines += 1
+            continue
         if not line:
             # Honest writers emit exactly one JSON object per line —
             # a blank/whitespace-only line is what an in-place
