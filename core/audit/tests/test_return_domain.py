@@ -31,9 +31,14 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
-    clear_cache()
-    yield
-    clear_cache()
+    from core.audit import return_domain as rd
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        rd, {"_DOMAIN_CACHE": {}, "_CONSTANTS_CACHE": {}},
+        lock=rd._DOMAIN_CACHE_LOCK,
+    ):
+        yield
 
 
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:

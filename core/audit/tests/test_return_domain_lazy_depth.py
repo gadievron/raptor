@@ -9,9 +9,14 @@ from core.audit import return_domain as rd
 
 @pytest.fixture(autouse=True)
 def clear_return_domain_caches():
-    rd.clear_cache()
-    yield
-    rd.clear_cache()
+    from core.audit import return_domain as rd
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        rd, {"_DOMAIN_CACHE": {}, "_CONSTANTS_CACHE": {}},
+        lock=rd._DOMAIN_CACHE_LOCK,
+    ):
+        yield
 
 
 def test_definitionless_files_keep_guards_and_later_tables_independent(tmp_path):

@@ -25,9 +25,13 @@ from core.audit.constant_resolution import (
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    clear_cache()
-    yield
-    clear_cache()
+    from collections import OrderedDict
+
+    from core.audit import constant_resolution as cr
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(cr, {"_cache": OrderedDict()}):
+        yield
 
 
 def _write_file(tmp_path: Path, name: str, content: str) -> Path:

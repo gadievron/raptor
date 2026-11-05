@@ -36,9 +36,12 @@ from core.audit.sweep_memo import SweepMemo
 
 @pytest.fixture(autouse=True)
 def _fresh_registry():
-    reset_checkpoint_registry()
-    yield
-    reset_checkpoint_registry()
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        sc, {"_registry": {}, "_key_warned": set()}, lock=sc._registry_lock,
+    ):
+        yield
 
 
 def _key(rule: str = "aaa", file: str = "bbb",
