@@ -348,6 +348,21 @@ def _scrub_env_image_values(names: Iterable[bytes]) -> None:
         return
 
 
+def _pipe_readable_until(fd: int, deadline: float) -> bool:
+    """Bound a post-fork pipe wait using only already-imported modules."""
+    poller = _select_mod.poll()
+    poller.register(fd, _select_mod.POLLIN)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            if poller.poll(int(remaining * 1000) + 1):
+                return True
+        except InterruptedError:
+            continue
+
+
 def _write_setup_status(fd: int, category: bytes, reason: str = "") -> None:
     """Fork-safe write of a typed setup-failure status to the exec-status
     pipe.
@@ -3015,21 +3030,14 @@ def run_sandboxed(
             # legitimately contains newuidmap plus, under audit, the
             # tracer fork and its own ready wait — the go deadline
             # must not fire while the parent is lawfully inside that
-            # budget. (_select_mod, not the bare `select` name —
-            # that name is function-local here; see the import.)
+            # budget. The helper uses the module-scope poll API, with no
+            # imports or logging in this forked child.
             try:
                 _go = b""
                 _go_deadline = (time.monotonic()
                                 + 2 * _P_READY_DEADLINE_S)
-                while True:
-                    _go_left = _go_deadline - time.monotonic()
-                    if _go_left <= 0:
-                        break
-                    _go_ready, _, _ = _select_mod.select(
-                        [p_go_r], [], [], _go_left)
-                    if _go_ready:
-                        _go = os.read(p_go_r, 1)
-                        break
+                if _pipe_readable_until(p_go_r, _go_deadline):
+                    _go = os.read(p_go_r, 1)
                 if _go != b"G":
                     # Parent failed before signalling go (it has already
                     # raised + killed us), or the deadline expired with
@@ -3661,7 +3669,8 @@ def run_sandboxed(
                 # hard-killed (SIGKILL/OOM/crash), death_w closes →
                 # select sees death_r readable (EOF) → we SIGKILL the
                 # grandchild so the pid-ns doesn't orphan to init.
-                import select as _sel
+                _death_poll = _select_mod.poll()
+                _death_poll.register(death_r, _select_mod.POLLIN)
                 while True:
                     try:
                         pid_, status = os.waitpid(grand, os.WNOHANG)
@@ -3671,7 +3680,7 @@ def run_sandboxed(
                     if pid_ != 0:
                         break
                     try:
-                        ready, _, _ = _sel.select([death_r], [], [], 0.05)
+                        ready = _death_poll.poll(50)
                     except (OSError, ValueError):
                         time.sleep(0.05)
                         continue
@@ -3966,15 +3975,13 @@ def run_sandboxed(
             _ready = b""
             _ready_timed_out = False
             os.set_blocking(p_ready_r, False)
-            import select as _pr_sel
             _pr_deadline = time.monotonic() + _P_READY_DEADLINE_S
             while True:
                 _pr_remaining = _pr_deadline - time.monotonic()
                 if _pr_remaining <= 0:
                     _ready_timed_out = True
                     break
-                _pr_readable, _, _ = _pr_sel.select(
-                    [p_ready_r], [], [], _pr_remaining)
+                _pr_readable = _readable_fds([p_ready_r], _pr_remaining)
                 if not _pr_readable:
                     continue  # loop re-checks the deadline
                 try:
@@ -4326,7 +4333,6 @@ def run_sandboxed(
             _tracer_ready_wait_timed_out = False
             try:
                 os.set_blocking(t_ready_r, False)  # type: ignore[arg-type]
-                import select as _tr_sel
                 _tr_deadline = time.monotonic() + 15.0
                 ready = b""  # type: ignore[assignment]
                 while True:
@@ -4334,8 +4340,7 @@ def run_sandboxed(
                     if _tr_remaining <= 0:
                         _tracer_ready_wait_timed_out = True
                         break
-                    _tr_ready, _, _ = _tr_sel.select(  # type: ignore[type-var]
-                        [t_ready_r], [], [], _tr_remaining)
+                    _tr_ready = _readable_fds([t_ready_r], _tr_remaining)  # type: ignore[arg-type]
                     if not _tr_ready:
                         continue  # loop re-checks the deadline
                     try:
@@ -4441,8 +4446,7 @@ def run_sandboxed(
         if pid_r is not None:
             _exec_pid = None
             try:
-                import select as _pid_sel
-                _pid_ready, _, _ = _pid_sel.select([pid_r], [], [], 15.0)
+                _pid_ready = _readable_fds([pid_r], 15.0)
                 if _pid_ready:
                     _pid_raw = os.read(pid_r, 64)
                     if _pid_raw:
