@@ -20,16 +20,11 @@ from core.sandbox.tests.capability import requires_userns
 
 
 @pytest.fixture
-def reset_caches():
-    """Make sure the platform / availability caches don't leak
-    between tests in this file."""
-    state._seatbelt_available_cache = None
-    state._mount_available_cache = None
-    state._mount_ns_available_cache = None
-    yield
-    state._seatbelt_available_cache = None
-    state._mount_available_cache = None
-    state._mount_ns_available_cache = None
+def reset_caches(monkeypatch):
+    """Pin fresh backend probes and restore the caller's cached answers."""
+    monkeypatch.setattr(state, "_seatbelt_available_cache", None)
+    monkeypatch.setattr(state, "_mount_available_cache", None)
+    monkeypatch.setattr(state, "_mount_ns_available_cache", None)
 
 
 def test_check_seatbelt_available_returns_false_on_linux(reset_caches):

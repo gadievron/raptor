@@ -27,11 +27,13 @@ from core.llm.client import LLMClient, _pinned_llm_config
 
 
 @pytest.fixture(autouse=True)
-def _reset_banner_flag():
-    """Reset once-per-process banner flag so tests are order-independent."""
-    _client_mod._MODEL_BANNER_SHOWN = False
-    yield
-    _client_mod._MODEL_BANNER_SHOWN = False
+def _reset_banner_flag(monkeypatch):
+    """Pin fresh banner latches and restore the caller's values."""
+    for name in (
+        "_MODEL_BANNER_SHOWN", "_TRANSPORT_BANNER_SHOWN",
+        "_UNCAPPED_BANNER_SHOWN", "_DEFAULT_CEILING_LOG_SHOWN",
+    ):
+        monkeypatch.setattr(_client_mod, name, False)
 
 
 class _RaptorLogCapture:

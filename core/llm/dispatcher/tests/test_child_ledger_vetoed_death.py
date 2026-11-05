@@ -55,10 +55,10 @@ def fake_creds():
 
 
 @pytest.fixture(autouse=True)
-def _clean_attempt_state():
-    dispatcher_client._attempt_state.response_started = False
-    yield
-    dispatcher_client._attempt_state.response_started = False
+def _clean_attempt_state(monkeypatch):
+    monkeypatch.setattr(
+        dispatcher_client._attempt_state, "response_started", False, raising=False,
+    )
 
 
 class _AbortSSEUpstream:

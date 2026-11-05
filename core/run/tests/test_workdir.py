@@ -217,11 +217,9 @@ class TestTempRootInteropAdvisory:
     pytestmark = pytest.mark.wsl
 
     @pytest.fixture(autouse=True)
-    def _reset_latch(self):
+    def _reset_latch(self, monkeypatch):
         from core.startup import wsl
-        wsl._tmpdir_warned = False
-        yield
-        wsl._tmpdir_warned = False
+        monkeypatch.setattr(wsl, "_tmpdir_warned", False)
 
     def test_resolution_fires_advisory_once(
         self, _fresh, monkeypatch, capsys,

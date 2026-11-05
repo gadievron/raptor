@@ -17,14 +17,10 @@ from core.startup import init as startup_init
 
 
 @pytest.fixture
-def reset_seatbelt_cache():
-    """check_seatbelt_available() caches its result process-wide;
-    tests here mock different return values so we must clear the
-    cache to avoid one test's mock leaking into another."""
+def reset_seatbelt_cache(monkeypatch):
+    """Pin a fresh probe result and restore the caller's cached answer."""
     from core.sandbox import state
-    state._seatbelt_available_cache = None
-    yield
-    state._seatbelt_available_cache = None
+    monkeypatch.setattr(state, "_seatbelt_available_cache", None)
 
 
 def test_check_env_macos_seatbelt_available(reset_seatbelt_cache):

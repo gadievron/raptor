@@ -20,15 +20,10 @@ pytestmark = pytest.mark.wsl
 
 
 @pytest.fixture(autouse=True)
-def reset_wsl_cache():
-    """``is_wsl()`` caches its filesystem answer process-wide; tests
-    mock different kernel identities, so the cache is cleared around
-    each test to keep them independent."""
-    wsl._is_wsl_cache = None
-    wsl._is_wsl2_cache = None
-    yield
-    wsl._is_wsl_cache = None
-    wsl._is_wsl2_cache = None
+def reset_wsl_cache(monkeypatch):
+    """Pin fresh detection caches and restore the caller's answers."""
+    monkeypatch.setattr(wsl, "_is_wsl_cache", None)
+    monkeypatch.setattr(wsl, "_is_wsl2_cache", None)
 
 
 class TestIsWsl:
@@ -490,12 +485,9 @@ class TestWarnWindowsInteropMount:
 
 class TestWarnTmpdirWindowsInterop:
     @pytest.fixture(autouse=True)
-    def reset_tmpdir_latch(self):
-        """The advisory latches once per process; tests exercise the
-        latch itself, so it is reset around each test."""
-        wsl._tmpdir_warned = False
-        yield
-        wsl._tmpdir_warned = False
+    def reset_tmpdir_latch(self, monkeypatch):
+        """Exercise a fresh advisory latch and restore its borrowed value."""
+        monkeypatch.setattr(wsl, "_tmpdir_warned", False)
 
     def test_warns_once_per_process(self, capsys):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
