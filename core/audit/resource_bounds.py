@@ -54,6 +54,8 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_RESOURCE_MEMBER_SEPARATOR_RE = re.compile(r"->|\.")
+
 RULE_UNBOUNDED = "resource_bounds:unbounded-accumulation"
 
 # Detection-grade vocabulary (seed/name-stem only) or unknown
@@ -552,7 +554,7 @@ def _enumerate_sites(
 
 
 def _name_tail(name: str) -> str:
-    return re.split(r"->|\.", name)[-1]
+    return _RESOURCE_MEMBER_SEPARATOR_RE.split(name)[-1]
 
 
 def _classify_bound_guard(

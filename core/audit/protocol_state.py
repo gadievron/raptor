@@ -76,6 +76,12 @@ from core.source.lines import slice_text, split_lines
 
 logger = logging.getLogger(__name__)
 
+_STATE_INVARIANT_COMPARISON_RE = re.compile(r"(<=|>=|==|!=|<|>)")
+_STATE_WHITESPACE_RE = re.compile(r"\s+")
+_STATE_INTEGER_LITERAL_RE = re.compile(r"\d+[uUlL]*")
+_STATE_CALL_RHS_RE = re.compile(r"([A-Za-z_]\w*)\s*\(")
+_STATE_LOCAL_RHS_RE = re.compile(r"([A-Za-z_]\w*)")
+
 RULE_INVARIANT_VIOLATED = "protocol_state:invariant-violated"
 DETECTION_VARIANT_SUFFIX = "-unreceipted"
 RULE_INVARIANT_UNRECEIPTED = (
@@ -219,14 +225,14 @@ def classify_protocol_state_hypothesis(
     try:
         from .invariant_smt import extract_invariants
         for cand in extract_invariants(text):
-            m = re.search(r"(<=|>=|==|!=|<|>)", cand)
+            m = _STATE_INVARIANT_COMPARISON_RE.search(cand)
             if not m:
                 continue
             sides = (cand[:m.start()], cand[m.end():])
             if all(
                 any(
                     _STATE_STEM_RE.search(ident)
-                    for ident in re.findall(r"[A-Za-z_]\w*", side)
+                    for ident in _CHAIN_IDENT_RE.findall(side)
                 )
                 for side in sides
             ):
@@ -328,7 +334,7 @@ def _invariant_receipt(
     entry (provenance chain embedded verbatim in the evidence) or
     ``None`` — in which case only the ``-unreceipted`` detection
     variant may confirm."""
-    norm = re.sub(r"\s+", "", invariant)
+    norm = _STATE_WHITESPACE_RE.sub("", invariant)
     if not norm:
         return None
     # Token-boundary containment, not bare substring: "x <= 10" is
@@ -342,7 +348,7 @@ def _invariant_receipt(
         if not isinstance(entry, dict):
             continue
         statement = str(entry.get("statement") or "")
-        if not bounded.search(re.sub(r"\s+", "", statement)):
+        if not bounded.search(_STATE_WHITESPACE_RE.sub("", statement)):
             continue
         provenance = str(entry.get("provenance") or "")
         if provenance in ("", "llm_prior"):
@@ -485,15 +491,15 @@ def _classify_rhs(rhs: str) -> str:
     # the sole producer splits the statement on ";" before calling.
     if rhs in ("NULL", "nullptr"):
         return "literal_null"
-    if re.fullmatch(r"\d+[uUlL]*", rhs.rstrip(";")):
+    if _STATE_INTEGER_LITERAL_RE.fullmatch(rhs.rstrip(";")):
         return "literal_const"
-    m = re.match(r"([A-Za-z_]\w*)\s*\(", rhs)
+    m = _STATE_CALL_RHS_RE.match(rhs)
     if m:
         return f"from_call:{m.group(1)}"
     m = _FIELD_ACCESS_RE.match(rhs)
     if m:
         return f"from_field:{m.group(2)}"
-    m = re.fullmatch(r"([A-Za-z_]\w*)", rhs.rstrip(";").strip())
+    m = _STATE_LOCAL_RHS_RE.fullmatch(rhs.rstrip(";").strip())
     if m:
         return f"from_local:{m.group(1)}"
     return "unknown"
@@ -717,7 +723,7 @@ def _strip_chain_prefixes(text: str, name: str) -> str:
 
 def _invariant_variables(invariant: str) -> set[str]:
     return {
-        ident for ident in re.findall(r"[A-Za-z_]\w*", invariant)
+        ident for ident in _CHAIN_IDENT_RE.findall(invariant)
         if not ident.isdigit()
     }
 

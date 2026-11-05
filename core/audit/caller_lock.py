@@ -101,6 +101,15 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_CALLER_STATIC_RE = re.compile(r"\bstatic\b")
+_CALLER_PP_IF_RE = re.compile(r"#\s*(?:if|ifdef|ifndef)\b")
+_CALLER_PP_ENDIF_RE = re.compile(r"#\s*endif\b")
+_CALLER_MEMBER_SEPARATOR_RE = re.compile(r"(->|\.)")
+_CALLER_UNLOCK_SUFFIX_RE = re.compile(r"_irq(?:save|restore)?$|_bh$")
+_CALLER_ACQUIRE_SUFFIX_RE = re.compile(r"_irq(?:save)?$|_bh$|_interruptible$|_killable$")
+_CALLER_INCLUDE_DIRECTIVE_RE = re.compile(r"#\s*include\b")
+_CALLER_INCLUDE_PATH_RE = re.compile(r'[<"]([^">]+)[">]')
+
 #: Per-caller pre-call region is char-capped upstream; call-site count
 #: is capped by the enumerator.  This caps how many call sites the
 #: per-site lock analysis will accept at all.
@@ -257,7 +266,7 @@ def _static_in_head(
     window = "\n".join(view_lines[i] for i in sorted(run))
     cut = max(window.rfind(";"), window.rfind("}"))
     segment = window[cut + 1:]
-    return bool(re.search(r"\bstatic\b", segment))
+    return bool(_CALLER_STATIC_RE.search(segment))
 
 
 def _preprocessor_lines(view_lines: list[str]) -> set[int]:
@@ -425,7 +434,7 @@ def _caller_name_from_head(head_line: str) -> str | None:
     # \b pins each attempt to an identifier start: unanchored, every
     # suffix of a long identifier is retried — quadratic on a hostile
     # head line. Mid-word starts were never real function names.
-    matches = list(re.finditer(r"\b([A-Za-z_]\w*)\s*\(", head_line))
+    matches = list(_CALL_IDENT_RE.finditer(head_line))
     if not matches:
         return None
     return matches[-1].group(1)
@@ -456,9 +465,9 @@ def _conditional_brace_skew(lines: list[str]) -> bool:
         if is_directive:
             if "{" in ln or "}" in ln:
                 return True
-            if re.match(r"#\s*(?:if|ifdef|ifndef)\b", stripped):
+            if _CALLER_PP_IF_RE.match(stripped):
                 depth += 1
-            elif re.match(r"#\s*endif\b", stripped):
+            elif _CALLER_PP_ENDIF_RE.match(stripped):
                 if depth == 0:
                     return True
                 depth -= 1
@@ -724,14 +733,14 @@ def _lock_obj_prefix_patterns(lock_obj: str) -> list[str] | None:
     around the accessors.  ``None`` when the object is not a plain
     member-access path — the identity is then too complex to guard.
     """
-    parts = re.split(r"(->|\.)", lock_obj.replace(" ", ""))
-    if not parts or not re.fullmatch(r"[A-Za-z_]\w*", parts[0]):
+    parts = _CALLER_MEMBER_SEPARATOR_RE.split(lock_obj.replace(" ", ""))
+    if not parts or not _IDENT_RE.fullmatch(parts[0]):
         return None
     pats: list[str] = [re.escape(parts[0])]
     cur = re.escape(parts[0])
     for i in range(1, len(parts) - 1, 2):
         sep, seg = parts[i], parts[i + 1]
-        if not re.fullmatch(r"[A-Za-z_]\w*", seg):
+        if not _IDENT_RE.fullmatch(seg):
             return None
         cur += rf"\s*{re.escape(sep)}\s*{re.escape(seg)}"
         pats.append(cur)
@@ -802,10 +811,8 @@ def _interval_call_escape(
 def _lock_class_re(acquire_fn: str, unlock_name: str) -> re.Pattern:
     """Call-shaped mention of either side of the lock class, with the
     irq/bh/interruptible suffix variants stripped to their base."""
-    unlock_base = re.sub(r"_irq(?:save|restore)?$|_bh$", "", unlock_name)
-    acquire_base = re.sub(
-        r"_irq(?:save)?$|_bh$|_interruptible$|_killable$", "", acquire_fn,
-    )
+    unlock_base = _CALLER_UNLOCK_SUFFIX_RE.sub("", unlock_name)
+    acquire_base = _CALLER_ACQUIRE_SUFFIX_RE.sub("", acquire_fn)
     return re.compile(
         rf"\b(?:{re.escape(unlock_base)}|{re.escape(acquire_base)})"
         rf"\w*\s*\(",
@@ -852,7 +859,7 @@ def check_caller_lock_serialization(
 
     if not func_source or not func_source.strip():
         return _refuse("empty source")
-    if not function_name or not re.fullmatch(r"[A-Za-z_]\w*", function_name):
+    if not function_name or not _IDENT_RE.fullmatch(function_name):
         return _refuse(f"not a plain C function name: {function_name!r}")
     if not rel_file.endswith(".c"):
         return _refuse(f"not a C translation unit: {rel_file}")
@@ -920,9 +927,9 @@ def check_caller_lock_serialization(
     # on RAW lines — the sanitized view blanks the quoted path.
     for i, raw in enumerate(raw_lines):
         stripped = raw.lstrip()
-        if not re.match(r"#\s*include\b", stripped):
+        if not _CALLER_INCLUDE_DIRECTIVE_RE.match(stripped):
             continue
-        m = re.search(r'[<"]([^">]+)[">]', raw)
+        m = _CALLER_INCLUDE_PATH_RE.search(raw)
         if m is None or not m.group(1).strip().lower().endswith(
             (".h", ".hpp", ".hxx"),
         ):

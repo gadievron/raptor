@@ -130,6 +130,10 @@ from .defassign import (
 
 logger = logging.getLogger(__name__)
 
+_LIFETIME_DEFINE_NAME_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)")
+_LIFETIME_PARAM_MARKER_RE = re.compile(r"__ltwp(\d+)__")
+_LIFETIME_FUNCTION_DIRECTIVE_RE = re.compile(r"^[^\S\n]*#", re.MULTILINE)
+
 # Token tuple shapes: plain (kind, spelling) and offset-carrying
 # (kind, spelling, start, end).
 _Tok = TypeVar("_Tok", tuple[str, str], tuple[str, str, int, int])
@@ -624,7 +628,7 @@ _LT_TABLE_CACHE_MAX = 8
 
 def _reparse_named_variadic(rest: str, path: str) -> MacroDef | None:
     """Parse ``NAME(a, b, tail...)<body>`` after ``#define``."""
-    m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", rest)
+    m = _LIFETIME_DEFINE_NAME_RE.match(rest)
     if m is None:
         return None
     name = m.group(1)
@@ -699,7 +703,7 @@ def _lifetime_macro_table(
             if parsed is None:
                 parsed = _reparse_named_variadic(rest, str(path))
             if parsed is None:
-                nm = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", rest)
+                nm = _LIFETIME_DEFINE_NAME_RE.match(rest)
                 if nm is not None:
                     poisoned.add(nm.group(1))
                 continue
@@ -1107,7 +1111,7 @@ def _certify_macros(
             continue
         args, _after = _split_top_level_args(src_tokens, i + 1)
         for marker in flagged:
-            mm = re.fullmatch(r"__ltwp(\d+)__", marker)
+            mm = _LIFETIME_PARAM_MARKER_RE.fullmatch(marker)
             if mm is None:
                 continue  # variadic marker: no single position
             pi = int(mm.group(1))
@@ -1639,7 +1643,7 @@ class _Analysis:
         if not func_source or len(func_source) > _MAX_SOURCE_BYTES:
             raise ProofRefusal("function source empty or too large")
         func_source = _trim_to_function(func_source)
-        if re.search(r"^[^\S\n]*#", func_source, re.MULTILINE):
+        if _LIFETIME_FUNCTION_DIRECTIVE_RE.search(func_source):
             raise ProofRefusal(
                 "preprocessor directive inside the function source"
             )

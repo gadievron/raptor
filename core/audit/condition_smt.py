@@ -26,6 +26,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SMT_AND_WORD_RE = re.compile(r"\band\b")
+_SMT_ELSE_WORD_RE = re.compile(r"\belse\b")
+_SMT_LOCK_CALL_RE = re.compile(r"\b(\w+_lock)\s*\(")
+_SMT_GO_DECL_RE = re.compile(r"\s*(?:package|func)\b")
+_SMT_PARAM_LIST_RE = re.compile(r"\([^)]{0,500}\)")
+_SMT_PARAM_SEPARATOR_RE = re.compile(r"[,)]")
+_SMT_INTEGER_MIN_RE = re.compile(r"MinInt|INT(?:\d+)?_MIN|L?LONG_MIN")
+_SMT_CALL_SHAPE_RE = re.compile(r"\b\w+\s*\(")
+_SMT_ASCII_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 
 # ---------------------------------------------------------------------------
 # Domain vocabulary — study-discovered operation pairs
@@ -559,9 +569,7 @@ def constraints_for_guard(
         "excluded", "negated_guard",
     ):
         return raw
-    if len(raw) > 1 or "&&" in guard.text or re.search(
-        r"\band\b", guard.text,
-    ):
+    if len(raw) > 1 or "&&" in guard.text or _SMT_AND_WORD_RE.search(guard.text):
         # Negation of a conjunction is a disjunction — not
         # representable as a constraint list.  This also covers the
         # partially-extracted case (``flag && a < 10`` extracts one
@@ -2002,7 +2010,7 @@ def _find_enclosing_guard(lines: list[str], ret_line: int) -> str:
         closes = stripped.count("}")
         new_depth = depth + closes - opens
 
-        if depth == 0 and re.search(r"\belse\b", stripped):
+        if depth == 0 and _SMT_ELSE_WORD_RE.search(stripped):
             return ""
 
         if stripped.startswith("if") and "(" in stripped:
@@ -2284,7 +2292,7 @@ def _extract_lock_acquires(
     # not already covered by explicit pairs or vocab.
     known_acq = {p.pattern for p, _ in pairs}
     full_text = "\n".join(lines)
-    for m_lock in re.finditer(r"\b(\w+_lock)\s*\(", full_text):
+    for m_lock in _SMT_LOCK_CALL_RE.finditer(full_text):
         acq_name = m_lock.group(1)
         pat_str = rf"\b({re.escape(acq_name)})\s*\("
         if pat_str in known_acq:
@@ -3230,7 +3238,7 @@ def check_integer_narrowing(
 
     if language is None:
         go_view = sanitized_view(source, language="go")
-        language = "go" if any(re.match(r"\s*(?:package|func)\b", line)
+        language = "go" if any(_SMT_GO_DECL_RE.match(line)
                                   for line in split_lines(go_view)[:30]) else "c"
     if language not in {"c", "cpp", "go"}:
         return IntegerNarrowingResult(reasoning="unsupported narrowing source language")
@@ -3437,7 +3445,7 @@ def _extract_param_types(source: str) -> dict[str, str]:
     results: dict[str, str] = {}
     # The window matches the scanned 500-char signature slice; an
     # unbounded interior re-scans from every '(' — quadratic.
-    sig_match = re.search(r"\([^)]{0,500}\)", source[:500])
+    sig_match = _SMT_PARAM_LIST_RE.search(source[:500])
     if not sig_match:
         return results
     params_str = sig_match.group(0)[1:-1]
@@ -3627,7 +3635,7 @@ def build_consumer_width_index(
                 continue
             inner = sig[sig.find("(") + 1:sig.rfind(")")]
             widths: list[int] = []
-            for tok in re.split(r"[,)]", inner):
+            for tok in _SMT_PARAM_SEPARATOR_RE.split(inner):
                 for word in tok.split():
                     w = _TYPE_WIDTHS.get(word.strip("*& ")) or \
                         _GO_TYPE_WIDTHS.get(word.strip("*& "))
@@ -3711,9 +3719,7 @@ def check_parsed_int_contract(
     # negative), so any subsequent upper-bound cap is bypassable. The
     # range-check pass below must NOT clear this shape — the check the
     # code performs is exactly the one the overflow defeats.
-    min_guard = re.search(
-        r"MinInt|INT(?:\d+)?_MIN|L?LONG_MIN", source,
-    )
+    min_guard = _SMT_INTEGER_MIN_RE.search(source)
     for var in parsed_vars:
         neg_re = re.compile(
             rf"\b{re.escape(var)}\s*=\s*-\s*{re.escape(var)}\b",
@@ -4249,7 +4255,7 @@ def _check_early_release_c(
                     has_side_effect = False
                     for eff in range(k + 1, min(len(lines), k + 5)):
                         eff_s = lines[eff].strip()
-                        if re.search(r"\b\w+\s*\(", eff_s) or "return" in eff_s:
+                        if _SMT_CALL_SHAPE_RE.search(eff_s) or "return" in eff_s:
                             has_side_effect = True
                             break
                     if has_side_effect:
@@ -5255,7 +5261,7 @@ def disprove_integer_overflow(
             reasoning="explicit arithmetic expression unavailable — inconclusive",
         )
     operands, op_char = list(claim.operands), claim.operator
-    var_names = [value for value in operands if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)]
+    var_names = [value for value in operands if _SMT_ASCII_IDENT_RE.fullmatch(value)]
 
     from .arithmetic_operation import bind_arithmetic_operation
     from .sweep import _premise_gate
