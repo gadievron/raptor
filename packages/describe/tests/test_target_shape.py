@@ -3,6 +3,8 @@ inference for the /describe command."""
 
 from __future__ import annotations
 
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler
+
 from packages.describe.target_shape import (
     TargetShape,
     _compute_breakdown,
@@ -263,6 +265,7 @@ def test_scan_inventory_hoists_stat_import_out_of_loop():
 
 
 class TestProbeNoiseFilterThreadScoped:
+    @isolated_cli_logging(logger_names=("raptor",))
     def test_concurrent_threads_probe_lines_survive(self, monkeypatch, tmp_path):
         """The probe-noise filter drops chatter from the CALLING
         thread only — the shared "raptor" logger carries other
@@ -280,37 +283,31 @@ class TestProbeNoiseFilterThreadScoped:
                 records.append(record.getMessage())
 
         raptor_logger = logging.getLogger("raptor")
-        cap = _Cap()
-        prev_level = raptor_logger.level
-        raptor_logger.addHandler(cap)
-        raptor_logger.setLevel(logging.INFO)
+        with owned_log_handler(raptor_logger, _Cap()):
+            raptor_logger.setLevel(logging.INFO)
 
-        class _FakeDetector:
-            def __init__(self, _path):
-                pass
+            class _FakeDetector:
+                def __init__(self, _path):
+                    pass
 
-            def detect_build_system(self, _lang):
-                t = threading.Thread(
-                    target=lambda: raptor_logger.info(
-                        "Detecting build system for other-thread",
-                    ),
-                )
-                t.start()
-                t.join(timeout=5)
-                assert not t.is_alive()
-                # This thread's own chatter stays suppressed.
-                raptor_logger.info(
-                    "Detecting build system for this-thread",
-                )
-                return None
+                def detect_build_system(self, _lang):
+                    t = threading.Thread(
+                        target=lambda: raptor_logger.info(
+                            "Detecting build system for other-thread",
+                        ),
+                    )
+                    t.start()
+                    t.join(timeout=5)
+                    assert not t.is_alive()
+                    # This thread's own chatter stays suppressed.
+                    raptor_logger.info(
+                        "Detecting build system for this-thread",
+                    )
+                    return None
 
-        monkeypatch.setattr(
-            "core.build.build_detector.BuildDetector", _FakeDetector,
-        )
-        try:
+            monkeypatch.setattr(
+                "core.build.build_detector.BuildDetector", _FakeDetector,
+            )
             ts._detect_build_systems(tmp_path, {"cpp": 1})
-        finally:
-            raptor_logger.removeHandler(cap)
-            raptor_logger.setLevel(prev_level)
         assert "Detecting build system for other-thread" in records
         assert "Detecting build system for this-thread" not in records

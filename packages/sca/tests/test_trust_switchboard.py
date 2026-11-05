@@ -23,11 +23,12 @@ same resolved value. These tests pin that invariant per entry point.
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from core.testing.logging_state import isolated_cli_logging
 
 from packages.sca._scan_args import (
     add_scan_args,
@@ -223,20 +224,7 @@ class TestScanOptionsPropagation:
 
 class TestScanCliEntrypoint:
 
-    @pytest.fixture(autouse=True)
-    def _preserve_root_logging(self):
-        """``_run_analyse`` attaches a run-directory file handler to
-        the root logger; restore root handlers/level afterwards."""
-        root = logging.getLogger()
-        saved_handlers = list(root.handlers)
-        saved_level = root.level
-        yield
-        for h in root.handlers:
-            if h not in saved_handlers:
-                root.removeHandler(h)
-                h.close()
-        root.setLevel(saved_level)
-
+    @isolated_cli_logging()
     def _run(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
              extra_flags: list) -> int:
         import packages.sca.cli as sca_cli

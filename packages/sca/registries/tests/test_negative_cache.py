@@ -7,6 +7,7 @@ import logging
 import pytest
 
 from core.http import HttpError
+from core.testing.logging_state import isolated_cli_logging
 from packages.sca.registries._negative_cache import log_fetch_failure
 
 _LOG = logging.getLogger("sca.registries.test")
@@ -150,52 +151,42 @@ def test_fetch_or_negative_cache_404_cached_transient_not(tmp_path):
     ) == {"ok": True}, "transient failure must not poison the entry"
 
 
+@isolated_cli_logging()
 def test_configure_logging_debug_file(tmp_path):
     """_configure_logging with log_dir writes debug.log capturing DEBUG
     while the console handler stays at the requested level."""
     from packages.sca.cli import _configure_logging
 
     root = logging.getLogger()
-    original_handlers = list(root.handlers)
-    original_level = root.level
-    try:
-        for h in list(root.handlers):
-            root.removeHandler(h)
+    for h in list(root.handlers):
+        root.removeHandler(h)
 
-        _configure_logging(0, log_dir=tmp_path)
+    _configure_logging(0, log_dir=tmp_path)
 
-        debug_log = tmp_path / "debug.log"
-        assert debug_log.exists()
+    debug_log = tmp_path / "debug.log"
+    assert debug_log.exists()
 
-        test_logger = logging.getLogger("test.configure_logging")
-        test_logger.debug("debug-only-message")
-        test_logger.warning("warning-message")
+    test_logger = logging.getLogger("test.configure_logging")
+    test_logger.debug("debug-only-message")
+    test_logger.warning("warning-message")
 
-        stream_handlers = [
-            h for h in root.handlers
-            if isinstance(h, logging.StreamHandler)
-            and not isinstance(h, logging.FileHandler)
-        ]
-        assert len(stream_handlers) == 1
-        assert stream_handlers[0].level == logging.WARNING
+    stream_handlers = [
+        h for h in root.handlers
+        if isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+    ]
+    assert len(stream_handlers) == 1
+    assert stream_handlers[0].level == logging.WARNING
 
-        file_handlers = [
-            h for h in root.handlers
-            if isinstance(h, logging.FileHandler)
-        ]
-        assert len(file_handlers) == 1
-        assert file_handlers[0].level == logging.DEBUG
+    file_handlers = [
+        h for h in root.handlers
+        if isinstance(h, logging.FileHandler)
+    ]
+    assert len(file_handlers) == 1
+    assert file_handlers[0].level == logging.DEBUG
 
-        for h in file_handlers:
-            h.flush()
-        content = debug_log.read_text()
-        assert "debug-only-message" in content
-        assert "warning-message" in content
-    finally:
-        for h in list(root.handlers):
-            root.removeHandler(h)
-            if isinstance(h, logging.FileHandler):
-                h.close()
-        for h in original_handlers:
-            root.addHandler(h)
-        root.setLevel(original_level)
+    for h in file_handlers:
+        h.flush()
+    content = debug_log.read_text()
+    assert "debug-only-message" in content
+    assert "warning-message" in content
