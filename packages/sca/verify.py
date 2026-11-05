@@ -56,6 +56,7 @@ from core.atomic_fs.fs_lock import artifact_lock
 from core.json import JsonCache, load_json, save_json
 from core.run.output import unique_run_suffix
 from core.run.scratch import scratch_dir
+from core.security.log_sanitisation import sanitise_for_terminal
 
 # findings.json byte budgets (single owner + rationale: kinds.py) —
 # steered-path budget for the operator-supplied --findings read,
@@ -137,7 +138,7 @@ def main(
                            subject="SCA verification output"):
             return _verify_in_output(target, proposed, out_dir, args, http, cache)
     except OSError as exc:
-        print(f"raptor-sca verify: verification failed: {exc}", file=sys.stderr)
+        print(f"raptor-sca verify: verification failed: {sanitise_for_terminal(str(exc), max_len=1000)}", file=sys.stderr)
         return 3
 
 
@@ -146,7 +147,7 @@ def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
     try:
         applied = _prepare_overlay(target, proposed, out_dir)
     except (OSError, ValueError) as e:
-        print(f"raptor-sca verify: cannot prepare overlay: {e}", file=sys.stderr)
+        print(f"raptor-sca verify: cannot prepare overlay: {sanitise_for_terminal(str(e), max_len=1000)}", file=sys.stderr)
         return 3
     if not applied:
         print(f"raptor-sca verify: --proposed dir contains no files; nothing to "
@@ -168,7 +169,7 @@ def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
         after = run_sca(target=overlay_dir, output_dir=after_dir,
                         options=options, http=http, cache=cache)
     except Exception as e:                 # noqa: BLE001
-        print(f"raptor-sca verify: analyse on overlay failed: {e}", file=sys.stderr)
+        print(f"raptor-sca verify: analyse on overlay failed: {sanitise_for_terminal(str(e), max_len=1000)}", file=sys.stderr)
         return 3
 
     if args.findings:
@@ -185,7 +186,7 @@ def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
             before = run_sca(target=target, output_dir=before_dir,
                              options=options, http=http, cache=cache)
         except Exception as e:             # noqa: BLE001
-            print(f"raptor-sca verify: analyse on target failed: {e}", file=sys.stderr)
+            print(f"raptor-sca verify: analyse on target failed: {sanitise_for_terminal(str(e), max_len=1000)}", file=sys.stderr)
             return 3
         before_findings = before.findings_path
         # Self-produced: the run_sca above just wrote it.
@@ -210,7 +211,7 @@ def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
                 else after.findings_path)
         delta = compute_delta(rows_before, rows_after)
     except (OSError, ValueError) as e:
-        print(f"raptor-sca verify: cannot parse findings: {e}", file=sys.stderr)
+        print(f"raptor-sca verify: cannot parse findings: {sanitise_for_terminal(str(e), max_len=1000)}", file=sys.stderr)
         return 3
 
     summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity,

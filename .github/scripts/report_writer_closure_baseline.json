@@ -709,10 +709,7 @@
     "packages/sca/supply_chain/typosquat_audit.py::_render_reaudit_llm::unsanitised_llm_value::rationale": {
       "note": "re-audit rationale lane — unit-filed to the typosquat owner (campaign rows U07/U08)"
     },
-    "packages/sca/verify.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
-    "packages/sca/verify.py::main::unsanitised_llm_value::delta_md": {
+    "packages/sca/verify.py::_verify_in_output::unsanitised_llm_value::delta_md": {
       "note": "bool-propagation false positive: osv_degraded is a boolean derived from findings rows and passed into _render_markdown, so the detector taints the returned markdown; the render routes every foreign cell through md_cell and the degraded verdict line is a constant — the flag itself cannot carry bytes"
     },
     "packages/source_intel/measurement.py::_run_one::unsanitised_exception_text::e": {
