@@ -527,3 +527,49 @@ def test_artifact_directories_are_not_traversed(det, tmp_path, monkeypatch, arti
         "core/a/kept.py", "core/build/__init__.py", "core/build/kept.py",
         "core/z.py", "libexec/entry", "entry.py",
     ]
+
+
+def test_declaration_walk_retains_nested_statements_and_breadth_first_order(
+    det, monkeypatch,
+):
+    import ast
+
+    tree = ast.parse("""
+SHALLOW_ENV = "RAPTOR_SHALLOW"
+async def outer():
+    INNER_ENV = "RAPTOR_INNER"
+    try:
+        import os as nested_os
+    except RuntimeError:
+        from os import environ as nested_environ
+    else:
+        from os import getenv as nested_getenv
+    finally:
+        FINAL_ENV: str = "RAPTOR_FINAL"
+    match subject:
+        case _ if predicate():
+            MATCH_ENV = "RAPTOR_MATCH"
+    class Nested:
+        CLASS_ENV = "RAPTOR_CLASS"
+LAST_ENV = "RAPTOR_LAST"
+# NamedExpr is not an Assign/AnnAssign declaration in the original census.
+value = factory([transform(x) for x in items],
+                lambda: (WALRUS_ENV := "RAPTOR_WALRUS"))
+""")
+    iter_children = ast.iter_child_nodes
+
+    def statement_children(node):
+        assert not isinstance(node, ast.expr), "declaration walk entered an expression"
+        return iter_children(node)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(ast, "iter_child_nodes", statement_children)
+        os_names, environ_names, getenv_names, consts = det._collect_module_facts(tree)
+    assert os_names == {"os", "nested_os"}
+    assert environ_names == {"nested_environ"}
+    assert getenv_names == {"nested_getenv"}
+    assert list(consts.items()) == [
+        ("SHALLOW_ENV", "RAPTOR_SHALLOW"), ("LAST_ENV", "RAPTOR_LAST"),
+        ("INNER_ENV", "RAPTOR_INNER"), ("FINAL_ENV", "RAPTOR_FINAL"),
+        ("CLASS_ENV", "RAPTOR_CLASS"), ("MATCH_ENV", "RAPTOR_MATCH"),
+    ]

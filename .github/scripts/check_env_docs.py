@@ -98,7 +98,7 @@ import os
 import re
 import sys
 import unicodedata
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 # Container Python helpers are installed as runtime programs in published images.
@@ -307,13 +307,30 @@ class Inventory:
 _ModuleFacts = tuple[set[str], set[str], set[str], dict[str, str]]
 
 
+def _statement_tree(tree: ast.Module):
+    """Breadth-first statement branches, including non-statement containers.
+
+    Import, Assign and AnnAssign nodes cannot occur below expressions. Keep
+    wrappers such as except handlers and match cases, and the breadth-first
+    order, without traversing expression trees for declaration-only queries.
+    """
+    pending = deque([tree])
+    while pending:
+        node = pending.popleft()
+        yield node
+        pending.extend(
+            child for child in ast.iter_child_nodes(node)
+            if not isinstance(child, ast.expr)
+        )
+
+
 def _collect_module_facts(tree: ast.Module) -> _ModuleFacts:
     """(os aliases, environ aliases, getenv aliases, str-const map)."""
     os_names: set[str] = {"os"}
     environ_names: set[str] = set()
     getenv_names: set[str] = set()
     consts: dict[str, str | None] = {}
-    for node in ast.walk(tree):
+    for node in _statement_tree(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "os":
@@ -794,7 +811,7 @@ def scan_tree(root: Path) -> Inventory:
         if declarations:
             # One breadth-first walk preserves the previous first-assignment
             # semantics without walking the entire AST for each constant.
-            for node in ast.walk(tree):
+            for node in _statement_tree(tree):
                 if (isinstance(node, ast.Assign) and len(node.targets) == 1
                         and isinstance(node.targets[0], ast.Name)
                         and node.targets[0].id in declarations):
