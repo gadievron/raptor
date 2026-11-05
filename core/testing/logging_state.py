@@ -1,4 +1,4 @@
-"""Scoped logging ownership for tests that call standalone CLIs in-process."""
+"""Scoped logging ownership for tests and in-process CLI calls."""
 
 from __future__ import annotations
 
@@ -43,3 +43,19 @@ def isolated_cli_logging(*, logger_names=()):
                 cleanup.callback(handler.setLevel, level)
             cleanup.callback(original_list.__setitem__, slice(None), original_handlers)
             cleanup.callback(setattr, root, "handlers", original_list)
+
+
+@contextmanager
+def owned_log_handler(logger, handler, *, level=None):
+    """Attach a newly owned handler and attempt both removal and closure.
+
+    Register cleanup before level setup or attachment can fail. Borrowed
+    handlers such as pytest's caplog handler must not enter this scope.
+    """
+    with ExitStack() as cleanup:
+        cleanup.callback(handler.close)
+        cleanup.callback(logger.removeHandler, handler)
+        if level is not None:
+            handler.setLevel(level)
+        logger.addHandler(handler)
+        yield handler

@@ -18,6 +18,7 @@ import logging
 import unittest
 
 from core.logging import RaptorLogger
+from core.testing.logging_state import owned_log_handler
 
 
 class _CapturingHandler(logging.Handler):
@@ -37,10 +38,7 @@ class ReservedKwargAcrossLevelsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.raptor_logger = RaptorLogger()
         self.handler = _CapturingHandler()
-        self.raptor_logger.logger.addHandler(self.handler)
-
-    def tearDown(self) -> None:
-        self.raptor_logger.logger.removeHandler(self.handler)
+        self.enterContext(owned_log_handler(self.raptor_logger.logger, self.handler))
 
     def _assert_reserved_kwarg_survives(self, method_name: str) -> None:
         method = getattr(self.raptor_logger, method_name)

@@ -16,6 +16,7 @@ what's actually going to fire.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -44,15 +45,18 @@ class _RaptorLogCapture:
 
     def __enter__(self):
         self.records: list = []
-        self._h = logging.Handler()
-        self._h.handle = lambda r: (self.records.append(r), True)[1]
-        self._lg = logging.getLogger("raptor")
-        self._lg.addHandler(self._h)
-        return self
+        with ExitStack() as cleanup:
+            self._h = logging.Handler()
+            cleanup.callback(self._h.close)
+            self._h.handle = lambda r: (self.records.append(r), True)[1]
+            self._lg = logging.getLogger("raptor")
+            cleanup.callback(self._lg.removeHandler, self._h)
+            self._lg.addHandler(self._h)
+            self._cleanup = cleanup.pop_all()
+            return self
 
     def __exit__(self, *exc):
-        self._lg.removeHandler(self._h)
-        return False
+        return self._cleanup.__exit__(*exc)
 
     def messages(self) -> list:
         return [r.getMessage() for r in self.records]

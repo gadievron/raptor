@@ -9,6 +9,7 @@ import logging
 import pytest
 
 from core.security.prompt_telemetry import DefenseTelemetry
+from core.testing.logging_state import owned_log_handler
 
 
 @pytest.fixture
@@ -21,13 +22,12 @@ def telemetry():
 @pytest.fixture
 def log_capture():
     """Capture log output from the raptor.security logger."""
-    stream = io.StringIO()
-    handler = logging.StreamHandler(stream)
-    handler.setLevel(logging.WARNING)
-    logger = logging.getLogger("raptor.security")
-    logger.addHandler(handler)
-    yield stream
-    logger.removeHandler(handler)
+    with io.StringIO() as stream:
+        logger = logging.getLogger("raptor.security")
+        with owned_log_handler(
+            logger, logging.StreamHandler(stream), level=logging.WARNING,
+        ):
+            yield stream
 
 
 # --- Basic recording ---

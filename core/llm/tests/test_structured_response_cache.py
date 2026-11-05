@@ -13,6 +13,7 @@ calls, then exercises the cache via the real public API
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from pathlib import Path
 
 from core.testing import (
@@ -235,15 +236,19 @@ class _RecordingHandler:
 
     def __enter__(self):
         import logging
-        self._h = logging.Handler()
-        self._h.handle = lambda r: (self.records.append(r), True)[1]
-        self._lg = logging.getLogger("raptor")
-        self._lg.addHandler(self._h)
-        return self
+
+        with ExitStack() as cleanup:
+            self._h = logging.Handler()
+            cleanup.callback(self._h.close)
+            self._h.handle = lambda r: (self.records.append(r), True)[1]
+            self._lg = logging.getLogger("raptor")
+            cleanup.callback(self._lg.removeHandler, self._h)
+            self._lg.addHandler(self._h)
+            self._cleanup = cleanup.pop_all()
+            return self
 
     def __exit__(self, *exc):
-        self._lg.removeHandler(self._h)
-        return False
+        return self._cleanup.__exit__(*exc)
 
     def messages(self):
         return [r.getMessage() for r in self.records]
