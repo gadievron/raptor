@@ -1677,6 +1677,14 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
     ("core/audit/orchestrator.py", "_multi_pass_review",
      "value-expression", "8420136baaebfa6f"):
         "mr_result.items[0]: the merged panel item built by the merge above",
+    ("core/audit/corpus/receipt_replay.py", "replay",
+     "value-expression", "b0e2a0fcaac3fb65"):
+        "captured.get('review_result', {}): untrusted replay input passed to "
+        "the receipt decision under isolated config; no review keys minted",
+    ("core/audit/orchestrator.py", "_aggregate_ihv_verdicts",
+     "computed-key", "05edb1da5eb3a080"):
+        "gate-blocked proposal restores only hypothesis/cwe/cwe_class from "
+        "the prior review; finite model-owned keys, no pipeline stamp copied",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).
