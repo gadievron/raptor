@@ -2484,8 +2484,13 @@ def _guard_view_lines(source: str, view: str) -> list[str]:
     """
     out: list[str] = []
     off = 0
+    native_source = type(source) is str
     for seg in source.splitlines(keepends=True):  # line-model: offset walk pairing the view with the per-line loops' splitlines model
-        line = seg.splitlines()[0]
+        # A native splitlines segment contains at most one terminator
+        # (including CRLF), so trimming those characters avoids splitting
+        # every segment into another temporary list.
+        line = (seg.rstrip("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+                if native_source else seg.splitlines()[0])
         lead = len(line) - len(line.lstrip())
         out.append(view[off + lead:off + lead + len(line.strip())])
         off += len(seg)
