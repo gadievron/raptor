@@ -283,7 +283,10 @@ class TestCodexChildSessionIsolation:
         for key, value in inherited.items():
             monkeypatch.setenv(key, value)
         monkeypatch.delenv("CLAUDECODE", raising=False)
-        monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
+        # No protected mount namespace is created for this owned child.
+        # Marker propagation is checked by TestChildSessionIsolation above;
+        # protected-import refusal has its own security contracts.
+        monkeypatch.delenv("RAPTOR_INSTALL_PROTECTED", raising=False)
         monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
         if ci:
             monkeypatch.setenv("CI", "true")
@@ -313,7 +316,7 @@ class TestCodexChildSessionIsolation:
         for key in inherited:
             if key not in {"RAPTOR_REGISTRY_HOME", "RAPTOR_OUT_DIR"}:
                 assert key not in env
-        assert env["RAPTOR_INSTALL_PROTECTED"] == "1"
+        assert "RAPTOR_INSTALL_PROTECTED" not in env
         assert env["CODEX_SANDBOX_NETWORK_DISABLED"] == "1"
         assert (env.get("CI") == "true") == ci
         assert ("ANTHROPIC_API_KEY" in env) == (mode == "llm")
