@@ -130,7 +130,17 @@ jobs:
         run: |
           set -euo pipefail
           wrapper_apt_config="$RUNNER_TEMP/wrapper-apt.conf"
-          cat > "$wrapper_apt_config" <<'APT'
+          # Use Ubuntu's archive directly; the hosted runner's Azure mirror
+          # has repeatedly stalled while downloading Chromium font packages.
+          wrapper_apt_sources="$RUNNER_TEMP/wrapper-ubuntu.sources.list"
+          cat > "$wrapper_apt_sources" <<'SOURCES'
+          deb https://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb https://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb https://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+          SOURCES
+          cat > "$wrapper_apt_config" <<APT
+          Dir::Etc::sourcelist "$wrapper_apt_sources";
+          Dir::Etc::sourceparts "-";
           Acquire::http::Timeout "20";
           Acquire::https::Timeout "20";
           Acquire::Retries "2";
