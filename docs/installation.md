@@ -100,7 +100,7 @@ and browser automation tooling.
 The commands below pin the latest published image by digest, so pulling and running
 use the same image. You can pull it with:
 ```bash
-docker pull docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
 
 or build it locally using the included `Dockerfile`:
@@ -135,7 +135,7 @@ To start the published image:
 ```bash
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
-  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
+  docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
 
 To mount a target folder as well:
@@ -143,7 +143,7 @@ To mount a target folder as well:
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  docker.io/danielcuthbert/raptor:latest@sha256:2683092d69b246577d4a2fb5a9c7e4f36d0187bffd71f1252ef751ed227a276f
+  docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
 
 For a locally built image, replace the published image reference in these commands
