@@ -16,7 +16,6 @@ STRONG = "semgrep:explicit-error-discard"
 def select(*records):
     return supported_claims(
         records, receipt_can_promote=orch._promotion_grade_receipt,
-        aggregate=orch._aggregate_channel_confirmations,
     )
 
 
@@ -36,12 +35,9 @@ def test_two_weak_receipts_cannot_corroborate_different_claims():
     ) == []
 
 
-def test_existing_two_channel_policy_applies_within_a_single_claim():
+def test_weak_channels_cannot_confirm_even_within_a_single_claim():
     record = ClaimVerification({"mechanism": "race"}, (WEAK, OTHER_WEAK))
-    result = select(record)
-    assert len(result) == 1
-    assert result[0].verification is record
-    assert set(result[0].channels) == {"smt", "codeql-llm"}
+    assert select(record) == []
 
 
 def test_strong_receipt_is_selected_ahead_of_a_weak_lead_on_the_same_claim():

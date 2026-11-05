@@ -283,8 +283,8 @@ _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
     # — Tier 2 template predicates, Tier 3 compile-retry, the legacy
     # free-form fallback). CodeQL executing the query is mechanical;
     # the PREMISES are model text, so the receipt is detection-role:
-    # it corroborates, joins the two-namespace aggregation floor, and
-    # steers confidence, but never satisfies verification grade alone
+    # it corroborates and steers review, but neither alone nor combined
+    # with other detection namespaces does it satisfy verification grade
     # — it cannot break merge ties, hold a claim against demotion, or
     # earn a cross-run skip. Kept OUT of the ``codeql`` namespace:
     # that namespace has an open-ended mechanical-premise producer
@@ -599,19 +599,13 @@ def is_tool_evidence(stamp: str) -> bool:
       legitimate runs.
     * Detection-role variants (``consistency:*-majority``,
       ``smt:check-toctou``, ...) never qualify alone — a statistical
-      prior corroborates, it does not convict. Two or more DISTINCT
-      detection namespaces agreeing DO qualify: that is exactly the
-      Bayesian aggregation-promotion receipt
-      (``orchestrator._aggregate_channel_confirmations`` stamps
-      ``"+".join(confirmed)`` only after >=2 independent channels
-      cross the posterior threshold; ``_probe_backed_suspicious``
-      applies the same two-namespace floor).
+      prior corroborates, it does not convict. Combining detection-role
+      namespaces never grants verification authority.
     """
     if not stamp or stamp == "none":
         return False
     parts = stamp.split("+") if "+" in stamp else [stamp]
     qualifying = 0
-    detection_namespaces: set = set()
     for p in parts:
         p = p.strip()
         if not p:
@@ -630,13 +624,7 @@ def is_tool_evidence(stamp: str) -> bool:
             # "CodeQL:rule") — pipeline stamps are lowercase by
             # construction, so this is model-authored text.
             return False
-        elif _is_detection_variant(p):
-            detection_namespaces.add(
-                p.split(":", 1)[0] if ":" in p else p,
-            )
-    if qualifying > 0:
-        return True
-    return len(detection_namespaces) >= 2
+    return qualifying > 0
 
 
 _LLM_ONLY_EVIDENCE = frozenset({
@@ -884,67 +872,41 @@ def is_verification_evidence(ev: str) -> bool:
     (``smt:check-integer-narrowing+llm-claimed:smt``, the
     evidence-combine shape) keeps its verification status.
 
-    Aggregation-promotion receipt: ``orchestrator.
-    _aggregate_channel_confirmations`` mints ``"+".join(confirmed)``
-    when two or more INDEPENDENT detection-role channels jointly cross
-    the posterior confirm threshold — by construction no single part
-    of that stamp is a verification receipt (that is the whole point
-    of aggregating), so the per-part rule alone would silently
-    un-grade a genuinely confirmed row. Mirror of the producer and of
-    ``is_tool_evidence``'s two-namespace floor (same rule in
-    ``_probe_backed_suspicious``): a composite whose parts span >=2
-    DISTINCT detection-role namespaces (``_is_detection_only`` — the
-    producer's own precondition for every part it joins) is
-    verification, PROVIDED the stamp carries no ``llm-claimed:`` /
-    ``prefilter:`` part anywhere (a contaminated composite is not the
-    pristine aggregation receipt — the claim-tail rule above stays
-    closed) and the whole stamp passes :func:`is_tool_evidence`
-    (poison namespaces, miscased spellings, malformed joins).
+    Detection-role receipts remain observations regardless of how many
+    namespaces they span. At least one verification receipt is required.
     """
     if not ev or ev.startswith(_NON_MECHANICAL_LEAD):
         return False
-    detection_namespaces: set[str] = set()
-    contaminated = False
     for part in ev.split("+"):
         part = part.strip()
         if not part:
             continue
         low = part.lower()
         if low.startswith(LLM_CLAIM_PREFIX):
-            contaminated = True
             break
         if low.startswith(_PREFILTER_PREFIX):
-            contaminated = True
             continue
         if registry_owns(part):
             # Exact-spelling registry namespaces: the enumerated role
             # decides; an unlisted spelling is fail-closed — neither
-            # verification nor aggregation-eligible, ignored.
+            # verification nor recognized diagnostic evidence, ignored.
             role = registered_spelling_role(part)
             if role == _ROLE_VERIFICATION:
                 return True
-            if role == _ROLE_DETECTION:
-                detection_namespaces.add(low.split(":", 1)[0])
             continue
         # Import guard only: evidence_grade↔orchestrator is a
         # potential import cycle; _is_detection_only itself is a pure
         # string check (stock-rule role tables). Unknown namespaces
-        # come back False — they never count toward the aggregation
-        # floor.
+        # come back False and must still pass receipt admission below.
         detection = False
         with contextlib.suppress(ImportError):
             from core.audit.orchestrator import _is_detection_only
             detection = _is_detection_only(part)
         if detection:
-            detection_namespaces.add(low.split(":", 1)[0])
             continue
         if is_tool_evidence(part):
             return True
-    return (
-        not contaminated
-        and len(detection_namespaces) >= 2
-        and is_tool_evidence(ev)
-    )
+    return False
 
 
 _RECEIPT_MAP: dict[str, tuple] = {

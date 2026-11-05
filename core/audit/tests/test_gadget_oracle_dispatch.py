@@ -84,10 +84,10 @@ class TestEvidenceGrading:
         assert not is_tool_evidence(RULE_CHAIN)
         assert not is_tool_evidence(RULE_ABSENCE)
 
-    def test_two_detection_namespaces_aggregate(self):
+    def test_two_detection_namespaces_remain_diagnostic(self):
         from core.audit.evidence_grade import is_tool_evidence
 
-        assert is_tool_evidence(f"{RULE_CHAIN}+joern:live")
+        assert not is_tool_evidence(f"{RULE_CHAIN}+joern:live")
 
     def test_not_promotion_grade(self):
         from core.audit.orchestrator import _promotion_grade_receipt

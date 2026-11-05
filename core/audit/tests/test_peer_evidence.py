@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 from core.audit.evidence_grade import is_tool_evidence
 from core.audit.peer_evidence import (
-    CONSISTENCY_NAMESPACE,
     MAX_EXHIBITS,
     PeerEvidence,
     PeerExhibit,
@@ -126,15 +125,15 @@ class TestSelfCorroborationFirewall:
         ])
         assert channels == []
 
-    def test_majority_plus_second_namespace_aggregates(self):
+    def test_majority_plus_second_namespace_does_not_confirm(self):
         from core.audit.orchestrator import _aggregate_channel_confirmations
 
         channels, mean = _aggregate_channel_confirmations([
             "consistency:return-check-majority",
             "compiler:-Wunused-result",
         ])
-        assert channels == ["compiler", CONSISTENCY_NAMESPACE]
-        assert mean > 0.7
+        assert channels == []
+        assert mean == 0.0
 
     def test_detection_variants_are_detection_only(self):
         from core.audit.orchestrator import _is_detection_only

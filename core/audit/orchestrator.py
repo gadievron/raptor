@@ -22948,10 +22948,8 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "lock_region", "confirmed",
                         )
-                    # Parametric cocci corroboration leg: an
-                    # INDEPENDENT coccinelle-namespace stamp (the
-                    # aggregation rule needs two namespaces; a receipt
-                    # riding inside corroboration[] does not count).
+                    # Keep the parametric coccinelle receipt separately;
+                    # its role, not its namespace, determines authority.
                     cocci_stamp = cocci_corroboration(
                         effective_target, lr_res,
                     )
@@ -24949,7 +24947,6 @@ def _aggregate_ihv_verdicts(
     tools = [receipt for v in verifications for receipt in v.receipts]
     supports = supported_claims(
         verifications, receipt_can_promote=_promotion_grade_receipt,
-        aggregate=_aggregate_channel_confirmations,
     )
     if tools:
         outcome.review_result["ihv_tools"] = tools
@@ -25002,11 +24999,6 @@ def _aggregate_ihv_verdicts(
         candidate.evidence_tool = "+".join(support.receipts)
         candidate.review_result.pop("ihv_gate_blocked", None)
         candidate.review_result["immediate_verified"] = True
-        if support.channels:
-            _record_aggregated_promotion(
-                candidate, list(support.channels), support.posterior_mean,
-                list(support.receipts),
-            )
         with result._lock:
             result.immediate_verified += 1
         logger.info(
@@ -25320,33 +25312,12 @@ def _sweep_validate(
                 outcome, premise_h, confirmed, config, tier_counters,
             )
         elif confirmed:
-            high_prec = [t for t in confirmed if not _is_detection_only(t)]
+            high_prec = [t for t in confirmed if _promotion_grade_receipt(t)]
             if high_prec:
                 tool_label = "+".join(high_prec)
                 return _stamp_evidence(outcome, tool_label)
-            # Bayesian multi-channel aggregation: independent
-            # detection-role channels agreeing on the hypothesis can
-            # jointly cross the confirm threshold even though no single
-            # receipt is perfect.
-            agg_channels, post_mean = _aggregate_channel_confirmations(
-                confirmed,
-            )
-            if agg_channels:
-                if tier_counters:
-                    _increment_tier_dict(
-                        tier_counters, "adapter_aggregation", "confirmed",
-                    )
-                _record_aggregated_promotion(
-                    outcome, agg_channels, post_mean, confirmed,
-                )
-                logger.info(
-                    "sweep validated %s:%s via aggregated channels %s "
-                    "(posterior %.2f > %.2f)",
-                    outcome.file, outcome.function,
-                    "+".join(agg_channels), post_mean,
-                    _AGGREGATION_CONFIRM_THRESHOLD,
-                )
-                return _stamp_evidence(outcome, "+".join(confirmed))
+            # Multiple detection leads do not establish independence or
+            # validate the shared premise. Keep them as observations.
             if tier_counters:
                 _increment_tier_dict(
                     tier_counters, "adapter_aggregation", "inconclusive",
@@ -26555,7 +26526,7 @@ def _run_critique(
             # promoted on ANY confirmation, letting detection-role
             # heuristics (e.g. smt:check-overflow-to-oob) mint findings
             # through the critique door that the front door refused.
-            high_prec = [t for t in confirmed if not _is_detection_only(t)]
+            high_prec = [t for t in confirmed if _promotion_grade_receipt(t)]
             if not high_prec:
                 logger.info(
                     "critique promotion blocked %s:%s — only "
@@ -28749,42 +28720,10 @@ def _promote_suspicious_one(
             return None
         high_prec = [
             t for t in confirmed
-            if not _is_detection_only(t)
+            if _promotion_grade_receipt(t)
         ]
         if not high_prec:
-            # Bayesian multi-channel aggregation: independent
-            # detection-role channels agreeing on the hypothesis
-            # can jointly cross the promote threshold even though
-            # no single receipt is perfect.
-            agg_channels, post_mean = _aggregate_channel_confirmations(
-                confirmed,
-            )
-            if agg_channels and not _guard_blocks_promotion(
-                    outcome.function, joern_server,
-                    result.tier_counters, config=config):
-                tool = "+".join(confirmed)
-                promoted = _promote_outcome(
-                    outcome, tool, provisional=provisional,
-                    hypothesis=hypothesis,
-                )
-                _record_aggregated_promotion(
-                    promoted, agg_channels, post_mean, confirmed,
-                )
-                if not _commit_promotion(
-                        result, i, outcome, promoted, aggregated=True):
-                    return None
-                _increment_tier_dict(
-                    result.tier_counters, "adapter_aggregation",
-                    "confirmed",
-                )
-                logger.info(
-                    "sweep promoted %s:%s via aggregated channels %s "
-                    "(posterior %.2f > %.2f)",
-                    outcome.file, outcome.function,
-                    "+".join(agg_channels), post_mean,
-                    _AGGREGATION_CONFIRM_THRESHOLD,
-                )
-                return promoted
+            # Channel names alone cannot turn detection leads into proof.
             _increment_tier_dict(
                 result.tier_counters, "adapter_aggregation",
                 "inconclusive",
@@ -29668,84 +29607,25 @@ def _promote_suspicious_preconditions(
         )
 
 
-# Conservative default threshold for Bayesian multi-channel
-# aggregation at the promote decision. Against the uniform Beta(1,1)
-# prior, one confirming channel gives posterior mean 2/3 (below the
-# threshold — a single detection-role receipt still cannot promote),
-# two independent channels give 3/4 (above). I.e. two independent
-# medium-confidence channels stand in for one perfect receipt.
-_AGGREGATION_CONFIRM_THRESHOLD = 0.7
-
-
 def _aggregate_channel_confirmations(
     confirmed: list[str],
 ) -> tuple[list[str], float]:
-    """Bayesian aggregation of detection-role confirmations.
+    """Legacy compatibility: namespace diversity grants no promotion.
 
-    A single detection-role confirmation is too imprecise to promote
-    without LLM agreement — but N INDEPENDENT channels agreeing on the
-    same hypothesis is a different quantity of evidence, and the
-    first-wins promote decision used to discard it. Each DISTINCT
-    channel namespace (coccinelle, smt, ...) contributes one Bernoulli
-    confirmation to a Beta(1,1) posterior via the shipped
-    ``packages.hypothesis_validation.posterior`` machinery; same-engine
-    receipts collapse to one observation (two detection rules from one
-    engine are correlated, not independent).
-
-    The caller is expected to have established that every entry in
-    ``confirmed`` is detection-role (the high-precision receipts
-    promote directly and never reach this path).
-
-    Returns ``(channels, posterior_mean)`` — ``channels`` is the sorted
-    distinct namespaces when the combined posterior mean crosses
-    ``_AGGREGATION_CONFIRM_THRESHOLD``, else an empty list.
+    Receipt strings establish neither independent premises nor calibrated
+    likelihoods. Counting them is not a posterior probability of a defect.
+    Detection leads remain observations until a promotion-grade receipt
+    validates the selected claim. The zero mean is a compatibility sentinel,
+    not an estimated defect probability.
     """
-    namespaces = sorted({
-        t.split(":")[0] for t in confirmed if t
-    })
-    if len(namespaces) < 2:
-        return [], 0.0
-    try:
-        from packages.hypothesis_validation.posterior import (
-            UNIFORM_PRIOR,
-            update,
-            verdict_from_posterior,
-        )
-    except ImportError:
-        return [], 0.0
-    p = UNIFORM_PRIOR
-    for _ns in namespaces:
-        p = update(p, confirms=True)
-    verdict = verdict_from_posterior(
-        p, confirm_threshold=_AGGREGATION_CONFIRM_THRESHOLD,
-    )
-    if verdict == "confirmed":
-        return namespaces, p.mean
-    return [], p.mean
-
-
-def _record_aggregated_promotion(
-    outcome: ReviewOutcome,
-    channels: list[str],
-    posterior_mean: float,
-    confirmed: list[str],
-) -> None:
-    """Stamp the aggregation receipt onto the review result."""
-    if outcome.review_result is None:
-        return
-    outcome.review_result["aggregated_promotion"] = {
-        "channels": channels,
-        "posterior_mean": round(posterior_mean, 4),
-        "threshold": _AGGREGATION_CONFIRM_THRESHOLD,
-        "receipts": list(confirmed),
-    }
+    return [], 0.0
 
 
 def _is_detection_only(tool_id: str) -> bool:
     """Check if a tool confirmation is from a detection-only rule.
 
-    Detection rules surface candidates but are too imprecise to promote
-    a finding's status without LLM agreement.  The role is read from
+    Detection rules surface candidates; promotion requires independent
+    verification. The role is read from
     metadata: ``// @role:`` in coccinelle rules, ``_SMT_VERB_ROLES``
     for SMT verbs.
 
@@ -29796,7 +29676,7 @@ def _is_detection_only(tool_id: str) -> bool:
     if tool_id.startswith("fail_open:"):
         # Detection-variant rule-ids (naming-only / uncorroborated
         # role evidence) may not promote alone; they participate in
-        # _aggregate_channel_confirmations like other detection-role
+        # review diagnostics like other detection-role
         # channels. Registry-grade confirmations promote directly.
         from core.audit.fail_open_verify import is_detection_rule_id
         return is_detection_rule_id(tool_id)
@@ -30612,7 +30492,7 @@ def _promote_clean_refuted(
 
             high_prec = [
                 t for t in confirmed
-                if not _is_detection_only(t)
+                if _promotion_grade_receipt(t)
                 # The fail-open channel's registry-grade confirm proves
                 # the callee is fallible and its return discarded --
                 # exactly the facts the model weighed when it REFUTED
@@ -30910,7 +30790,7 @@ def _dispatch_secondary_hypotheses(
                     )
                 continue
 
-            high_prec = [t for t in confirmed if not _is_detection_only(t)]
+            high_prec = [t for t in confirmed if _promotion_grade_receipt(t)]
             if not high_prec:
                 logger.info(
                     "secondary-hypothesis promotion blocked %s:%s — only "
@@ -31410,7 +31290,7 @@ def _adversarial_refute_pass(
                 )
                 high_prec = [
                     t for t in (confirmed or [])
-                    if not _is_detection_only(t)
+                    if _promotion_grade_receipt(t)
                 ]
                 if high_prec:
                     overturned = True
@@ -33668,19 +33548,12 @@ def _deepen_demotion_refereed(
 
 
 def _probe_backed_suspicious(outcome: ReviewOutcome) -> bool:
-    """True when a suspicious verdict is backed by a fired probe/tool.
+    """A verification receipt can protect a suspicious verdict.
 
-    Detection-role receipts count here, unlike the verification-role
-    gate: a fired probe that flagged the mechanism is a tool
-    observation, and an LLM argument alone must not erase it (it may
-    only be answered by a verification-role refuter). ``llm-claimed:``
-    probe references qualify only when the orchestrator's own dispatch
-    record shows that tool family actually ran for this outcome — the
-    claim is then corroborated by the run's own records, not taken on
-    faith. ``prefilter:`` stamps never qualify: a pattern-scan prior
-    is not a fired probe.
+    Neither a group of detection leads nor a model citation backed only
+    by dispatch bookkeeping establishes a fired verification result.
     """
-    from .evidence_grade import LLM_CLAIM_PREFIX, is_tool_evidence
+    from .evidence_grade import is_verification_evidence
 
     ev = outcome.evidence_tool or ""
     if not ev:
@@ -33693,38 +33566,7 @@ def _probe_backed_suspicious(outcome: ReviewOutcome) -> bool:
         )
     if not ev:
         return False
-    dispatched = {
-        str(t).strip().lower()
-        for t in (outcome.tools_dispatched or set())
-        if str(t).strip()
-    }
-    detection_namespaces: set[str] = set()
-    for part in (p.strip() for p in ev.split("+")):
-        if not part:
-            continue
-        if part.lower().startswith(LLM_CLAIM_PREFIX):
-            claimed = part[len(LLM_CLAIM_PREFIX):].strip().lower()
-            fam = claimed.split(":", 1)[0].strip()
-            if fam and any(
-                d == fam or d.startswith(fam) for d in dispatched
-            ):
-                return True
-            continue
-        if part.startswith("prefilter:"):
-            continue
-        if _is_detection_only(part):
-            # A single detection-role receipt (inject-mode checker,
-            # -majority consistency variant) surfaces a candidate but
-            # is documented as too imprecise to convict alone; a
-            # deepen re-review that examined the mechanism and
-            # concluded clean may answer it. Two INDEPENDENT
-            # detection namespaces agreeing keep the floor — that is
-            # the aggregation-promotion shape.
-            detection_namespaces.add(part.split(":", 1)[0].lower())
-            continue
-        if is_tool_evidence(part):
-            return True
-    return len(detection_namespaces) >= 2
+    return is_verification_evidence(ev)
 
 
 def _stamp_evidence(outcome: ReviewOutcome, tool: str) -> ReviewOutcome:

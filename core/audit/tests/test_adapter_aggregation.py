@@ -1,7 +1,4 @@
-"""Tests for Bayesian multi-channel aggregation at the promote decision.
-
-No real tools or LLM calls — the tool chain is stubbed; the shipped
-packages.hypothesis_validation.posterior machinery runs for real."""
+"""Detection leads do not become verification by crossing namespaces."""
 
 from __future__ import annotations
 
@@ -36,15 +33,15 @@ def _result(outcomes):
 
 
 class TestAggregateChannelConfirmations:
-    def test_two_distinct_channels_cross_threshold(self):
+    def test_two_distinct_namespaces_do_not_prove_independence(self):
         from core.audit.orchestrator import (
             _aggregate_channel_confirmations,
         )
         channels, mean = _aggregate_channel_confirmations(
             ["coccinelle:det-a", "smt:check-det"],
         )
-        assert channels == ["coccinelle", "smt"]
-        assert abs(mean - 0.75) < 1e-9
+        assert channels == []
+        assert mean == 0.0
 
     def test_single_channel_below_threshold(self):
         from core.audit.orchestrator import (
@@ -71,8 +68,8 @@ class TestAggregateChannelConfirmations:
         channels, mean = _aggregate_channel_confirmations(
             ["coccinelle:det-a", "smt:check-det", "semgrep:det-x"],
         )
-        assert channels == ["coccinelle", "semgrep", "smt"]
-        assert abs(mean - 0.8) < 1e-9
+        assert channels == []
+        assert mean == 0.0
 
     def test_empty_input(self):
         from core.audit.orchestrator import (
@@ -105,7 +102,7 @@ class TestPromoteSuspiciousAggregation:
             lambda tool_id: True,
         )
 
-    def test_two_detection_channels_promote(self, tmp_path, monkeypatch):
+    def test_two_detection_channels_do_not_promote(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import _promote_suspicious
 
         self._patch_environment(
@@ -116,19 +113,11 @@ class TestPromoteSuspiciousAggregation:
 
         _promote_suspicious(result, _config(tmp_path))
 
-        promoted = result.outcomes[0]
-        assert promoted.status == "finding"
-        assert promoted.evidence_tool == "coccinelle:det-a+smt:check-det"
-        assert result.aggregation_promoted == 1
-        assert result.sweep_promoted == 1
-        assert result.findings == 1
-        assert result.suspicious == 0
-        agg = promoted.review_result["aggregated_promotion"]
-        assert agg["channels"] == ["coccinelle", "smt"]
-        assert agg["posterior_mean"] == 0.75
-        assert agg["receipts"] == ["coccinelle:det-a", "smt:check-det"]
-        tc = result.tier_counters["adapter_aggregation"]
-        assert tc.confirmed == 1
+        assert result.outcomes[0].status == "suspicious"
+        assert result.aggregation_promoted == result.sweep_promoted == result.findings == 0
+        assert result.suspicious == 1
+        assert "aggregated_promotion" not in result.outcomes[0].review_result
+        assert result.tier_counters["adapter_aggregation"].inconclusive == 1
 
     def test_single_detection_channel_still_blocked(
         self, tmp_path, monkeypatch,
@@ -205,7 +194,7 @@ class TestSweepValidateAggregation:
             lambda tool_id: True,
         )
 
-    def test_aggregated_channels_stamp_evidence(self, tmp_path, monkeypatch):
+    def test_multiple_detection_channels_do_not_stamp_evidence(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import (
             _make_tier_counters,
             _sweep_validate,
@@ -223,10 +212,9 @@ class TestSweepValidateAggregation:
             source_override="void agg_fn(void) { }",
         )
 
-        assert validated.evidence_tool == "coccinelle:det-a+smt:check-det"
-        agg = validated.review_result["aggregated_promotion"]
-        assert agg["channels"] == ["coccinelle", "smt"]
-        assert tier_counters["adapter_aggregation"].confirmed == 1
+        assert not validated.evidence_tool
+        assert "aggregated_promotion" not in validated.review_result
+        assert tier_counters["adapter_aggregation"].inconclusive == 1
 
     def test_single_channel_not_stamped(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import (

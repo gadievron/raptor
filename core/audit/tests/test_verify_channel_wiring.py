@@ -880,7 +880,7 @@ class TestProtocolStateWiring:
             "protocol_state:unvalidated-peer-write",
             "joern:flow",
         ])
-        assert channels == ["joern", "protocol_state"]
+        assert channels == []
 
     def test_detection_variant_solo_promotion_trips_alarm(self, tmp_path):
         from types import SimpleNamespace

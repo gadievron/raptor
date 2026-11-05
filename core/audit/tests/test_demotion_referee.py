@@ -1,10 +1,8 @@
 """Demotion referee: probe-backed suspicious vs LLM-only refutation.
 
-A suspicious verdict backed by a fired detection-role probe (SMT
-verb, coccinelle rule — including mid-loop receipts recorded under
-``llm-claimed:`` with the dispatch record as witness) may not be
-demoted to clean/dark on an LLM argument alone. Only a
-verification-role refuter may answer a tool observation.
+A suspicious verdict backed by a verification receipt may not be demoted
+on a model argument alone. Detection groups and model citations with only
+dispatch bookkeeping do not receive that protection.
 """
 
 from pathlib import Path
@@ -42,8 +40,8 @@ class TestProbeBackedSuspicious:
             _outcome(evidence="smt:check-overflow"),
         )
 
-    def test_composite_detection_receipt_qualifies(self):
-        assert _probe_backed_suspicious(
+    def test_composite_detection_receipt_does_not_qualify(self):
+        assert not _probe_backed_suspicious(
             _outcome(
                 evidence=(
                     "smt:invariant-preservation"
@@ -52,8 +50,8 @@ class TestProbeBackedSuspicious:
             ),
         )
 
-    def test_llm_claimed_with_dispatch_witness_qualifies(self):
-        assert _probe_backed_suspicious(
+    def test_llm_claimed_with_dispatch_does_not_qualify(self):
+        assert not _probe_backed_suspicious(
             _outcome(
                 evidence="llm-claimed:smt:check-toctou (mid-loop)",
                 dispatched={"smt"},
@@ -102,7 +100,7 @@ class TestDeepenDemotionReferee:
     def _probe_backed_prior(self):
         return _outcome(
             status="suspicious",
-            evidence="llm-claimed:smt:check-toctou (mid-loop)",
+            evidence="smt:check-overflow",
             dispatched={"smt"},
         )
 
@@ -182,7 +180,7 @@ class TestResolutionRefereesProbeBacked:
     def test_probe_backed_suspicious_not_resolved(self, tmp_path):
         config, checklist = self._setup(tmp_path)
         outcome = _outcome(
-            evidence="llm-claimed:smt:check-toctou (mid-loop)",
+            evidence="smt:check-overflow",
             dispatched={"smt"},
             line=1,
         )
@@ -209,9 +207,8 @@ class TestResolutionRefereesProbeBacked:
 class TestSingleDetectionReceiptFloor:
     """A single detection-role receipt may not hold the referee floor
     (observed sustaining clean-expected kernel functions against
-    structured deepen demotions); two independent detection namespaces
-    — the aggregation shape — still hold, as does any
-    verification-role receipt."""
+    structured deepen demotions). More detection namespaces do not change
+    that role; verification receipts retain their protection."""
 
     def test_single_detection_receipt_does_not_qualify(self):
         assert not _probe_backed_suspicious(

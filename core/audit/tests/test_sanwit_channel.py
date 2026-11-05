@@ -398,10 +398,10 @@ class TestEvidenceGrading:
         assert not is_tool_evidence("sanwit:insufficient:shell-command")
         assert not is_tool_evidence("sanwit:sufficient:html-text")
 
-    def test_two_detection_namespaces_aggregate(self):
+    def test_two_detection_namespaces_remain_diagnostic(self):
         from core.audit.evidence_grade import is_tool_evidence
 
-        assert is_tool_evidence(
+        assert not is_tool_evidence(
             "sanwit:insufficient:shell-command+joern:live",
         )
 
