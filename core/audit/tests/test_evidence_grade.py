@@ -474,6 +474,9 @@ class TestDetectionVariantFirewall:
         # (sweep._SMT_VERB_ROLES) already classified them detection,
         # but the firewall never consulted it.
         for stamp in (
+            "smt:check-oob",
+            "smt:check-oob:witness",
+            "smt:check-negative-bypass:witness",
             "smt:check-toctou",
             "smt:check-null-propagation",
             "smt:check-null-deref",
@@ -494,8 +497,7 @@ class TestDetectionVariantFirewall:
         for stamp in (
             "smt",
             "smt:check-overflow",
-            "smt:check-oob",
-            "smt:check-negative-bypass:witness",
+            "smt:check-overflow:witness",
             "dead_path_smt",
             "dead_path_smt:witness",
         ):

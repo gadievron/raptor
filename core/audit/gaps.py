@@ -2940,6 +2940,15 @@ def _reuse_ineligibility(
       :func:`_context_staleness`). ``None`` skips the short-circuit.
     """
     if getattr(entry, "verdict", None) == "clean":
+        from .smt_evidence import is_diagnostic_smt_rule
+        # Reclassifying a producer must also invalidate old clean verdicts
+        # credited to it. Source hashes and clean_basis alone cannot restore
+        # proof authority that the underlying model never established.
+        receipts = getattr(entry, "evidence_tools", None) or []
+        if any(part.strip().startswith("smt:") and is_diagnostic_smt_rule(part.strip())
+               for receipt in receipts if isinstance(receipt, str)
+               for part in receipt.split("+")):
+            return "diagnostic SMT receipt requires fresh review"
         # Prior integer disproofs have no durable target-ABI binding in the
         # journal schema. A source hash alone cannot reauthorize that clean
         # under a different or unknown target layout; require a fresh review.
@@ -3001,6 +3010,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("diagnostic SMT"):
+        return "diagnostic_smt"
     if reason.startswith("integer disproof"):
         return "integer_abi_unbound"
     if reason.startswith("context_reduced"):

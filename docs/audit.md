@@ -1038,3 +1038,11 @@ Manual SMT shim sweeps describe the feasibility of a supplied mathematical
 model. Their `supplied-model` receipts are diagnostic, including solver
 witnesses; specifying bitvector widths alone does not bind them to target
 source. Source overflow verification uses the ABI-bound adapter above.
+
+The source adapters for `check-oob`, `check-overflow-to-oob`, and
+`check-negative-bypass` currently infer numeric models without binding
+actual access, allocation, or conversion semantics. Their results are
+`inferred-arithmetic-model` diagnostics, even with a solver witness or an
+explicit ABI selection. Missing element sizes remain unknown. These
+receipts cannot promote findings, refute claims, or reauthorize old clean
+verdicts; independent verification can still establish a finding.

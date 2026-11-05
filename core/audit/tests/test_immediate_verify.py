@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from core.audit.claim_verification import ClaimVerification
 from core.audit.verification_results import ToolChainResult
 from core.audit.refutation_source import capture_source_identity
@@ -234,23 +236,27 @@ class TestVerifyImmediate:
         assert out.evidence_tool == "semgrep:test"
         assert "semgrep" in (out.tools_dispatched or set())
 
+    @pytest.mark.parametrize("verb,can_refute", [
+        ("check-overflow", True), ("check-oob", False),
+        ("check-overflow-to-oob", False), ("check-negative-bypass", False),
+    ])
     @patch("core.audit.orchestrator._run_tool_chain")
     @patch("core.audit.orchestrator._hypothesis_to_tool_chain")
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
     @patch("core.audit.orchestrator._gather_library_candidates")
-    def test_all_refuted_becomes_clean(
-        self, mock_lib, mock_corr, mock_chain, mock_run, tmp_path,
+    def test_refutation_requires_source_capable_producer(
+        self, mock_lib, mock_corr, mock_chain, mock_run, tmp_path, verb, can_refute,
     ):
         mock_corr.return_value = None
         mock_lib.return_value = []
         mock_chain.return_value = [
-            {"type": "smt", "config": {"verb": "check-oob"}},
+            {"type": "smt", "config": {"verb": verb}},
         ]
         def negative_result(chain, **kwargs):
             result = ToolChainResult(file=kwargs["file_path"], function=kwargs["function_name"],
                                      line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"],
                                      source_identity=capture_source_identity(tmp_path, kwargs["file_path"]))
-            result.observe("smt", "refuted", "check-oob", "no out-of-bounds path")
+            result.observe("smt", "refuted", verb, "numeric query is unsatisfiable")
             return result
 
         mock_run.side_effect = negative_result
@@ -260,8 +266,8 @@ class TestVerifyImmediate:
         o = self._make_outcome()
         result = _Result()
         out = _verify_hypotheses_immediate(o, cfg, result)
-        assert out.status == "clean"
-        assert out.review_result["ihv_all_refuted"] is True
+        assert out.status == ("clean" if can_refute else "suspicious")
+        assert bool(out.review_result.get("ihv_all_refuted")) is can_refute
         assert "smt" in (out.tools_dispatched or set())
 
     @patch("core.audit.orchestrator._run_tool_chain")

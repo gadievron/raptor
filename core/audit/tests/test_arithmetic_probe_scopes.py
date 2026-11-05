@@ -96,8 +96,13 @@ def test_bound_current_worker_results_survive_parent_admission(monkeypatch, verb
         file_path="record.c", function_name="Read", verb=verb, source=SOURCE, hypothesis="claim",
         integer_abi="ilp32",
     )
-    assert observed.outcome == outcome
-    assert observed.details == result.details
+    if verb == "check-overflow" or outcome == "error":
+        assert observed.outcome == outcome
+        assert observed.details == result.details
+    else:
+        assert observed.outcome == ("confirmed" if outcome == "confirmed" else "inconclusive")
+        assert observed.details["source_scope"] == result.details["source_scope"]
+        assert observed.details["oracle_scope"] == "inferred-arithmetic-model"
 
 
 @pytest.mark.parametrize("requested,expected", [("Read", "inconclusive"), ("Neighbor", "refuted")])
