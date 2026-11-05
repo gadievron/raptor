@@ -529,14 +529,18 @@ into a single `combined.sarif`:
   reports deduplicate by `(ruleId, uri, startLine, endLine, startColumn,
   fingerprint)`, with the latest occurrence winning. Their driver rules
   are unioned across the tool.
-- Reports with indexed or component-qualified rules, or URI-base tables,
-  retain their owning run metadata. Runs with identical metadata can
+- Reports with indexed or component-qualified rules, URI-base tables, or
+  artifact-table references retain their owning run metadata. Runs with identical metadata can
   combine exact duplicates without changing rule-table positions or paths.
 
 Generated finding IDs use the resolved primary file URI. The same relative
 path under different URI bases remains distinct; equivalent direct and
 based references to one file share an identity. Tool-supplied fingerprints
-remain unchanged.
+remain unchanged. Primary locations that provide only an artifact index
+are resolved through their owning run’s artifact table, including URI bases
+on the table entry. Explicit URI fields retain precedence. Invalid or
+unresolvable indexes leave the finding unlocated instead of borrowing a
+file from another run.
 
 ### Filtering
 
