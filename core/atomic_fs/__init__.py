@@ -162,14 +162,14 @@ def _resolve_effective_mode(
 
 
 def _close_write_fd(fd: int, *, write_failed: bool) -> None:
-    """Keep this write's failure authoritative if closing also fails."""
+    """Keep the operation's failure authoritative if closing also fails."""
     try:
         os.close(fd)
     except OSError:
         if not write_failed:
             raise
         logging.getLogger(__name__).warning(
-            "atomic write descriptor cleanup failed", exc_info=True,
+            "artifact descriptor cleanup failed", exc_info=True,
         )
 
 
@@ -388,13 +388,17 @@ def open_exclusive_artifact(
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
         0o644 if mode is None else mode,
     )
-    if mode is not None:
-        try:
-            os.fchmod(fd, mode)
-        except (OSError, AttributeError):
-            # Windows + some mounts don't honour fchmod — the O_CREAT
-            # mode argument was already best-effort.
-            pass
+    try:
+        if mode is not None:
+            try:
+                os.fchmod(fd, mode)
+            except (OSError, AttributeError):
+                # Windows + some mounts don't honour fchmod — the O_CREAT
+                # mode argument was already best-effort.
+                pass
+    except BaseException:
+        _close_write_fd(fd, write_failed=True)
+        raise
     return fd
 
 
@@ -412,6 +416,7 @@ def write_new_bytes(
     or write failure; no tempfile, no fsync — for regeneratable
     outputs where the atomic writers' durability cost is unearned."""
     fd = open_exclusive_artifact(path, mode=mode, replace=replace)
+    write_failed = False
     try:
         view = memoryview(content)
         written = 0
@@ -422,8 +427,11 @@ def write_new_bytes(
                     f"short write to {path}: os.write returned {n}",
                 )
             written += n
+    except BaseException:
+        write_failed = True
+        raise
     finally:
-        os.close(fd)
+        _close_write_fd(fd, write_failed=write_failed)
 
 
 def write_new_text(
@@ -467,7 +475,7 @@ def open_hardened_append(path: str | Path, *, mode: int = 0o644) -> int:
                 "(planted FIFO/device at the trail path?)",
             )
     except BaseException:
-        os.close(fd)
+        _close_write_fd(fd, write_failed=True)
         raise
     return fd
 
@@ -497,7 +505,7 @@ def open_hardened_read(path: str | Path) -> int:
                 "(planted FIFO/device at the artifact path?)",
             )
     except BaseException:
-        os.close(fd)
+        _close_write_fd(fd, write_failed=True)
         raise
     return fd
 
