@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
+from core.sandbox.evidence import _unique_evidence_object
 from core.security.capped_read import read_capped
 
 EGRESS_SUMMARY_FILE = "egress-summary.json"
@@ -62,7 +63,7 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
                 # Invalid source bytes survived only as surrogate escapes.
                 # Reject them before parsing, without altering valid Unicode.
                 line.encode("utf-8")
-                obj = json.loads(line)
+                obj = json.loads(line, object_pairs_hook=_unique_evidence_object)
                 if isinstance(obj, dict):
                     events.append(obj)
             except (ValueError, RecursionError):

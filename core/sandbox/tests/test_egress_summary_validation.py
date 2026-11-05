@@ -6,6 +6,8 @@ import pytest
 
 from core.sandbox import egress_summary as summary
 
+pytestmark = pytest.mark.usefixtures("private_egress_readers")
+
 
 def good(**fields):
     return {
@@ -87,11 +89,11 @@ def test_decoder_recursion_failure_does_not_end_reading(tmp_path, monkeypatch):
     real_loads = json.loads
     calls = []
 
-    def decode(line):
+    def decode(line, **kwargs):
         calls.append(line)
         if len(calls) == 2:
             raise RecursionError("excessive JSON nesting")
-        return real_loads(line)
+        return real_loads(line, **kwargs)
 
     monkeypatch.setattr(summary.json, "loads", decode)
     result = summary.summarise_egress(tmp_path)

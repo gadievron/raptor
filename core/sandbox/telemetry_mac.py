@@ -73,6 +73,7 @@ import time
 from pathlib import Path
 
 from core.logging import get_logger
+from core.sandbox.evidence import _unique_evidence_object
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -140,10 +141,36 @@ def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:
     )
 
 
+def _key_metadata_problem(path: Path, st: os.stat_result):
+    """Classify metadata consistently before and after reading key bytes."""
+    # Ownership precedes shape: foreign objects are unattributable and
+    # must never enter quarantine/re-key recovery, including FIFOs/dirs.
+    if st.st_uid != os.geteuid():
+        _warn_once_suspect_key(
+            path,
+            f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
+            "investigate the foreign-owned key; restore your own "
+            "0600 key file",
+        )
+        return _REFUSED
+    if not stat.S_ISREG(st.st_mode):
+        return _TamperedKey("not a regular file")
+    if st.st_nlink > 1:
+        return _TamperedKey(
+            f"key has {st.st_nlink} hard links (expected one)")
+    if st.st_mode & 0o077:
+        return _TamperedKey(
+            f"mode {stat.S_IMODE(st.st_mode):04o} grants "
+            "group/other access (the creator writes 0600; nothing "
+            "honest widens it)",
+        )
+    return None
+
+
 def _read_existing_key(path: Path):
     """Read an EXISTING key with rowmac's fd-fstat discipline.
 
-    Returns the raw bytes, ``None`` (absent), ``_REFUSED``
+    Returns the raw bytes, ``None`` (absent, changed, or read failed), ``_REFUSED``
     (foreign-owned / unreadable — unattributable, never recovered),
     or a ``_TamperedKey`` (own-uid symlink, non-regular file, extra
     hard links, or group/other permission bits — states no honest writer
@@ -170,27 +197,9 @@ def _read_existing_key(path: Path):
         return _REFUSED
     try:
         st = os.fstat(fd)
-        # Ownership precedes shape: foreign objects are unattributable and
-        # must never enter quarantine/re-key recovery, including FIFOs/dirs.
-        if st.st_uid != os.geteuid():
-            _warn_once_suspect_key(
-                path,
-                f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
-                "investigate the foreign-owned key; restore your own "
-                "0600 key file",
-            )
-            return _REFUSED
-        if not stat.S_ISREG(st.st_mode):
-            return _TamperedKey("not a regular file")
-        if st.st_nlink > 1:
-            return _TamperedKey(
-                f"key has {st.st_nlink} hard links (expected one)")
-        if st.st_mode & 0o077:
-            return _TamperedKey(
-                f"mode {stat.S_IMODE(st.st_mode):04o} grants "
-                "group/other access (the creator writes 0600; nothing "
-                "honest widens it)",
-            )
+        problem = _key_metadata_problem(path, st)
+        if problem is not None:
+            return problem
         # A single os.read may return fewer bytes than requested
         # (network filesystems); a short read would land a healthy key
         # in the wrong-length refusal, so loop to EOF. The cap stays at
@@ -204,6 +213,17 @@ def _read_existing_key(path: Path):
                 break
             chunks.append(chunk)
             remaining -= len(chunk)
+        # The opened inode may have been replaced or exposed while reads
+        # were in progress. Never mint from a known stale/unsafe snapshot.
+        current = os.lstat(str(path))
+        if (current.st_dev, current.st_ino) != (st.st_dev, st.st_ino):
+            return None
+        problem = _key_metadata_problem(path, current)
+        if problem is not None:
+            return problem
+        if (current.st_size != st.st_size
+                or current.st_mtime_ns != st.st_mtime_ns):
+            return None
         return b"".join(chunks)
     except OSError:
         return None
@@ -290,7 +310,8 @@ def tamper_events() -> list[dict]:
             with os.fdopen(fd, "rb", closefd=False) as fh:
                 for line in fh:
                     try:
-                        rec = json.loads(line.decode("utf-8"))
+                        rec = json.loads(
+                            line.decode("utf-8"), object_pairs_hook=_unique_evidence_object)
                     except (ValueError, RecursionError):
                         continue
                     if isinstance(rec, dict):

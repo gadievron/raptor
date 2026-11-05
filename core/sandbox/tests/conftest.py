@@ -219,7 +219,7 @@ def no_sandbox_consent_subprocess(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _sandbox_state_guard():
+def _sandbox_state_guard(monkeypatch):
     """Snapshot and restore all mutable module state around each test, so a
     test that sets any global can't poison others.
 
@@ -242,6 +242,11 @@ def _sandbox_state_guard():
     """
     from core.sandbox import state as mod
     from core.sandbox import summary as summary_mod
+    # Streamer shutdown now records parent-known loss. Give each test owned
+    # registry bindings before writes, preserving inherited observations and
+    # restoring the original objects through monkeypatch's teardown stack.
+    for name in ('_evidence_write_failures', '_evidence_inode_mismatches'):
+        monkeypatch.setattr(summary_mod, name, dict(getattr(summary_mod, name)))
     state_names = [
         # CLI overrides
         "_cli_sandbox_disabled", "_cli_sandbox_profile",
@@ -376,3 +381,109 @@ def private_triage_readers(monkeypatch, tmp_path):
         private = ModuleType(original.__name__)
         vars(private).update(vars(original))
         monkeypatch.setattr(triage, name, private)
+
+
+@pytest.fixture
+def owned_audit_source(tmp_path, monkeypatch, request):
+    """Feed the real audit reader from an owned process, without native tracing."""
+    import subprocess
+    import sys
+    from types import ModuleType
+    from core.sandbox import seatbelt_audit as audit
+    from core.sandbox import observe_profile as observe
+
+    owners, children = [], []
+
+    def cleanup():
+        errors = []
+        for proc in children:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=5)
+            except BaseException as error:
+                errors.append(error)
+        for owner in owners:
+            try:
+                owner.stop()
+            except BaseException as error:
+                errors.append(error)
+            reader = owner._reader
+            if reader is not None:
+                reader.join(timeout=5)
+                if reader.is_alive():
+                    errors.append(AssertionError('owned audit reader survived cleanup'))
+        for proc in children:
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError as error:
+                        errors.append(error)
+        if errors:
+            raise errors[0]
+
+    request.addfinalizer(cleanup)
+
+    def run(data, *, decode_failure=False, observe_mode=True):
+        run_dir = tmp_path / f'capture-{len(owners)}'
+        owner = audit.LogStreamer(run_dir, observe_mode=observe_mode,
+                                  observe_nonce='trusted' if observe_mode else None)
+        owners.append(owner)
+        private = ModuleType('owned_audit_subprocess')
+        vars(private).update(vars(subprocess))
+
+        def popen(argv, **kwargs):
+            kwargs['cwd'] = str(tmp_path)
+            kwargs['stderr'] = subprocess.PIPE
+            proc = subprocess.Popen([
+                sys.executable, '-c',
+                'import sys;sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]));sys.stdout.buffer.flush()',
+                data.hex(),
+            ], **kwargs)
+            children.append(proc)
+            return proc
+
+        private.Popen = popen
+        monkeypatch.setattr(audit, 'subprocess', private)
+        monkeypatch.setattr(owner, '_warm_up_until_attached', lambda: True)
+        if decode_failure:
+            original = audit._decode_log_entry
+            calls = 0
+
+            def fail_after_one(line):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError('injected producer decode failure')
+                return original(line)
+
+            monkeypatch.setattr(audit, '_decode_log_entry', fail_after_one)
+        owner.start()
+        owner._reader.join(timeout=5)
+        assert not owner._reader.is_alive(), 'owned producer did not reach reader EOF'
+        owner._proc.wait(timeout=5)
+        error = owner._proc.stderr.read(4096)
+        assert owner._proc.returncode == 0, f'owned producer exited {owner._proc.returncode}: {error}'
+        owner.stop()
+        profile = (observe.parse_observe_log(run_dir, expected_nonce='trusted', current_run=True)
+                   if observe_mode else None)
+        return owner, profile
+
+    return run
+
+
+@pytest.fixture
+def private_egress_readers(monkeypatch, tmp_path):
+    """Isolate egress reader fault injection from shared module APIs."""
+    from types import ModuleType
+    from core.sandbox import egress_summary
+    from core.security import capped_read
+    from core.testing.state_isolation import pin_user_state_dirs
+
+    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+    for owner, name in ((egress_summary, 'json'), (capped_read, 'os')):
+        original = getattr(owner, name)
+        private = ModuleType(original.__name__)
+        vars(private).update(vars(original))
+        monkeypatch.setattr(owner, name, private)
