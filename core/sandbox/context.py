@@ -478,26 +478,40 @@ def _read_proxy_count_sidecar(output, run_binding):
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None, set(), True
-        raw = os.read(fd, _COUNT_SIDECAR_MAX_BYTES + 1)
+        chunks = []
+        remaining = _COUNT_SIDECAR_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
     except OSError:
         return None, set(), True
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
     if len(raw) > _COUNT_SIDECAR_MAX_BYTES:
         return None, set(), True
     import json as _json
     try:
         data = _json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return None, set(), True
     if not isinstance(data, dict):
         return None, set(), True
     count = data.get("count")
-    flags = data.get("flags") or []
+    flags = data.get("flags", [])
+    if (type(count) is not int or count < 0
+            or not isinstance(flags, list)
+            or not all(isinstance(flag, str) for flag in flags)):
+        return None, set(), True
     token = data.get("mac")
     fields = _tmac.proxy_events_count_fields(count, flags, run_binding)
-    if not (isinstance(count, int) and count >= 0
-            and _tmac.verify(fields, token)):
+    if not _tmac.verify(fields, token):
         return None, set(), True
     return count, {str(f) for f in flags}, False
 
