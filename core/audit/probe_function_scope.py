@@ -158,5 +158,5 @@ def source_binding(source: str, function_name: str, *, verb: str) -> dict[str, s
     if verb == "check-overflow":
         # Same-source replies from workers predating operation admission must
         # not inherit the current producer's contract merely by matching input.
-        binding["query_contract"] = "unique-binary-operation-v1"
+        binding["query_contract"] = "dominating-overflow-guards-v2"
     return binding

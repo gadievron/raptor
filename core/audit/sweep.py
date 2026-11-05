@@ -2858,12 +2858,17 @@ def _run_smt_verb_on_source(
                     outcome="inconclusive", rule_id=f"smt:{verb}",
                     details={"arithmetic_operation_status": operation.status},
                 )
-            # Vacuity policy: SAT on unconstrained bitvectors is
-            # near-certain and meaningless.  Extract comparison lines
-            # mentioning the operands and add them as Z3 PREMISES —
-            # only then may SAT mean "the guards do not rule out the
-            # wrap".  No premises / vacuous premises → inconclusive.
-            premises = _extract_comparison_premises(operands, source)
+            # Admit only supported branch predicates that hold at this
+            # operation, with unchanged values. Whole-file comparisons,
+            # disjunctions flattened into conjunctions, and invalidated
+            # bounds must never become solver premises.
+            if operation.guard_status == "unavailable":
+                return SweepResult(
+                    tool="smt", file_path=file_path, function_name=function_name,
+                    outcome="inconclusive", rule_id=f"smt:{verb}",
+                    details={"arithmetic_guard_status": "unavailable"},
+                )
+            premises = list(operation.premises)
             gate = _premise_gate(premises, "uint32")
             if gate is not None:
                 return SweepResult(
@@ -3129,6 +3134,7 @@ def _run_smt_verb_on_source(
         if verb == "check-overflow":
             scope_details["source_operation"] = {
                 "line": operation.line, "column": operation.column,
+                "guards": list(operation.premises),
             }
         return SweepResult(
             tool="smt", file_path=file_path,
@@ -3344,9 +3350,9 @@ def _extract_comparison_premises(
 def _premise_gate(premises: list[str], profile: str) -> str | None:
     """Vet extracted premises before a vacuous-verb SMT call.
 
-    Returns ``None`` when the premises are usable (at least one
-    extracted, encodable, and jointly satisfiable), otherwise the
-    inconclusive-reason string.  The premise-vacuity check matters
+    Returns ``None`` only when at least one premise was extracted, all
+    premises are encodable, and their conjunction is satisfiable. Otherwise
+    returns the inconclusive-reason string.  The premise-vacuity check matters
     because contradictory premises would drive the *full* query UNSAT
     and masquerade as an authoritative "refuted".
 
@@ -3375,6 +3381,10 @@ def _premise_gate(premises: list[str], profile: str) -> str | None:
         premise_check = validate_path(premises, profile=profile)
     except Exception as exc:  # noqa: BLE001 — degrade, never crash the sweep
         return f"premise encoding failed: {exc}"
+    # Dropping a required branch predicate would weaken the reaching path
+    # and permit a witness that the source condition actually excludes.
+    if premise_check.get("unknown") or premise_check.get("unknown_reasons"):
+        return "guard premises partially unencodable"
     feasible = premise_check.get("feasible")
     if feasible is False:
         return "vacuous premises"

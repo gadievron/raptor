@@ -1,16 +1,18 @@
 """Bind a proposed arithmetic query to one source operation.
 
-This establishes syntax and occurrence identity only. It does not prove
-operand types, reachability, guard dominance, or the absence of mutation.
-Callers must supply source already restricted to the requested function.
+This binds syntax, occurrence identity, and predicates from supported
+structured paths. It does not establish operand types or complete source
+reachability. Callers supply source restricted to the requested function.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
 from .condition_extraction import _get_parser
 
 logger = logging.getLogger(__name__)
+_INTEGER_LITERAL_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|0|[1-9][0-9]*)")
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,8 @@ class ArithmeticOperation:
     status: str
     line: int = 0
     column: int = 0
+    guard_status: str = "unavailable"
+    premises: tuple[str, ...] = ()
 
 
 def _unwrap(node):
@@ -103,7 +107,11 @@ def bind_arithmetic_operation(source, operands, operator, *, language):
         if node.type == "binary_expression" and text(node.child_by_field_name("operator")) == operator:
             left = _unwrap(node.child_by_field_name("left"))
             right = _unwrap(node.child_by_field_name("right"))
-            if left is not None and right is not None and left.type == right.type == "identifier":
+            if left is not None and right is not None and all(
+                item.type == "identifier" or (
+                    item.type == "number_literal" and _INTEGER_LITERAL_RE.fullmatch(text(item))
+                ) for item in (left, right)
+            ):
                 pair = (text(left), text(right))
                 wanted = tuple(operands)
                 if pair == wanted or (operator in {"+", "*"} and pair == wanted[::-1]):
@@ -113,5 +121,7 @@ def bind_arithmetic_operation(source, operands, operator, *, language):
         stack.extend(node.named_children)
     if not matches:
         return ArithmeticOperation("unbound")
+    from .arithmetic_guards import guards_for_operation
+    guards = guards_for_operation(bodies[0], matches[0], data, operands)
     row, column = matches[0].start_point
-    return ArithmeticOperation("bound", row + 1, column + 1)
+    return ArithmeticOperation("bound", row + 1, column + 1, guards.status, guards.premises)

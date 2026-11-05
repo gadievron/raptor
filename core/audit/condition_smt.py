@@ -5246,12 +5246,17 @@ def disprove_integer_overflow(
     hypothesis: str,
     source_context: str,
     var_types: dict[str, str] | None = None,
+    *,
+    file_path: str = "",
+    function_name: str | None = None,
 ) -> HypothesisDisproofResult:
     """Attempt to disprove an integer overflow/underflow hypothesis via SMT.
 
     Extracts the claimed overflow expression from the hypothesis, resolves
     variable types from source context, and checks whether the overflow
-    is actually feasible given the type widths.
+    is feasible in the resolved type model. Pipeline callers provide the
+    file/function scope. Legacy callers without scope metadata must supply
+    one complete function; unknown operation or guard contexts decline.
 
     Returns disproved=True if UNSAT (overflow cannot happen),
     disproved=False if SAT (overflow is feasible), None if inconclusive.
@@ -5265,6 +5270,18 @@ def disprove_integer_overflow(
             hypothesis_class="integer_overflow",
             error="z3 not installed",
         )
+
+    from .condition_extraction import language_for_file
+    language = language_for_file(file_path) if file_path else "c"
+    if file_path or function_name is not None:
+        from .probe_function_scope import source_for_function
+        _, selected = source_for_function(source_context, file_path, function_name or "")
+        if selected is None:
+            return HypothesisDisproofResult(
+                hypothesis_class="integer_overflow",
+                reasoning="function scope unavailable — inconclusive",
+            )
+        source_context = selected
 
     var_types = var_types or {}
 
@@ -5296,10 +5313,6 @@ def disprove_integer_overflow(
     # split pieces are identical.
     parts = re.split(r"(?<!\s)\s*[*+\-]\s*", expr_text)
     var_names = [p.strip() for p in parts if p.strip() and re.match(r"[a-zA-Z_]", p.strip())]
-    literal_operands = [
-        p.strip() for p in parts
-        if p.strip() and re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|\d+)", p.strip())
-    ]
 
     if not var_names:
         return HypothesisDisproofResult(
@@ -5366,8 +5379,8 @@ def disprove_integer_overflow(
     # Guard premises: without source-level constraints on the operands
     # the model is vacuous — SAT merely restates that unconstrained
     # bitvector arithmetic can wrap (no evidence value), and the UNSAT
-    # branch is unreachable.  Same premise machinery as the sweep's
-    # check-overflow verb.
+    # branch is unreachable. Use the sweep's source-operation and
+    # guard-context admission rather than collecting arbitrary comparisons.
     width = max(resolved_types.values())
     if width not in (8, 16, 32, 64):
         width = 64
@@ -5375,29 +5388,24 @@ def disprove_integer_overflow(
                else f"uint{width}")
     overflow_kind = ("signed_wrap" if signedness == "signed"
                      else "unsigned_wrap")
-    try:
-        from .sweep import _extract_comparison_premises, _premise_gate
-    except Exception:  # noqa: BLE001 — sweep unavailable, no premises
+    from .arithmetic_operation import bind_arithmetic_operation
+    from .sweep import _premise_gate
+
+    # Preserve expression order, including literals. Reordering variables
+    # ahead of constants would change subtraction's intrinsic predicate.
+    operands = [part.strip() for part in parts if part.strip()]
+    operation = bind_arithmetic_operation(source_context, operands, op_char, language=language)
+    if operation.status != "bound" or operation.guard_status == "unavailable":
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",
-            reasoning="premise extraction unavailable — inconclusive",
+            reasoning="source operation or guard context unavailable — inconclusive",
         )
-    premises = _extract_comparison_premises(var_names, source_context)
+    premises = list(operation.premises)
     gate = _premise_gate(premises, profile)
     if gate is not None:
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",
             reasoning=f"inconclusive: {gate}",
-        )
-
-    operands = var_names + literal_operands
-    if len(operands) < 2:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=(
-                f"fewer than two operands in '{expr_text}' — "
-                f"inconclusive"
-            ),
         )
 
     try:
