@@ -467,6 +467,14 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
             # rules from later runs win on collision (matches the
             # latest-occurrence-wins semantic the result dedup uses).
             tool_runs[tool_name]["rules_by_id"].update(get_rules(run))
+            # The final driver table comes from rules_by_id. Keep a private
+            # header without the original table so replaced descriptors die.
+            header = tool_runs[tool_name]["tool"]
+            header_driver = _as_dict(header.get("driver"))
+            if tool_runs[tool_name]["rules_by_id"] and "rules" in header_driver:
+                tool_runs[tool_name]["tool"] = {
+                    **header, "driver": {key: value for key, value in header_driver.items() if key != "rules"},
+                }
             # Append invocations — each input run is its own
             # invocation record; multiple legitimately coexist.
             for inv in run.get("invocations") or []:
@@ -1444,7 +1452,7 @@ def generate_scan_metrics(
                 metrics["findings_by_tool"].get(tool_key, 0) + len(results)
             )
 
-            rule_resolver = ResultRuleResolver(run)
+            rule_resolver: ResultRuleResolver | None = None
 
             for result in results:
                 if not isinstance(result, dict):
@@ -1458,7 +1466,11 @@ def generate_scan_metrics(
                 raw_rule_id = result.get("ruleId")
                 needs_level = not isinstance(level, str) or not level
                 needs_id = not isinstance(raw_rule_id, str) or not raw_rule_id
-                rule = rule_resolver.resolve(result) if needs_level or needs_id else {}
+                rule = {}
+                if needs_level or needs_id:
+                    if rule_resolver is None:
+                        rule_resolver = ResultRuleResolver(run)
+                    rule = rule_resolver.resolve(result)
                 # Count by severity
                 if needs_level:
                     level = rule_default_level(rule) or "warning"

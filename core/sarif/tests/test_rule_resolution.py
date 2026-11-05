@@ -872,3 +872,95 @@ def test_metrics_release_input_objects_before_the_next_read(monkeypatch, separat
     assert metrics['findings_by_severity']['error'] == 2
     assert metrics['nosemgrep_suppressed_count'] == 2
     assert metrics['tools_used'] == ['CodeQL']
+
+
+def test_legacy_merge_releases_replaced_driver_rules_without_mutating_inputs(monkeypatch):
+    import weakref
+    import core.sarif.parser as parser
+
+    class Tracked(dict):
+        pass
+
+    rules = []
+
+    def load(path):
+        if len(rules) >= 2:
+            assert rules[0]() is None, 'first driver table retained a replaced rule'
+            assert rules[-1]() is not None, 'latest definition must remain owned'
+        rule = Tracked(id='rule', name=str(path))
+        rules.append(weakref.ref(rule))
+        return {'runs': [{'tool': {'driver': {'name': 'tool', 'version': '1', 'rules': [rule]}},
+                          'results': [{'ruleId': 'rule', 'message': {'text': 'finding'}}]}]}
+
+    monkeypatch.setattr(parser, 'load_sarif', load)
+    merged = parser.merge_sarif(['first', 'second', 'third'])
+    driver = merged['runs'][0]['tool']['driver']
+    assert driver == {'name': 'tool', 'version': '1', 'rules': [rules[-1]()]}
+    assert all(rule() is None for rule in rules[:-1])
+
+    # Retained caller documents must remain unchanged, even when their table
+    # is removed from the merge's private header.
+    first, second = load('retained-first'), load('retained-second')
+    import copy
+    before = copy.deepcopy([first, second])
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: {'first': first, 'second': second}[str(path)])
+    parser.merge_sarif(['first', 'second'])
+    assert [first, second] == before
+
+
+@pytest.mark.parametrize('results', [[], [None], [{'ruleId': 'rule', 'level': 'error'}]],
+                         ids=['empty', 'malformed-row', 'explicit-fields'])
+def test_metrics_skip_unused_rule_index(monkeypatch, results):
+    import core.sarif.parser as parser
+
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: {
+        'runs': [{'tool': {'driver': {'name': 'tool', 'rules': [{'id': 'rule'}]}}, 'results': results}]
+    })
+
+    def unexpected_index(run):
+        pytest.fail('metrics built a rule index without an inherited field')
+
+    monkeypatch.setattr(parser, 'ResultRuleResolver', unexpected_index)
+    metrics = parser.generate_scan_metrics(['report'])
+    assert metrics['total_findings'] == len(results)
+    assert metrics['findings_by_rule'] == ({'rule': 1} if results and isinstance(results[0], dict) else {})
+
+
+def test_metrics_build_one_rule_index_per_run_when_inheritance_is_needed(monkeypatch):
+    import core.sarif.parser as parser
+
+    runs = [
+        {'tool': {'driver': {'name': 'tool', 'rules': [
+            {'id': rule_id, 'defaultConfiguration': {'level': level}},
+        ]}}, 'results': [{'ruleId': 'explicit', 'level': 'note'}, {'ruleIndex': 0}, {'ruleIndex': 0}]}
+        for rule_id, level in [('first', 'error'), ('second', 'warning')]
+    ]
+    original = parser.ResultRuleResolver
+    indexed = []
+
+    def build(run):
+        indexed.append(run)
+        return original(run)
+
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: {'runs': runs})
+    monkeypatch.setattr(parser, 'ResultRuleResolver', build)
+    metrics = parser.generate_scan_metrics(['report'])
+    assert indexed == runs
+    assert metrics['findings_by_rule'] == {'explicit': 2, 'first': 2, 'second': 2}
+    assert metrics['findings_by_severity'] == {'error': 2, 'warning': 2, 'note': 2, 'none': 0}
+
+
+@pytest.mark.parametrize('rules', [None, [], [None], [{'name': 'no-id'}]],
+                         ids=['null', 'empty', 'non-object', 'missing-id'])
+def test_legacy_merge_preserves_original_rule_table_until_a_valid_union_exists(monkeypatch, rules):
+    import copy
+    import core.sarif.parser as parser
+
+    first = {'tool': {'driver': {'name': 'tool', 'rules': rules, 'version': 'first'}}}
+    later = {'tool': {'driver': {'name': 'tool', 'rules': [{'id': 'valid'}], 'version': 'later'}}}
+    before = copy.deepcopy(first)
+    monkeypatch.setattr(parser, 'load_sarif', lambda path: {'runs': [first if str(path) == 'first' else later]})
+    assert parser.merge_sarif(['first'])['runs'][0]['tool'] == first['tool']
+    driver = parser.merge_sarif(['first', 'later'])['runs'][0]['tool']['driver']
+    assert driver == {'name': 'tool', 'rules': [{'id': 'valid'}], 'version': 'first'}
+    assert first == before
