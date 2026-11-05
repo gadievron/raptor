@@ -1293,6 +1293,7 @@ def generate_scan_metrics(
     metrics: dict[str, Any] = {
         "total_files_scanned": 0,
         "total_findings": 0,
+        "nosemgrep_suppressed_count": 0,
         "findings_by_severity": {
             "error": 0,
             "warning": 0,
@@ -1340,6 +1341,9 @@ def generate_scan_metrics(
             for result in results:
                 if not isinstance(result, dict):
                     continue
+                suppression = _as_dict(_as_dict(result.get("properties")).get("nosemgrep"))
+                if suppression.get("suppressed") is True:
+                    metrics["nosemgrep_suppressed_count"] += 1
                 # Resolve at most once, and only when an inherited field
                 # needs it. Fully explicit results need no descriptor lookup.
                 level = result.get("level")

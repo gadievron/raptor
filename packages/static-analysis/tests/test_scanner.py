@@ -615,7 +615,8 @@ class TestJoinCodeQLStage:
 
 
 @pytest.mark.parametrize('merge_fails', [False, True])
-def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypatch, merge_fails):
+@pytest.mark.parametrize('removed_lines', [[], [1], [1, 2]])
+def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypatch, merge_fails, removed_lines):
     import json
     import core.project.trust
     import core.run.pin
@@ -625,7 +626,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypa
 
     repo = tmp_path / 'target'
     repo.mkdir()
-    (repo / 'source.py').write_text('first()\nsecond()\n')
+    (repo / 'source.py').write_text('first() # nosemgrep\nsecond() # nosemgrep\n')
     out = tmp_path / 'out'
     out.mkdir()
     inputs = []
@@ -650,25 +651,33 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypa
     monkeypatch.setattr(_scanner_mod, 'maybe_start_orphan_watchdog', lambda *a: None)
     monkeypatch.setattr(_scanner_mod, '_resolve_baseline_packs', lambda *a: [])
     monkeypatch.setattr(_scanner_mod, 'semgrep_scan_sequential', lambda *a, **kw: (inputs, []))
-    monkeypatch.setattr(_scanner_mod.semgrep_pkg, 'annotate_sarif', lambda *a: 0)
     monkeypatch.setattr(_scanner_mod, '_finalize_scan_artifacts', lambda *a, **kw: None)
     if merge_fails:
         def fail_merge(*a):
             raise ValueError('planted merge failure')
         monkeypatch.setattr(_scanner_mod, 'merge_sarif', fail_merge)
+    import core.analysis.sanitizer_cut_postpass as postpass
+    monkeypatch.setattr(_scanner_mod.RaptorConfig, 'SANITIZER_CUT_POSTPASS_ENABLED', True)
+    monkeypatch.setattr(_scanner_mod.RaptorConfig, 'SANITIZER_CUT_ENFORCE_ENABLED', True)
+    monkeypatch.setattr(postpass, 'run_postpass', lambda *a, **kw: {
+        'enforced_findings': [{'rule_id': 'rule-a', 'file': 'source.py', 'line': line}
+                              for line in removed_lines],
+    })
     monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
                                      '--sequential', '--no-codeql', '--no-cocci',
                                      '--no-source-wrappers', '--no-config-resolved',
-                                     '--no-graduated-rules', '--no-sanitizer-cut-postpass'])
+                                     '--no-graduated-rules'])
     with pytest.raises(SystemExit) as exit_info:
         _scanner_mod.main()
     assert exit_info.value.code == 0
     metrics = json.loads((out / 'scan_metrics.json').read_text())
-    expected_count = 4 if merge_fails else 2
+    expected_count = 4 if merge_fails else 2 - len(removed_lines)
+    expected_suppressed = 0 if merge_fails else expected_count
+    assert metrics['nosemgrep_suppressed_count'] == expected_suppressed
     assert metrics['total_files_scanned'] == 2
     assert metrics['total_findings'] == expected_count
     assert metrics['findings_by_tool'] == {'semgrep': expected_count}
-    assert metrics['findings_by_rule'] == {'rule-a': expected_count}
+    assert metrics['findings_by_rule'] == ({'rule-a': expected_count} if expected_count else {})
     assert metrics['findings_by_severity']['error'] == expected_count
     if not merge_fails:
         assert len(parse_sarif_findings(out / 'combined.sarif')) == expected_count
