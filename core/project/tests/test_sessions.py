@@ -1417,28 +1417,58 @@ class LedgerBudgetDisciplineTest(_RegistryCase):
     otherwise hoard the whole budget — an over-budget file reads as
     EMPTY and the next RMW would wipe every record AND witness."""
 
-    @pytest.mark.slow
     def test_witness_hoard_cannot_push_the_file_over_budget(self):
         sessions.record_session("myapp", pid=os.getpid())
         deep = Path(self._tmp.name) / ("p" * 220) / ("q" * 220)
-        for i in range(700):
-            d = deep / f"run_{i}"
+        pins = []
+        wire_bytes = 0
+        # Witnesses alone must exceed the REAL byte cap. Repeated starts
+        # and finishes are setup work, not the byte-eviction behavior.
+        while wire_bytes <= sessions._MAX_LEDGER_BYTES:
+            d = deep / f"run_{len(pins)}"
             d.mkdir(parents=True)
-            (d / ".raptor-run.json").write_text(
-                '{"status": "completed"}', encoding="utf-8")
-            sessions.ledger_record_start(d, pid=os.getpid(),
-                                         pin_project="appz",
-                                         record_pin=True)
-            sessions.ledger_record_finish(d, "completed",
-                                          pid=os.getpid())
+            pins.append({"epoch": 1, "run_id": d.name,
+                         "project": "appz", "run_dir": str(d)})
+            wire_bytes += len(f"pin 1 {d.name} appz {d}\n".encode("utf-8"))
+        self.assertGreater(wire_bytes, sessions._MAX_LEDGER_BYTES)
+        self.assertTrue(sessions._write_ledger(os.getpid(), [], pins))
         ledger = self.sessions_dir / f"{os.getpid()}.run"
-        self.assertLessEqual(ledger.stat().st_size,
-                             sessions._MAX_LEDGER_BYTES)
-        # The reader must still see a non-empty ledger (newest
-        # witnesses survive; oldest were evicted).
-        _r, pins, _u = sessions._read_ledger_full(os.getpid())
-        self.assertTrue(pins)
-        self.assertIn(f"run_699", pins[-1]["run_id"])
+        self.assertLessEqual(ledger.stat().st_size, sessions._MAX_LEDGER_BYTES)
+        _r, retained, _u = sessions._read_ledger_full(os.getpid())
+        self.assertTrue(retained)
+        self.assertLess(len(retained), len(pins))
+        self.assertEqual(retained[-1]["run_id"], pins[-1]["run_id"])
+
+        # Keep the public start/finish round trip under byte pressure too.
+        newest = Path(pins[-1]["run_dir"])
+        (newest / ".raptor-run.json").write_text(
+            '{"status": "running"}', encoding="utf-8")
+        sessions.ledger_record_start(newest, pid=os.getpid(),
+                                     pin_project="appz", record_pin=True)
+        self.assertLessEqual(ledger.stat().st_size, sessions._MAX_LEDGER_BYTES)
+        records, _p, _u = sessions._read_ledger_full(os.getpid())
+        self.assertTrue(any(r["run_id"] == newest.name and
+                            r["status"] == "running" for r in records))
+        sessions.ledger_record_finish(newest, "completed", pid=os.getpid())
+        self.assertLessEqual(ledger.stat().st_size, sessions._MAX_LEDGER_BYTES)
+        records, retained, _u = sessions._read_ledger_full(os.getpid())
+        self.assertFalse(any(r["run_id"] == newest.name and
+                             r["status"] == "running" for r in records))
+        self.assertTrue(retained)
+        self.assertEqual(retained[-1]["run_id"], newest.name)
+
+    def test_unicode_ledger_rows_respect_byte_budget(self):
+        sessions.record_session("myapp", pid=os.getpid())
+        budget = sessions._MAX_LEDGER_BYTES
+        rows = ["future " + "é" * (budget // 2), "future \udcff", "future é"]
+        self.assertLess(sum(len(row) + 1 for row in rows), budget)
+        self.assertGreater(sum(len((row + "\n").encode("utf-8"))
+                               for row in (rows[0], rows[-1])), budget)
+        self.assertTrue(sessions._write_ledger(os.getpid(), [], unknown=rows))
+        ledger = self.sessions_dir / f"{os.getpid()}.run"
+        self.assertLessEqual(ledger.stat().st_size, budget)
+        _r, _p, unknown = sessions._read_ledger_full(os.getpid())
+        self.assertEqual(unknown, [rows[-1]])
 
     def test_finish_refuses_stale_stamped_entries(self):
         sessions.record_session("myapp", pid=os.getpid())
