@@ -1055,7 +1055,8 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     # to the renamed inode. Only when the active handle belongs to
     # this run_dir — sweep-mode calls for other dirs leave it alone.
     # A failed verification is carried into the summary as an
-    # inode_mismatch tamper flag (MAC-bound) rather than warn-and-
+    # legacy inode_mismatch tamper flag (MAC-bound), including a held
+    # descriptor's same-inode truncation failure, rather than warn-and-
     # continue: pre-fix the summariser went on to read whatever file
     # now sat at the path and minted a valid MAC over it, laundering
     # the swap into integrity=verified.
@@ -1514,7 +1515,7 @@ def _assemble_and_write_summary(
         if corrupt_lines:
             _details.append(f"{corrupt_lines} corrupt line(s)")
         if inode_mismatch:
-            _details.append("evidence-file inode mismatch")
+            _details.append("evidence-file verification failure")
         if evidence_write_failure:
             _details.append("denial evidence write failure")
         if planted_object:

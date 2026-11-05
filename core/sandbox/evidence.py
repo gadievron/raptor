@@ -188,6 +188,7 @@ class EvidenceFile:
         self.path = path
         self._created_dev = st.st_dev
         self._created_ino = st.st_ino
+        self._minimum_size = st.st_size
         self._closed = False
         self._close_result = False
         self._io_lock = threading.RLock()
@@ -285,6 +286,7 @@ class EvidenceFile:
                 # returns must not bypass the recovery-state update.
                 self._needs_resync = True
                 written = os.write(self.fd, data)
+                self._minimum_size += max(written, 0)
                 if written == len(data):
                     self._needs_resync = False
             if written != len(data):
@@ -311,14 +313,19 @@ class EvidenceFile:
         return self.write_line(line)
 
     def verify(self) -> bool:
-        """Check the path still names the inode we created.
+        """Check identity and size against known append progress.
 
-        Returns True when it does. On mismatch (or a missing file) a
-        LOUD warning fires: someone with write access to the evidence
-        directory swapped or removed the file — the on-disk JSONL at
-        this path can no longer be trusted, even though every append
-        made through the held fd went to the original inode.
+        The opening size plus this handle's writes is a persistent floor;
+        the shared offset also covers raw descriptor inheritors' writes.
+        This cannot detect rewrites or regrowth back to those bounds.
+        Mismatch, truncation, missing files, and descriptor inspection
+        failures emit a loud warning and return False. Bytes at this path
+        can no longer be trusted as the complete original evidence.
         """
+        with self._io_lock:
+            return self._verify_locked()
+
+    def _verify_locked(self) -> bool:
         try:
             st = os.stat(self.path, follow_symlinks=False)
         except OSError:
@@ -340,10 +347,30 @@ class EvidenceFile:
                 st.st_dev, st.st_ino,
             )
             return False
+        try:
+            # Read the offset before size: concurrent raw-fd appenders may
+            # grow the file, but cannot manufacture a false shrink result.
+            written_end = os.lseek(self.fd, 0, os.SEEK_CUR)
+            size = os.fstat(self.fd).st_size
+        except OSError:
+            logger.warning(
+                "SANDBOX EVIDENCE TAMPER SUSPECTED: cannot verify the "
+                "held evidence descriptor for %s", self.path, exc_info=True,
+            )
+            return False
+        minimum_size = max(written_end, self._minimum_size)
+        if size < minimum_size:
+            logger.warning(
+                "SANDBOX EVIDENCE TAMPER SUSPECTED: evidence file %s "
+                "was truncated below known append progress (%s bytes < %s). "
+                "Treat this run's evidence as compromised.",
+                self.path, size, minimum_size,
+            )
+            return False
         return True
 
     def close(self, *, verify: bool = True) -> bool:
-        """Finalise: optionally verify the inode, then close the fd.
+        """Finalise: optionally verify identity and size, then close the fd.
 
         Returns the verification result (True when skipped or clean).
         Repeated closes return the original result. Verification errors
