@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import hashlib
-
-from core.json import dumps_canonical
+import logging
 import os
-import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_fs import rmtree_hardened
+from core.json import dumps_canonical
+from core.source import open_regular_gated
+
+logger = logging.getLogger(__name__)
+
 
 def graph_digest(path: Path) -> str:
     """Hash a regular graph through one descriptor; reject concurrent edits."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-    with os.fdopen(fd, "rb") as stream:
+    with open_regular_gated(path, follow_symlinks=False) as stream:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode):
             raise ValueError("graph is not a regular file")
@@ -74,8 +77,7 @@ class FrozenGraph:
         root = Path(tempfile.mkdtemp(prefix="graph-", dir=directory))
         destination = root / "cpg.bin"
         try:
-            fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-            with os.fdopen(fd, "rb") as stream, destination.open("xb") as output:
+            with open_regular_gated(source, follow_symlinks=False) as stream, destination.open("xb") as output:
                 before = os.fstat(stream.fileno())
                 if not stat.S_ISREG(before.st_mode):
                     raise ValueError("graph is not a regular file")
@@ -94,8 +96,12 @@ class FrozenGraph:
             destination.chmod(0o400)
             return cls(destination, value)
         except BaseException:
-            shutil.rmtree(root)
+            if not rmtree_hardened(root):
+                logger.warning("incomplete frozen graph cleanup at %r", root)
             raise
 
-    def close(self):
-        shutil.rmtree(self.path.parent, ignore_errors=True)
+    def close(self) -> bool:
+        removed = rmtree_hardened(self.path.parent)
+        if not removed:
+            logger.warning("incomplete frozen graph cleanup at %r", self.path.parent)
+        return removed
