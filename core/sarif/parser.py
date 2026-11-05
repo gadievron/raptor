@@ -289,6 +289,12 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
             scopes[key] = dumps_canonical([tool, origin]) if origin else tool
         return scopes[key]
 
+    def column_identity(finding):
+        start = _coerce_line(finding.get("startColumn")) or 0
+        end = _coerce_line(finding.get("endColumn")) or 0
+        start, end = max(start, 0), max(end, 0)
+        return ("columns", start, end) if start or end else ()
+
     owners: dict[str, tuple] = {}
     collisions: set[str] = set()
     seen: set[tuple] = set()
@@ -303,6 +309,7 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
             finding.get("endLine"),
             finding.get("rule_id"),
             fid,
+            *column_identity(finding),
         )
         if isinstance(fid, str) and fid:
             if owners.setdefault(fid, fp) != fp:
@@ -316,7 +323,8 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
 
     def source_key(finding):
         return (finding["finding_id"], finding_scope(finding), finding.get("file"),
-                finding.get("startLine"), finding.get("endLine"), finding.get("rule_id"))
+                finding.get("startLine"), finding.get("endLine"), finding.get("rule_id"),
+                *column_identity(finding))
 
     sources = {source_key(finding) for finding in unique
                if isinstance(finding.get("finding_id"), str)
@@ -356,7 +364,7 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _result_key(
     result: dict[str, Any],
-) -> tuple[str, str, int, int, int, str]:
+) -> tuple[Any, ...]:
     """Dedup key for a SARIF result.
 
     Pre-fix the key was just (ruleId, uri, startLine). That collapsed
@@ -376,7 +384,9 @@ def _result_key(
     Extended key: (ruleId, uri, startLine, endLine, startColumn,
     fingerprint). Missing fields default to 0 / "" so keys remain
     hashable and the (legacy) "no column / no fingerprint" case
-    keeps deduping like before.
+    keeps deduping like before. Valid end columns and native match IDs append
+    tagged identity material; absent or malformed values leave legacy key bytes
+    unchanged. Native IDs equal to the rule ID retain the existing legacy guard.
     """
     rule_id = result.get("ruleId", "")
     if not isinstance(rule_id, str):
@@ -405,7 +415,14 @@ def _result_key(
         # Fall back to a stable serialisation of the whole dict —
         # different fingerprint sets mean different findings.
         fingerprint = repr(sorted(fp.items()))
-    return (rule_id, uri, line, end_line, start_col, fingerprint)
+    key: tuple[Any, ...] = (rule_id, uri, line, end_line, start_col, fingerprint)
+    end_col = _coerce_line(region.get("endColumn"))
+    if end_col is not None and end_col > 0:
+        key += ("endColumn", end_col)
+    native_id = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
+    if isinstance(native_id, str) and native_id and native_id != rule_id:
+        key += ("matchBasedId/v1", native_id)
+    return key
 
 
 def _uses_artifact_table(result: dict[str, Any]) -> bool:
@@ -1426,6 +1443,12 @@ def parse_sarif_findings(
                 # emits result.level).
                 level = default_level or "warning"
 
+            columns = {}
+            for field in ("startColumn", "endColumn"):
+                column = _coerce_line(region.get(field))
+                if column is not None and column > 0:
+                    columns[field] = column
+
             findings.append(
                 {
                     "finding_id": finding_id,
@@ -1440,6 +1463,7 @@ def parse_sarif_findings(
                     # normalizer) never see a string / Infinity / NaN.
                     "startLine": _coerce_line(region.get("startLine")),
                     "endLine": _coerce_line(region.get("endLine")),
+                    **columns,
                     "snippet": snippet,
                     "level": level,
                     "cwe_id": _extract_cwe_from_rule(result) or rule_cwe,
