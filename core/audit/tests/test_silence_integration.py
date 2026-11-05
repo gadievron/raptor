@@ -200,6 +200,11 @@ class TestPopulatedSarifCacheSeam:
     def run(self, tmp_path, monkeypatch):
         _reset_substrate_caches()
         target, out = _write_tree(tmp_path)
+        # This seam exercises scanner receipts and resolution, not background
+        # study, unrelated detectors, or LLM-generated witness probes.
+        monkeypatch.setattr(orch, "_run_mechanical_detectors", lambda *a, **k: ({}, set()))
+        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
+        monkeypatch.setattr(orch, "_run_dark_verification", lambda *a, **k: None)
         # semgrep at the runner boundary: available, scans the target
         # (scanned-path witness present), matches nothing.
         monkeypatch.setattr(semgrep_runner, "is_available", lambda: True)
@@ -225,7 +230,7 @@ class TestPopulatedSarifCacheSeam:
             target_path=target, out_dir=out, resume=False,
             inventory=checklist, batch_sloc_threshold=0,
             verdict_reuse=False,
-            immediate_verify=False,
+            immediate_verify=False, on_demand_synthesis=False,
         )
         result = run_orchestrator(config, _review_fn)
         return result, out
