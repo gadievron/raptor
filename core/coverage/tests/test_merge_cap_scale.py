@@ -114,8 +114,12 @@ class TestMegaRunFullRows:
     # magnitudes wait for nightly.
     @pytest.mark.slow
     def test_beyond_cap_lane_alive_at_the_real_cap(
-        self, tmp_path: Path,
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from functools import cache
+
+        from core.json import utils as json_utils
+
         # One identity past the REAL cap: the newest cap-full merge
         # as full rows, the overflow reaches the aggregates section,
         # counts conserved — the beyond-cap lane is alive at the new
@@ -124,11 +128,25 @@ class TestMegaRunFullRows:
         project = tmp_path / "project"
         run = _write_run(project, "run1", cap + 1)
         assert merge_into_index(project, run) == cap
-        full = load_index_full(project)
-        assert len(full) == cap
-        (record,) = load_index_aggregates(project).values()
-        assert record["identities"] == 1
-        assert len(full) + record["identities"] == cap + 1
+        index_path = project / INDEX_FILENAME
+
+        def index_version():
+            st = index_path.stat()
+            return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+        before_reads = index_version()
+        # The completed index is immutable across these two public views.
+        # Keep both real readers and their real byte budgets, but share the
+        # identical bounded JSON decode instead of parsing the giant file
+        # twice. Different paths or read options still execute the loader.
+        with monkeypatch.context() as reads:
+            reads.setattr(json_utils, "load_json", cache(json_utils.load_json))
+            full = load_index_full(project)
+            assert len(full) == cap
+            (record,) = load_index_aggregates(project).values()
+            assert record["identities"] == 1
+            assert len(full) + record["identities"] == cap + 1
+        assert index_version() == before_reads, "readers changed the cached index"
 
 
 class TestMergeByteCeiling:
