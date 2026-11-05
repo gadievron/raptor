@@ -105,3 +105,23 @@ def active_link() -> Path:
     it points into.
     """
     return projects_dir() / ".active"
+
+
+def refuse_registry_overlap(path: str | Path, *,
+                            extra_projects_dir: str | Path | None = None) -> None:
+    """Refuse output operations that overlap configured operator registries.
+
+    Check both ancestors and descendants, including physical aliases. Resolve
+    at call time so relocated registries and previously absent paths stay
+    protected. Explicit manager/import registries supplement the configured
+    locations rather than replacing them. No registry contents are read.
+    """
+    candidate = Path(path).resolve()
+    protected = [projects_dir(), sessions_dir()]
+    if extra_projects_dir is not None:
+        protected.append(Path(extra_projects_dir))
+    for registry in protected:
+        registry = registry.resolve()
+        if candidate.is_relative_to(registry) or registry.is_relative_to(candidate):
+            raise ValueError(
+                f"Refusing output path {candidate}: overlaps operator registry {registry}")

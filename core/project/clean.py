@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import rmtree_hardened
+from core.project.registry_home import refuse_registry_overlap
 
 
 def _run_dir_size(d: Path) -> int:
@@ -313,6 +314,7 @@ def execute_clean(
         if _directory_identity(path) != identity:
             skipped("skipped_changed", path)
             return False
+        refuse_registry_overlap(path)
         if run_is_live(path):
             skipped("skipped_live", path)
             return False

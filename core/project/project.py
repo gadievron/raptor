@@ -1228,6 +1228,8 @@ class ProjectManager:
                 raise ValueError(
                     f"Refusing to delete output path {output}: expected a strict "
                     f"child of {expected_base}. Use --no-purge or clean by hand.")
+            _registry_home.refuse_registry_overlap(
+                path, extra_projects_dir=self.projects_dir)
             # Older registries can contain shared or nested output claims,
             # even though new creates reject an identical output directory.
             for other in self.list_projects():

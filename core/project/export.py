@@ -15,6 +15,7 @@ from pathlib import Path
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.logging import get_logger
+from core.project.registry_home import refuse_registry_overlap
 from core.run.scratch import scratch_dir
 from core.zip import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 
@@ -895,6 +896,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
             output_dir = _guard_import_output_dir(
                 output_base, project_name,
             )
+            refuse_registry_overlap(output_dir, extra_projects_dir=projects_dir)
             # Refuse a same-name destination dir that exists but is
             # NOT a registered project (an orphan from a deleted
             # project, an operator's unrelated dir, debris). Pre-fix
