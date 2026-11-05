@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import datetime
 from copy import deepcopy
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from typing import TYPE_CHECKING
 
@@ -108,6 +108,29 @@ def _matches_path(observed: str, ep_or_sink: dict,
     return observed.endswith("/" + rel.lstrip("/"))
 
 
+def _path_matcher(observed_paths: Iterable[str],
+                  target_dir: str | None) -> Callable[[dict], bool]:
+    """Index strict matches once; retain the legacy suffix heuristic."""
+    if target_dir is None:
+        return lambda row: any(_matches_path(path, row) for path in observed_paths)
+    prefix = target_dir.rstrip("/") + "/"
+    relative, outside = set(), set()
+    for path in observed_paths:
+        if not isinstance(path, str):
+            continue
+        if path.startswith(prefix):
+            relative.add(path[len(prefix):])
+        else:
+            outside.add(path)
+
+    def matches(row: dict) -> bool:
+        rel = row.get("file") or row.get("location")
+        return (isinstance(rel, str) and bool(rel)
+                and (rel.lstrip("/") in relative or rel in outside))
+
+    return matches
+
+
 def _correlate_entry_points(profile: ObserveProfile,
                             entry_points: Iterable[dict],
                             target_dir: str | None = None) -> list:
@@ -120,18 +143,17 @@ def _correlate_entry_points(profile: ObserveProfile,
     skipped — we can't surface an unkeyed correlation usefully.
     """
     confirmed = []
-    if not isinstance(entry_points, Iterable):
+    if not isinstance(entry_points, Iterable) or not entry_points:
         return confirmed
+    matches = _path_matcher(profile.paths_read, target_dir)
     for ep in entry_points:
         if not isinstance(ep, dict):
             continue
         ep_id = ep.get("id")
         if not ep_id:
             continue
-        for observed in profile.paths_read:
-            if _matches_path(observed, ep, target_dir=target_dir):
-                confirmed.append(ep_id)
-                break
+        if matches(ep):
+            confirmed.append(ep_id)
     return confirmed
 
 
@@ -143,18 +165,17 @@ def _correlate_sinks(profile: ObserveProfile,
     Same shape as _correlate_entry_points but on the write side.
     """
     confirmed = []
-    if not isinstance(sink_details, Iterable):
+    if not isinstance(sink_details, Iterable) or not sink_details:
         return confirmed
+    matches = _path_matcher(profile.paths_written, target_dir)
     for sink in sink_details:
         if not isinstance(sink, dict):
             continue
         sink_id = sink.get("id")
         if not sink_id:
             continue
-        for observed in profile.paths_written:
-            if _matches_path(observed, sink, target_dir=target_dir):
-                confirmed.append(sink_id)
-                break
+        if matches(sink):
+            confirmed.append(sink_id)
     return confirmed
 
 
