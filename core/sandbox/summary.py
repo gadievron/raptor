@@ -1844,7 +1844,8 @@ def _cli_main(argv: list | None = None) -> int:
         try:
             if not child.is_dir() or child.name.startswith((".", "_")):
                 continue
-            if not _evidence.resolve_read_path(child, DENIALS_FILE).exists():
+            # Keep refused objects and probe errors for the finalizer.
+            if not path_may_exist(_evidence.resolve_read_path(child, DENIALS_FILE)):
                 continue
         except OSError:
             continue
