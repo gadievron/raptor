@@ -6,24 +6,26 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+with patch.object(sys, "path", sys.path.copy()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from test_scope import (
-    FAST_TIER_IGNORES,
-    ROOT_HARNESS_FILES,
-    TIERS,
-    batch_matrix,
-    compute_tier_dispatch,
-    expand_conftest,
-    file_in_dir,
-    file_in_fast_tier,
-    file_matches_tier,
-    is_dependency_manifest,
-    is_test_file,
-)
+    from test_scope import (
+        FAST_TIER_IGNORES,
+        ROOT_HARNESS_FILES,
+        TIERS,
+        batch_matrix,
+        compute_tier_dispatch,
+        expand_conftest,
+        file_in_dir,
+        file_in_fast_tier,
+        file_matches_tier,
+        is_dependency_manifest,
+        is_test_file,
+    )
 
 
 class TestExpandConftest:
@@ -479,22 +481,29 @@ class TestDispatchFailsOpen:
     toward FULL dispatch on any file it cannot map — never toward
     zero — while mappable shapes stay scoped."""
 
-    def test_worker_planner_edit_runs_its_consuming_tiers(self, tmp_path):
+    @pytest.mark.parametrize("planner,expected", [
+        ("pytest_workers.py", ["ci_lint", "exploit_feasibility", "sandbox"]),
+        ("macos_test_scope.py", ["ci_lint", "sandbox"]),
+        ("sca_test_matrix.py", ["ci_lint", "sca"]),
+    ], ids=["worker-planner", "macos-planner", "sca-planner"])
+    def test_worker_planner_edit_runs_its_consuming_tiers(self, tmp_path, planner, expected):
         targets = [
             "core/sandbox/tests/test_one.py",
             "packages/exploit_feasibility/tests/test_one.py",
             ".github/tests/test_one.py",
+            "packages/sca/tests/test_one.py",
         ]
         for target in targets:
             path = tmp_path / target
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("def test_one(): pass\n")
         result = compute_tier_dispatch(
-            [".github/scripts/pytest_workers.py"], tmp_path,
+            [f".github/scripts/{planner}"], tmp_path,
         )
-        assert _active(result) == ["ci_lint", "exploit_feasibility", "sandbox"]
-        assert result["sandbox"]["files"] == [Path(targets[0])]
-        assert result["exploit_feasibility"]["files"] == [Path(targets[1])]
+        assert _active(result) == expected
+        assert result["sandbox"]["files"] == ([Path(targets[0])] if "sandbox" in expected else [])
+        assert result["exploit_feasibility"]["files"] == ([Path(targets[1])] if "exploit_feasibility" in expected else [])
+        assert result["sca"]["files"] == ([Path(targets[3])] if "sca" in expected else [])
 
     def test_plain_edit_stays_scoped(self, mini_repo):
         # Control: an in-place edit of the same module dispatches its
@@ -805,15 +814,35 @@ class TestOnRealRepo:
         per call on a CI runner — on every invocation. The graph is a
         pure function of the tree, and the tree does not change while
         this class runs, so every test after the first re-derived the
-        same value. Serve one build to all of them; discovery, the
-        closure walk, tier mapping, and batching still run for real
-        in each test.
+        same value. Share one graph and each distinct full-file discovery;
+        the closure walk, tier mapping and batching still run in every test.
+        Discovery results are copied so a caller cannot mutate the snapshot.
         """
         import test_scope as _ts
         assert whole_repo_import_graph[4] == repo
         references = whole_repo_import_graph[3]
         cached = (whole_repo_import_graph[1], whole_repo_import_graph[2])
         real_build_graph = _ts.build_graph
+        real_tier_files = _ts._discover_tier_files
+        real_fast_files = _ts._discover_fast_tier_files
+        tier_files = {}
+        fast_files = None
+
+        def _tier_files_cached(config, repo_arg):
+            if repo_arg != repo:
+                return real_tier_files(config, repo_arg)
+            key = (tuple(config.get("test_dirs", ())), tuple(config.get("test_files", ())))
+            if key not in tier_files:
+                tier_files[key] = tuple(real_tier_files(config, repo_arg))
+            return list(tier_files[key])
+
+        def _fast_files_cached(repo_arg):
+            nonlocal fast_files
+            if repo_arg != repo:
+                return real_fast_files(repo_arg)
+            if fast_files is None:
+                fast_files = tuple(real_fast_files(repo_arg))
+            return list(fast_files)
 
         def _build_graph_cached(all_py, repo_arg, **kwargs):
             if repo_arg == repo:
@@ -824,6 +853,8 @@ class TestOnRealRepo:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(_ts, "build_graph", _build_graph_cached)
+            mp.setattr(_ts, "_discover_tier_files", _tier_files_cached)
+            mp.setattr(_ts, "_discover_fast_tier_files", _fast_files_cached)
             yield
 
     @pytest.mark.parametrize("harness_file", sorted(ROOT_HARNESS_FILES))
@@ -1241,3 +1272,21 @@ class TestSharedFixtureInventory:
         assert build_data_file_map([relative_test], tmp_path) == {
             new.relative_to(tmp_path): {relative_test},
         }
+
+
+@pytest.mark.parametrize('changed,mode', [
+    ('conftest.py', 'full'),
+    ('pyproject.toml', 'full'),
+    ('core/pkga/removed.py', 'full'),
+    ('core/pkga/mod.py', 'scoped'),
+    ('.github/scripts/sca_test_matrix.py', 'scoped'),
+], ids=['harness', 'dependencies', 'deleted-module', 'ordinary-edit', 'sca-planner'])
+def test_cli_reports_actual_fallback_mode(mini_repo, tmp_path, monkeypatch, changed, mode):
+    import test_scope as dispatcher
+    changes = tmp_path / 'changed'
+    changes.write_text(changed + '\n')
+    output = tmp_path / 'outputs'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    monkeypatch.setattr(sys, 'argv', ['test_scope', '--repo', str(mini_repo), '--changed-files', str(changes)])
+    assert dispatcher.main() == 0
+    assert f'scope_mode={mode}\n' in output.read_text()

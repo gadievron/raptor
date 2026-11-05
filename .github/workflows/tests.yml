@@ -155,6 +155,9 @@ jobs:
       # Per-tier gates (true/false).
       python: ${{ steps.scope.outputs.python }}
       sandbox: ${{ steps.scope.outputs.sandbox }}
+      sandbox_macos: ${{ steps.macos_scope.outputs.run }}
+      sandbox_macos_files: ${{ steps.macos_scope.outputs.files }}
+      sandbox_macos_audit: ${{ steps.macos_scope.outputs.native_audit }}
       exploit_feasibility: ${{ steps.scope.outputs.exploit_feasibility }}
       prompt_audit: ${{ steps.scope.outputs.prompt_audit }}
       ci_lint: ${{ steps.scope.outputs.ci_lint }}
@@ -283,6 +286,13 @@ jobs:
             --repo .
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+
+      - name: Select sandbox files requiring macOS
+        id: macos_scope
+        env:
+          SCOPE_MODE: ${{ steps.scope.outputs.scope_mode }}
+          SANDBOX_FILES: ${{ steps.scope.outputs.sandbox_files }}
+        run: python3 .github/scripts/macos_test_scope.py
 
       - id: sca_matrix
         run: python3 .github/scripts/sca_test_matrix.py
@@ -736,7 +746,7 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      needs.changes.outputs.sandbox == 'true'
+      needs.changes.outputs.sandbox_macos == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -780,22 +790,43 @@ jobs:
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Run sandbox tests (macOS)
+        id: sandbox
+        timeout-minutes: 8
         env:
-          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
+          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_macos_files }}
         run: |
-          source $VENV_PATH/bin/activate
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
           set -f
           workers="$(python .github/scripts/pytest_workers.py $SANDBOX_FILES)"
-          python -m pytest -n "$workers" --dist loadfile $SANDBOX_FILES -v
+          python -m pytest -n "$workers" --dist loadfile $SANDBOX_FILES -v \
+            --junitxml="$RUNNER_TEMP/sandbox-macos.xml" 2>&1 | tee "$RUNNER_TEMP/sandbox-macos.log"
 
       - name: Run native audit checks (macOS slow)
+        id: native_audit
+        if: needs.changes.outputs.sandbox_macos_audit == 'true'
+        timeout-minutes: 4
         env:
           # Empty disables the default-tier guard; zero enforces a zero-second limit.
           RAPTOR_MAX_TEST_SECONDS: ""
         run: |
-          source $VENV_PATH/bin/activate
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
           python -m pytest -m "slow and darwin_native" \
-            core/sandbox/tests/test_macos_spawn.py -v
+            core/sandbox/tests/test_macos_spawn.py -v \
+            --junitxml="$RUNNER_TEMP/sandbox-macos-audit.xml" 2>&1 | tee "$RUNNER_TEMP/sandbox-macos-audit.log"
+
+      - name: Retain macOS sandbox diagnostics
+        timeout-minutes: 2
+        continue-on-error: true
+        if: always() && (steps.sandbox.outcome != 'skipped' || steps.native_audit.outcome != 'skipped')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sandbox-macos-diagnostics
+          path: |
+            ${{ runner.temp }}/sandbox-macos*.log
+            ${{ runner.temp }}/sandbox-macos*.xml
+          if-no-files-found: warn
 
   # PR-time sandbox feature-matrix subset: the u24 image x the {full,
   # default} lanes of the weekly sandbox-matrix.yml, run against the
