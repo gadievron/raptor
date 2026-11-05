@@ -30,6 +30,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from core.source.lines import join_lf_slice
+
 logger = logging.getLogger(__name__)
 
 _SYNC_RE = re.compile(r"^\s*synchronized\s*[({]")
@@ -242,7 +244,7 @@ def scan_gaps(
         le = gap.get("line_end") or ls
         if not ls:
             continue
-        body = "\n".join(text.split("\n")[ls - 1:le])  # line-model: source_texts reads are universal-newline (read_contained)
+        body = join_lf_slice(text, ls - 1, le)  # line-model: source_texts reads are universal-newline (read_contained)
         fn = gap.get("name", "")
         if fp not in nullable_cache:
             nullable_cache[fp] = _nullable_getters(text)
