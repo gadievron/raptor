@@ -52,6 +52,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -65,6 +66,7 @@ import yaml
 
 from core.container.proc import docker_child_env, run_cli
 from core.run.scratch import keepalive_register, keepalive_unregister
+from core.source import open_regular_beneath
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +206,7 @@ def rewrite_for_localhost(
     caller's label-scoped cleanup can find compose-launched containers
     (otherwise the compose path would be exempt from auto-cleanup).
     """
-    source_dir = compose_file.parent
+    source_dir = compose_file.parent.resolve()
     _require_stageable_size(source_dir)
     # Hand-rolled (not scratch_dir): ownership transfers to the caller,
     # who runs cleanup_staging() after down_stack. The raptor-compose-
@@ -220,7 +222,7 @@ def rewrite_for_localhost(
         # DEREFERENCE them, copying arbitrary host files (~/.aws/credentials,
         # /etc/shadow) into the staging dir where they become build-context /
         # bind-mount content shipped into a hostile stack.
-        shutil.copytree(source_dir, staging, dirs_exist_ok=True, symlinks=True)
+        _copy_staging_tree(source_dir, staging)
         pruned = _prune_escaping_symlinks(staging)
         if pruned:
             logger.warning(
@@ -234,7 +236,10 @@ def rewrite_for_localhost(
         # Any failure — ComposeError or an unanticipated one — must
         # release the keepalive-pinned staging dir; a ComposeError-only
         # clause leaked the tmpdir on e.g. hostile-bytes decode errors.
-        cleanup_staging(staging)
+        try:
+            cleanup_staging(staging)
+        except BaseException:
+            logger.warning("compose staging cleanup failed for %s", staging, exc_info=True)
         raise
     return staged_compose, staging
 
@@ -267,25 +272,82 @@ def _require_stageable_size(source_dir: Path) -> None:
     """
     total = 0
     entries = 0
-    for dirpath, dirnames, filenames in os.walk(source_dir, followlinks=False):
-        entries += len(dirnames) + len(filenames)
+    pending = [source_dir]
+    while pending:
+        # Enumerate incrementally: os.walk materialises a whole directory
+        # before its caller can reject an entry flood.
+        with os.scandir(pending.pop()) as children:
+            for entry in children:
+                entries += 1
+                if entries > _STAGING_MAX_ENTRIES:
+                    raise ComposeError(
+                        f"compose source dir {source_dir} exceeds the "
+                        f"{_STAGING_MAX_ENTRIES}-entry staging budget"
+                    )
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    total += info.st_size
+                else:
+                    raise ComposeError(f"compose source contains a special file: {entry.path}")
+                if total > _STAGING_MAX_BYTES:
+                    raise ComposeError(
+                        f"compose source dir {source_dir} exceeds the "
+                        f"{_STAGING_MAX_BYTES}-byte staging budget"
+                    )
+
+
+def _copy_staging_tree(source_dir: Path, staging: Path) -> None:
+    """Enforce aggregate budgets on actual copies, after the preflight too."""
+    if staging.resolve().is_relative_to(source_dir.resolve()):
+        raise ComposeError("compose staging directory must be outside the source tree")
+    copied = 0
+    entries = 0
+
+    def count_entries(directory, names):
+        nonlocal entries, copied
+        entries += len(names)
         if entries > _STAGING_MAX_ENTRIES:
-            raise ComposeError(
-                f"compose source dir {source_dir} exceeds the "
-                f"{_STAGING_MAX_ENTRIES}-entry staging budget — refusing "
-                "to copy it to the staging tmpdir (inode exhaustion)"
-            )
-        for name in filenames:
-            try:
-                total += os.lstat(os.path.join(dirpath, name)).st_size
-            except OSError:
-                continue
-            if total > _STAGING_MAX_BYTES:
-                raise ComposeError(
-                    f"compose source dir {source_dir} exceeds the "
-                    f"{_STAGING_MAX_BYTES}-byte staging budget — refusing "
-                    "to copy it to the staging tmpdir"
-                )
+            raise ComposeError(f"compose copy exceeds {_STAGING_MAX_ENTRIES}-entry staging budget")
+        for name in names:
+            info = (Path(directory) / name).lstat()
+            if stat.S_ISLNK(info.st_mode):
+                copied += info.st_size
+                if copied > _STAGING_MAX_BYTES:
+                    raise ComposeError(f"compose copy exceeds {_STAGING_MAX_BYTES}-byte staging budget")
+        return ()
+
+    def copy_file(source, destination):
+        nonlocal copied
+        rel = Path(source).relative_to(source_dir)
+        stream = open_regular_beneath(source_dir, rel, "rb")
+        if stream is None:
+            raise ComposeError(f"compose source changed or is not a readable regular file: {source}")
+        with stream:
+            before = os.fstat(stream.fileno())
+            if before.st_size > _STAGING_MAX_BYTES - copied:
+                raise ComposeError(f"compose copy exceeds {_STAGING_MAX_BYTES}-byte staging budget")
+            with open(destination, "xb") as output:
+                while True:
+                    remaining = _STAGING_MAX_BYTES - copied
+                    chunk = stream.read(min(1024 * 1024, remaining + 1))
+                    if not chunk:
+                        break
+                    if len(chunk) > remaining:
+                        raise ComposeError(f"compose copy exceeds {_STAGING_MAX_BYTES}-byte staging budget")
+                    output.write(chunk)
+                    copied += len(chunk)
+            after = os.fstat(stream.fileno())
+            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise ComposeError(f"compose source changed while being copied: {source}")
+        os.chmod(destination, stat.S_IMODE(before.st_mode) & 0o777)
+        os.utime(destination, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return destination
+
+    shutil.copytree(source_dir, staging, dirs_exist_ok=True, symlinks=True,
+                    copy_function=copy_file, ignore=count_entries)
 
 
 def cleanup_staging(staging: str | Path) -> None:
@@ -296,8 +358,17 @@ def cleanup_staging(staging: str | Path) -> None:
     best-effort-removes the tree. Callers run it after ``down_stack``;
     the rewrite's own failure paths use it too.
     """
-    keepalive_unregister(staging)
-    rmtree_hardened(staging)
+    try:
+        try:
+            keepalive_unregister(staging)
+        except Exception:
+            logger.warning("Cannot unregister compose staging %s", staging, exc_info=True)
+    finally:
+        try:
+            if not rmtree_hardened(staging):
+                logger.warning("Compose staging retained after failed removal: %s", staging)
+        except Exception:
+            logger.warning("Cannot remove compose staging %s", staging, exc_info=True)
 
 
 def _prune_escaping_symlinks(staging: Path) -> int:
@@ -321,8 +392,8 @@ def _prune_escaping_symlinks(staging: Path) -> int:
             if not target.startswith(prefix):
                 try:
                     p.unlink()
-                except OSError:  # pragma: no cover — racy delete, stay closed
-                    pass
+                except OSError as exc:
+                    raise ComposeError(f"cannot prune escaping staging link {p}: {exc}") from exc
                 removed += 1
     return removed
 
