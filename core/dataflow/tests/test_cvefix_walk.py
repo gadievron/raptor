@@ -460,14 +460,12 @@ def test_process_pair_finally_cleans_go_caches_after_each_pair(
     py = CveFixPair("CVE-P", "CWE-89", "https://github.com/o/p", "Python", "fP", "pP")
     process_pair(go, work_dir=tmp_path)
     process_pair(py, work_dir=tmp_path)
-    # Go pair triggers cleanup (per-invocation scratch first, then the
-    # shared work dir for pre-scratch-layout leftovers); Python pair
-    # does not.
-    assert [t[0] for t in cleaned] == ["go", "go"], cleaned
+    # Only invocation-owned caches are reclaimed. Shared caches may
+    # belong to another live worker; Python does not need this pass.
+    assert [t[0] for t in cleaned] == ["go"], cleaned
     scratch = cleaned[0][1]
     assert scratch.parent == tmp_path
     assert scratch.name.startswith("pair-")
-    assert cleaned[1] == ("go", tmp_path)
 
 
 def test_walk_dedups_same_commit_cwe_across_cves(monkeypatch, tmp_path: Path):

@@ -19,17 +19,18 @@ input. The git/CodeQL steps are module-level functions so tests stub them.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
 import sqlite3
-import stat
 import subprocess
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_fs import rmtree_hardened
+from core.run.scratch import scratch_dir
 from core.config import RaptorConfig
 from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, load_pairs
 from core.git.clone import (
@@ -38,6 +39,8 @@ from core.git.clone import (
     safe_git_readonly_command,
 )
 from core.sarif.parser import SARIF_MAX_BYTES
+
+logger = logging.getLogger(__name__)
 
 # CodeQL resource tunables live in ``packages.codeql`` — the central
 # home for all CodeQL-related utilities.  We re-export the type at the
@@ -422,19 +425,11 @@ def _clean_go_caches(work_dir: Path) -> None:
     """
     for sub in ("go-mod-cache", "gopath", "go-build-cache"):
         p = work_dir / sub
-        if not p.is_dir():
+        # Never traverse a symlink standing in for a cache directory.
+        if p.is_symlink():
             continue
-        # Recursively add owner-write so rmtree can unlink everything.
-        # Symlinks are skipped (we don't want to chmod the target).
-        for root, dirs, files in os.walk(p):
-            for name in dirs + files:
-                fp = Path(root) / name
-                try:
-                    if not fp.is_symlink():
-                        fp.chmod(fp.stat().st_mode | stat.S_IWUSR)
-                except OSError:
-                    pass
-        shutil.rmtree(p, ignore_errors=True)
+        if not rmtree_hardened(p):
+            logger.warning("Corpus Go cache retained after failed cleanup: %s", p)
 
 
 def process_pair(
@@ -461,47 +456,33 @@ def process_pair(
         else "autobuild" if lang in _AUTOBUILD_ONLY
         else None
     )
-    # Unique per-invocation scratch: the subpath names used to be
-    # fixed ("repo", "db-a", ...), so two walkers sharing a work dir
-    # interleaved clone/build state mid-run and the loser persisted
-    # wrong-commit counts as normal rows (the finally-rmtree of one
-    # invocation deleted the other's in-flight tree). No attacker
-    # input in the name — pid + random suffix only.
-    scratch = work_dir / f"pair-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    repo = scratch / "repo"
-    db_a, db_b = scratch / "db-a", scratch / "db-b"
-    sa, sb = scratch / "a.sarif", scratch / "b.sarif"
-    try:
-        if not _fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
-            return WalkResult(pair.fix_hash, "fetch_fail")
-        if not _build_db(repo, pair.fix_hash, db_a, lang, codeql_bin, build_timeout, mode,
-                         tunables=tunables):
-            return WalkResult(pair.fix_hash, "build_fail")
-        if not _build_db(repo, pair.parent_hash, db_b, lang, codeql_bin, build_timeout, mode,
-                         tunables=tunables):
-            return WalkResult(pair.fix_hash, "build_fail")
-        after = _count_query(db_a, query, sa, codeql_bin, analyze_timeout, tunables=tunables)
-        before = _count_query(db_b, query, sb, codeql_bin, analyze_timeout, tunables=tunables)
-        if after is None or before is None:
-            return WalkResult(pair.fix_hash, "analyze_fail")
-        return WalkResult(pair.fix_hash, "ok", before_count=before, after_count=after)
-    finally:
-        for p in (repo, db_a, db_b, sa, sb):
-            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
-        # Per-pair Go cache cleanup.  Without this, modules cached from
-        # one project with its `replace` directives corrupt the next
-        # project's build (CodeQL surfaces this as
-        # "module declares its path as X but was required as Y" and
-        # extraction fails).  Java's Maven cache doesn't have this
-        # conflict shape — version conflicts resolve last-write-wins —
-        # so cross-pair Maven reuse is fine and we leave it alone.
-        # (The autobuild env keys the caches off db.parent, which is
-        # now this invocation's scratch dir; work_dir is swept too for
-        # caches left by pre-scratch layouts.)
-        if lang == "go":
-            _clean_go_caches(scratch)
-            _clean_go_caches(work_dir)
-        shutil.rmtree(scratch, ignore_errors=True)
+    # The entire invocation is owned, including tool caches and side files.
+    with scratch_dir(prefix="pair-", dir=work_dir) as scratch:
+        repo = scratch / "repo"
+        db_a, db_b = scratch / "db-a", scratch / "db-b"
+        sa, sb = scratch / "a.sarif", scratch / "b.sarif"
+        try:
+            if not _fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
+                return WalkResult(pair.fix_hash, "fetch_fail")
+            if not _build_db(repo, pair.fix_hash, db_a, lang, codeql_bin, build_timeout, mode,
+                             tunables=tunables):
+                return WalkResult(pair.fix_hash, "build_fail")
+            if not _build_db(repo, pair.parent_hash, db_b, lang, codeql_bin, build_timeout, mode,
+                             tunables=tunables):
+                return WalkResult(pair.fix_hash, "build_fail")
+            after = _count_query(db_a, query, sa, codeql_bin, analyze_timeout, tunables=tunables)
+            before = _count_query(db_b, query, sb, codeql_bin, analyze_timeout, tunables=tunables)
+            if after is None or before is None:
+                return WalkResult(pair.fix_hash, "analyze_fail")
+            return WalkResult(pair.fix_hash, "ok", before_count=before, after_count=after)
+        finally:
+            if lang == "go":
+                # Only this invocation's caches are ours. Shared legacy
+                # caches may belong to another active worker.
+                try:
+                    _clean_go_caches(scratch)
+                except Exception:
+                    logger.warning("Corpus Go cache cleanup failed at %s", scratch, exc_info=True)
 
 
 # --- resumable results store ---
