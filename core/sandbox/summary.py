@@ -68,6 +68,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any
 
 from core.atomic_fs import write_text_atomically
@@ -97,10 +98,14 @@ _lock = threading.Lock()
 # record_denial appends. Opened lazily on the first denial so runs
 # without denials leave no file behind; closed (with inode
 # verification) at summarize_and_write / set_active_run_dir. Guarded
-# by _lock. _evidence_open_failed suppresses repeat warnings when the
-# evidence dir cannot be created for a run.
+# by _lock. Failed opens are retried with a short backoff; warnings are
+# suppressed until the current outage recovers.
 _evidence_handle: _evidence.EvidenceFile | None = None
 _evidence_open_failed = False
+_evidence_next_open_attempt = 0.0
+_EVIDENCE_OPEN_RETRY_S = 1.0
+# Persistent loss observation; value True means it still needs publication.
+_evidence_write_failures: dict[str, bool] = {}
 # A failed held-inode verification remains authoritative across run switches
 # and summary-write retries. Guarded by _lock, keyed like other run state.
 # True means not yet published; False keeps the failure sticky for fresh
@@ -179,7 +184,7 @@ def set_active_run_dir(run_dir: Path | None) -> None:
     verification stays in parent memory for that run's later summary.
     """
     global _active_run_dir, _denial_count, _evidence_handle
-    global _evidence_open_failed, _active_run_generation
+    global _evidence_open_failed, _active_run_generation, _evidence_next_open_attempt
     with _lock:
         if _evidence_handle is not None:
             if not _evidence_handle.close():
@@ -187,6 +192,7 @@ def set_active_run_dir(run_dir: Path | None) -> None:
                     str(_evidence_handle.path.parent.parent.resolve())] = True
             _evidence_handle = None
         _evidence_open_failed = False
+        _evidence_next_open_attempt = 0.0
         _active_run_dir = Path(run_dir) if run_dir is not None else None
         _denial_count = 0
         _active_run_generation += 1
@@ -207,23 +213,31 @@ def set_active_run_dir(run_dir: Path | None) -> None:
 
 
 def _get_evidence_handle_locked(run_dir: Path):
-    """Return the held evidence fd for the active run, opening it on
-    first use. Caller holds _lock. Returns None when the evidence file
-    cannot be opened (warned once per run)."""
-    global _evidence_handle, _evidence_open_failed
+    """Open evidence with bounded retry frequency after transient failures.
+
+    Caller holds _lock. Warn once per outage; a successful open resets the
+    retry state but does not erase earlier loss observations.
+    """
+    global _evidence_handle, _evidence_open_failed, _evidence_next_open_attempt
     if _evidence_handle is not None:
         return _evidence_handle
-    if _evidence_open_failed:
+    now = _monotonic()
+    if _evidence_open_failed and now < _evidence_next_open_attempt:
         return None
     try:
         _evidence_handle = _evidence.EvidenceFile.open(run_dir, DENIALS_FILE)
     except OSError:
+        first_failure = not _evidence_open_failed
         _evidence_open_failed = True
-        logger.warning(
-            "record_denial: cannot open evidence file under %s",
-            run_dir, exc_info=True,
-        )
+        _evidence_next_open_attempt = now + _EVIDENCE_OPEN_RETRY_S
+        if first_failure:
+            logger.warning(
+                "record_denial: cannot open evidence file under %s",
+                run_dir, exc_info=True,
+            )
         return None
+    _evidence_open_failed = False
+    _evidence_next_open_attempt = 0.0
     return _evidence_handle
 
 
@@ -368,6 +382,16 @@ def record_denial(cmd_display: str, returncode: int,
                 msg = f"evidence append failed under {run_dir}"
                 raise OSError(msg)
     except Exception:
+        # Keep loss observable even when no disk artifact can be written.
+        # Use the captured run, never a later active run.
+        try:
+            failure_key = str(run_dir.resolve())
+        except OSError:
+            logger.warning("record_denial: could not retain evidence failure state",
+                           exc_info=True)
+        else:
+            with _lock:
+                _evidence_write_failures[failure_key] = True
         # WARNING (F071 W21 promote): operators rarely run with DEBUG
         # enabled, so pre-fix this swallow meant every dropped sandbox-
         # denial record was invisible — operator sees "no denials" with
@@ -473,6 +497,16 @@ def get_proxy_persist_state(run_dir: Path) -> "dict | None":
         if cur is None:
             return None
         return {**cur, "flags": list(cur["flags"])}
+
+
+def get_evidence_write_failure(run_dir: Path) -> bool:
+    """Whether this parent observed loss while recording denial evidence."""
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return False
+    with _lock:
+        return run_key in _evidence_write_failures
 
 
 def get_evidence_inode_mismatch(run_dir: Path) -> bool:
@@ -1041,6 +1075,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         run_key = str(run_dir.resolve())
         inode_mismatch = run_key in _evidence_inode_mismatches
         inode_failure_pending = _evidence_inode_mismatches.get(run_key, False)
+        write_failure_pending = _evidence_write_failures.get(run_key, False)
     # New (.audit/) location preferred; legacy <run_dir>/ location
     # kept as a read fallback for runs produced by older versions.
     jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
@@ -1059,7 +1094,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         # The held descriptor can already have detected missing evidence.
         # Preserve an unpublished result even with no records to aggregate.
         if (not _mem_only and get_cli_disable(run_dir) is None
-                and not inode_failure_pending):
+                and not inode_failure_pending and not write_failure_pending):
             return None
         return _assemble_and_write_summary(
             run_dir, records=[], refusals=_mem_only,
@@ -1259,6 +1294,9 @@ def _assemble_and_write_summary(
     through the same MAC-minting code. ``refusals=None`` means
     "split them out of ``records`` and merge with parent memory";
     a list means the caller already resolved them."""
+    with _lock:
+        evidence_write_failure = str(run_dir.resolve()) in _evidence_write_failures
+
     # Containment-floor refusals ride the same evidence stream but
     # are NOT denials (the target never executed) — split them out
     # before any denial accounting. Parent memory is the AUTHORITY
@@ -1295,6 +1333,7 @@ def _assemble_and_write_summary(
     if (not records and not refusals and not unverified_refusals
             and not corrupt_lines
             and not inode_mismatch and not planted_object
+            and not evidence_write_failure
             and _disable_consent is None):
         return None
 
@@ -1439,12 +1478,13 @@ def _assemble_and_write_summary(
                 "never witnessed.",
                 len(unverified_refusals), run_dir,
             )
-    if corrupt_lines or inode_mismatch or planted_object:
+    if corrupt_lines or inode_mismatch or planted_object or evidence_write_failure:
         # Tamper flags. Corrupt lines mean someone rewrote evidence in
         # place (the inode check cannot see that on the Landlock-only
         # tier, where the run dir is a writable grant and .audit/
         # cannot be carved out); an inode mismatch means the file was
-        # swapped outright. Either way the record set as a whole is
+        # swapped outright. Producer write failures also mean records
+        # were lost. In all cases the record set as a whole is
         # untrusted — the flags are bound into the MAC below so they
         # cannot be stripped, and triage refuses to treat a flagged
         # summary as usable denial evidence (integrity=tampered). The
@@ -1464,6 +1504,8 @@ def _assemble_and_write_summary(
             summary["corrupt_lines"] = corrupt_lines
         if inode_mismatch:
             summary["inode_mismatch"] = True
+        if evidence_write_failure:
+            summary["evidence_write_failure"] = True
         if planted_object:
             summary["planted_object"] = planted_object
         _details = []
@@ -1471,6 +1513,8 @@ def _assemble_and_write_summary(
             _details.append(f"{corrupt_lines} corrupt line(s)")
         if inode_mismatch:
             _details.append("evidence-file inode mismatch")
+        if evidence_write_failure:
+            _details.append("denial evidence write failure")
         if planted_object:
             _details.append(f"planted object: {planted_object}")
         logger.warning(
@@ -1484,6 +1528,7 @@ def _assemble_and_write_summary(
             f"denials evidence corrupt under {run_dir}",
             corrupt_lines=corrupt_lines,
             inode_mismatch=inode_mismatch,
+            evidence_write_failure=evidence_write_failure,
             planted_object=planted_object,
             surviving_records=len(records),
         )
@@ -1538,6 +1583,7 @@ def _assemble_and_write_summary(
         len(denials), _denials_sha, run=_tmac.run_binding(run_dir),
         corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
         planted_object=planted_object, posture=posture,
+        evidence_write_failure=evidence_write_failure,
         floor_refusals=len(refusals),
         floor_refusals_sha256=_refusals_sha,
         cli_sandbox_disabled=_disable_consent is not None,
@@ -1567,9 +1613,12 @@ def _assemble_and_write_summary(
         )
         return None
 
-    if inode_mismatch:
+    if inode_mismatch or evidence_write_failure:
         with _lock:
-            _evidence_inode_mismatches[str(run_dir.resolve())] = False
+            if inode_mismatch:
+                _evidence_inode_mismatches[str(run_dir.resolve())] = False
+            if evidence_write_failure:
+                _evidence_write_failures[str(run_dir.resolve())] = False
 
     # The caller removes the claimed evidence after this succeeds.
     # Consume the parent-memory refusal mirror now that it is folded

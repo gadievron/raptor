@@ -630,10 +630,14 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
                    floor_refusals: int = 0,
                    floor_refusals_sha256: str = "",
                    cli_sandbox_disabled: bool = False,
-                   disable_consent: str = "") -> dict:
+                   disable_consent: str = "",
+                   evidence_write_failure: bool = False) -> dict:
     """MAC fields for sandbox-summary.json: the denial payload is
     covered by its content hash, so a planted or edited summary fails
     verification even when the headline counters are preserved.
+
+    ``evidence_write_failure`` binds known producer-side persistence loss
+    when present; absent/False keeps older healthy-summary tokens compatible.
 
     ``corrupt_lines`` / ``inode_mismatch`` are the summariser's tamper
     flags (evidence rewritten in place / evidence file swapped). They
@@ -659,6 +663,8 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
         fields["corrupt_lines"] = int(corrupt_lines)
     if inode_mismatch:
         fields["inode_mismatch"] = True
+    if evidence_write_failure:
+        fields["evidence_write_failure"] = True
     if planted_object:
         fields["planted_object"] = str(planted_object)
     if posture is not None:
