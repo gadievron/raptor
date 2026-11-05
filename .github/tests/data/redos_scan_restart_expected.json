@@ -1223,13 +1223,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/propagation.py\u001f_CALLEE_VIOLATION_RE": {
-   "digests": [
-    "8a4ee851ea48"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/proto_length_checker.py\u001f_ALLOC_RE": {
    "digests": [
     "b6611cb1ebea"

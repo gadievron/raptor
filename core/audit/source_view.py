@@ -610,7 +610,7 @@ def _render_c_blank_ranges(source: str, ranges: list[tuple[int, int]]) -> str:
                 pieces.append(region.translate(_C_ASCII_BLANK_TABLE))
             else:
                 pieces.append("\n".join(
-                    " " * len(line) for line in region.split("\n")
+                    " " * len(line) for line in region.split("\n")  # line-model: preserve LF offsets; CR becomes one blank, not a stripped terminator
                 ))
             del region
         cursor = end
