@@ -679,6 +679,8 @@ def _scan_c_family(
     )
     chars = list(source) if c_blanks is None else []
     n = len(source)
+    # Zero expires on the first skip; n records an exhausted search.
+    slash_pos = double_pos = single_pos = 0
     flag = found.add
     # Capture an alias, keeping source as a fast local in the main loop.
     c_source = source if plain_c else None
@@ -977,8 +979,26 @@ def _scan_c_family(
             if plain_c:
                 # These grammars have no state transition on ordinary
                 # characters. Keep the existing handlers for each opener.
-                marker = _C_BLANKING_START_RE.search(source, i + 1)
-                i = n if marker is None else marker.start()
+                if c_blanks is not None:
+                    # Each native search advances monotonically. Cached
+                    # positions inside a consumed literal/comment expire;
+                    # exhausted searches must never restart.
+                    if slash_pos <= i:
+                        slash_pos = source.find("/", i + 1)
+                        if slash_pos < 0:
+                            slash_pos = n
+                    if double_pos <= i:
+                        double_pos = source.find('"', i + 1)
+                        if double_pos < 0:
+                            double_pos = n
+                    if single_pos <= i:
+                        single_pos = source.find("'", i + 1)
+                        if single_pos < 0:
+                            single_pos = n
+                    i = min(slash_pos, double_pos, single_pos)
+                else:
+                    marker = _C_BLANKING_START_RE.search(source, i + 1)
+                    i = n if marker is None else marker.start()
             else:
                 i += 1
     if c_blanks is not None:
