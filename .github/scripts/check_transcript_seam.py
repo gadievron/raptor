@@ -152,20 +152,22 @@ def _tail_name(node: ast.expr) -> str | None:
     return None
 
 
-def _symbol_aliases(tree: ast.AST, targets: frozenset[str]) -> set[str]:
-    """``import … as`` / ``from … import … as`` aliases of *targets*.
+def _symbol_aliases_by_target(
+    tree: ast.AST, targets: frozenset[str],
+) -> dict[str, set[str]]:
+    """Import renames grouped by original target in one AST walk.
 
     Only symbol renames matter: a module alias (``import x.y as z``)
     still constructs via ``z.LLMClient()``, whose Attribute tail the
     census already matches.
     """
-    aliases: set[str] = set()
+    aliases = {target: set() for target in targets}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 base = alias.name.rsplit(".", 1)[-1]
-                if alias.asname and base in targets:
-                    aliases.add(alias.asname)
+                if alias.asname and base in aliases:
+                    aliases[base].add(alias.asname)
     return aliases
 
 
@@ -272,6 +274,8 @@ def census(root: Path) -> dict[str, int]:
     seam's own plumbing and likewise excluded.
     """
     provider_names = derive_provider_names(root)
+    provider_targets = frozenset({PROVIDER_FACTORY_NAME} | provider_names)
+    alias_targets = provider_targets | {CLIENT_NAME}
     observed: dict[str, int] = {}
     factory_pin_seen = False
     for path in runtime_file_universe(root, include_dev_scripts=True):
@@ -283,14 +287,12 @@ def census(root: Path) -> dict[str, int]:
         except SyntaxError as exc:
             msg = f"cannot parse runtime file {rel}: {exc}"
             raise ValueError(msg) from exc
-        client_names = frozenset(
-            {CLIENT_NAME} | _symbol_aliases(tree, frozenset({CLIENT_NAME})),
-        )
-        provider_targets = frozenset(
-            {PROVIDER_FACTORY_NAME} | provider_names,
-        )
+        aliases = _symbol_aliases_by_target(tree, alias_targets)
+        client_names = frozenset({CLIENT_NAME} | aliases[CLIENT_NAME])
         provider_call_names = frozenset(
-            provider_targets | _symbol_aliases(tree, provider_targets),
+            provider_targets | {
+                alias for target in provider_targets for alias in aliases[target]
+            },
         )
         visitor = _SiteVisitor(
             client_names=client_names,
