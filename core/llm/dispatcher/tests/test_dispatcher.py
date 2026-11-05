@@ -10,6 +10,7 @@ key was injected.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import httpx
 import pytest
 
 from core.testing.fds import read_and_close
+from packages.web.tests.http_server import start_http_server
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import (
@@ -166,12 +168,13 @@ class TestLayer3TokenAuth:
         """A valid token reaches a captive upstream and returns its reply."""
         from dataclasses import replace
 
-        upstream = _CaptiveUpstream()
-        monkeypatch.setitem(
-            dispatcher._rules, "anthropic",
-            replace(dispatcher._rules["anthropic"], upstream_base_url=upstream.base_url),
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            monkeypatch.setitem(
+                dispatcher._rules, "anthropic",
+                replace(dispatcher._rules["anthropic"], upstream_base_url=upstream.base_url),
+            )
             _socket_path, fd = dispatcher.allocate_worker(label="test-l3")
             token = read_and_close(fd, 64).decode().strip()
             r = self._post(dispatcher, headers={_TOKEN_HEADER: token})
@@ -179,8 +182,6 @@ class TestLayer3TokenAuth:
             assert r.json()["id"] == "msg_test"
             assert upstream.captured["path"] == "/v1/messages"
             assert upstream.captured["body"] == b'{"x":1}'
-        finally:
-            upstream.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -197,21 +198,23 @@ class TestLayer4TokenLifecycle:
         # Point the anthropic rule at a captive in-process server so
         # the first two requests resolve quickly and we observe the
         # gate's third-request rejection deterministically.
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="budget", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=2,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="budget", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=2,
+            )
+            cleanup.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             _socket_path, fd = d.allocate_worker(label="budget-test")
             token = read_and_close(fd, 64).decode().strip()
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
@@ -230,9 +233,6 @@ class TestLayer4TokenLifecycle:
                            headers={_TOKEN_HEADER: token})
                 assert r.status_code == 401
                 assert "exhausted" in r.text
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_token_expiry(self, fake_creds, tmp_path):
         d = LLMDispatcher(
@@ -389,21 +389,23 @@ class TestLayer4TokenLifecycle:
         env/FD contract changes."""
         from core.llm.dispatcher.client import _make_httpx_client
 
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="renew-client", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=30, token_budget=100,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="renew-client", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=30, token_budget=100,
+            )
+            cleanup.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             token = self._mint_worker_token(d)
             rec = d._tokens[token]
             with _make_httpx_client(str(d.socket_path), token) as c:
@@ -419,9 +421,6 @@ class TestLayer4TokenLifecycle:
                 e for e in _read_audit(d) if e["event"] == "token.renew"
             ]
             assert len(renews) >= 2
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_renew_transport_failure_never_fails_caller(self):
         """Reviewer PoC-C inverted: the renewal leg is out-of-band on a
@@ -551,21 +550,23 @@ class TestLayer4TokenLifecycle:
         client above (test_token_expiry) still hard-401s at TTL."""
         from core.llm.dispatcher.client import _make_httpx_client
 
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="renew-outlive", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=2, token_budget=100,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="renew-outlive", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=2, token_budget=100,
+            )
+            cleanup.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             token = self._mint_worker_token(d)
             issued_at = d._tokens[token].issued_at
             deadline = issued_at + 3.0   # 1.5x the 2s TTL
@@ -577,9 +578,6 @@ class TestLayer4TokenLifecycle:
                     assert r.status_code == 200, r.text
                     assert "expired" not in r.text
                     time.sleep(0.25)
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -662,23 +660,17 @@ class _CaptiveUpstream:
                 self.wfile.write(resp)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = start_http_server(self._server, cleanup.callback)
             self.host, self.port = self._server.server_address
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-            self._thread.start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
-        assert not self._thread.is_alive(), "captive upstream did not stop"
+        self._cleanup.close()
 
 
 @pytest.mark.upstream_forward
@@ -690,27 +682,31 @@ class TestE2ECredentialIsolation:
     injected, (d) the response streams back unchanged."""
 
     def _setup(self, fake_creds, tmp_path):
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="e2e", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=100,
-        )
-        # Rewrite the rule to point at our captive server. The rule
-        # is a frozen dataclass, so swap the whole entry.
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        return d, upstream
+        with ExitStack() as rollback:
+            upstream = _CaptiveUpstream()
+            rollback.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="e2e", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=100,
+            )
+            rollback.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
+            rollback.pop_all()
+            return d, upstream
 
     def test_e2e_credentials_injected_dummy_stripped(self, fake_creds, tmp_path):
-        d, upstream = self._setup(fake_creds, tmp_path)
-        try:
+        with ExitStack() as cleanup:
+            d, upstream = self._setup(fake_creds, tmp_path)
+            cleanup.callback(upstream.shutdown)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="e2e")
             token = read_and_close(fd, 64).decode().strip()
 
@@ -750,13 +746,12 @@ class TestE2ECredentialIsolation:
 
             # ---- request body passed through unchanged ----
             assert upstream.captured["body"] == b'{"model":"claude-3-haiku","messages":[]}'
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_e2e_audit_records_dispatch_without_body(self, fake_creds, tmp_path):
-        d, upstream = self._setup(fake_creds, tmp_path)
-        try:
+        with ExitStack() as cleanup:
+            d, upstream = self._setup(fake_creds, tmp_path)
+            cleanup.callback(upstream.shutdown)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="audit-e2e")
             token = read_and_close(fd, 64).decode().strip()
 
@@ -776,9 +771,6 @@ class TestE2ECredentialIsolation:
             for value in ev.values():
                 if isinstance(value, str):
                     assert "sensitive-content-must-not-be-logged" not in value
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -796,21 +788,25 @@ class TestRealAnthropicSDKThroughDispatcher:
     stock SDK actually accepts."""
 
     def _setup(self, fake_creds, tmp_path):
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="sdk-e2e", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=100,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        return d, upstream
+        with ExitStack() as rollback:
+            upstream = _CaptiveUpstream()
+            rollback.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="sdk-e2e", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=100,
+            )
+            rollback.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
+            rollback.pop_all()
+            return d, upstream
 
     def test_real_anthropic_sdk_call_succeeds(self, fake_creds, tmp_path):
         """Build the client via ``make_anthropic_client`` (the actual
@@ -819,26 +815,23 @@ class TestRealAnthropicSDKThroughDispatcher:
         pytest.importorskip("anthropic")
         from core.llm.dispatcher.client import make_anthropic_client
 
-        d, upstream = self._setup(fake_creds, tmp_path)
-        # Override _CaptiveUpstream's response to a valid Anthropic
-        # messages payload so the SDK's deserialiser doesn't choke.
-        anthropic_response_body = json.dumps({
-            "id": "msg_e2e_test",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "hello from dispatcher"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 5, "output_tokens": 4},
-        }).encode("utf-8")
-        # Replace the captive handler's response. Done after the
-        # fixture is built so the dispatcher is wired correctly.
-        upstream._server.RequestHandlerClass.do_POST = (
-            self._make_post_handler(upstream, anthropic_response_body)
-        )
-
-        try:
+        with ExitStack() as cleanup:
+            d, upstream = self._setup(fake_creds, tmp_path)
+            cleanup.callback(upstream.shutdown)
+            cleanup.callback(d.shutdown)
+            anthropic_response_body = json.dumps({
+                "id": "msg_e2e_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-haiku-20240307",
+                "content": [{"type": "text", "text": "hello from dispatcher"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 4},
+            }).encode("utf-8")
+            upstream._server.RequestHandlerClass.do_POST = (
+                self._make_post_handler(upstream, anthropic_response_body)
+            )
             _socket_path, fd = d.allocate_worker(label="sdk-e2e")
             token = read_and_close(fd, 64).decode().strip()
 
@@ -888,9 +881,6 @@ class TestRealAnthropicSDKThroughDispatcher:
                 "set to 'http://_/anthropic/v1' instead of "
                 "'http://_/anthropic' (SDK appends /v1 itself)."
             )
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def _make_post_handler(self, upstream, response_body):
         """Closure that captures one request and replies with
@@ -925,49 +915,46 @@ class TestSubprocessE2E:
         pytest.importorskip("anthropic")
         from core.llm.dispatcher.spawn import spawn_worker
 
-        upstream = _CaptiveUpstream()
-        # Same payload-shape swap as above so the SDK parses successfully.
-        anthropic_response_body = json.dumps({
-            "id": "msg_subproc",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "subprocess hello"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 5, "output_tokens": 3},
-        }).encode("utf-8")
-
-        def do_POST(handler):
-            length = int(handler.headers.get("Content-Length", "0"))
-            body = handler.rfile.read(length) if length else b""
-            upstream.captured["method"] = handler.command
-            upstream.captured["path"] = handler.path
-            upstream.captured["headers"] = {k: v for k, v in handler.headers.items()}
-            upstream.captured["body"] = body
-            handler.send_response(200)
-            handler.send_header("Content-Type", "application/json")
-            handler.send_header("Content-Length", str(len(anthropic_response_body)))
-            handler.end_headers()
-            handler.wfile.write(anthropic_response_body)
-
-        upstream._server.RequestHandlerClass.do_POST = do_POST
-
-        d = LLMDispatcher(
-            run_id="subproc-e2e", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=60, token_budget=10,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            anthropic_response_body = json.dumps({
+                "id": "msg_subproc",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-haiku-20240307",
+                "content": [{"type": "text", "text": "subprocess hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 3},
+            }).encode("utf-8")
+            def do_POST(handler):
+                length = int(handler.headers.get("Content-Length", "0"))
+                body = handler.rfile.read(length) if length else b""
+                upstream.captured["method"] = handler.command
+                upstream.captured["path"] = handler.path
+                upstream.captured["headers"] = {k: v for k, v in handler.headers.items()}
+                upstream.captured["body"] = body
+                handler.send_response(200)
+                handler.send_header("Content-Type", "application/json")
+                handler.send_header("Content-Length", str(len(anthropic_response_body)))
+                handler.end_headers()
+                handler.wfile.write(anthropic_response_body)
+            upstream._server.RequestHandlerClass.do_POST = do_POST
+            d = LLMDispatcher(
+                run_id="subproc-e2e", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=60, token_budget=10,
+            )
+            cleanup.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             # Worker script: read token, build anthropic client via
             # the official helper, call messages.create, assert no
             # API keys are in env, write SDK response to stdout.
@@ -1037,9 +1024,6 @@ class TestSubprocessE2E:
             req = json.loads(upstream.captured["body"])
             assert req["model"] == "claude-3-haiku-20240307"
             assert req["messages"][0]["content"] == "subproc ping"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestChildPlaneSocket:
@@ -1105,21 +1089,23 @@ class TestChildPlaneSocket:
     def test_child_token_dispatches_on_child_plane(self, fake_creds, tmp_path):
         """The reduced plane still serves its purpose: a scoped child
         token's model call forwards upstream."""
-        upstream = _CaptiveUpstream()
-        d = LLMDispatcher(
-            run_id="child-plane", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=100,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="child-plane", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=100,
+            )
+            cleanup.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
             # This test checks forwarding on the reduced IPC plane. Keep the
             # separately bounded cold confinement-worker startup outside the
             # HTTP client's five-second request timeout; still engage the real
@@ -1136,9 +1122,6 @@ class TestChildPlaneSocket:
                     headers={"Authorization": f"Bearer {token}"},
                 )
             assert r.status_code == 200
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_stolen_worker_token_cannot_renew_through_bridge(
         self, fake_creds, tmp_path,
@@ -1281,21 +1264,17 @@ class _GzipCaptiveUpstream:
                 self.wfile.write(compressed)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = start_http_server(self._server, cleanup.callback)
             self.host, self.port = self._server.server_address
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-            self._thread.start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 @pytest.mark.upstream_forward
@@ -1307,28 +1286,34 @@ class TestE2EResponseEncodingPreserved:
     parse error; Anthropic: binary in the error string)."""
 
     def _setup(self, fake_creds, tmp_path, payload: bytes):
-        upstream = _GzipCaptiveUpstream(payload)
-        d = LLMDispatcher(
-            run_id="gzip-e2e", creds=fake_creds,
-            audit_path=tmp_path / "audit.jsonl",
-            token_ttl_s=3600, token_budget=100,
-        )
-        from core.llm.dispatcher.auth import ProviderRule
-        original = d._rules["anthropic"]
-        d._rules["anthropic"] = ProviderRule(
-            name=original.name,
-            upstream_base_url=upstream.base_url,
-            inject_headers=original.inject_headers,
-            strip_request_headers=original.strip_request_headers,
-        )
-        return d, upstream
+        with ExitStack() as rollback:
+            upstream = _GzipCaptiveUpstream(payload)
+            rollback.callback(upstream.shutdown)
+            d = LLMDispatcher(
+                run_id="gzip-e2e", creds=fake_creds,
+                audit_path=tmp_path / "audit.jsonl",
+                token_ttl_s=3600, token_budget=100,
+            )
+            rollback.callback(d.shutdown)
+            from core.llm.dispatcher.auth import ProviderRule
+            original = d._rules["anthropic"]
+            d._rules["anthropic"] = ProviderRule(
+                name=original.name,
+                upstream_base_url=upstream.base_url,
+                inject_headers=original.inject_headers,
+                strip_request_headers=original.strip_request_headers,
+            )
+            rollback.pop_all()
+            return d, upstream
 
     def test_gzipped_upstream_body_decompresses_at_worker(
         self, fake_creds, tmp_path,
     ):
         payload = b'{"id":"msg_test","content":"hello gzipped world"}'
-        d, upstream = self._setup(fake_creds, tmp_path, payload)
-        try:
+        with ExitStack() as cleanup:
+            d, upstream = self._setup(fake_creds, tmp_path, payload)
+            cleanup.callback(upstream.shutdown)
+            cleanup.callback(d.shutdown)
             _, fd = d.allocate_worker(label="gzip-e2e")
             token = read_and_close(fd, 64).decode().strip()
 
@@ -1357,9 +1342,6 @@ class TestE2EResponseEncodingPreserved:
             # to opaque-bytes mode.
             ce = {k.lower(): v for k, v in resp.headers.items()}.get("content-encoding")
             assert ce == "gzip"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 # ---------------------------------------------------------------------------
