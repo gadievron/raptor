@@ -15,7 +15,8 @@ with patch.object(sys, "path", sys.path.copy()):
 
 
 @pytest.fixture
-def tree(tmp_path):
+def tree(tmp_path, monkeypatch):
+    monkeypatch.setenv('GITHUB_STEP_SUMMARY', str(tmp_path / 'summary'))
     def write(name, text):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,3 +213,53 @@ def test_invalid_lazy_submodule_maps_still_broaden_conservatively(tree, invalid)
     path = root / 'core/lazy/__init__.py'
     path.write_text(path.read_text().replace('("core.shared.helper", "VALUE")', invalid))
     assert selected(tree, ['core/unrelated/module.py'])[1] == {'one'}
+
+
+@pytest.mark.parametrize('changed,reason', [
+    (None, 'unavailable change history'),
+    (['core/sandbox/context.py'], 'shared sandbox or test-harness'),
+    (['core/missing/module.py'], 'deleted Python modules'),
+    (['docs/guide.md'], 'No platform runners'),
+    (['core/unrelated/module.py'], 'do not affect registered'),
+    (['core/one/wrapper.py'], 'Scoped coverage'),
+], ids=['unknown-history', 'shared-input', 'deletion', 'irrelevant', 'unrelated-runtime', 'dependency-match'])
+def test_explanations_preserve_selection(tree, changed, reason):
+    root, registry = tree
+    explanations = []
+    expected = scope.select(root, registry, changed)
+    assert scope.select(root, registry, changed, explanations=explanations) == expected
+    assert any(reason in explanation for explanation in explanations)
+
+
+def test_shared_import_fallback_names_the_opaque_source(tree):
+    root, registry = tree
+    (root / 'conftest.py').write_text('import importlib\nimportlib.import_module(unknown)\n')
+    explanations = []
+    matrix = scope.select(root, registry, ['core/unrelated/module.py'], explanations=explanations)
+    assert len(matrix['include']) == 2 and all(cell['full'] for cell in matrix['include'])
+    assert explanations == ['Full coverage: computed imports in shared pytest dependencies: conftest.py']
+
+
+def test_unreadable_dependency_reports_a_full_fallback(tree):
+    root, registry = tree
+    (root / 'core/shared/helper.py').write_text('def broken(')
+    explanations = []
+    result = scope.select(root, registry, ['core/one/wrapper.py'], explanations=explanations)
+    assert all(cell['full'] for cell in result['include'])
+    assert explanations == ['Full coverage: wrapper dependencies could not be analysed (SyntaxError).']
+
+
+def test_selection_summary_escapes_changed_paths(tree, monkeypatch):
+    root, _ = tree
+    monkeypatch.chdir(root)
+    monkeypatch.setenv('EVENT', 'push')
+    monkeypatch.setattr(scope, 'changed_paths', lambda *args: ['docs/<owned>&.md'])
+    summary = root / 'summary'
+    output = root / 'output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    monkeypatch.setenv('GITHUB_STEP_SUMMARY', str(summary))
+    scope.main()
+    assert 'run=false\n' in output.read_text()
+    assert 'No platform runners' in summary.read_text()
+    assert 'docs/&lt;owned&gt;&amp;.md' in summary.read_text()
+    assert '<owned>' not in summary.read_text()

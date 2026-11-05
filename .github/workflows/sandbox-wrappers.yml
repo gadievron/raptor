@@ -70,23 +70,57 @@ jobs:
           uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
           save-on-rebuild: 'true'
       - name: Install Linux parser tools
+        # Contracts include a real confinement check; keep libseccomp2 even
+        # when no native family is selected.
         if: runner.os == 'Linux'
+        timeout-minutes: 8
+        env:
+          NEEDS_RADARE2: ${{ contains(matrix.families, 'radare2') }}
+          NEEDS_GADGETS: ${{ contains(matrix.families, 'gadget-parsers') }}
+        shell: bash
         run: |
+          set -euo pipefail
+          packages=(binutils libseccomp2)
+          if [[ "$NEEDS_RADARE2" == true ]]; then packages+=(radare2); fi
+          if [[ "$NEEDS_GADGETS" == true ]]; then packages+=(ruby); fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends binutils radare2 ruby libseccomp2
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Install macOS parser tools
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && toJSON(matrix.families) != '[]'
+        timeout-minutes: 8
+        env:
+          NEEDS_RADARE2: ${{ contains(matrix.families, 'radare2') }}
+          NEEDS_GADGETS: ${{ contains(matrix.families, 'gadget-parsers') }}
+        shell: bash
         run: |
-          brew install binutils radare2 ruby
-          echo "$(brew --prefix ruby)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix binutils)/libexec/gnubin" >> "$GITHUB_PATH"
-      - name: Install Python and Ruby parser dependencies
+          set -euo pipefail
+          packages=(binutils)
+          if [[ "$NEEDS_RADARE2" == true ]]; then packages+=(radare2); fi
+          if [[ "$NEEDS_GADGETS" == true ]]; then packages+=(ruby); fi
+          brew install "${packages[@]}"
+          if [[ "$NEEDS_GADGETS" == true ]]; then
+            wrapper_ruby_prefix=$(brew --prefix ruby)
+            echo "$wrapper_ruby_prefix/bin" >> "$GITHUB_PATH"
+          fi
+          wrapper_binutils_prefix=$(brew --prefix binutils)
+          echo "$wrapper_binutils_prefix/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Install Python parser dependencies
+        # The isolated ELF worker also imports pwntools; it is not solely a
+        # gadget-parser dependency.
+        if: contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')
+        timeout-minutes: 8
         shell: bash
         run: |
           set -euo pipefail
           uv pip install --python "$VENV_PATH/bin/python" pwntools==4.15.0 ROPgadget==7.7 capstone==5.0.6
           test -x "$VENV_PATH/bin/ROPgadget"
           echo "$GITHUB_WORKSPACE/$VENV_PATH/bin" >> "$GITHUB_PATH"
+      - name: Install Ruby parser dependencies
+        if: contains(matrix.families, 'gadget-parsers')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
       - name: Install isolated Chromium runtime

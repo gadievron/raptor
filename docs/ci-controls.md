@@ -250,5 +250,13 @@ A wrapper-only change selects its contract cases and any native family whose
 dependencies include that wrapper. Scheduled/manual/merge-queue runs retain full
 coverage. The current shared root fixtures contain opaque dependencies, so
 ordinary runtime edits still fall back to full acceptance; granular selection
-is used only when the dependency analysis can establish its bounds. `sandbox-wrappers-passed` reports selection and acceptance failures even
+is used only when the dependency analysis can establish its bounds. The scope
+job logs its selection reasons and writes the changed paths, selected cases and
+fallback sources to the job summary. Contract-only selections skip optional parser
+installation, retaining Linux confinement prerequisites. Native selections retain base platform tools, adding radare2 only
+for its family and Ruby only for the gadget-parser family. Python parser
+dependencies serve both gadget-parser and ELF-worker families; full selections
+retain every required tool. Parser setup
+steps have eight-minute limits within the existing thirty-minute acceptance job.
+`sandbox-wrappers-passed` reports selection and acceptance failures even
 when unrelated platform jobs are skipped.

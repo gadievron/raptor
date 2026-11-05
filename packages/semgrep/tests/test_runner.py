@@ -8,19 +8,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-from packages.semgrep.models import SemgrepResult
-from packages.semgrep.runner import (
-    _SCOPE_ISOLATION_MIN_VERSION,
-    _config_to_name,
-    build_cmd,
-    is_available,
-    run_rule,
-    run_rules,
-    scope_isolation_available,
-    version,
-)
+with patch.object(sys, "path", sys.path.copy()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from packages.semgrep.models import SemgrepResult
+    from packages.semgrep.runner import (
+        _SCOPE_ISOLATION_MIN_VERSION,
+        _config_to_name,
+        build_cmd,
+        is_available,
+        run_rule,
+        run_rules,
+        scope_isolation_available,
+        version,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +29,18 @@ def _scope_isolation_ok():
     with patch("packages.semgrep.runner.scope_isolation_available",
                return_value=True):
         yield
+
+
+@pytest.fixture
+def runner_proxy_hosts(monkeypatch):
+    """Dispatch-shape tests own their host list; calibration has its own suite."""
+    from core.config import RaptorConfig
+    from packages.semgrep import _proxy_hosts
+
+    hosts = ['semgrep.registry.example.test']
+    monkeypatch.setattr(RaptorConfig, 'SEMGREP_OFFLINE', False)
+    monkeypatch.setattr(_proxy_hosts, 'proxy_hosts_for_semgrep', lambda: hosts.copy())
+    return hosts
 
 
 # Helpers ----------------------------------------------------------------------
@@ -618,7 +630,7 @@ class TestSandboxDefaultPolicy:
         assert "cmd" in calls
 
     def test_registry_config_gets_proxied_egress_local_blocks(
-            self, tmp_path):
+            self, tmp_path, runner_proxy_hosts):
         """Posture pin: registry configs route through the egress
         proxy with the shared semgrep hostname allowlist — never
         open network (semgrep parses attacker-controlled source; a
@@ -636,6 +648,7 @@ class TestSandboxDefaultPolicy:
             runner(["semgrep"], capture_output=True)
             assert captured.get("block_network") is not False
             assert captured["use_egress_proxy"] is True
+            assert captured["proxy_hosts"] == runner_proxy_hosts
             assert captured["proxy_hosts"], (
                 "registry lane must carry a hostname allowlist"
             )
@@ -1061,7 +1074,7 @@ def test_home_tool_runtime_and_exact_local_config_are_declared(tmp_path):
     assert run.call_args.kwargs['block_network'] is True
 
 
-def test_single_file_scan_binds_exact_file_without_changing_scan_argv(tmp_path):
+def test_single_file_scan_binds_exact_file_without_changing_scan_argv(tmp_path, runner_proxy_hosts):
     from packages.semgrep.runner import _default_sandbox_runner
     source = tmp_path / 'source'
     source.mkdir()
@@ -1076,9 +1089,10 @@ def test_single_file_scan_binds_exact_file_without_changing_scan_argv(tmp_path):
     assert str(source) not in run.call_args.kwargs['tool_paths']
     assert run.call_args.args[0] == command
     assert run.call_args.kwargs['output'] != str(source)
+    assert run.call_args.kwargs['proxy_hosts'] == runner_proxy_hosts
 
 
-def test_extra_target_gets_its_own_exact_readonly_bind(tmp_path):
+def test_extra_target_gets_its_own_exact_readonly_bind(tmp_path, runner_proxy_hosts):
     from packages.semgrep.runner import _default_sandbox_runner
     target = tmp_path / 'fixture.py'
     target.write_text('print(42)')
@@ -1088,6 +1102,7 @@ def test_extra_target_gets_its_own_exact_readonly_bind(tmp_path):
         wrapper(['/usr/bin/semgrep', str(target), str(additional)])
     assert str(additional) in run.call_args.kwargs['tool_paths']
     assert str(additional.parent) not in run.call_args.kwargs['tool_paths']
+    assert run.call_args.kwargs['proxy_hosts'] == runner_proxy_hosts
 
 
 def test_relative_file_rule_and_extra_target_are_independent_of_sandbox_cwd(tmp_path, monkeypatch):
@@ -1105,7 +1120,7 @@ def test_relative_file_rule_and_extra_target_are_independent_of_sandbox_cwd(tmp_
 
 
 @pytest.mark.parametrize('configuration', ['p/security-audit', 'category/security'])
-def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, monkeypatch, configuration):
+def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, monkeypatch, configuration, runner_proxy_hosts):
     monkeypatch.chdir(tmp_path)
     Path(configuration).mkdir(parents=True)
     target = tmp_path / 'fixture.py'
@@ -1122,6 +1137,7 @@ def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, 
         wrapper = _default_sandbox_runner(target, configuration)
         wrapper(['/usr/bin/semgrep', '--config', configuration, str(target)])
     assert run.call_args.kwargs['use_egress_proxy'] is True
+    assert run.call_args.kwargs['proxy_hosts'] == runner_proxy_hosts
     assert str(Path(configuration).absolute()) not in run.call_args.kwargs['tool_paths']
 
 
