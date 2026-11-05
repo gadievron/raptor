@@ -22,6 +22,12 @@ def reap_on_exit(process, *, process_group=False, wait_timeout=5):
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                except PermissionError:
+                    # Darwin can report EPERM for an already killed group's
+                    # unreaped leader. Confirm its exit; never hide a denied
+                    # signal while the owned child is still running.
+                    if process.poll() is None:
+                        raise
             elif not process_group and process.poll() is None:
                 process.kill()
             process.wait(timeout=wait_timeout)
