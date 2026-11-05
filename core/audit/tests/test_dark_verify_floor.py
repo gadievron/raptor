@@ -236,7 +236,7 @@ class TestDarkVerificationFloorRefusal:
             )
         assert not (tmp_path / "dark-verify-results.json").exists()
 
-    def test_confirmed_witness_path_unchanged(self, tmp_path):
+    def test_matched_prediction_remains_recorded_without_promotion(self, tmp_path):
         """Positive control: the arm sits around the real
         execute_witness without disturbing the confirm path."""
         config, result = _dark_run_fixture(tmp_path)
@@ -244,7 +244,7 @@ class TestDarkVerificationFloorRefusal:
             result, config, llm_client=lambda p, s: _WITNESS_JSON,
             start_time=time.monotonic(),
         )
-        assert result.outcomes[0].status == "finding"
+        assert result.outcomes[0].status == "dark"
         records = json.loads(
             (tmp_path / "dark-verify-results.json").read_text())
         assert records[0]["verdict"] == "confirmed"

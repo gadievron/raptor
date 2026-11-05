@@ -55,6 +55,7 @@ from packages.checker_synthesis.library import RuleLibrary
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
+from .dark_verify._admission import SANITIZER_RECEIPT, witness_can_confirm
 from .claim_counters import _DISMISSIVE_COUNTERS, has_claim_counter, matching_claims
 from .refutation_source import capture_source_identity
 from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
@@ -1355,7 +1356,7 @@ class ReviewOutcome:
     weaknesses: list[dict[str, Any]] | None = None
 
     _CONFIRMED_EVIDENCE = frozenset({
-        "dark_verify:confirmed", "dynamic:crash", "frida:runtime",
+        "dark_verify:sanitizer-violation", "dynamic:crash", "frida:runtime",
         "validate:observed_runtime", "validate:replayed_crash",
         # Differential family execution: sandboxed member runs
         # compared under an explicit contract — executed evidence.
@@ -35171,15 +35172,15 @@ def _drain_dark_probes(
             continue
 
         prior = outcome.status
-        if verify_result.verdict == "confirmed":
+        if witness_can_confirm(verify_result, finding_key=f"{outcome.file}:{outcome.function}"):
             from .evidence_grade import is_tool_evidence as _is_tool_ev
 
             _prior_ev = outcome.evidence_tool or ""
-            if "dark_verify:confirmed" not in _prior_ev:
+            if SANITIZER_RECEIPT not in _prior_ev:
                 if _prior_ev and _is_tool_ev(_prior_ev):
-                    outcome.evidence_tool = f"{_prior_ev}+dark_verify:confirmed"
+                    outcome.evidence_tool = f"{_prior_ev}+{SANITIZER_RECEIPT}"
                 else:
-                    outcome.evidence_tool = "dark_verify:confirmed"
+                    outcome.evidence_tool = SANITIZER_RECEIPT
             if outcome.status != "finding":
                 outcome.status = "finding"
                 with result._lock:
@@ -35192,6 +35193,8 @@ def _drain_dark_probes(
                         result.clean -= 1
                     elif prior == "error":
                         result.errors -= 1
+        elif verify_result.verdict == "confirmed":
+            logger.info("dark witness matched a prediction for %s:%s; no independent violation", outcome.file, outcome.function)
         elif verify_result.verdict == "refuted":
             # This refutes one witness prediction, not the vulnerability.
             # Preserve status, evidence, counters, and learned priors.
@@ -35204,6 +35207,7 @@ def _drain_dark_probes(
             "status": outcome.status,
             "evidence_tool": outcome.evidence_tool,
             "verdict": verify_result.verdict,
+            "violation_observed": getattr(verify_result, "violation_observed", False) is True,
             "match_detail": getattr(verify_result, "match_detail", ""),
         })
         handled.add(id(outcome))
@@ -35345,7 +35349,8 @@ def _run_dark_verification(
     the dispatch table (auth/biz-logic CWEs where witness execution is
     the primary grounding mechanism).
 
-    Confirmed witnesses upgrade the outcome to ``"finding"``. A witness
+    Independent sanitizer violations upgrade the outcome to ``"finding"``.
+    Matching ordinary model-predicted behavior grants no promotion. A witness
     whose prediction was refuted leaves the original verdict unchanged.
 
     Witness probes (one LLM call + one sandboxed execution each) are
@@ -35503,18 +35508,18 @@ def _run_dark_verification(
     def _apply(outcome: ReviewOutcome, verify_result: Any) -> dict[str, Any]:
         """Fold one witness verdict into the outcome + counters."""
         prior = outcome.status
-        if verify_result.verdict == "confirmed":
+        if witness_can_confirm(verify_result, finding_key=f"{outcome.file}:{outcome.function}"):
             from .evidence_grade import is_tool_evidence as _is_tool_ev
 
             outcome.status = "finding"
             # Extend the existing receipt chain without erasing engine provenance.
             _prior_ev = outcome.evidence_tool or ""
-            if "dark_verify:confirmed" in _prior_ev:
+            if SANITIZER_RECEIPT in _prior_ev:
                 pass
             elif _prior_ev and _is_tool_ev(_prior_ev):
-                outcome.evidence_tool = f"{_prior_ev}+dark_verify:confirmed"
+                outcome.evidence_tool = f"{_prior_ev}+{SANITIZER_RECEIPT}"
             else:
-                outcome.evidence_tool = "dark_verify:confirmed"
+                outcome.evidence_tool = SANITIZER_RECEIPT
             if prior != "finding":
                 result.findings += 1
                 if prior in ("dark", "dormant"):
@@ -35525,6 +35530,8 @@ def _run_dark_verification(
                     result.clean -= 1
                 elif prior == "error":
                     result.errors -= 1
+        elif verify_result.verdict == "confirmed":
+            logger.info("dark witness matched a prediction for %s:%s; no independent violation", outcome.file, outcome.function)
         elif verify_result.verdict == "refuted":
             # Tool-backed floor: an executed witness is ONE LLM-guessed
             # input. It can refute its own prediction, but it cannot
@@ -35546,6 +35553,7 @@ def _run_dark_verification(
             "status": outcome.status,
             "evidence_tool": outcome.evidence_tool,
             "verdict": verify_result.verdict,
+            "violation_observed": getattr(verify_result, "violation_observed", False) is True,
             "match_detail": verify_result.match_detail,
         }
 

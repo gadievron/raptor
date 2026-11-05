@@ -75,6 +75,8 @@ class DarkVerifyResult:
 
     ``refuted`` is expectation-relative: this input did not produce the
     predicted observation. It is not a refutation of the vulnerability.
+    Likewise, ``confirmed`` says the prediction matched; promotion needs
+    an independently observed violation, not just that expectation match.
     """
 
     finding_key: str
@@ -95,6 +97,9 @@ class DarkVerifyResult:
     # "the call completed and we saw what it did" apart from "the
     # verdict was derived without a trustworthy observation".
     observed_status: str = ""
+    # Set only by the instrumented native classifier, never from a model's
+    # prediction or a matching ordinary return/exception/crash.
+    violation_observed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,4 +111,5 @@ class DarkVerifyResult:
             "match_detail": self.match_detail,
             "oracle_reliability": self.oracle_reliability,
             "observed_status": self.observed_status,
+            "violation_observed": self.violation_observed,
         }

@@ -1981,6 +1981,7 @@ def _classify_native_output(
                 return DarkVerifyResult(
                     finding_key=spec.finding_key,
                     verdict="confirmed",
+                    violation_observed=bool(expected_token and sanitizers_active and window_reports),
                     language=lang,
                     actual_exception=f"sanitizer: {sanitizer_type}",
                     match_detail=(
@@ -2002,6 +2003,7 @@ def _classify_native_output(
             return DarkVerifyResult(
                 finding_key=spec.finding_key,
                 verdict="confirmed",
+                violation_observed=bool(expected_token and sanitizers_active and window_reports),
                 language=lang,
                 actual_exception=f"sanitizer: {sanitizer_type}",
                 match_detail=f"ASan/UBSan fired: {sanitizer_type}",
