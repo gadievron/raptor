@@ -114,3 +114,33 @@ def _scrub_dispatcher_route(monkeypatch):
     on purpose set the var with ``monkeypatch.setenv`` inside the test
     body, which runs after this autouse scrub and wins."""
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+
+
+@pytest.fixture
+def sysprompt_cache(tmp_path, monkeypatch):
+    """Own prompt-cache state and disk paths without a process-wide ticker."""
+    import threading
+    from core.atomic_fs import rmtree_hardened
+    from core.llm import cc_adapter
+    from core.run import scratch, tmp_reaper
+
+    parent = tmp_path / "prompt-cache"
+    parent.mkdir()
+    original_scratch = scratch.scratch_dir
+    monkeypatch.setattr(cc_adapter, "_sysprompt_cache", {})
+    monkeypatch.setattr(cc_adapter, "_sysprompt_dir", None)
+    monkeypatch.setattr(cc_adapter, "_sysprompt_owner_pid", None)
+    monkeypatch.setattr(cc_adapter, "_sysprompt_lock", threading.Lock())
+    monkeypatch.setattr(tmp_reaper, "_RUNTIME_DIR_PREFIXES", set())
+    monkeypatch.setattr(scratch, "_keepalive_paths", set())
+    monkeypatch.setattr(scratch, "keepalive_register", lambda p: scratch._keepalive_paths.add(str(p)))
+    monkeypatch.setattr(scratch, "keepalive_unregister", lambda p: scratch._keepalive_paths.discard(str(p)))
+    monkeypatch.setattr(scratch, "scratch_dir", lambda prefix, **kw: original_scratch(prefix, dir=parent, **kw))
+    try:
+        yield cc_adapter
+    finally:
+        try:
+            cc_adapter._cleanup_sysprompt_cache()
+            assert not scratch._keepalive_paths, "prompt-cache keepalive was not released"
+        finally:
+            rmtree_hardened(parent)
