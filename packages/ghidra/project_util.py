@@ -10,11 +10,15 @@ from __future__ import annotations
 import getpass
 import logging
 import os
-import shutil
+import tempfile
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 
-from core.atomic_fs import open_exclusive_artifact
+from core.atomic_fs import open_exclusive_artifact, rmtree_hardened
+from core.atomic_fs.fs_lock import artifact_lock
+from core.run.scratch import scratch_dir
+from core.source import open_regular_beneath, open_regular_gated
 
 from .detect import get_project_name
 
@@ -74,102 +78,208 @@ def fix_owner(prp_path: Path) -> bool:
 MAX_REP_COPY_BYTES = 4 * 1024 * 1024 * 1024
 
 
-def prepare_working_copy(gpr_path: Path, work_dir: Path) -> Path:
-    """Copy a Ghidra project into *work_dir* and fix ownership.
-
-    Returns the path to the copied ``.gpr`` inside *work_dir*.
-    The original project is never modified.
-
-    The .rep directory is attacker-controlled, so the copy walks it
-    with ``lstat`` semantics: symlinks and other non-regular entries
-    are skipped with a warning (following them would let a hostile
-    project exfiltrate arbitrary local files into the working copy —
-    which round-trips back into the deliverable — or fill the disk
-    from a device node), and the total copied size is capped.
-    """
-    name = get_project_name(gpr_path)
-    dst_gpr = work_dir / gpr_path.name
-    if gpr_path.is_symlink():
-        raise ValueError(f"refusing symlinked project file: {gpr_path}")
-
-    src_rep = gpr_path.with_suffix(".rep")
-    dst_rep = work_dir / f"{name}.rep"
-    # Always a CLEAN copy: a pre-existing destination .rep would be
-    # merge-overwritten (planted files absent from the source survive
-    # into the copy the JVM opens — and into the enriched
-    # deliverable).
-    if dst_rep.exists():
-        shutil.rmtree(dst_rep)
-    # missing_ok unlink, not exists()-gated: a DANGLING symlink at
-    # the destination passes exists() == False and survived, and the
-    # copy below then created the symlink's target.
-    dst_gpr.unlink(missing_ok=True)
-
-    # The .gpr rides the same byte ceiling as the .rep tree: it is a
-    # small XML pointer file in any real project, and a hostile
-    # multi-GB one would otherwise bypass the tempdir-fill defence the
-    # .rep copy already has.
-    gpr_size = gpr_path.stat().st_size
-    if gpr_size > MAX_REP_COPY_BYTES:
-        msg = (
-            f"refusing to copy {gpr_path.name}: {gpr_size} bytes "
-            f"exceeds the {MAX_REP_COPY_BYTES}-byte project-copy ceiling"
-        )
-        raise ValueError(msg)
-    # Exclusive-create copy: copy2 opens the DESTINATION with O_TRUNC
-    # and follows whatever occupies it (the source side was symlink-
-    # vetted above; the destination side was not) — a fresh O_EXCL |
-    # O_NOFOLLOW inode closes the unlink→copy window.
-    with open(gpr_path, "rb") as src_fh, os.fdopen(
-        open_exclusive_artifact(dst_gpr), "wb",
-    ) as dst_fh:
-        shutil.copyfileobj(src_fh, dst_fh)
-    if src_rep.is_dir() and not src_rep.is_symlink():
-        _copy_rep_tree(src_rep, dst_rep)
-
-    prp = dst_rep / "project.prp"
-    if prp.is_file():
-        fix_owner(prp)
-
-    lock = work_dir / f"{name}.lock"
-    if lock.exists():
-        lock.unlink()
-
-    return dst_gpr
+# Directory/file count complements bytes: empty trees can exhaust inodes.
+# Higher limits admit larger databases at higher disk cost; lower limits may
+# refuse legitimate projects. Header and database share both budgets.
+MAX_REP_COPY_ENTRIES = 400_000
 
 
-def _copy_rep_tree(src_rep: Path, dst_rep: Path) -> None:
-    """Copy a .rep tree, regular files and directories only."""
-    copied = 0
+@dataclass
+class _CopyBudget:
+    copied: int = 0
+    entries: int = 0
+
+    def entry(self):
+        self.entries += 1
+        if self.entries > MAX_REP_COPY_ENTRIES:
+            raise ValueError(f"project working-copy cap: {MAX_REP_COPY_ENTRIES} entries")
+
+
+def _identity(path, *, version=False):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    identity = (info.st_dev, info.st_ino, info.st_mode)
+    return (*identity, info.st_size, info.st_mtime_ns, info.st_ctime_ns) if version else identity
+
+
+def _copy_stream(stream, destination, budget, *, header=False):
+    info = os.fstat(stream.fileno())
+    label = "project-copy ceiling" if header else "working-copy cap"
+    if info.st_size > MAX_REP_COPY_BYTES - budget.copied:
+        raise ValueError(f"{label}: exceeds {MAX_REP_COPY_BYTES} bytes")
+    # Let builtin open own the descriptor from its opener onward, including
+    # buffer-setup failures, while preserving the shared 0644/umask policy.
+    with open(destination, "xb", opener=lambda path, flags: open_exclusive_artifact(path)) as output:
+        while True:
+            remaining = MAX_REP_COPY_BYTES - budget.copied
+            chunk = stream.read(min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            if len(chunk) > remaining:
+                raise ValueError(f"{label}: exceeds {MAX_REP_COPY_BYTES} bytes")
+            budget.copied += len(chunk)
+            output.write(chunk)
+    after = os.fstat(stream.fileno())
+    if (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+            after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise ValueError("project source changed while being copied")
+    if not header:
+        os.chmod(destination, stat.S_IMODE(info.st_mode) & 0o777)
+        os.utime(destination, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+
+def _copy_rep_tree(src_rep: Path, dst_rep: Path, *, budget=None) -> None:
+    """Copy regular files beneath a real source root with bounded actual I/O."""
+    if not stat.S_ISDIR(src_rep.lstat().st_mode):
+        raise ValueError("project .rep root must be a real directory")
+    src_rep, dst_rep = src_rep.resolve(), dst_rep.resolve()
+    if dst_rep.is_relative_to(src_rep):
+        raise ValueError("project destination is inside the source database")
+    budget = budget if budget is not None else _CopyBudget()
     skipped = 0
-    for root, dirs, files in os.walk(src_rep, followlinks=False):
+    def failed_walk(exc):
+        raise exc
+    for root, dirs, files in os.walk(src_rep, followlinks=False, onerror=failed_walk):
         rel = Path(root).relative_to(src_rep)
+        if rel == Path("."):
+            budget.entry()
         (dst_rep / rel).mkdir(parents=True, exist_ok=True)
-        # prune symlinked directories from the walk
-        kept_dirs = []
-        for d in dirs:
-            if (Path(root) / d).is_symlink():
+        kept = []
+        for name in dirs:
+            budget.entry()
+            if (Path(root) / name).is_symlink():
                 skipped += 1
             else:
-                kept_dirs.append(d)
-        dirs[:] = kept_dirs
-        for f in files:
-            src = Path(root) / f
-            st = src.lstat()
-            if not stat.S_ISREG(st.st_mode):
+                kept.append(name)
+        dirs[:] = kept
+        for name in files:
+            budget.entry()
+            source = Path(root) / name
+            if not stat.S_ISREG(source.lstat().st_mode):
                 skipped += 1
                 continue
-            copied += st.st_size
-            if copied > MAX_REP_COPY_BYTES:
-                raise ValueError(
-                    f"project .rep exceeds the "
-                    f"{MAX_REP_COPY_BYTES >> 30} GiB working-copy cap "
-                    f"at {src} — refusing to copy further"
-                )
-            shutil.copy2(src, dst_rep / rel / f, follow_symlinks=False)
+            stream = open_regular_beneath(src_rep, source.relative_to(src_rep), "rb")
+            if stream is None:
+                raise OSError(f"project file changed or is unreadable: {source}")
+            with stream:
+                _copy_stream(stream, dst_rep / rel / name, budget)
     if skipped:
-        logger.warning(
-            "working copy of %s: skipped %d symlink/non-regular "
-            "entr%s (hostile-project defense)",
-            src_rep, skipped, "y" if skipped == 1 else "ies",
-        )
+        logger.warning("working copy of %r: skipped %d symlink/non-regular entries", src_rep, skipped)
+
+
+def _remove_node(path):
+    try:
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            return rmtree_hardened(path)
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        logger.warning("project copy cleanup incomplete: %r", path, exc_info=True)
+        return False
+
+
+def _publish_project(staged, destinations, originals):
+    staged_ids = [_identity(path) for path in staged]
+    backup = None
+    if any(original is not None for original in originals):
+        backup = Path(tempfile.mkdtemp(prefix=".ghidra-retired-", dir=destinations[0].parent))
+    try:
+        for destination, original in zip(destinations, originals):
+            if original is not None:
+                retired = backup / destination.name
+                os.rename(destination, retired)
+                if _identity(retired) != original:
+                    raise ValueError("project destination changed during publication")
+        for source, destination, identity in zip(staged, destinations, staged_ids):
+            if identity is not None:
+                os.rename(source, destination)
+    except BaseException:
+        # Only remove our newly published nodes. Recovery copies are outside
+        # scratch so a rollback failure cannot discard the old deliverable.
+        for destination, identity in zip(destinations, staged_ids):
+            try:
+                if identity is not None and _identity(destination) == identity:
+                    _remove_node(destination)
+            except OSError:
+                logger.warning("cannot inspect failed project publication at %r", destination, exc_info=True)
+        if backup is not None:
+            for destination in destinations:
+                retired = backup / destination.name
+                if os.path.lexists(retired):
+                    try:
+                        if not os.path.lexists(destination):
+                            os.rename(retired, destination)
+                    except OSError:
+                        logger.warning("cannot restore project copy from %r", retired, exc_info=True)
+            try:
+                if any(backup.iterdir()):
+                    logger.warning("previous project copy retained at %r", backup)
+                else:
+                    _remove_node(backup)
+            except OSError:
+                logger.warning("project recovery copy retained at %r", backup, exc_info=True)
+        raise
+    if backup is not None and not rmtree_hardened(backup):
+        logger.warning("retired project copy cleanup incomplete: %r", backup)
+
+
+def copy_project(gpr_path: Path, destination: Path, *, repair_owner=False) -> Path:
+    """Stage a bounded project pair and replace the destination with rollback.
+
+    Readers must synchronize separately; two filesystem entries cannot be
+    published as one atomic rename. Failed staging leaves the old pair intact.
+    """
+    gpr_path, destination = Path(gpr_path).absolute(), Path(destination).resolve()
+    if gpr_path.is_symlink():
+        raise ValueError(f"refusing symlinked project file: {gpr_path}")
+    src_rep = gpr_path.with_suffix(".rep")
+    name = get_project_name(gpr_path)
+    dst_gpr, dst_rep = destination / gpr_path.name, destination / f"{name}.rep"
+    source = gpr_path.parent.resolve() / gpr_path.name
+    if (destination == source.parent or destination.is_relative_to(src_rep.resolve())
+            or source.is_relative_to(dst_rep.resolve())
+            or src_rep.resolve().is_relative_to(dst_rep.resolve())):
+        raise ValueError("project destination overlaps source inputs")
+    source_rep_identity = _identity(src_rep)
+    if source_rep_identity is not None and not stat.S_ISDIR(source_rep_identity[2]):
+        raise ValueError("project .rep root must be a real directory, not a symlink")
+    destination.mkdir(parents=True, exist_ok=True)
+    with artifact_lock(destination / ".ghidra-project", required=True,
+                       subject="Ghidra project copy"):
+        dst_lock = destination / f"{name}.lock"
+        destinations = [dst_gpr, dst_rep, dst_lock]
+        originals = [_identity(path) for path in destinations]
+        versions = [_identity(path, version=True) for path in destinations]
+        if originals[0] is not None and stat.S_ISDIR(originals[0][2]):
+            raise ValueError("destination .gpr must not be a directory")
+        if originals[1] is not None and not stat.S_ISDIR(originals[1][2]):
+            raise ValueError("destination .rep must be a real directory")
+        if originals[2] is not None and stat.S_ISDIR(originals[2][2]):
+            raise ValueError("destination project lock must not be a directory")
+        with scratch_dir(".ghidra-copy-", dir=destination) as scratch:
+            staged_gpr, staged_rep = scratch / dst_gpr.name, scratch / dst_rep.name
+            budget = _CopyBudget()
+            budget.entry()
+            with open_regular_gated(gpr_path, follow_symlinks=False) as stream:
+                _copy_stream(stream, staged_gpr, budget, header=True)
+            if source_rep_identity is not None:
+                _copy_rep_tree(src_rep, staged_rep, budget=budget)
+            if _identity(src_rep) != source_rep_identity:
+                raise ValueError("source project database changed during staging")
+            prp = staged_rep / "project.prp"
+            if repair_owner and prp.is_file():
+                fix_owner(prp)
+            if [_identity(path, version=True) for path in destinations] != versions:
+                raise ValueError("project destination changed during staging")
+            _publish_project([staged_gpr, staged_rep, scratch / dst_lock.name], destinations, originals)
+        return dst_gpr
+
+
+def prepare_working_copy(gpr_path: Path, work_dir: Path) -> Path:
+    """Prepare a bounded private project copy without modifying the source."""
+    return copy_project(gpr_path, work_dir, repair_owner=True)

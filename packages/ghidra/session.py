@@ -126,10 +126,14 @@ class GhidraSession:
             program_name: Specific program within the project.
                 If None, opens the first (or only) program.
         """
+        if any(item is not None for item in (
+                self._work_dir, self._project, self._program, self._decomp)):
+            raise GhidraSessionError("session already owns a project; close it before opening another")
         self.ensure_jvm()
         gpr_path = Path(gpr_path)
 
         work_dir = tempfile.mkdtemp(prefix="raptor-ghidra-")
+        self._work_dir = work_dir
         try:
             work_gpr = prepare_working_copy(gpr_path, Path(work_dir))
             project_dir = work_gpr.parent
@@ -185,15 +189,11 @@ class GhidraSession:
                     f"failed to open program {target_program}: {e}"
                 ) from e
 
-            self._work_dir = work_dir
         except BaseException:
-            if self._project is not None:
-                try:
-                    self._project.close()
-                except Exception:  # noqa: BLE001 — teardown best-effort
-                    pass
-                self._project = None
-            rmtree_hardened(work_dir)
+            try:
+                self.close()
+            except Exception:
+                logger.warning("failed Ghidra open cleanup incomplete", exc_info=True)
             raise
 
         from core.security.log_sanitisation import sanitise_for_terminal
@@ -330,37 +330,34 @@ class GhidraSession:
         return self._decompile_one(func, timeout)
 
     def close(self) -> None:
-        """Release all resources."""
+        """Release children before parents, retaining failed obligations for retry."""
         self._func_index = None
-
         if self._decomp is not None:
             try:
                 self._decomp.dispose()
             except Exception:
-                pass
-            self._decomp = None
-
-        if self._program is not None and self._consumer is not None:
+                logger.warning("Ghidra decompiler disposal incomplete", exc_info=True)
+            else:
+                self._decomp = None
+        if self._decomp is None and self._program is not None and self._consumer is not None:
             try:
                 self._program.release(self._consumer)
             except Exception:
-                pass
-            self._program = None
-            self._consumer = None
-
-        if self._project is not None:
+                logger.warning("Ghidra program release incomplete", exc_info=True)
+            else:
+                self._program = self._consumer = None
+        if self._decomp is None and self._program is None and self._project is not None:
             try:
                 self._project.close()
             except Exception:
-                pass
-            self._project = None
-
-        if self._work_dir is not None:
-            try:
-                rmtree_hardened(self._work_dir)
-            except Exception:
-                pass
-            self._work_dir = None
+                logger.warning("Ghidra project close incomplete", exc_info=True)
+            else:
+                self._project = None
+        if all(item is None for item in (self._decomp, self._program, self._project)) and self._work_dir is not None:
+            if rmtree_hardened(self._work_dir):
+                self._work_dir = None
+            else:
+                logger.warning("Ghidra working-copy cleanup incomplete: %r", self._work_dir)
 
     def __enter__(self):
         return self
