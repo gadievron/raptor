@@ -295,6 +295,7 @@ def scratch_dir(
         warn_tmpdir_windows_interop()
     path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
     ready = False
+    failed = False
     try:
         if parent is None:
             # Protect the allocation even if keepalive/advisory setup fails.
@@ -304,15 +305,33 @@ def scratch_dir(
             env["TMPDIR"] = str(path)
         ready = True
         yield path
+    except BaseException:
+        failed = True
+        raise
     finally:
+        interrupted = None
         if parent is None:
-            # The keepalive window is the context-manager window —
-            # a keep=True dir ages out normally once its owner stops
-            # using it, same contract as other --keep survivors.
-            keepalive_unregister(path)
+            # Independent teardown: a failed unregister must not strand
+            # the tree or replace an exception from setup/the body.
+            try:
+                keepalive_unregister(path)
+            except BaseException as exc:
+                logger.warning("Scratch keepalive teardown failed for %s", path, exc_info=True)
+                if not isinstance(exc, Exception):
+                    interrupted = exc
         # keep=True transfers ownership only after successful setup.
         if not keep or not ready:
-            rmtree_hardened(path)
+            try:
+                if not rmtree_hardened(path):
+                    logger.warning("Scratch directory retained after failed removal: %s", path)
+            except BaseException as exc:
+                logger.warning("Scratch removal failed for %s", path, exc_info=True)
+                if interrupted is None and not isinstance(exc, Exception):
+                    interrupted = exc
+        # A new cancellation still propagates after all teardown attempts.
+        # An existing exception (including cancellation) keeps precedence.
+        if interrupted is not None and not failed:
+            raise interrupted
 
 
 def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
@@ -323,16 +342,28 @@ def write_temp_text(text: str, *, prefix: str, suffix: str) -> Path:
     disposable tool input, so it needs no durable atomic-write/fsync protocol.
     """
     path = None
+    stream = None
     try:
-        with tempfile.NamedTemporaryFile(
+        # Take ownership immediately; a context-enter failure must not
+        # leave a delete=False file untracked. Explicit close also keeps
+        # a failed close from replacing a failed write.
+        stream = tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix=prefix, suffix=suffix,
             delete=False,
-        ) as stream:
-            path = Path(stream.name)
-            stream.write(text)
+        )
+        path = Path(stream.name)
+        stream.write(text)
+        stream.close()
         return path
     except BaseException:
+        if stream is not None:
+            try:
+                stream.close()
+            except BaseException:
+                logger.warning("Temporary text close failed for %s", path, exc_info=True)
         if path is not None:
-            with contextlib.suppress(OSError):
+            try:
                 path.unlink(missing_ok=True)
+            except BaseException:
+                logger.warning("Partial temporary text retained at %s", path, exc_info=True)
         raise
