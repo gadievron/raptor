@@ -17,22 +17,27 @@ def controller_server(owner):
         thread.start()
         return thread
 
+    def close_resources():
+        # Normal serve() teardown closes the listener and services. If
+        # the thread never started or exited before that teardown, the
+        # fixture still owns both resources. Avoid closing services a
+        # second time after a normal serving-loop exit.
+        if owner.listener.fileno() != -1:
+            try:
+                owner.listener.close()
+            finally:
+                owner.services.close()
+
     try:
         yield start
     finally:
-        owner.stopping.set()
         try:
-            if thread is not None and thread.ident is not None:
-                thread.join(timeout=3)
-                if thread.is_alive():
-                    raise RuntimeError("controller fixture serving thread did not stop")
+            owner.stopping.set()
         finally:
-            # Normal serve() teardown closes the listener and services. If
-            # the thread never started or exited before that teardown, the
-            # fixture still owns both resources. Avoid closing services a
-            # second time after a normal serving-loop exit.
-            if owner.listener.fileno() != -1:
-                try:
-                    owner.listener.close()
-                finally:
-                    owner.services.close()
+            try:
+                if thread is not None and thread.ident is not None:
+                    thread.join(timeout=3)
+                    if thread.is_alive():
+                        raise RuntimeError("controller fixture serving thread did not stop")
+            finally:
+                close_resources()
