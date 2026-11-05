@@ -390,6 +390,12 @@ class _PyScanner(ast.NodeVisitor):
             self._visitor_methods[node_type] = visitor
         return visitor(self, node)
 
+    def visit_Name(self, node: ast.Name) -> None:
+        """Owners resolve names directly; their context has no accesses."""
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        """Literal values have no AST descendants to inspect."""
+
     def _name_of(self, node: ast.AST) -> str | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
