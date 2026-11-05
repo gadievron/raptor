@@ -1041,11 +1041,20 @@ def parse_sarif_findings(
             rule_id = result.get("ruleId")
             if not isinstance(rule_id, str):
                 rule_id = None
+            if not rule_id and rule:
+                # Only a validated reference may supply a missing readable
+                # identity. Preserve a sub-rule ID rather than its parent.
+                reference_id = _as_dict(result.get("rule")).get("id")
+                resolved_id = reference_id or rule.get("id")
+                if isinstance(resolved_id, str) and resolved_id:
+                    rule_id = resolved_id
             fingerprint = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
             if isinstance(fingerprint, str) and fingerprint:
                 finding_id = fingerprint
             else:
                 key = _result_key(result)
+                if rule_id:
+                    key = (rule_id, *key[1:])
                 # Use the key-derived hash only when it carries
                 # distinguishing material beyond the ruleId (a
                 # location or a partialFingerprint). A bare

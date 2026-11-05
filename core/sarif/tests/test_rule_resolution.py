@@ -244,3 +244,92 @@ def test_merge_exact_qualified_reports_deduplicate_without_reindexing(tmp_path, 
     assert output['runs'][0]['results'] == [result]
     assert output['runs'][0]['tool'] == run['tool']
     assert output['runs'][0]['artifacts'] == run['artifacts']
+
+
+@pytest.mark.parametrize('reference_kind', ['driver-index', 'extension-index', 'qualified-id'])
+def test_referenced_rule_identity_preserves_same_location_findings(tmp_path, reference_kind):
+    import copy
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    rules = [{'id': 'rule-a'}, {'id': 'rule-b'}]
+    tool = {'driver': {'name': 'CodeQL', 'rules': rules}}
+    if reference_kind != 'driver-index':
+        tool = {'driver': {'name': 'CodeQL'}, 'extensions': [{'name': 'pack', 'rules': rules}]}
+    results = []
+    for index, rule in enumerate(rules):
+        if reference_kind == 'driver-index':
+            reference = {'ruleIndex': index}
+        elif reference_kind == 'extension-index':
+            reference = {'rule': {'index': index, 'toolComponent': {'index': 0}}}
+        else:
+            reference = {'rule': {'id': rule['id'], 'toolComponent': {'name': 'pack'}}}
+        results.append(dict(reference, message={'text': 'same message'}, locations=[{
+            'physicalLocation': {'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1}},
+        }]))
+    path = tmp_path / 'identity.sarif'
+    report = {'version': '2.1.0', 'runs': [{'tool': tool, 'results': results}]}
+    before = copy.deepcopy(report)
+    path.write_text(json.dumps(report))
+    findings = parse_sarif_findings(path)
+    assert [finding['rule_id'] for finding in findings] == ['rule-a', 'rule-b']
+    assert len({finding['finding_id'] for finding in findings}) == 2
+    assert len(deduplicate_findings(findings)) == 2
+    assert json.loads(path.read_text()) == before
+
+
+@pytest.mark.parametrize('readable_id', ['same', 'same/child'])
+def test_referenced_rule_identity_matches_explicit_readable_id(tmp_path, run, readable_id):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    result = {'rule': {'id': readable_id, 'index': 0, 'toolComponent': {'index': 0}},
+              'message': {'text': 'finding'}, 'locations': [{'physicalLocation': {
+                  'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+              }}]}
+    path = tmp_path / 'equivalent.sarif'
+
+    def parse(row):
+        path.write_text(json.dumps({'version': '2.1.0', 'runs': [dict(run, results=[row])]}))
+        return parse_sarif_findings(path)[0]
+
+    implicit = parse(result)
+    explicit = parse(dict(result, ruleId=readable_id))
+    assert implicit['rule_id'] == explicit['rule_id'] == readable_id
+    assert implicit['finding_id'] == explicit['finding_id']
+    fingerprinted = parse(dict(result, fingerprints={'matchBasedId/v1': 'tool-fingerprint'}))
+    assert fingerprinted['finding_id'] == 'tool-fingerprint'
+
+
+def test_invalid_reference_cannot_supply_missing_rule_identity(tmp_path, run):
+    import json
+    from core.sarif.parser import parse_sarif_findings
+
+    result = {'rule': {'id': 'invented', 'index': 0}, 'message': {'text': 'finding'}}
+    path = tmp_path / 'invalid.sarif'
+    path.write_text(json.dumps({'version': '2.1.0', 'runs': [dict(run, results=[result])]}))
+    assert parse_sarif_findings(path)[0]['rule_id'] is None
+
+
+def test_distinct_subrules_survive_dedup_and_table_reordering(tmp_path, run):
+    import json
+    from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+
+    path = tmp_path / 'subrules.sarif'
+
+    def parse(index):
+        results = [{'rule': {'id': child, 'index': index, 'toolComponent': {'index': 0}},
+                    'message': {'text': 'same message'}, 'locations': [{'physicalLocation': {
+                        'artifactLocation': {'uri': 'source.c'}, 'region': {'startLine': 1},
+                    }}]} for child in ['same/first', 'same/second']]
+        path.write_text(json.dumps({'version': '2.1.0', 'runs': [dict(run, results=results)]}))
+        return parse_sarif_findings(path)
+
+    original = parse(0)
+    assert len(deduplicate_findings(original)) == 2
+    assert len({finding['finding_id'] for finding in original}) == 2
+    run['tool']['extensions'][0]['rules'].insert(0, {'id': 'unrelated'})
+    reordered = parse(1)
+    assert [(f['rule_id'], f['finding_id']) for f in reordered] == [
+        (f['rule_id'], f['finding_id']) for f in original
+    ]

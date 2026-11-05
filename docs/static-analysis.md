@@ -506,7 +506,9 @@ findings from the same analyzer run are retained.
 Imported SARIF findings and scan metrics inherit missing severity from each
 report’s referenced rule, including indexed and extension rules. CWE labels
 come from that same descriptor unless the result supplies its own CWE.
-Ambiguous or conflicting references cannot borrow another rule’s metadata.
+Ambiguous or conflicting references cannot borrow another rule’s metadata. Rule IDs
+omitted from a result are recovered from its validated rule reference, so
+different indexed rules at the same location remain separate findings.
 
 Each Semgrep pack (local + registry + extra-config) produces its own
 SARIF file. The Coccinelle stage produces one SARIF file. When CodeQL
