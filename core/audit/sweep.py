@@ -3193,38 +3193,10 @@ _IDENT_RE = __import__("re").compile(r"[a-z_][a-z0-9_]*", __import__("re").IGNOR
 def _extract_negative_bypass_operands(
     hypothesis: str, source: str,
 ) -> tuple:
-    """Extract (value, limit) from hypothesis like 'negative msg_qbytes bypasses size check'."""
-    import re
-    hyp = hypothesis.lower()
-    m = re.search(
-        r"negative\s+(?:value\s+(?:for\s+)?)?(?:the\s+)?[`'\"]?(\w+)[`'\"]?",
-        hyp,
-    )
-    value = m.group(1) if m else None
+    """Read explicit symbolic value/limit roles for a diagnostic lead."""
+    from .negative_bypass_operands import extract_negative_bypass_operands
 
-    m = re.search(
-        # Keyword \w run bounded: unbounded, every keyword planted
-        # inside one hostile word re-scans the word's remainder —
-        # quadratic on hypothesis text.
-        r"(?:bypass|exceed|circumvent)\w{0,64}\s+(?:the\s+)?[`'\"]?(\w+)[`'\"]?\s+(?:check|limit|bound)",
-        hyp,
-    )
-    if m:
-        limit = m.group(1)
-    else:
-        identifiers = _IDENT_RE.findall(source)
-        limit_candidates = [
-            i for i in identifiers
-            if any(kw in i.lower() for kw in ("limit", "max", "size", "bound", "rlim"))
-        ]
-        limit = limit_candidates[0] if limit_candidates else None
-
-    if value and not _IDENT_RE.fullmatch(value):
-        value = None
-    if limit and not _IDENT_RE.fullmatch(limit):
-        limit = None
-
-    return value, limit
+    return extract_negative_bypass_operands(hypothesis, _strip_comments_and_strings(source))
 
 
 _OVERFLOW_SAFE_EXTS = frozenset({".go", ".py", ".rs", ".java"})
