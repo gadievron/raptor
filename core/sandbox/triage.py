@@ -348,7 +348,11 @@ def _verify_summary(
     if (type(corrupt_lines) is not int or corrupt_lines < 0
             or type(total_denials) is not int or total_denials < 0
             or not isinstance(denials, list)
-            or not all(isinstance(row, dict) for row in denials)):
+            or not all(isinstance(row, dict) for row in denials)
+            or any(row.get(field) is not None
+                   and not isinstance(row[field], str)
+                   for row in denials
+                   for field in ("type", "syscall", "profile", "path"))):
         return None, _INTEGRITY_TAMPERED
     inode_mismatch = bool(summary.get("inode_mismatch"))
     planted_object = str(summary.get("planted_object") or "")
