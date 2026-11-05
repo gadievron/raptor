@@ -62,6 +62,7 @@ from core.sandbox.summary import (
     AUDIT_DEGRADED_FILE,
     MAX_DENIALS_PER_RUN,
     SUMMARY_FILE,
+    get_evidence_inode_mismatch,
     get_proxy_persist_state,
     get_run_posture,
     reassert_audit_degraded,
@@ -557,6 +558,7 @@ def triage_run(run_dir: Path, *,
     # also matter at count zero: an initial persistence failure can leave
     # no disk artifacts at all, but must still produce a failure report.
     _pm_persist = get_proxy_persist_state(run_dir)
+    _pm_inode_mismatch = get_evidence_inode_mismatch(run_dir)
     if (raw_summary is None and not raw_proxy_events
             and raw_audit_degraded is None and not marker_restored
             and not events_read_issues):
@@ -564,7 +566,8 @@ def triage_run(run_dir: Path, *,
                                  or degraded_destroyed or count_present
                                  or (_pm_persist or {}).get(
                                      "expected_count")
-                                 or (_pm_persist or {}).get("flags")):
+                                 or (_pm_persist or {}).get("flags")
+                                 or _pm_inode_mismatch):
             pass  # fall through: unusable artifacts drive a report
         else:
             if not allow_legacy:
@@ -590,6 +593,11 @@ def triage_run(run_dir: Path, *,
     _run_binding = telemetry_mac.run_binding(run_dir)
     summary, summary_integrity = _verify_summary(
         raw_summary, _run_binding, allow_legacy=_verify_legacy)
+    if _pm_inode_mismatch:
+        # Parent observation is authoritative even if the disk summary is
+        # missing or a later writer omitted its integrity flag.
+        summary = None
+        summary_integrity = _INTEGRITY_TAMPERED
     # With no usable key the sidecar cannot verify for anyone —
     # operator-side condition, not tampering; the count check is
     # skipped and the provenance_unavailable signal carries it.
@@ -739,6 +747,9 @@ def triage_run(run_dir: Path, *,
         evidence = [f"{name}: provenance verification failed"
                     for name in sorted(set(tampered) - set(destroyed)
                                        - set(restored))]
+        if _pm_inode_mismatch:
+            evidence.append(
+                "sandbox_summary: parent observed an evidence-file inode mismatch")
         evidence += [
             f"{name}: file present but yielded no readable content "
             f"(destroyed/replaced)" for name in sorted(destroyed)]
