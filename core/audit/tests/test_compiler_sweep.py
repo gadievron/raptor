@@ -3846,3 +3846,65 @@ def test_subjectless_diagnostics_keep_existing_attribution_fallback(diag_id, mes
     diag = {'id': diag_id, 'line': 1, 'message': message}
     assert compiler_sweep._diag_implicates(diag, ['p'], ['return *p;'])
     assert not compiler_sweep._diag_implicates(diag, ['q'], ['return *p;'])
+
+
+@pytest.mark.parametrize('relative', ['include/unit.c', '../other/unit.c'])
+def test_relative_diagnostic_path_requires_the_same_file(tmp_path, relative):
+    source = tmp_path / 'src' / 'unit.c'
+    source.parent.mkdir()
+    source.write_text('void f(void) {}\n')
+    assert not compiler_sweep._same_file(relative, source)
+
+
+def test_relative_header_diagnostic_does_not_confirm_tu_hypothesis(tmp_path, monkeypatch):
+    import json
+
+    target = tmp_path / 'repo'
+    header = target / 'include' / 'unit.c'
+    header.parent.mkdir(parents=True)
+    header.write_text('void helper(void) {}\n')
+    source = target / 'unit.c'
+    source.write_text('void f(void) {}\n')
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: None)
+
+    def run(command, **kwargs):
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        return subprocess.CompletedProcess(command, 0, '', json.dumps([{
+            'kind': 'warning', 'option': '-Wanalyzer-use-after-free',
+            'message': "use after 'free' of 'p'",
+            'locations': [{'caret': {'file': 'include/unit.c', 'line': 1}}],
+        }]))
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path='unit.c', function_name='f',
+        hypothesis='memory is freed then used', cwe='CWE-416',
+        line_start=1, line_end=1, out_dir=tmp_path,
+    )
+    assert result.outcome == 'refuted', result.details
+
+
+@pytest.mark.parametrize('name', ['unit.c', './unit.c', '../src/unit.c'])
+def test_relative_diagnostic_paths_to_tu_still_match(tmp_path, name):
+    source = tmp_path / 'src' / 'unit.c'
+    source.parent.mkdir()
+    source.write_text('void f(void) {}\n')
+    assert compiler_sweep._same_file(name, source)
+    assert compiler_sweep._same_file(str(source), source)
+
+
+def test_same_basename_symlink_diagnostics_use_real_file_identity(tmp_path):
+    source = tmp_path / 'unit.c'
+    source.write_text('void f(void) {}\n')
+    other = tmp_path / 'other.c'
+    other.write_text('void g(void) {}\n')
+    directory = tmp_path / 'alias'
+    directory.mkdir()
+    alias = directory / 'unit.c'
+    alias.symlink_to(source)
+    assert compiler_sweep._same_file('alias/unit.c', source)
+    alias.unlink()
+    alias.symlink_to(other)
+    assert not compiler_sweep._same_file('alias/unit.c', source)

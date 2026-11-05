@@ -1813,22 +1813,20 @@ def _parse_analyzer_output(
 
 
 def _same_file(diag_file: str, full_path: Path) -> bool:
-    """Is the diagnostic located in the TU we compiled?
+    """Match diagnostic paths using compiler-scan's TU-directory policy.
 
-    Single-TU compile, so basename equality is the workhorse; absolute
-    diagnostic paths additionally require realpath equality so a
-    same-named header elsewhere can't masquerade as the TU.
+    Relative paths must resolve to the TU, not just share its basename.
+    Preserve support for bare filenames and normalized paths to the TU.
     """
-    if not diag_file:
+    if not diag_file or os.path.basename(diag_file) != full_path.name:
         return False
-    if os.path.basename(diag_file) != full_path.name:
+    candidate = Path(diag_file)
+    if not candidate.is_absolute():
+        candidate = full_path.parent / candidate
+    try:
+        return os.path.realpath(candidate) == os.path.realpath(full_path)
+    except OSError:
         return False
-    if os.path.isabs(diag_file):
-        try:
-            return os.path.realpath(diag_file) == os.path.realpath(full_path)
-        except OSError:
-            return False
-    return True
 
 
 def _in_range(line: int, line_start: int, line_end: int) -> bool:
