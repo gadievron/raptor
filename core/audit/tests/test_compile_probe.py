@@ -106,13 +106,17 @@ class TestGenerateProbeSource:
 
 @pytest.fixture(autouse=True)
 def _toolchain(monkeypatch):
-    cp._reset_toolchain_cache()
-    monkeypatch.setattr(
-        cp, "_find_toolchain",
-        lambda lang: ("/usr/bin/cc", "cc (test) 13.2.0"),
-    )
-    yield
-    cp._reset_toolchain_cache()
+    """Keep the stubbed toolchain and its cache within this test's scope."""
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        cp, {"_TOOLCHAIN_CACHE": {}}, lock=cp._TOOLCHAIN_LOCK,
+    ):
+        monkeypatch.setattr(
+            cp, "_find_toolchain",
+            lambda lang: ("/usr/bin/cc", "cc (test) 13.2.0"),
+        )
+        yield
 
 
 class FakeCompiler:

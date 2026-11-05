@@ -20,7 +20,6 @@ import core.audit.orchestrator as orch
 import packages.coccinelle.runner as cocci_runner
 from core.audit.cocci_flow import run_flow_cocci_sweep
 from core.audit.orchestrator import _make_tier_counters, _run_tool_chain
-from core.audit.substrate import _reset_substrate_caches
 from core.audit.sweep import run_coccinelle_sweep, run_consistency_check
 from core.audit.sweep_memo import SweepMemo
 
@@ -31,9 +30,20 @@ _UAF_HYPOTHESIS = (
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
-    _reset_substrate_caches()
-    yield
-    _reset_substrate_caches()
+    """Use private substrate caches; publish and restore under their locks."""
+    from contextlib import ExitStack
+
+    from core.audit import substrate
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(
+            substrate, {"_LANG_CACHE": {}}, lock=substrate._LANG_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            substrate, {"_TREE_CACHE": {}}, lock=substrate._TREE_LOCK,
+        ))
+        yield
 
 
 def _stub_spatch(monkeypatch, calls: list | None = None):
