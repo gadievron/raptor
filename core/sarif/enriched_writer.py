@@ -163,6 +163,11 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
         "endLine": end_line,
     }
 
+    for field in ("startColumn", "endColumn"):
+        column = _coerce_line(finding.get(field))
+        if column is not None and column > 0:
+            region[field] = column
+
     snippet = finding.get("snippet")
     if not snippet:
         code = finding.get("code")

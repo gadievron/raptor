@@ -920,6 +920,10 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
             region["startLine"] = f["startLine"]
         if f.get("endLine"):
             region["endLine"] = f["endLine"]
+        for field in ("startColumn", "endColumn"):
+            column = _coerce_line(f.get(field))
+            if column is not None and column > 0:
+                region[field] = column
         if f.get("snippet"):
             region["snippet"] = {"text": f["snippet"]}
 
