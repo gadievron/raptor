@@ -993,6 +993,8 @@ class TestAdversarial:
 
     # ADV2
     def test_per_run_cap_drops_excess_denials(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(summary_mod, "_evidence_write_failures",
+                            dict(summary_mod._evidence_write_failures))
         # Lower the cap so the test runs fast.
         monkeypatch.setattr(summary_mod, "MAX_DENIALS_PER_RUN", 5)
         summary_mod.set_active_run_dir(tmp_path)
@@ -1000,11 +1002,11 @@ class TestAdversarial:
             summary_mod.record_denial(f"cmd{i}", 1, "network")
         records = [json.loads(line) for line in
                    _denials_path(tmp_path).read_text().splitlines() if line]
-        # Exactly the cap, no more (slight overcount allowed by the
-        # lock-free design — assert <= cap+1 to be tolerant)
-        assert len(records) <= summary_mod.MAX_DENIALS_PER_RUN
+        assert len(records) == summary_mod.MAX_DENIALS_PER_RUN
 
     def test_denial_counter_resets_per_run(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(summary_mod, "_evidence_write_failures",
+                            dict(summary_mod._evidence_write_failures))
         # Each set_active_run_dir resets the cap counter.
         monkeypatch.setattr(summary_mod, "MAX_DENIALS_PER_RUN", 3)
         # Run 1: hit the cap
