@@ -490,6 +490,10 @@ paths from the translation unit’s directory, as `/scan` does. A warning in
 `include/unit.c` is not attributed to `unit.c` merely because the basenames
 match.
 
+Compiler SARIF locations use the actual source filename after URI decoding,
+including spaces and literal percent sequences. Non-local or invalid location
+URIs are reported as analysis errors rather than treated as clean results.
+
 ## Output
 
 ### SARIF Files

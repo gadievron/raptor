@@ -3908,3 +3908,37 @@ def test_same_basename_symlink_diagnostics_use_real_file_identity(tmp_path):
     alias.unlink()
     alias.symlink_to(other)
     assert not compiler_sweep._same_file('alias/unit.c', source)
+
+
+@pytest.mark.parametrize('uri_kind', ['file', 'path'])
+def test_encoded_sarif_primary_location_confirms_its_actual_file(tmp_path, monkeypatch, uri_kind):
+    import json
+    from urllib.parse import quote
+
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a %20.c'
+    source.write_text('void f(void) {}\n')
+    uri = source.as_uri() if uri_kind == 'file' else quote(str(source), safe='/')
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: ('/owned/gcc', 'sarif-file'))
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: None)
+
+    def run(command, **kwargs):
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        Path(kwargs['cwd'], source.name + '.sarif').write_text(json.dumps({'runs': [{'results': [{
+            'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning',
+            'message': {'text': "use after 'free' of 'p'"},
+            'locations': [{'physicalLocation': {
+                'artifactLocation': {'uri': uri}, 'region': {'startLine': 1},
+            }}],
+        }]}]}))
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path=source.name, function_name='f',
+        hypothesis='memory is freed then used', cwe='CWE-416',
+        line_start=1, line_end=1, out_dir=tmp_path,
+    )
+    assert result.outcome == 'confirmed', result.details

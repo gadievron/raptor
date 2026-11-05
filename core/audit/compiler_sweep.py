@@ -51,7 +51,7 @@ from core.source import open_regular, read_text_capped
 from core.source.lines import split_lines
 from typing import Any
 
-from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths
+from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths, local_uri_path
 
 from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
@@ -1763,11 +1763,16 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             locs = result.get("locations") or [{}]
             phys = (locs[0] or {}).get("physicalLocation", {}) if locs else {}
             region = phys.get("region", {})
+            uri = phys.get("artifactLocation", {}).get("uri", "") or ""
+            try:
+                filename = local_uri_path(uri) if uri else ""
+            except ValueError as exc:
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic URI") from exc
             diags.append({
                 "id": result.get("ruleId", "") or "",
                 "kind": result.get("level", "") or "",
                 "line": region.get("startLine", 0) or 0,
-                "file": phys.get("artifactLocation", {}).get("uri", "") or "",
+                "file": filename,
                 "message": (result.get("message", {}) or {}).get("text", "") or "",
             })
             reported = compiler_reported_cwe(result, run)

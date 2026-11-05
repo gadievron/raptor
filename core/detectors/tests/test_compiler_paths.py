@@ -100,3 +100,36 @@ def test_json_filesystem_names_and_sarif_uris_round_trip_once():
     assert paths[0]["threadFlows"][0]["locations"][0]["location"]["physicalLocation"]["artifactLocation"]["uri"] == "a%252fb%20c.c"
     again, notes = normalize_paths(paths)
     assert again == paths and not notes
+
+
+@pytest.mark.parametrize('name', ['a b.c', 'literal%20.c', 'hash#and?.c', 'snow-λ.c'])
+def test_primary_locations_share_filesystem_identity_across_gcc_formats(tmp_path, name):
+    from core.audit.compiler_sweep import _parse_gcc_json, _parse_gcc_sarif
+
+    source = tmp_path / name
+    result = {'ruleId': '-Wanalyzer-use-after-free', 'message': {'text': 'warning'},
+              'locations': [flow(source.as_uri())['threadFlows'][0]['locations'][0]['location']]}
+    path = tmp_path / 'gcc.sarif'
+    path.write_text(json.dumps({'runs': [{'results': [result]}]}))
+    modern = _parse_gcc_sarif(path)
+    legacy = _parse_gcc_json(json.dumps([{
+        'message': 'warning', 'locations': [{'caret': {'file': str(source), 'line': 3}}],
+    }]))
+    assert modern[0]['file'] == legacy[0]['file'] == str(source)
+
+
+@pytest.mark.parametrize('uri', [
+    'https://example/a.c', 'file://remote/a.c', 'file:///a.c?x',
+    'file:///a.c#x', 'a%00.c', 'a%ff.c', 'a\n.c', ' a.c',
+])
+def test_bad_primary_uri_is_not_compiler_silence(tmp_path, uri):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    result = {'message': {'text': 'warning'},
+              'locations': [flow(uri)['threadFlows'][0]['locations'][0]['location']]}
+    path = tmp_path / 'gcc.sarif'
+    path.write_text(json.dumps({'runs': [{'results': [result]}]}))
+    with pytest.raises(CompilerDiagnosticError, match='diagnostic URI'):
+        _parse_gcc_sarif(path)
+    assert normalize_paths([flow(uri)])[1]
