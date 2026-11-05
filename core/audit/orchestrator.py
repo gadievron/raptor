@@ -1363,24 +1363,19 @@ class ReviewOutcome:
         "differential:confirmed", "differential:relation-violation",
     })
 
-    def compute_tier(self) -> str:
+    def compute_tier(self, *, target_path: Path | str | None = None) -> str:
         """Derive verification tier from evidence and tool dispatch state."""
         dispatched = self.tools_dispatched or set()
 
         if self.status == "clean":
-            # A clean is tool-backed only when a channel's silence was
-            # PROBATIVE: a dispatched name alone (errored, skipped,
-            # or inconclusive-only — an undecidable invariant, a
-            # vacuous SAT) is the same LLM-trusts-LLM basis that
-            # propagation refuses to build on. A clean minted FROM
-            # silence (gate resolution, propagation, the sarif-clean
-            # gate) is a verdict about the absence of evidence, and one
-            # of unknown basis (imported from a pre-field row) cannot
-            # show otherwise — neither is ever tool-backed.
+            # Dispatch bookkeeping cannot prove a negative. Grade only
+            # explicit refutations of every active claim, revalidated
+            # against the current target source. Missing provenance is
+            # speculative, including standalone calls without a root.
             from core.coverage.journal import CLEAN_BASIS_NOT_REUSABLE
             if self.clean_basis in CLEAN_BASIS_NOT_REUSABLE:
                 return VerificationTier.SPECULATIVE.value
-            if probative_channels(self):
+            if _refutations_match_current_source(self, target_path=target_path):
                 return VerificationTier.TOOL_BACKED.value
             return VerificationTier.SPECULATIVE.value
 
@@ -14205,7 +14200,7 @@ def _commit_outcome(
         checked_by=checked_by,
     )
 
-    outcome.verification_tier = outcome.compute_tier()
+    outcome.verification_tier = outcome.compute_tier(target_path=config.target_path)
 
     if gap.get("from_composition"):
         if outcome.review_result is None:
@@ -24672,12 +24667,15 @@ def _retain_probe_refutation(outcome, probe, config, *, tool, rule_id, hypothesi
     return _retain_claim_refutation(outcome, results, config, hypothesis=hypothesis, phase=phase)
 
 
-def _refutations_match_current_source(outcome, config) -> bool:
+def _refutations_match_current_source(outcome, config=None, *, target_path=None) -> bool:
+    target = target_path if target_path is not None else getattr(config, "target_path", None)
+    if target is None:
+        return False
     hypotheses = [h["mechanism"] for h in _extract_all_hypotheses(outcome)]
     if outcome.hypothesis and outcome.hypothesis not in hypotheses:
         hypotheses.append(outcome.hypothesis)
     return claims_refuted(outcome, hypotheses,
-                           source_identity=capture_source_identity(config.target_path, outcome.file))
+                           source_identity=capture_source_identity(target, outcome.file))
 
 
 def _verify_hypotheses_immediate(

@@ -860,8 +860,7 @@ class TestKeywordRuleSilenceIsInconclusive:
 
 
 class TestCleanTierNeedsProbativeChannel:
-    """compute_tier grades a clean tool_backed only on a
-    probative channel, and propagation trusts only such cleans."""
+    """Dispatch and channel bookkeeping do not prove a negative verdict."""
 
     @pytest.mark.parametrize("record", [
         {"tools_dispatched": {"smt"}, "tools_inconclusive": {"smt"}},
@@ -877,24 +876,22 @@ class TestCleanTierNeedsProbativeChannel:
             file="a.c", function="f", status="clean", body="ok", **record)
         assert clean.compute_tier() == "speculative"
 
-    def test_control_probative_clean_is_tool_backed(self):
-        """Control: one probative channel next to an inconclusive one
-        keeps the clean tool_backed."""
+    def test_dispatch_without_negative_receipt_is_speculative(self):
+        """An apparently completed channel still needs a negative receipt."""
         clean = _outcome(
             file="a.c", function="f", status="clean", body="ok",
             tools_dispatched={"smt", "semgrep"},
             tools_inconclusive={"smt"},
         )
-        assert clean.compute_tier() == "tool_backed"
+        assert clean.compute_tier() == "speculative"
 
     @pytest.mark.parametrize("inconclusive, demoted", [
-        ({"smt"}, False), (None, True),
+        ({"smt"}, False), (None, False),
     ], ids=["non_probative_callee", "control_probative_callee"])
     def test_propagation_trusts_only_probative_clean(
         self, inconclusive, demoted,
     ):
-        """A callee clean backed only by an inconclusive channel must
-        not demote its caller; a probative one still does."""
+        """Neither inconclusive nor bare dispatch metadata can seed demotion."""
         from core.audit.propagation import propagate_confidence
 
         callee = _outcome(

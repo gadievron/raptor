@@ -778,9 +778,8 @@ class TestFlushDurability:
 
 class TestSubmitVerificationTier:
     def test_submit_computes_verification_tier(self, tmp_path: Path) -> None:
-        # Collector.submit must derive the tier like _commit_outcome
-        # does — otherwise propagate_confidence's trusted_clean set is
-        # empty on every standard (collector) run.
+        # Collector.submit must derive the tier like _commit_outcome:
+        # dispatch without negative receipts remains speculative.
         from core.audit.orchestrator import ReviewOutcome
 
         c = Collector(out_dir=tmp_path, target_path=tmp_path)
@@ -789,7 +788,7 @@ class TestSubmitVerificationTier:
             body="fine", tools_dispatched={"semgrep"},
         )
         c.submit(clean, _make_gap(name="ok"))
-        assert clean.verification_tier == "tool_backed"
+        assert clean.verification_tier == "speculative"
 
         spec = ReviewOutcome(
             file="src/a.c", function="guess", status="clean", body="fine",
@@ -805,7 +804,7 @@ class TestSubmitVerificationTier:
             json.loads(ln)["key"]: json.loads(ln)["verification_tier"]
             for ln in lines
         }
-        assert tiers["src/a.c:ok:10"] == "tool_backed"
+        assert tiers["src/a.c:ok:10"] == "speculative"
         assert tiers["src/a.c:guess:10"] == "speculative"
 
 
