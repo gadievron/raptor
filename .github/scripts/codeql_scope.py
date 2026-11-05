@@ -275,15 +275,21 @@ def extract_imports(
     modules: list[str] = []
     own_package = ".".join(path.parts[:-1]) if len(path.parts) > 1 else ""
 
-    # These passes need the same breadth-first order. Materialize it once
-    # per file instead of repeatedly expanding every AST node's children.
-    # Keep the alias-discovery pass before call matching: an import alias
-    # may appear later in traversal order than a call that refers to it.
-    nodes = list(ast.walk(tree))
-    for node in nodes:
-        if (literal_references is not None and isinstance(node, ast.Constant)
-                and isinstance(node.value, str) and node.value in literal_references):
-            literal_references[node.value].add(path)
+    # Preserve breadth-first order within each kind, without repeatedly
+    # scanning inert nodes in the import/call/string passes. Walk every
+    # subtree: imports and references inside nested scopes still count.
+    declarations, calls, constants = [], [], []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            declarations.append(node)
+        elif isinstance(node, ast.Call):
+            calls.append(node)
+        elif isinstance(node, ast.Constant):
+            constants.append(node)
+            if (literal_references is not None and isinstance(node.value, str)
+                    and node.value in literal_references):
+                literal_references[node.value].add(path)
+    for node in declarations:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -311,14 +317,16 @@ def extract_imports(
                     modules.extend(f"{base}.{alias.name}" for alias in node.names if alias.name != "*")
 
     # Dynamic imports: importlib.import_module("x") / __import__("x").
-    modules.extend(_extract_dynamic_imports(nodes))
+    # Alias discovery must finish before matching calls, including when
+    # the alias import occurs later in the original traversal.
+    modules.extend(_extract_dynamic_imports(declarations + calls))
 
     # PEP 562 lazy-export dicts in __init__.py files.
     if path.name == "__init__.py":
         modules.extend(_extract_lazy_export_dicts(tree))
 
     # Project-internal module paths in string constants (parametrize etc.).
-    modules.extend(_extract_parametrize_modules(nodes))
+    modules.extend(_extract_parametrize_modules(constants))
 
     # Only keep imports that point into our scan roots or at a
     # repo-root entry module. Filtering to SCAN_ROOTS alone erased
