@@ -36,57 +36,37 @@ def test_lint_workflow_uses_ruff_config_instead_of_inline_rule_flags() -> None:
     assert workflow.count("ruff check --output-format=github") == 2
 
 
-def test_ruff_tree_is_exempt_from_the_run_dedup() -> None:
-    """The pre_check dedup matches prior successful "Lint" runs at
-    the same (or PR-linked) SHA — but PR-event runs execute ruff-pr
-    only, never ruff-tree, so consulting should_skip in ruff-tree's
-    `if:` skipped the push run's only unique job on every
-    squash/merge-landed PR: the full-tree audit (the job whose own
-    comment names the cross-file drift class only a full pass
-    catches) was deferred to the weekly cron for every PR-landed
-    change. Both directions: ruff-tree must not consult the dedup;
-    the PR-gate jobs (coverage-equivalent across the deduped events)
-    must keep it."""
+def test_ruff_tree_owns_main_pushes_and_pr_lint_owns_proposals() -> None:
     workflow = _read(".github/workflows/lint.yml")
     tree_block = workflow.split("\n  ruff-tree:", 1)[1].split(
         "\n  command-metadata:", 1
     )[0]
-    assert "should_skip" not in tree_block, (
-        "ruff-tree re-joined the pre_check dedup — PR runs don't "
-        "execute it, so dedup against them skips full-tree coverage "
-        "on every PR-landed push"
-    )
     assert "github.event_name == 'push'" in tree_block
+    assert "needs:" not in tree_block
     pr_block = workflow.split("\n  ruff-pr:", 1)[1].split(
         "\n  ruff-tree:", 1
     )[0]
-    assert "needs.pre_check.outputs.should_skip != 'true'" in pr_block
+    assert "github.event_name == 'pull_request'" in pr_block
+    assert "github.event_name == 'merge_group'" in pr_block
 
 
-def test_codeql_push_runs_skip_the_squash_merge_dedup() -> None:
-    """GitHub's default-branch code-scanning alert baseline refreshes
-    only from analyses uploaded for refs/heads/main; the PR run's
-    upload targets the PR ref. codeql.yml's squash-merge dedup arm
-    therefore skipped the ONLY delivery to main's baseline on every
-    squash-landed PR — alert state went stale until the weekly cron,
-    while the workflow's own concurrency comment promised every main
-    commit a full analysis. Both directions: codeql.yml must carry
-    the exact-SHA arm only (a true re-run of the same commit already
-    uploaded for this ref), and tests.yml keeps its squash-merge arm
-    (its push runs have no push-only unique effect — same mechanism,
-    different consequence, per-mechanism disposition)."""
-    codeql = _read(".github/workflows/codeql.yml")
-    assert "commits/${SHA}/pulls" not in codeql, (
-        "codeql.yml regrew the squash-merge dedup arm — push runs to "
-        "main stop uploading and the code-scanning baseline starves"
-    )
-    assert codeql.count("head_sha=") == 1  # the exact-SHA arm stays
-    tests_wf = _read(".github/workflows/tests.yml")
-    assert "commits/${SHA}/pulls" in tests_wf, (
-        "tests.yml lost its squash-merge dedup arm — its push runs "
-        "are coverage-equivalent to the PR head run and the dedup is "
-        "deliberate there"
-    )
+def test_workflows_do_not_substitute_prior_runs_for_current_validation() -> None:
+    for name in ("tests.yml", "lint.yml", "codeql.yml", "corpus-labels.yml"):
+        workflow = _read(".github/workflows/" + name)
+        assert "\n  pre_check:" not in workflow
+        assert "needs.pre_check" not in workflow
+        assert "should_skip" not in workflow
+        assert "commits/${SHA}/pulls" not in workflow
+
+
+def test_image_access_output_stays_with_scope_and_keeps_fork_fallback() -> None:
+    workflow = _read(".github/workflows/tests.yml")
+    scope = workflow.split("\n  changes:", 1)[1].split("\n  deps:", 1)[0]
+    outputs = scope.split("    outputs:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert ("pkg_access: ${{ github.event_name != 'pull_request' || "
+            "github.event.pull_request.head.repo.full_name == github.repository }}") in outputs
+    assert "needs.changes.outputs.pkg_access == 'true'" in workflow
+    assert "needs.changes.outputs.pkg_access != 'true'" in workflow
 
 
 def test_daily_sweep_covers_every_repo_invariant_detector() -> None:

@@ -52,8 +52,7 @@ env:
 
 permissions:
   contents: read
-  # Needed by the pre_check job to query prior workflow runs at the
-  # current SHA via ``gh api repos/.../actions/runs``.
+  # The scope job reads successful nightly timing artifacts.
   actions: read
   # Needed by the ``changes`` job's ``gh api repos/.../pulls/.../files``
   # query to compute the changed-file list for path filtering. Covered
@@ -62,77 +61,6 @@ permissions:
   pull-requests: read
 
 jobs:
-  # Skip the workflow if a previous successful run of this same workflow
-  # already passed at the exact same commit SHA — catches the
-  # "PR fast-forward-merged → main push reruns the same SHA" case and
-  # explicit re-runs. Doc-only / .claude-only PRs are skipped naturally
-  # by the per-job path-filter gate in `changes`, not here.
-  pre_check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      should_skip: ${{ steps.dup.outputs.should_skip }}
-      # true for same-repo events (push / merge_group / schedule / dispatch
-      # / branch PRs); false only for fork PRs, whose read-only token can't
-      # pull the private GHCR images. Tiers pass this to _tier.yml to
-      # choose the image (fast) vs runner (fallback) path; the
-      # sandbox-feature-matrix job uses it the same way to pick pull vs
-      # build-on-runner for the matrix image.
-      pkg_access: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    steps:
-      - id: dup
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          WORKFLOW: ${{ github.workflow }}
-          SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          should_skip=false
-          # Never dedup forced-full events: the operator triggered them
-          # deliberately (cron, manual dispatch) or the merge queue needs
-          # an authoritative pass.
-          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
-             && "$EVENT" != "merge_group" ]]; then
-            # 1. Exact-SHA match — covers fast-forward merges and
-            #    explicit re-runs where the SHA is identical.
-            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
-                    -f "head_sha=${SHA}" -f "status=success" \
-                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
-                  | head -n1 || true)
-            if [[ -n "${dup:-}" ]]; then
-              should_skip=true
-              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
-            fi
-            # 2. Squash-merge fallback — the push-to-main SHA is brand
-            #    new, but GitHub links it to the source PR. Look up the
-            #    PR's head SHA and check whether *that* already passed.
-            #    Push-only effect here: NONE — every job this
-            #    workflow runs on push also ran on the PR head, so the
-            #    dedup loses no coverage. Contrast codeql.yml, whose
-            #    push-run upload is the only feed of main's
-            #    code-scanning baseline and so carries no such arm
-            #    (and lint.yml, whose ruff-tree job is push-only and
-            #    exempts itself from the dedup).
-            if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
-              pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
-                          --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)
-              if [[ -n "${pr_head:-}" ]]; then
-                dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
-                        -f "head_sha=${pr_head}" -f "status=success" \
-                        --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
-                      | head -n1 || true)
-                if [[ -n "${dup:-}" ]]; then
-                  should_skip=true
-                  echo "Skipping: source PR head ${pr_head} already passed in run ${dup}"
-                fi
-              fi
-            fi
-          fi
-          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
-
   # Changed-file enumeration via GitHub API, then import-graph-based
   # test dispatch via test_scope.py.  CodeQL per-language filters
   # (codeql_python, codeql_cpp, codeql_actions) live in codeql.yml's
@@ -144,14 +72,14 @@ jobs:
   # full dispatch internally — every gate is set to true and every
   # file list is populated from disk.
   changes:
-    needs: pre_check
-    if: needs.pre_check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     # 5 rather than 2: the best-effort durations step downloads the
     # shuffled-nightly junit artifacts, and a job-level timeout kill
     # would override that step's continue-on-error.
     timeout-minutes: 5
     outputs:
+      # Fork PRs use runner rebuilds instead of private GHCR images.
+      pkg_access: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       # Per-tier gates (true/false).
       python: ${{ steps.scope.outputs.python }}
       sandbox: ${{ steps.scope.outputs.sandbox }}
@@ -361,9 +289,8 @@ jobs:
           PYTHON
 
   deps:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.python == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
        needs.changes.outputs.sca == 'true' ||
@@ -421,9 +348,8 @@ jobs:
   # gets one runner and a broad refactor fans out.
   python-unit-tests-fast:
     name: python-unit-tests-fast (${{ matrix.batch }})
-    needs: [pre_check, changes, deps]
+    needs: [changes, deps]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.python == 'true'
     # Repo variable RAPTOR_FAST_RUNNER (Settings → Variables) upsizes
     # the fast-tier batch runners, e.g. a larger hosted-runner label.
@@ -578,9 +504,8 @@ jobs:
   # before this carve-out. Small measured selections consolidate runners;
   # unknown costs retain the historical four-way split.
   python-unit-tests-sca:
-    needs: [pre_check, changes, deps]
+    needs: [changes, deps]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.sca == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -632,9 +557,8 @@ jobs:
   # and its shared fixtures/resources together. Single-file selections
   # stay in process rather than starting an idle second worker.
   python-unit-tests-sandbox:
-    needs: [pre_check, changes, deps]
+    needs: [changes, deps]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -743,9 +667,8 @@ jobs:
   # subset; the skipif(sys.platform != "darwin") tests are invisible there.
   # Free on public repos — no runner-minute cost.
   python-unit-tests-sandbox-macos:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.sandbox_macos == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
@@ -859,9 +782,8 @@ jobs:
   # failures.txt into the step summary, and the artifact upload carries
   # the same evidence shape as the weekly run.
   sandbox-feature-matrix:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     # 45: the warm path is ~5 (pull + two lanes); a requirements change
@@ -886,7 +808,7 @@ jobs:
       # access broke, and that should be fixed once, loudly, not paid
       # as a silent multi-minute build on every PR.
       - name: Pull the prebuilt matrix image
-        if: needs.pre_check.outputs.pkg_access == 'true'
+        if: needs.changes.outputs.pkg_access == 'true'
         # GHA expressions via env:, never interpolated into the script
         # body — the canonical hardening pattern this repo documents in
         # refit-sca-calibration.yml.
@@ -908,7 +830,7 @@ jobs:
             raptor-sandbox-matrix:u24
 
       - name: Run the matrix subset (u24 x full,default, prebuilt image)
-        if: needs.pre_check.outputs.pkg_access == 'true'
+        if: needs.changes.outputs.pkg_access == 'true'
         run: core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default --skip-build
 
       # Fork-PR fallback: the restricted token cannot pull the private
@@ -917,7 +839,7 @@ jobs:
       # runner fallback for raptor-ci-deps rather than skipping fork
       # PRs out of the lattice signal.
       - name: Run the matrix subset (u24 x full,default, fork build fallback)
-        if: needs.pre_check.outputs.pkg_access != 'true'
+        if: needs.changes.outputs.pkg_access != 'true'
         run: core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default
 
       - name: Surface the matrix report in the step summary
@@ -958,9 +880,8 @@ jobs:
   # analyze_binary against real binaries. Gated on the package's real
   # upstream dependency surface.
   python-unit-tests-exploit-feasibility:
-    needs: [pre_check, changes, deps]
+    needs: [changes, deps]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.exploit_feasibility == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1027,9 +948,8 @@ jobs:
   # packages yet). The skipif guards degrade gracefully; the next push
   # uses the rebuilt image. One-time per Dockerfile change, self-healing.
   python-unit-tests-source-intel:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.source_intel == 'true'
     permissions:
       contents: read
@@ -1042,7 +962,7 @@ jobs:
       # One selected file stays serial; broader selections use this runner's cores.
       pytest_args: ${{ contains(needs.changes.outputs.source_intel_files, ' ') && '-n 2 --dist loadfile' || '' }}
       native_pytest_markers: "(slow or integration) and not corpus"
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   # engine tier: the semgrep/coccinelle rule engines' own precision
   # and regression suites (ReDoS gate, per-rule coccinelle tests,
@@ -1052,9 +972,8 @@ jobs:
   # (fork PRs) skips them via their shutil.which guards while the
   # hermetic renderer/pack suites still run.
   python-unit-tests-engine:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.engine == 'true'
     permissions:
       contents: read
@@ -1067,7 +986,7 @@ jobs:
       # One selected file stays serial to avoid worker startup overhead.
       pytest_args: ${{ contains(needs.changes.outputs.engine_files, ' ') && '-n 2 --dist worksteal' || '' }}
       native_pytest_markers: "integration and not corpus"
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   # Prompt-envelope audit: AST-based heuristic over the registered
   # prompt-construction files. The test only needs stdlib + pytest
@@ -1076,9 +995,8 @@ jobs:
   # filter so it only fires when an audited file, the audit module,
   # or the test itself actually changes.
   python-prompt-audit:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.prompt_audit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1114,9 +1032,8 @@ jobs:
   # globs cover the actual import dependencies of subsystem-scoped jobs.
   # No project deps required — only pytest.
   ci-lint-tests:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.ci_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1196,9 +1113,8 @@ jobs:
   # touching only one package skips the others. Filters live in
   # compute_filters.FILTERS and are validated by ci-lint-tests above.
   python-unit-tests-codeql:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.codeql == 'true'
     permissions:
       contents: read
@@ -1208,12 +1124,11 @@ jobs:
       tier: codeql
       test_path: ${{ needs.changes.outputs.codeql_files }}
       timeout_minutes: 25
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   python-unit-tests-llm-analysis:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.llm_analysis == 'true'
     permissions:
       contents: read
@@ -1223,12 +1138,11 @@ jobs:
       tier: llm_analysis
       test_path: ${{ needs.changes.outputs.llm_analysis_files }}
       timeout_minutes: 25
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   python-unit-tests-cve-diff:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.cve_diff == 'true'
     permissions:
       contents: read
@@ -1237,12 +1151,11 @@ jobs:
     with:
       tier: cve_diff
       test_path: ${{ needs.changes.outputs.cve_diff_files }}
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   python-unit-tests-fuzzing:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.fuzzing == 'true'
     permissions:
       contents: read
@@ -1251,7 +1164,7 @@ jobs:
     with:
       tier: fuzzing
       test_path: ${{ needs.changes.outputs.fuzzing_files }}
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
   # fix). sage is the proving ground (NOTE: the tier now spawns
@@ -1269,9 +1182,8 @@ jobs:
   # caller keeps its path-filter `if:` and name; _tier.yml picks the
   # execution path from pkg_access.
   python-unit-tests-sage:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.sage == 'true'
     permissions:
       contents: read
@@ -1280,12 +1192,11 @@ jobs:
     with:
       tier: sage
       test_path: ${{ needs.changes.outputs.sage_files }}
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   python-unit-tests-orchestration:
-    needs: [pre_check, changes]
+    needs: [changes]
     if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.orchestration == 'true'
     permissions:
       contents: read
@@ -1294,20 +1205,19 @@ jobs:
     with:
       tier: orchestration
       test_path: ${{ needs.changes.outputs.orchestration_files }}
-      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      use_container: ${{ needs.changes.outputs.pkg_access == 'true' }}
 
   # Single aggregate gate over the whole suite. `needs:` every job and
   # `if: always()` so it still runs when an upstream tier is path-filtered
   # out (skipped) or fails. This is the one check to pin in a future
   # branch-protection ruleset: individual tier job names can then change
   # — notably the reusable-workflow `/ python-<tier>` rename — without
-  # touching protection. Skipped is a pass (dedup / path-filter); only
+  # touching protection. Skipped is a pass (event / path filters); only
   # failure or cancellation blocks.
   tests-passed:
     name: tests-passed
     if: always()
     needs:
-      - pre_check
       - changes
       - deps
       - python-unit-tests-fast
@@ -1337,7 +1247,6 @@ jobs:
           # Results only: scope outputs can exceed the process environment limit.
           NEEDS_JSON: >-
             {
-              "pre_check": {"result": "${{ needs['pre_check'].result }}"},
               "changes": {"result": "${{ needs['changes'].result }}"},
               "deps": {"result": "${{ needs['deps'].result }}"},
               "python-unit-tests-fast": {"result": "${{ needs['python-unit-tests-fast'].result }}"},
