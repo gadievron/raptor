@@ -9,6 +9,7 @@ and run under the sanitised env from ``RaptorConfig.get_safe_env()``
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,6 +35,32 @@ class TestProbe:
     def test_missing_tool_returns_none(self):
         with patch("shutil.which", return_value=None):
             assert probe("no-such-tool-xyz") is None
+
+    @pytest.mark.parametrize('failure', [subprocess.TimeoutExpired('fixture', 10), OSError('fixture')])
+    def test_isolated_home_is_cleaned_after_failure(self, tmp_path, monkeypatch, failure):
+        home = tmp_path / 'operator'
+        home.mkdir()
+        monkeypatch.setenv('HOME', str(home))
+        captured = []
+        def fail(*args, **kwargs):
+            captured.append(Path(kwargs['env']['HOME']))
+            assert captured[-1].is_dir()
+            raise failure
+        with patch('shutil.which', return_value='/fixture/tool'), patch('subprocess.run', side_effect=fail):
+            info = probe('fixture', isolated_home=True)
+        assert info.returncode is None
+        assert len(captured) == 1 and captured[0] != home
+        assert not captured[0].exists()
+        assert list(home.iterdir()) == []
+
+    def test_cache_separates_isolated_and_operator_home(self):
+        with patch('shutil.which', return_value='/fixture/tool'), patch('subprocess.run') as run:
+            run.return_value = MagicMock(stdout='1.2.3\n', stderr='', returncode=0)
+            regular = probe('fixture', use_cache=True)
+            isolated = probe('fixture', use_cache=True, isolated_home=True)
+            assert probe('fixture', use_cache=True) is regular
+            assert probe('fixture', use_cache=True, isolated_home=True) is isolated
+            assert run.call_count == 2
 
     def test_probe_runs_resolved_path_not_bare_name(self):
         # Drift fix pin: the semgrep copy which()-checked then exec'd

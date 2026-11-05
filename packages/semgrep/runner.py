@@ -125,7 +125,11 @@ def is_available() -> bool:
 def _version_probe():
     from core.config import RaptorConfig
     if not RaptorConfig.SEMGREP_OFFLINE:
-        return probe(_SEMGREP_BIN)
+        return probe(
+            _SEMGREP_BIN,
+            args=("--version", "--metrics", "off", "--disable-version-check"),
+            isolated_home=True,
+        )
     from core.run.toolprobe import ToolInfo
     binary = shutil.which(_SEMGREP_BIN)
     if binary is None:
@@ -152,7 +156,8 @@ def version() -> str | None:
     ``subprocess.run`` per-test.
     """
     info = _version_probe()
-    return info.first_line if info is not None else None
+    return (info.first_line if info is not None and info.returncode == 0
+            and info.version_tuple() is not None else None)
 
 
 # Only the latest successful capability probe is retained. CLI scans and
