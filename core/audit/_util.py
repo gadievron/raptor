@@ -275,10 +275,21 @@ def extract_functions_from_source(source: str) -> list:
     """
     funcs: list = []
     lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
+    native_source = type(source) is str
+    line = 1
+    line_offset = 0
     for m in _FUNC_DEF_RE.finditer(source):
         name = m.group("name")
         indent = len(m.group("indent"))
-        start_line = source.count("\n", 0, m.start()) + 1
+        if native_source:
+            # Matches advance in source order; count each intervening
+            # range once rather than rescanning every source prefix.
+            offset = m.start()
+            line += source.count("\n", line_offset, offset)
+            line_offset = offset
+            start_line = line
+        else:
+            start_line = source.count("\n", 0, m.start()) + 1
 
         body_start_idx = start_line - 1
         end_idx = body_start_idx + 1
