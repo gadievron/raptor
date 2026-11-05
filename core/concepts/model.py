@@ -451,6 +451,11 @@ class DomainModel:
         raw = load_json(path, max_bytes=64 * 1024 * 1024)
         if not isinstance(raw, dict):
             return cls()
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> DomainModel:
+        """Apply the normal schema-drift pass to an already parsed model."""
         # Tolerate schema drift in on-disk models: any record written by
         # an older schema (or a partial writer) must degrade, never
         # crash the loader — sibling-run models are consulted

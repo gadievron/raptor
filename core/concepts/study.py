@@ -329,8 +329,8 @@ def _promotion_lock(canonical: Path) -> Iterator[None]:
     load → merge → write window.
 
     Delegates to :func:`core.atomic_fs.fs_lock.artifact_lock` (the shared flock
-    idiom: sibling ``.lock`` file, whole-window hold, O_NOFOLLOW, loud
-    unlocked degrade, no-op without fcntl). Without it, concurrent
+    idiom: sibling ``.lock`` file, whole-window hold, O_NOFOLLOW,
+    and refusal when exclusive locking is unavailable). Without it, concurrent
     promoters on one project (parallel study runs, the study loop
     beside /agentic — projects explicitly support concurrent sessions)
     read the same canonical state and the later writer silently drops
@@ -338,7 +338,7 @@ def _promotion_lock(canonical: Path) -> Iterator[None]:
     """
     from core.atomic_fs.fs_lock import artifact_lock
 
-    with artifact_lock(canonical, subject="study promotion"):
+    with artifact_lock(canonical, subject="study promotion", required=True):
         yield
 
 
@@ -360,116 +360,90 @@ def merge_promote_domain_model(per_run_path: Path,
     match the in-run prior merge: the new run wins on ID collisions
     (the last promoter to hold the lock is the well-defined winner for
     a shared ID), everything else accumulates. Raises OSError on write
-    failure — callers decide how loudly to report.
+    failure and ValueError on malformed or over-budget artifacts.
     """
     with _promotion_lock(canonical):
         _merge_promote_domain_model_locked(per_run_path, canonical)
 
 
+# Match the domain-model and study-loop readers: never publish a durable
+# artifact that those consumers must discard as over budget.
+_PROMOTION_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _load_promotion_document(path: Path, *, missing_ok: bool = False):
+    from core.json.bounded import loads_bounded
+    from core.source import read_bytes_gated
+
+    try:
+        raw = read_bytes_gated(path, _PROMOTION_MAX_BYTES, follow_symlinks=False)
+    except FileNotFoundError:
+        if missing_ok:
+            return None, None
+        raise
+    data = loads_bounded(raw.decode("utf-8-sig"), max_bytes=_PROMOTION_MAX_BYTES)
+    if not isinstance(data, dict):
+        raise ValueError(f"study promotion input must be a JSON object: {path}")
+    return data, raw
+
+
+def _save_promotion_document(canonical: Path, content: bytes, prior: bytes | None) -> None:
+    from core.atomic_fs import write_bytes_atomically
+
+    if len(content) > _PROMOTION_MAX_BYTES:
+        raise ValueError(
+            f"study promotion at {canonical} exceeds the "
+            f"{_PROMOTION_MAX_BYTES}-byte artifact budget; original left untouched"
+        )
+    if content != prior:
+        write_bytes_atomically(canonical, content)
+
+
 def _merge_promote_domain_model_locked(per_run_path: Path,
                                        canonical: Path) -> None:
     """Body of :func:`merge_promote_domain_model`; caller holds the lock."""
-    import shutil
-    import tempfile
+    import dataclasses
+    import json
 
-    if canonical.is_file():
-        canon_model = DomainModel.load(canonical)
-        run_model = DomainModel.load(per_run_path)
-        merged = _merge_domain_models(canon_model, run_model)
-        # Carry non-schema top-level keys through the merge — the
-        # study loop attaches dict-level extras (subject_title,
-        # overview_summary, architecture, struct_definitions,
-        # struct_annotations) that DomainModel.load drops; losing
-        # them here forces every subsequent run to re-pay the
-        # overview-synthesis LLM call. Run wins per key, canonical
-        # fills the rest.
-        import dataclasses
-        import json as _json
-
-        from core.atomic_fs import write_text_atomically
-        schema_keys = {
-            f.name for f in dataclasses.fields(DomainModel)
-        }
-        extras: dict[str, Any] = {}
-        for raw_path in (canonical, per_run_path):
-            with contextlib.suppress(OSError, ValueError):
-                raw = _json.loads(
-                    raw_path.read_text(encoding="utf-8"),
-                )
-                if isinstance(raw, dict):
-                    extras.update({
-                        k: v for k, v in raw.items()
-                        if k not in schema_keys
-                    })
-        final = {**dataclasses.asdict(merged), **extras}
-        write_text_atomically(
-            canonical, _json.dumps(final, indent=2) + "\n",
-        )
-        logger.info(
-            "merged domain-model.json into %s "
-            "(%d concepts, %d invariants, %d contracts)",
-            canonical, len(merged.concepts),
-            len(merged.invariants), len(merged.contracts),
-        )
+    run_data, run_raw = _load_promotion_document(per_run_path)
+    canon_data, canon_raw = _load_promotion_document(canonical, missing_ok=True)
+    if canon_data is None:
+        # Preserve first-promotion bytes and extras, but only after the
+        # same bounded JSON validation used by the merge path.
+        _save_promotion_document(canonical, run_raw, None)
         return
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(
-            dir=str(canonical.parent), suffix=".tmp",
-            prefix="domain-model-",
-        )
-        # Copy through the fd mkstemp returned (O_EXCL-created,
-        # race-free): a close-then-reopen-by-path copy would follow a
-        # symlink swapped in at the tempfile name in this shared
-        # project dir.
-        with os.fdopen(fd, "wb") as tmp_fh, \
-                open(per_run_path, "rb") as src_fh:
-            shutil.copyfileobj(src_fh, tmp_fh)
-        Path(tmp).rename(canonical)
-    except OSError:
-        if tmp:
-            with contextlib.suppress(OSError):
-                Path(tmp).unlink(missing_ok=True)
-        raise
-    logger.info("promoted domain-model.json to %s", canonical)
+    merged = _merge_domain_models(
+        DomainModel.from_dict(canon_data), DomainModel.from_dict(run_data),
+    )
+    schema_keys = {f.name for f in dataclasses.fields(DomainModel)}
+    extras = {}
+    for raw in (canon_data, run_data):
+        extras.update({k: v for k, v in raw.items() if k not in schema_keys})
+    final = {**dataclasses.asdict(merged), **extras}
+    content = (json.dumps(final, indent=2) + "\n").encode("utf-8")
+    _save_promotion_document(canonical, content, canon_raw)
+    logger.info("merged domain-model.json into %s (%d concepts, %d invariants, %d contracts)",
+                canonical, len(merged.concepts), len(merged.invariants), len(merged.contracts))
 
 
 def merge_promote_patterns(src: Path, canonical: Path) -> None:
-    """Merge a run's ``patterns.json`` into the canonical copy.
+    """Merge patterns under the same bounded, locked publication contract."""
+    from core.json import dumps_artifact
 
-    THE promotion write for discovered patterns — both study-prep and
-    the study loop route through it. Keyed by pattern name, run wins
-    per key: a narrowly scoped run must never replace the whole-tree
-    accumulation. The canonical load → merge → save window runs under
-    :func:`_promotion_lock` (same lost-update interleave as the domain
-    model above). Raises OSError/ValueError on unreadable input —
-    callers decide how loudly to report.
-    """
-    from core.json import load_json
-
-    # Study artifacts are small RAPTOR-written run output; the cap
-    # matches the study loop's artifact ceiling.
-    max_bytes = 64 * 1024 * 1024
-    run_data = load_json(src, strict=True, max_bytes=max_bytes) or {}
-    if not isinstance(run_data, dict):
-        return
     with _promotion_lock(canonical):
-        merged: dict[str, Any] = {}
-        if canonical.is_file():
-            prior = load_json(canonical, strict=True, max_bytes=max_bytes)
-            if isinstance(prior, dict):
-                merged = prior
+        run_data, _ = _load_promotion_document(src)
+        prior, prior_raw = _load_promotion_document(canonical, missing_ok=True)
+        merged = prior if prior is not None else {}
         patterns = merged.get("patterns")
         if not isinstance(patterns, dict):
             patterns = {}
         run_patterns = run_data.get("patterns")
         if isinstance(run_patterns, dict):
             patterns.update(run_patterns)
-        merged.update(
-            {k: v for k, v in run_data.items() if k != "patterns"},
-        )
+        merged.update({k: v for k, v in run_data.items() if k != "patterns"})
         merged["patterns"] = patterns
-        save_json(canonical, merged)
+        content = (dumps_artifact(merged, indent=2) + "\n").encode("utf-8")
+        _save_promotion_document(canonical, content, prior_raw)
 
 
 def _is_under_projects_base(directory: Path) -> bool:

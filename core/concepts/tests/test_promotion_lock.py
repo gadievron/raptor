@@ -9,8 +9,7 @@ concurrent run of a project. These tests pin:
   pre-lock promoter permanently dropped a run's whole study output);
 - the merge semantics for two runs studying the SAME concept id:
   last promoter wins per ID, deterministically;
-- the lock degrades loudly (not silently) when the lock file refuses
-  to open.
+- promotion refuses unavailable locks instead of writing unlocked.
 """
 
 from __future__ import annotations
@@ -169,9 +168,8 @@ def test_promotion_creates_lock_sibling(tmp_path: Path) -> None:
     assert (tmp_path / "domain-model.json.lock").is_file()
 
 
-def test_lock_refusal_degrades_loudly(tmp_path, caplog) -> None:
-    """A symlink planted at the lock path refuses O_NOFOLLOW open —
-    promotion proceeds unlocked with a WARNING, never silently."""
+def test_lock_refusal_preserves_canonical(tmp_path, caplog) -> None:
+    """An unavailable lock must refuse destructive unlocked promotion."""
     import logging
 
     from core.concepts.model import Concept, DomainModel
@@ -184,10 +182,9 @@ def test_lock_refusal_degrades_loudly(tmp_path, caplog) -> None:
     DomainModel(target="t", source_root="s",
                 concepts=[Concept(id="c1", description="d")]).save(run)
     with caplog.at_level(logging.WARNING, logger="core.concepts.study"):
-        merge_promote_domain_model(run, canonical)
-    assert canonical.is_file()
-    assert any("WITHOUT cross-process lock" in r.message
-               for r in caplog.records)
+        with pytest.raises(OSError):
+            merge_promote_domain_model(run, canonical)
+    assert not canonical.exists()
 
 
 def test_patterns_promotion_takes_the_lock(tmp_path: Path) -> None:
