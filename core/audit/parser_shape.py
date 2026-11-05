@@ -173,8 +173,19 @@ def parser_shape(
 
     byte_buffer_input = _has_byte_buffer_signature(parameters)
     cursor_advance = bool(src) and bool(_CURSOR_ADVANCE_RE.search(src))
-    length_arith_sites = len(_LEN_ARITH_RE.findall(src)) if src else 0
-    error_path_sites = len(_ERROR_PATH_RE.findall(src)) if src else 0
+    # Short bodies keep direct scans; prechecks amortize on larger text.
+    prefilter_source = type(src) is str and len(src) >= 256
+    length_arith_sites = 0
+    # Every arithmetic match contains a length morpheme. Use the same
+    # case-insensitive morpheme pattern before the more expensive scan.
+    if src and (not prefilter_source or _LEN_NAME_RE.search(src) is not None):
+        length_arith_sites = len(_LEN_ARITH_RE.findall(src))
+    error_path_sites = 0
+    # These case-sensitive literals are necessary for every error-path
+    # alternative; possible matches still use the original pattern.
+    if src and (not prefilter_source or "return" in src or "goto" in src
+                or "throw" in src or "raise" in src):
+        error_path_sites = len(_ERROR_PATH_RE.findall(src))
     name_morphology = bool(name) and bool(_NAME_MORPH_RE.search(name))
 
     parser_api_call = False
@@ -182,7 +193,9 @@ def parser_shape(
         called = set(_CALLED_NAME_RE.findall(src))
         called.discard(name)
         catalog = _taxonomy_parser_names()
-        if called & catalog or domain_vocab is not None and called & _learned_parser_names(
+        catalog_match = (not called.isdisjoint(catalog) if type(catalog) is frozenset
+                         else bool(called & catalog))
+        if catalog_match or domain_vocab is not None and called & _learned_parser_names(
             domain_vocab,
         ):
             parser_api_call = True
