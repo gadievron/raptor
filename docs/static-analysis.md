@@ -508,8 +508,13 @@ report’s referenced rule, including indexed and extension rules. CWE labels
 come from that same descriptor unless the result supplies its own CWE.
 Ambiguous or conflicting references cannot borrow another rule’s metadata. Rule IDs
 omitted from a result are recovered from its validated rule reference, so
-different indexed rules at the same location remain separate findings. Per-rule
-scan counts use these same recovered IDs; unresolved IDs are counted as `unknown`.
+different indexed rules at the same location remain separate findings.
+When combining findings for analysis, evidence from different tools remains
+separate. If tools reuse a finding ID, only the colliding IDs are qualified
+by tool; `source_finding_id` retains the original for correlation. Ordinary
+IDs remain unchanged.
+
+Per-rule scan counts use these same recovered IDs; unresolved IDs are counted as `unknown`.
 
 Each Semgrep pack (local + registry + extra-config) produces its own
 SARIF file. The Coccinelle stage produces one SARIF file. When CodeQL
