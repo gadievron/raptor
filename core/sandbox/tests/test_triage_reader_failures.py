@@ -9,6 +9,9 @@ import pytest
 from core.sandbox import triage
 
 
+pytestmark = pytest.mark.usefixtures('private_triage_readers')
+
+
 @pytest.mark.parametrize('error_type', [ValueError, RecursionError])
 def test_single_document_decode_failure_is_refused(tmp_path, monkeypatch, error_type):
     path = tmp_path / 'summary.json'

@@ -7,6 +7,9 @@ import pytest
 from core.sandbox import triage
 
 
+pytestmark = pytest.mark.usefixtures('private_triage_readers')
+
+
 @pytest.fixture
 def stream(tmp_path, monkeypatch):
     path = tmp_path / 'events.jsonl'

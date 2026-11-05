@@ -7,6 +7,9 @@ import pytest
 from core.sandbox import triage
 
 
+pytestmark = pytest.mark.usefixtures('private_triage_readers')
+
+
 @pytest.mark.parametrize('record', [
     b'{"host":"bad\xff.test","result":"allowed"}',
     b'{"host":"bad\xc3.test","result":"allowed"}',
@@ -26,7 +29,7 @@ def test_stream_keeps_valid_peers_and_reports_utf8_loss(tmp_path, monkeypatch, c
     path.write_bytes(b'{"host":"bad\xff.test","result":"allowed"}\n'
                      + json.dumps(good).encode() + b'\n')
     original = os.read
-    monkeypatch.setattr(os, 'read', lambda fd, size: original(fd, min(size, chunk_size)))
+    monkeypatch.setattr(triage.os, 'read', lambda fd, size: original(fd, min(size, chunk_size)))
     issues = set()
     assert triage._load_jsonl_stream(path, issues=issues) == ([good], False)
     assert issues == {'malformed_record'}

@@ -7,6 +7,9 @@ import pytest
 from core.sandbox import triage
 
 
+pytestmark = pytest.mark.usefixtures('private_triage_readers')
+
+
 GOOD = {'host': 'example.test', 'result': 'allowed'}
 
 
@@ -21,7 +24,7 @@ def test_loss_is_reported_and_valid_peer_survives(tmp_path, monkeypatch, bad, re
     path.write_bytes(bad + json.dumps(GOOD).encode() + b'\n')
     monkeypatch.setattr(triage, '_MAX_EVENT_LINE_BYTES', 80)
     original = os.read
-    monkeypatch.setattr(os, 'read', lambda fd, size: original(fd, min(size, chunk_size)))
+    monkeypatch.setattr(triage.os, 'read', lambda fd, size: original(fd, min(size, chunk_size)))
     issues = set()
     assert triage._load_jsonl_stream(path, issues=issues) == ([GOOD], False)
     assert issues == {reason}
@@ -45,7 +48,7 @@ def test_read_error_preserves_prefix_and_reports_loss(tmp_path, monkeypatch):
             raise OSError('read interrupted by I/O failure')
         return original(fd, min(size, len(payload)))
 
-    monkeypatch.setattr(os, 'read', fail_after_prefix)
+    monkeypatch.setattr(triage.os, 'read', fail_after_prefix)
     issues = set()
     assert triage._load_jsonl_stream(path, issues=issues) == ([GOOD], False)
     assert issues == {'read_failure'}

@@ -6,6 +6,9 @@ import pytest
 from core.sandbox import triage
 
 
+pytestmark = pytest.mark.usefixtures('private_triage_readers')
+
+
 @pytest.mark.parametrize('chunk_size', [1, 7, 64, 4096])
 @pytest.mark.parametrize('padding', ['before', 'after', 'both'])
 def test_oversized_padded_record_is_skipped_and_next_survives(
