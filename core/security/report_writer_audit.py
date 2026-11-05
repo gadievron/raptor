@@ -1523,7 +1523,7 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     ),
     AllowlistEntry(
         file="core/project/report.py",
-        func_name="export_findings_directory",
+        func_name="_write_findings_directory",
         kind="unsanitised_llm_value",
         detail="record",
         audit_note=(
