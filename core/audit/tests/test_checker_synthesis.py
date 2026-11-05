@@ -375,7 +375,7 @@ class TestSynthesizeAndSweepDelegation:
 # ---------------------------------------------------------------------------
 
 
-class TestSageReplayRule:
+class _SageReplayRuleFixtures:
     def _seed(self):
         from packages.checker_synthesis import SeedBug
 
@@ -405,6 +405,8 @@ class TestSageReplayRule:
         meta.update(kw)
         return meta
 
+
+class TestSageReplayRule(_SageReplayRuleFixtures):
     def test_replays_verified_rule_with_sage_provenance(self, tmp_path):
         from core.audit.checker_synthesis import _sage_replay_rule
         from packages.checker_synthesis import Match
@@ -771,7 +773,7 @@ class TestTriageRuleHitsErrorGuard:
         assert lib.matches == [("lib-rule", True)]
 
 
-class TestSageReplayRuleIdShape(TestSageReplayRule):
+class TestSageReplayRuleIdShape(_SageReplayRuleFixtures):
     """Ingestion-time shape check: SAGE is an agent-writable store and
     a recalled rule_id flows into library filenames — traversal or
     separator characters mark a planted record, not a slugified id."""
