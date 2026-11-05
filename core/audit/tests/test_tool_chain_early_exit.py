@@ -291,10 +291,12 @@ class TestFullChainRuns:
 class TestPromotionGradePredicate:
     def test_verification_receipts_qualify(self):
         assert _promotion_grade_receipt("semgrep:rules/r.yaml")
-        assert _promotion_grade_receipt("smt:check-oob")
+        assert _promotion_grade_receipt("smt:check-overflow")
         assert _promotion_grade_receipt("api_boundary:caller-contract")
 
     def test_detection_role_receipts_do_not_qualify(self):
+        assert not _promotion_grade_receipt("smt:check-oob")
+        assert not _promotion_grade_receipt("smt:check-oob:witness")
         assert not _promotion_grade_receipt("smt:check-auth-bypass")
         assert not _promotion_grade_receipt("joern:live")
 
