@@ -193,7 +193,7 @@ class TestBoundedReads:
         import os
         os.mkfifo(tmp_path / OBSERVE_FILENAME)
         profile = parse_observe_log(tmp_path)
-        assert profile == ObserveProfile()
+        assert profile == ObserveProfile(capture_incomplete=True)
 
     def test_oversized_file_refused(self, tmp_path, monkeypatch, caplog):
         # Shrink the cap so the fixture stays small.

@@ -177,8 +177,8 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
 
     if getattr(profile, "capture_incomplete", False):
         parts.append(
-            "\n⚠️  audit capture INCOMPLETE — the reader failed or did not "
-            "drain before shutdown; observed paths and connections may be missing."
+            "\n⚠️  audit capture INCOMPLETE — audit records could not be fully "
+            "captured or parsed; observed paths and connections may be missing."
         )
 
     # Surface budget truncation FIRST — if the probe hit any cap,
