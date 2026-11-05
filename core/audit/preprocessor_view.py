@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
+from core.source.lines import splitlines_prefix
 from core.source import read_text_capped, open_regular
 
 from ._util import safe_join
@@ -583,7 +584,7 @@ def expand_translation_unit(
             # Missing generated headers, dialect gaps, etc.  Degrade,
             # never fabricate a view from partial output.
             stderr = (proc.stderr or "").strip()
-            first = "; ".join(stderr.splitlines()[:3]) or f"exit code {proc.returncode}"
+            first = "; ".join(splitlines_prefix(stderr, 3)) or f"exit code {proc.returncode}"
             return _degraded(
                 file_path,
                 f"preprocess failed — no fidelity-3 view: {first}",

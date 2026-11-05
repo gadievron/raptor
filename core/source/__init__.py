@@ -38,6 +38,7 @@ from core.source.lines import (
     slice_lines,
     slice_text,
     split_lines,
+    splitlines_prefix,
 )
 from core.source.strip import (
     C_FAMILY_SUFFIXES,
@@ -66,6 +67,7 @@ __all__ = [
     "slice_lines",
     "slice_text",
     "split_lines",
+    "splitlines_prefix",
     "strip_c_comments",
     "strip_comments",
     "strip_python_comments",

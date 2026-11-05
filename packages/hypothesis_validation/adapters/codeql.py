@@ -24,6 +24,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.sarif.parser import load_sarif
+from core.source.lines import splitlines_prefix
 from core.config import RaptorConfig
 from packages.codeql.tunables import CodeQLTunables
 
@@ -797,7 +798,7 @@ def _qlpack_yaml(rule: str) -> str:
     matching dependencies are `codeql/<lang>-all`.
     """
     lang = "cpp"  # default for /audit's primary use case
-    for line in rule.splitlines()[:20]:
+    for line in splitlines_prefix(rule, 20):
         s = line.strip()
         if s.startswith("import "):
             tokens = s.split()

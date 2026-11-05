@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json
-from core.source.lines import split_lines
+from core.source.lines import slice_text, split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,10 @@ def _snippet_for(
     text = read_contained(Path(target_path), file_path, newline="")
     if text is None:
         return ""
+    if (type(text) is str and type(line_start) is int
+            and (line_end is None or (type(line_end) is int and line_end >= 0))):
+        end = min(line_end or line_start, line_start + 120)
+        return slice_text(text, line_start, end)[:8000]
     lines = split_lines(text)
     end = min(line_end or line_start, line_start + 120, len(lines))
     return "\n".join(lines[line_start - 1: end])[:8000]

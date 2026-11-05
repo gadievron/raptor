@@ -30,6 +30,8 @@ import logging
 import re
 from typing import Any, TYPE_CHECKING
 
+from core.source.lines import splitlines_prefix
+
 from ..models import Confidence, Dependency, PinStyle
 from ._base import build_purl, lockfile_confidence
 from . import _safe_read, register
@@ -83,7 +85,7 @@ def _looks_like_berry(text: str) -> bool:
     """Berry lockfiles start with a ``__metadata`` block before the first
     descriptor. Classic v1 files start with the ``# yarn lockfile v1`` banner.
     """
-    head = "\n".join(text.splitlines()[:30])
+    head = "\n".join(splitlines_prefix(text, 30))
     if "__metadata:" in head:
         return True
     if "# yarn lockfile v1" in head:

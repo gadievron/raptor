@@ -28,6 +28,7 @@ __all__ = [
     "slice_lines",
     "slice_text",
     "split_lines",
+    "splitlines_prefix",
 ]
 
 #: Every terminator ``str.splitlines()`` recognises BEYOND ``\n`` /
@@ -95,6 +96,30 @@ def split_lines(text: str) -> list[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def splitlines_prefix(text: str, limit: int) -> list[str]:
+    """Return ``text.splitlines()[:limit]`` with bounded prefix splitting.
+
+    Retain Python's full display-line model, including bare CR and Unicode
+    separators. Source coordinates use ``split_lines`` instead. For large
+    native strings, a small LF-terminated prefix contains at least as many
+    display lines as LF breaks, so its first ``limit`` lines are identical.
+    Other inputs and layouts retain the original split/slice operations.
+    """
+    if (type(text) is str and type(limit) is int
+            and len(text) >= 16 * 1024 and 0 < limit <= 128):
+        end = 0
+        for _ in range(limit):
+            found = text.find("\n", end, 16 * 1024)
+            if found < 0:
+                break
+            end = found + 1
+        else:
+            # Include the last LF: dropping it loses an empty final
+            # prefix line when consecutive separators occur at the cut.
+            return text[:end].splitlines()[:limit]
+    return text.splitlines()[:limit]
 
 
 def join_lf_slice(text: str, start: int, end: int) -> str:
