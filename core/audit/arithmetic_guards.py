@@ -127,7 +127,7 @@ def guards_for_operation(body, target, data, operands):
                         continue
                 if any(item.type == "return_statement" for item in _nodes(child)):
                     return None  # an unmodeled exit could restrict the reaching path
-                if facts and effects(child, watched(facts)):
+                if effects(child, watched(facts)):
                     return None
             return None
         if node.type == "if_statement":
@@ -167,5 +167,5 @@ def guards_for_operation(body, target, data, operands):
     if facts is None:
         return GuardPremises("unavailable")
     if not any(variables & set(operands) for _, variables in facts):
-        return GuardPremises("no-guards")
+        return GuardPremises("no-guards", tuple(dict.fromkeys(predicate for predicate, _ in facts)))
     return GuardPremises("bound", tuple(dict.fromkeys(predicate for predicate, _ in facts)))

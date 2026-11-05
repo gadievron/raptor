@@ -270,6 +270,16 @@
     "count": 13,
     "kind": "alternation"
   },
+  "core/audit/array_bounds.py::_FRAME_NODES": {
+    "count": 19,
+    "kind": "literal",
+    "note": "closed tree-sitter C/C++ syntax schema for the admitted source-array frame; these are parser node tags, not application function or identifier vocabulary. Unknown nodes decline the obligation."
+  },
+  "core/audit/array_bounds.py::_WRITE_CLAIM": {
+    "count": 11,
+    "kind": "alternation",
+    "note": "closed English write/store/overwrite inflection grammar used to refuse write claims in a read-only source model; not API or repository identifier vocabulary."
+  },
   "core/audit/asm_zero_len_loop.py::check_zero_length_loop_entry": {
     "count": 11,
     "kind": "literal",

@@ -124,6 +124,10 @@ def receipt_preconditions(
     elif bare_verb == "check-overflow":
         claim = parse_arithmetic_claim(mechanism)
         operands = list(claim.operands) if claim is not None else []
+    elif bare_verb == "check-array-bounds":
+        from .array_bounds import parse_array_access_claim
+        access = parse_array_access_claim(mechanism)
+        operands = [access[1]] if access is not None else []
     elif bare_verb == "check-oob":
         index, size = _extract_oob_operands(mechanism, source)
         operands = [op for op in (index, size) if op]

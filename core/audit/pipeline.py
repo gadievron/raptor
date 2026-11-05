@@ -429,7 +429,7 @@ def _build_orchestrator_config(
     if opts.integer_abi is not None and abi is None:
         raise ValueError("unknown target integer ABI")
     if abi is None:
-        logger.info("Target integer ABI unknown: source overflow SMT is inconclusive")
+        logger.info("Target integer ABI unknown: source overflow/array SMT is inconclusive")
     else:
         logger.info("Target integer ABI: %s (explicit target assertion)", abi.name)
     return OrchestratorConfig(

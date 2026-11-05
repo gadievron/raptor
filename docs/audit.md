@@ -342,6 +342,7 @@ channels.
 | Verb | CWE | What it checks |
 |------|-----|----------------|
 | `check-overflow` | CWE-190 | Integer overflow in arithmetic expressions |
+| `check-array-bounds` | CWE-125 | Source-bound read from a local fixed-size builtin array, with typed function-entry witness |
 | `check-oob` | CWE-125/787 | Out-of-bounds access given buffer size and index |
 | `check-null-deref` | CWE-476 | Null dereference reachability |
 | `check-overflow-to-oob` | CWE-680 | Overflow feeding a buffer index |
@@ -1046,3 +1047,26 @@ actual access, allocation, or conversion semantics. Their results are
 explicit ABI selection. Missing element sizes remain unknown. These
 receipts cannot promote findings, refute claims, or reauthorize old clean
 verdicts; independent verification can still establish a finding.
+
+
+### Source-bound array read obligations
+
+With an explicit target integer ABI, `/audit` can check a named access such
+as `Data[Index]` against its local array declaration. Supported frames use
+one literal-extent builtin array and a direct read indexed by an unchanged
+builtin integer parameter. The checker binds the declaration and access,
+retains reaching guards, models promotions and storage ranges, and checks
+both negative indices and indices at or beyond the extent. It independently
+checks each SAT witness against the source guards and parameter ranges.
+
+The `smt:check-array-bounds` receipt verifies a safety violation in that
+function-entry source model. The artifact records the access location,
+declared extent, ABI, guards, parameter values, and assumptions. The source
+is assumed to represent the active build; caller reachability and additional
+calling-context constraints are outside this proof. A safe or unreachable
+access never supplies a whole-function clean or claim-refutation receipt.
+
+Pointers, array parameters, variable extents, unresolved aliases, writes,
+mutation, calls, and unsupported control flow remain inconclusive. Ordinary
+bounds dispatch prefers this source obligation when it can bind the access;
+the existing supplied numeric-model check remains diagnostic fallback.

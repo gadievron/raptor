@@ -4666,8 +4666,8 @@ def main() -> int:
     from core.audit.integer_abi import INTEGER_ABIS
     p_run.add_argument(
         "--integer-abi", choices=sorted(INTEGER_ABIS), default=None,
-        help="Target C integer ABI for source overflow checks (operator assertion; "
-             "default: unknown, overflow SMT stays inconclusive). Uses the same "
+        help="Target C integer ABI for source overflow/array checks (operator assertion; "
+             "default: unknown, source overflow/array SMT stays inconclusive). Uses the same "
              "selection on resume; never infers the target from the audit host.",
     )
     p_run.add_argument("target", help="Path to codebase to review")
