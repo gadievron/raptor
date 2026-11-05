@@ -359,3 +359,20 @@ def _sandbox_state_guard():
         # is honoured (set_active_run_dir also resets _denial_count,
         # which is harmless — a per-test counter reset is appropriate).
         summary_mod.set_active_run_dir(saved_active_run)
+
+
+@pytest.fixture
+def private_triage_readers(monkeypatch, tmp_path):
+    """Keep reader fault injection off process-wide os/json modules."""
+    from types import ModuleType
+
+    from core.sandbox import triage
+    from core.testing.state_isolation import pin_user_state_dirs
+
+    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+    for name in ('os', 'json'):
+        original = getattr(triage, name)
+        private = ModuleType(original.__name__)
+        vars(private).update(vars(original))
+        monkeypatch.setattr(triage, name, private)
