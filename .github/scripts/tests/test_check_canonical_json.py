@@ -428,3 +428,39 @@ class TestDefaultRoot:
         monkeypatch.chdir(tmp_path)
         assert det._default_root() == _REPO_ROOT
         assert det._default_root() != Path.cwd()
+
+
+@pytest.mark.parametrize("expression", [
+    "hashlib.sha256(raw + display)",
+    "hashlib.blake2b(raw, key=display)",
+    "hashlib.blake2b(display, key=raw)",
+    "hashlib.sha256().update(raw + display)",
+])
+def test_mixed_dumper_kinds_are_both_reported(det, tmp_path, expression):
+    root = _tree(tmp_path, "core/mixed.py", (
+        "import hashlib, json\n"
+        "from core.json import dumps_display\n"
+        "def fingerprint(row):\n"
+        "    raw = json.dumps(row).encode()\n"
+        "    display = dumps_display(row).encode()\n"
+        f"    return {expression}\n"
+    ))
+    findings = det.scan_tree(root)
+    assert sorted(f["rule"] for f in findings) == [
+        "dumps_flows_to_hash", "substrate_dumps_flows_to_hash",
+    ]
+    assert all(f["line"] == 6 for f in findings)
+
+
+def test_mixed_assignment_propagates_both_kinds_through_aliases(det, tmp_path):
+    root = _tree(tmp_path, "core/mixed.py", (
+        "import hashlib, json\n"
+        "from core.json import dumps_artifact\n"
+        "def fingerprint(row):\n"
+        "    both = json.dumps(row) + dumps_artifact(row)\n"
+        "    copied = both\n"
+        "    return hashlib.sha256(copied.encode())\n"
+    ))
+    assert sorted(f["rule"] for f in det.scan_tree(root)) == [
+        "dumps_flows_to_hash", "substrate_dumps_flows_to_hash",
+    ]

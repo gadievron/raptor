@@ -235,33 +235,28 @@ class _FunctionScanner(ast.NodeVisitor):
         return self._hash_obj_stack[-1]
 
     # -- helpers ----------------------------------------------------------
-    def _contains_json_dumps(self, node: ast.AST) -> bool:
+    def _taint_kinds(self, node: ast.AST) -> tuple[bool, bool]:
+        """Raw JSON and non-canonical substrate output below this node.
+
+        Inspect each subtree once, using the current scope's aliases. Results
+        cannot be cached across assignments because those aliases evolve.
+        """
+        raw = display = False
+        tainted = self._tainted
+        display_tainted = self._display_tainted
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Call) and _is_json_dumps(
-                    sub, self.json_aliases, self.bare_dumps):
-                return True
-        return False
-
-    def _contains_substrate_dumps(self, node: ast.AST) -> bool:
-        """dumps_display(...) / dumps_artifact(...) anywhere below
-        *node* — matched by trailing callee name so every import form
-        (bare, aliased-module attribute) is covered."""
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                parts = _callee_parts(sub.func)
-                if parts and parts[-1] in NON_CANONICAL_SUBSTRATE_DUMPERS:
-                    return True
-        return False
-
-    def _references_tainted(self, node: ast.AST) -> bool:
-        return any(
-            isinstance(sub, ast.Name) and sub.id in self._tainted
-            for sub in ast.walk(node))
-
-    def _references_display_tainted(self, node: ast.AST) -> bool:
-        return any(
-            isinstance(sub, ast.Name) and sub.id in self._display_tainted
-            for sub in ast.walk(node))
+            if isinstance(sub, ast.Name):
+                raw |= sub.id in tainted
+                display |= sub.id in display_tainted
+            elif isinstance(sub, ast.Call):
+                if not raw:
+                    raw = _is_json_dumps(sub, self.json_aliases, self.bare_dumps)
+                if not display:
+                    parts = _callee_parts(sub.func)
+                    display = bool(parts) and parts[-1] in NON_CANONICAL_SUBSTRATE_DUMPERS
+            if raw and display:
+                break
+        return raw, display
 
     @staticmethod
     def _target_names(target: ast.expr) -> list[ast.Name]:
@@ -297,10 +292,10 @@ class _FunctionScanner(ast.NodeVisitor):
         names = self._target_names(target)
         if not names:
             return
-        if self._contains_json_dumps(value) or self._references_tainted(value):
+        raw, display = self._taint_kinds(value)
+        if raw:
             self._tainted.update(n.id for n in names)
-        if self._contains_substrate_dumps(value) \
-                or self._references_display_tainted(value):
+        if display:
             self._display_tainted.update(n.id for n in names)
         if isinstance(value, ast.Call) and _is_hash_call(value):
             self._hash_objs.update(n.id for n in names)
@@ -333,16 +328,17 @@ class _FunctionScanner(ast.NodeVisitor):
             self.raw_dumps.append((self._qualname, node.lineno))
         if _is_hash_call(node) or self._is_hash_update(node):
             args = list(node.args) + [kw.value for kw in node.keywords]
+            raw = display = False
             for a in args:
-                if self._contains_json_dumps(a) or self._references_tainted(a):
-                    self.hash_flows.append((self._qualname, node.lineno))
+                arg_raw, arg_display = self._taint_kinds(a)
+                raw |= arg_raw
+                display |= arg_display
+                if raw and display:
                     break
-            for a in args:
-                if self._contains_substrate_dumps(a) \
-                        or self._references_display_tainted(a):
-                    self.substrate_hash_flows.append(
-                        (self._qualname, node.lineno))
-                    break
+            if raw:
+                self.hash_flows.append((self._qualname, node.lineno))
+            if display:
+                self.substrate_hash_flows.append((self._qualname, node.lineno))
         self.generic_visit(node)
 
 
