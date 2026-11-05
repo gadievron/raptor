@@ -15,6 +15,7 @@ from pathlib import Path
 from time import perf_counter
 
 from core.json import load_json, save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 
 
 DEFAULT_CASES = Path(__file__).with_name("replay_cases") / "actor_identity.json"
@@ -214,8 +215,10 @@ def main(argv=None) -> int:
         if args.output:
             save_json(args.output, report)
         row = report["cases"][-1]
-        print(f"{row['id']}: {'PASS' if row['match'] else 'FAIL'} "
-              f"{row.get('errors', row.get('error', ''))}", flush=True)
+        print(sanitise_for_terminal(
+            f"{row['id']}: {'PASS' if row['match'] else 'FAIL'} "
+            f"{row.get('errors', row.get('error', ''))}", max_len=2000,
+        ), flush=True)
 
     if args.regrade:
         prior = load_json(args.regrade)

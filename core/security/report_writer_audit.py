@@ -539,6 +539,10 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Corpus CLI progress/failures are bounded terminal text. Replay record
+    # assembly is structured JSON data, audited separately below.
+    "core/audit/corpus/actor_identity.py",
+    "core/audit/corpus/receipt_replay.py",
     # Standalone container-build helper: _term caps metadata names and uses
     # json.dumps(ensure_ascii=True) to escape terminal controls and Unicode.
     ".devcontainer/install-python-notices.py",
@@ -810,6 +814,21 @@ class AllowlistEntry:
 # the heuristic. New entries require the same discipline (enforced by
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        file="core/audit/corpus/receipt_replay.py", func_name="replay",
+        kind="unsanitised_llm_value", detail='id',
+        audit_note='Fixture case identifier copied into the structured replay row; JSON record assembly, not terminal interpolation. main sanitizes the full failure line before printing.',
+    ),
+    AllowlistEntry(
+        file="core/audit/corpus/receipt_replay.py", func_name="replay",
+        kind="unsanitised_llm_value", detail='actual',
+        audit_note='Structured verdict/gate mapping retained for deterministic comparison and JSON output. main sanitizes the full failure line before printing.',
+    ),
+    AllowlistEntry(
+        file="core/audit/corpus/receipt_replay.py", func_name="replay",
+        kind="unsanitised_llm_value", detail='status',
+        audit_note='Status membership/equality feeds the boolean label_gap field; it cannot contribute arbitrary text to terminal output.',
+    ),
     AllowlistEntry(
         file="packages/cve_diff/cve_diff/cli/bench.py",
         func_name="_render_html",

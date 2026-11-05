@@ -16,6 +16,7 @@ import tempfile
 from types import SimpleNamespace
 
 from core.json import load_json, save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.audit.receipt_resolution import receipt_override
 
 
@@ -138,12 +139,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.output:
             save_json(args.output, report)
     except (ValueError, OSError) as exc:
-        parser.error(str(exc))
+        parser.error(sanitise_for_terminal(str(exc), max_len=1000))
     print(f"Receipt replay: {report['passed']}/{report['total']} passed; "
           f"{report['label_gaps']} labelled-positive case(s) without an override")
     for row in report["cases"]:
         if not row["match"]:
-            print(f"  FAIL {row['id']}: expected={row['expected']} actual={row['actual']}")
+            print(sanitise_for_terminal(
+                f"  FAIL {row['id']}: expected={row['expected']} actual={row['actual']}",
+                max_len=2000,
+            ))
     return 0 if report["passed"] == report["total"] else 1
 
 
