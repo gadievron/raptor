@@ -570,7 +570,8 @@ def parse_observe_log(run_dir, *,
     nonce keep current behaviour — the nonce itself gates every
     record, so the legacy fallback stays safe there. False
     (default) preserves the pre-existing behaviour for offline
-    readers of older runs' artifacts.
+    readers of older runs' artifacts. A current-run parse also requires an
+    accepted audit-summary tail; without one, capture_incomplete is True.
 
     `sandbox_info`: the run's ``result.sandbox_info`` dict, used as
     a fail-safe backstop on nonce trust. When the run executed on a
@@ -626,6 +627,8 @@ def parse_observe_log(run_dir, *,
     else:
         log_path = _resolve_evidence_path(run_dir, filename)
     if not log_path.exists():
+        if current_run:
+            profile.capture_incomplete = True
         return profile
 
     seen_read: set = set()
@@ -641,6 +644,7 @@ def parse_observe_log(run_dir, *,
     darwin_connect_unparsed = 0
 
     ambiguous_skipped = 0
+    summary_seen = False
     for rec in _iter_records(log_path, profile=profile):
         if not isinstance(rec, dict):
             continue
@@ -672,6 +676,7 @@ def parse_observe_log(run_dir, *,
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
+            summary_seen = True
             if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
                 profile.capture_incomplete = True
             append_failures = rec.get("append_failures")
@@ -753,6 +758,12 @@ def parse_observe_log(run_dir, *,
             if target not in seen_connect:
                 seen_connect.add(target)
                 profile.connect_targets.append(target)
+
+    if current_run and not summary_seen:
+        # Current writers finish with a summary, even for zero events. Its
+        # absence means capture completion cannot be established. Offline
+        # readers still accept legacy streams that predate summary tails.
+        profile.capture_incomplete = True
 
     # Diagnostic: a darwin-sourced stream carried egress evidence but
     # parsing surfaced none of it. Historically this was silent —
