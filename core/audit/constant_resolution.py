@@ -249,9 +249,10 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         text = sanitized_view(raw_text, str(p))
 
         text_joined = text.replace("\\\n", " ")
-        depth_at_line = _conditional_depth_lookup(text)
-
-        original_line = _definition_line_lookup(text)
+        # Coordinate metadata is needed only once a definition or enum
+        # block actually matches the sanitized source.
+        depth_at_line: Callable[[int], int] | None = None
+        original_line: Callable[[int], int] | None = None
 
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 
@@ -263,6 +264,10 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             body = m.group(3).strip()
             if not body:
                 continue
+            if depth_at_line is None:
+                depth_at_line = _conditional_depth_lookup(text)
+            if original_line is None:
+                original_line = _definition_line_lookup(text)
             line = original_line(m.start())
             depth = depth_at_line(line)
             defs.setdefault(name, []).append(
@@ -270,6 +275,10 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             )
 
         for block_start, body in _iter_enum_bodies(text_joined):
+            if depth_at_line is None:
+                depth_at_line = _conditional_depth_lookup(text)
+            if original_line is None:
+                original_line = _definition_line_lookup(text)
             block_line = original_line(block_start)
             block_depth = depth_at_line(block_line)
             # Enumerator offsets advance: count only the intervening range.
