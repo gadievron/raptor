@@ -589,7 +589,7 @@ class SourceBuilder:
             with scratch_dir("cve-env-archive-", dir=target.parent) as scratch:
                 tree = scratch / "checkout"
                 with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
-                    members = []
+                    members: list[tarfile.TarInfo] = []
                     total_size = 0
                     for member in tf:
                         total_size += max(0, member.size)

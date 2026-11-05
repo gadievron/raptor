@@ -188,13 +188,15 @@ def containerized_build(
 
     Never raises for build-class failures; see :class:`BuildProduct`.
     """
-    options = dict(
-        out_dir=out_dir, toolchain=toolchain, base_image=base_image,
-        timeout_seconds=timeout_seconds, keep_rootfs=None, run_env=run_env,
-        aux_builds=aux_builds, subdir=subdir,
-    )
+    def build(rootfs: Path | None = None) -> BuildProduct:
+        return _containerized_build(
+            repo_dir, command, out_dir=out_dir, toolchain=toolchain,
+            base_image=base_image, timeout_seconds=timeout_seconds,
+            keep_rootfs=rootfs, run_env=run_env, aux_builds=aux_builds,
+            subdir=subdir,
+        )
     if not keep_rootfs:
-        return _containerized_build(repo_dir, command, **options)
+        return build()
     keep = Path(keep_rootfs)
     try:
         # Reserve exclusively before any build work. An existing tree is
@@ -215,8 +217,7 @@ def containerized_build(
     try:
         with scratch_dir("raptor-rootfs-build-", dir=keep.parent) as scratch:
             rootfs = scratch / "rootfs"
-            options["keep_rootfs"] = rootfs
-            product = _containerized_build(repo_dir, command, **options)
+            product = build(rootfs)
             if product.ok:
                 try:
                     if not stat.S_ISDIR(rootfs.lstat().st_mode):

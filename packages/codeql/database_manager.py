@@ -2396,7 +2396,7 @@ class DatabaseManager:
         except (OverflowError, TypeError) as exc:
             raise ValueError("cleanup days exceed the supported interval") from exc
         logger.debug("Cleaning up databases older than %s days...", days)
-        deleted = []
+        deleted: list[str] = []
         try:
             root = self.db_root.resolve()
             repos = list(self.db_root.iterdir())

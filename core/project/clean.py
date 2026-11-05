@@ -126,7 +126,7 @@ def _finish_clean(plan, candidates, deleted, sizes) -> None:
     plan["freed_bytes"] = sum(sizes.values())
     typed = plan.get("_type_dirs", {})
     if typed:
-        kept = []
+        kept: list[str] = []
         for command, paths in typed.items():
             paths = list(dict.fromkeys(Path(path) for path in paths))
             survivors = [path for path in paths if os.path.lexists(path)]
@@ -152,7 +152,7 @@ def eligible_clean_dirs(project, keep: int=1, dedup: bool=False) -> set[Path]:
     executor still intersects it with the confirmed paths and identities.
     """
     try:
-        allowed = set()
+        allowed: set[Path] = set()
         for dirs in project.get_run_dirs_by_type().values():
             closed, _ = split_live_runs(dirs)
             if dedup:

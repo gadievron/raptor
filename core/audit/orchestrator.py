@@ -24962,8 +24962,10 @@ def _aggregate_ihv_verdicts(
         if hyp.get("cwe"):
             review["cwe"] = review["cwe_class"] = hyp["cwe"]
         candidate = replace(outcome, status="suspicious", hypothesis=hyp["mechanism"], review_result=review)
+        assert candidate.review_result is not None
         # Check the claim actually supported by these receipts, not
         # whichever hypothesis happened to be primary in the review.
+        gate_block: str | None
         if _premise_blocks_confirm(hyp, list(support.receipts)):
             _note_premise_blocked_validation(
                 candidate, hyp, list(support.receipts), config, result.tier_counters,
@@ -28657,7 +28659,7 @@ def _promote_suspicious_one(
         return None
     _sweep_skipped: set = set()
     _sweep_errored: set = set()
-    confirmed = _run_tool_chain(
+    confirmed: list[str] = _run_tool_chain(
         chain,
         config=config,
         file_path=outcome.file,
