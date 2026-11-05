@@ -489,7 +489,12 @@ _DEFAULT_TOKEN_RE = _re.compile(
 # ...) are default-deny: every grant in a job holding only such
 # scopes is an offender until an adjudicated verb row is added.
 _SCOPE_PUBLISH_VERBS: dict[str, str] = {
-    "contents": r"git push|push --force|gh release",
+    # Reviewed wrapper: sync_main validates publication metadata, regenerates
+    # trusted repository docs and performs a bounded fast-forward Git push.
+    "contents": (
+        r"git push|push --force|gh release|"
+        r"^\s*python3 \.github/scripts/update_published_image_docs\.py --sync-main\s*$"
+    ),
     "pull-requests": r"gh pr ",
     "packages": r"docker login|docker push|packages/container",
     "issues": r"gh issue ",
@@ -1335,3 +1340,26 @@ jobs:
     offenders, checked = _default_token_offenders(mixed)
     assert checked == 1  # only the write job's grant is in-universe
     assert offenders == []
+
+
+def test_image_docs_publish_wrapper_is_exact_and_scope_bound(tmp_path):
+    cases = [
+        ("python3 .github/scripts/update_published_image_docs.py --sync-main", "contents", False),
+        ("python3 .github/scripts/update_published_image_docs.py", "contents", True),
+        ("python3 .github/scripts/update_published_image_docs.py --sync-main-extra", "contents", True),
+        ("python3 .github/scripts/update_published_image_docs.py --sync-main", "packages", True),
+        ("# python3 .github/scripts/update_published_image_docs.py --sync-main", "contents", True),
+    ]
+    for index, (command, permission, rejected) in enumerate(cases):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        (directory / "publish.yml").write_text(
+            "permissions:\n  " + permission + ": write\njobs:\n  publish:\n"
+            "    runs-on: ubuntu-latest\n    steps:\n      - name: docs\n"
+            "        env:\n          GH_TOKEN: ${{ github.token }}\n"
+            "        run: |\n          " + command + "\n",
+            encoding="utf-8",
+        )
+        offenders, checked = _default_token_offenders(directory)
+        assert checked == 1
+        assert bool(offenders) is rejected, (command, permission, offenders)
