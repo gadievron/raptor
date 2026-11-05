@@ -642,6 +642,7 @@ _raptor_local_route() {
     return 1
 }
 
+if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     for _arg in "$@"; do
         [ "$_arg" = -- ] && break
         if [ "$_arg" = --codex ]; then
@@ -649,7 +650,6 @@ _raptor_local_route() {
             exit 1
         fi
     done
-if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     # `|| true`: _raptor_local_route execs on a match (never returns); a
     # non-match returns 1, which under `set -e` would abort before the
     # guidance below — tolerate it so the error message prints.
@@ -662,15 +662,10 @@ if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     exit 1
 fi
 
-# Choose CLI: explicit --codex -> codex; else claude if present; else codex.
+# Keep direct analysis local when Claude is absent. Frontend selection waits
+# until parsing, so explicit --codex and its error handling remain authoritative.
 if ! command -v claude >/dev/null 2>&1; then
     _raptor_local_route "$@" || true
-    if command -v codex >/dev/null 2>&1; then
-        USE_CODEX=1
-    else
-        echo "raptor: neither claude nor codex found. Install Claude Code or Codex CLI." >&2
-        exit 1
-    fi
 fi
 
 # RAPTOR_CALLER_DIR was exported before the direct routes above.
@@ -805,24 +800,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Use the parsed flag, so a model name or passthrough value cannot select
-# protection. A requested protected launch never retries without its boundary.
-if [ -n "$PROTECT_INSTALL" ] && [ -z "$INSTALL_GUARD_INSIDE" ]; then
-    _rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
-        "$_RAPTOR_LAUNCH_METADATA" --prepare-protection || exit 126
-    exec python3 -I -S -B "$RAPTOR_DIR/core/startup/install_guard.py" --frontend claude -- \
-        /bin/bash "$RAPTOR_DIR/bin/raptor" --_protected-install-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
-fi
-
-# Keep the filesystem cleaner outside frontend mount/PID namespaces. Reentry
-# binds the actual frontend PID; the supervisor never seeds a project row.
-if [ -z "$_scratch_inside" ]; then
-    exec python3 -I "$RAPTOR_DIR/core/security/scratch_supervisor.py" \
-        --metadata "$_RAPTOR_LAUNCH_METADATA" ${_scratch_approval_arg:+"$_scratch_approval_arg"} -- \
-        /bin/bash "$RAPTOR_DIR/bin/raptor" --_scratch-session-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
-fi
-unset _scratch_inside
-
 # Choose only after parsing so --codex never falls back silently to Claude.
 if [ -n "$USE_CODEX" ]; then
     if ! command -v codex >/dev/null 2>&1; then
@@ -842,6 +819,26 @@ if [ -n "$USE_CODEX" ] && [ -n "$VERBOSE_SESSION" ]; then
     echo "raptor: -v/--verbose is supported only by Claude Code" >&2
     exit 1
 fi
+
+# Use the parsed flag, so a model name or passthrough value cannot select
+# protection. A requested protected launch never retries without its boundary.
+if [ -n "$PROTECT_INSTALL" ] && [ -z "$INSTALL_GUARD_INSIDE" ]; then
+    _rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --prepare-protection || exit 126
+    _protected_frontend=claude
+    [ -z "$USE_CODEX" ] || _protected_frontend=codex
+    exec python3 -I -S -B "$RAPTOR_DIR/core/startup/install_guard.py" --frontend "$_protected_frontend" -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_protected-install-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
+
+# Keep the filesystem cleaner outside frontend mount/PID namespaces. Reentry
+# binds the actual frontend PID; the supervisor never seeds a project row.
+if [ -z "$_scratch_inside" ]; then
+    exec python3 -I "$RAPTOR_DIR/core/security/scratch_supervisor.py" \
+        --metadata "$_RAPTOR_LAUNCH_METADATA" ${_scratch_approval_arg:+"$_scratch_approval_arg"} -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_scratch-session-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
+unset _scratch_inside
 
 # Build initial prompt: /raptor [target]. Strip control bytes from
 # the operator-supplied TARGET first - an embedded newline would
