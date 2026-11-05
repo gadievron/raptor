@@ -20,7 +20,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # packages/codeql/tests/test_traced_build_wrapper_location.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.build.build_detector import BuildSystem
 from packages.codeql.database_manager import DatabaseManager

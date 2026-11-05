@@ -18,7 +18,8 @@ from typing import Optional
 # packages/llm_analysis/tests/test_crash_agent_record_witness.py
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from core.witness import WitnessOutcome, WitnessSource  # noqa: E402
 from packages.binary_analysis.crash_analyser import CrashContext  # noqa: E402

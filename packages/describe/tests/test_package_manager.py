@@ -22,6 +22,13 @@ def _isolated_package_manager_cache(monkeypatch):
     private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
     monkeypatch.setattr(package_manager, "detect_package_manager", private)
     monkeypatch.setitem(globals(), "detect_package_manager", private)
+    # Exact install-hint assertions describe an unprivileged operator. Keep
+    # that UID local to this consumer; root-aware production behavior stays live.
+    from types import ModuleType
+    operator_os = ModuleType(package_manager.os.__name__)
+    operator_os.__dict__.update(vars(package_manager.os))
+    operator_os.geteuid = lambda: 1000
+    monkeypatch.setattr(package_manager, "os", operator_os)
 
 
 def _which_only(present_pms):

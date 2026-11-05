@@ -11,7 +11,8 @@ from typing import cast
 import pytest
 
 # packages/codeql/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
 

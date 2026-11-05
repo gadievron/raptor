@@ -38,7 +38,8 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
 
 GOVERNOR_PATH = REPO_ROOT / "core" / "engagement" / "governor.py"
 JOURNAL_PATH = REPO_ROOT / "core" / "coverage" / "journal.py"

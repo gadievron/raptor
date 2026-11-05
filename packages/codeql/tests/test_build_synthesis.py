@@ -7,7 +7,8 @@ import pytest
 
 
 # packages/codeql/tests/test_build_synthesis.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.build.build_detector import BuildDetector
 from core.testing.logging_state import owned_log_handler

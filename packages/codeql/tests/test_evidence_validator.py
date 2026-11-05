@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.dataflow import Finding, Step
 from core.dataflow.validator import Validator, ValidatorVerdict

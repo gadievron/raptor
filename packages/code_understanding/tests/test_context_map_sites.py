@@ -16,7 +16,8 @@ from pathlib import Path
 # packages/code_understanding/tests/test_context_map_sites.py
 #   parents[0]=tests  [1]=code_understanding  [2]=packages  [3]=repo
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from packages.code_understanding.context_map_sites import (  # noqa: E402
     enrich_context_map_with_sites,

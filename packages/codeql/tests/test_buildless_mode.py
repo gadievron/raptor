@@ -34,7 +34,8 @@ def _raptor_logger_propagates():
 
 
 # packages/codeql/tests/test_buildless_mode.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.build.build_detector import BuildSystem
 from packages.codeql.database_manager import (
