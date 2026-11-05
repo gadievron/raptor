@@ -94,13 +94,15 @@ def resolve_read_path(run_dir, filename: str) -> Path:
     Prefers ``<run_dir>/.audit/<filename>``; falls back to the legacy
     ``<run_dir>/<filename>`` when only the old location exists (runs
     produced by older versions). When neither exists, returns the new
-    location so error messages point at the canonical path.
+    location so error messages point at the canonical path. Dangling
+    symlinks count as present entries so no-follow readers can refuse and
+    report them instead of silently falling back to older evidence.
     """
     new = evidence_write_path(run_dir, filename)
-    if new.exists():
+    if new.exists() or new.is_symlink():
         return new
     old = legacy_read_path(run_dir, filename)
-    if old.exists():
+    if old.exists() or old.is_symlink():
         return old
     return new
 
