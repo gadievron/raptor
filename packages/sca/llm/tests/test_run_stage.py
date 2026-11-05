@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
+import pytest
 from pydantic import BaseModel, Field
 
 from packages.sca.llm import (
@@ -12,6 +13,15 @@ from packages.sca.llm import (
     UntrustedBlock,
     run_stage,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+
+    from packages.sca import llm
+
+    pin_defense_telemetry(monkeypatch, llm)
 
 
 # ------------------------------------------------------------------ stubs

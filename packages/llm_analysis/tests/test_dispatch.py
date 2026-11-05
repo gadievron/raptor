@@ -22,6 +22,13 @@ from packages.llm_analysis.tasks import (
 from packages.llm_analysis.orchestrator import CostTracker
 
 
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+
+    pin_defense_telemetry(monkeypatch)
+
+
 def _make_finding(finding_id, rule_id="sqli", file_path="db.py", start_line=42):
     return {
         "finding_id": finding_id,
