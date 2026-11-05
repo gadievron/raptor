@@ -2205,7 +2205,11 @@ _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-toctou",
 })
 
-_FUNCTION_SCOPED_SOURCE_VERBS = _SMT_DIRECT_ONLY_VERBS - {"check-integer-narrowing"}
+# Arithmetic operand/premise extraction also reads source. Scope it through
+# the same admission boundary as the line-oriented detectors.
+_FUNCTION_SCOPED_SOURCE_VERBS = (_SMT_DIRECT_ONLY_VERBS - {"check-integer-narrowing"}) | {
+    "check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass",
+}
 
 
 _SMT_VERB_ROLES = {
@@ -2784,7 +2788,7 @@ def _run_smt_verb_inner(
         file_path=file_path, function_name=function_name, verb=verb,
         source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab,
     )
-    if verb in _FUNCTION_SCOPED_SOURCE_VERBS and result.outcome != "error":
+    if binding is not None and is_diagnostic_smt_rule(verb) and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
         if result.outcome != "confirmed":
             result.matches = []
