@@ -764,7 +764,24 @@ def test_growth_ratio_rail_trips_on_quadratic_engine(packs) -> None:
         + ", ".join(f"{r:.2f}" for r in ratios))
 
 
-def test_growth_ratio_rail_immune_to_wall_stalls(packs) -> None:
+def test_growth_ratio_rail_immune_to_wall_stalls() -> None:
+    # The rail deliberately measures process CPU, including other threads.
+    # Run its sleep control without a shuffled worker's background servers.
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, "-c", """
+from core.taint.tests.test_engine_hostile import (
+    _assert_wall_stall_immunity, load_packs, HAND_COMPUTED_PACKS,
+)
+_assert_wall_stall_immunity(load_packs(HAND_COMPUTED_PACKS))
+"""],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _assert_wall_stall_immunity(packs) -> None:
     # Immunity direction: super-linear WALL stalls (the loaded-
     # runner shape — a co-runner stealing the core) must NOT trip
     # the rail, because the measurement is CPU time. Linear CPU
