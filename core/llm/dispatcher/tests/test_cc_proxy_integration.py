@@ -19,6 +19,7 @@ booked on the token.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import http.server
 import json
 import shutil
@@ -27,6 +28,8 @@ import threading
 import time
 
 import pytest
+
+from packages.web.tests.http_server import start_http_server
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import LLMDispatcher
@@ -136,18 +139,13 @@ class _FakeMantle:
         self._server = http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), _H,
         )
-        try:
+        with ExitStack() as cleanup:
+            self._thread = start_http_server(self._server, cleanup.callback)
             self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
-            threading.Thread(
-                target=self._server.serve_forever, daemon=True,
-            ).start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     def shutdown(self):
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 def _fake_bedrock_creds(endpoint: str) -> CredentialStore:
@@ -172,13 +170,15 @@ def _fake_bedrock_creds(endpoint: str) -> CredentialStore:
 def test_real_claude_cli_round_trip_through_credential_proxy(
     tmp_path, monkeypatch,
 ):
-    fake = _FakeMantle()
-    d = LLMDispatcher(
-        run_id="cc-smoke", creds=_fake_bedrock_creds(fake.base_url),
-        audit_path=tmp_path / "audit.jsonl",
-        token_ttl_s=600, token_budget=100,
-    )
-    try:
+    with ExitStack() as cleanup:
+        fake = _FakeMantle()
+        cleanup.callback(fake.shutdown)
+        d = LLMDispatcher(
+            run_id="cc-smoke", creds=_fake_bedrock_creds(fake.base_url),
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=600, token_budget=100,
+        )
+        cleanup.callback(d.shutdown)
         port = d.enable_loopback_listener()
         # Budget must cover the request's derived worst-case ceiling
         # (the CLI declares its full output window as max_tokens, and
@@ -256,6 +256,3 @@ def test_real_claude_cli_round_trip_through_credential_proxy(
             time.sleep(0.05)
         assert spend.get("spent_usd", 0) > 0
         assert spend.get("requests_made", 0) >= 1
-    finally:
-        fake.shutdown()
-        d.shutdown()
