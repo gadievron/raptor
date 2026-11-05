@@ -9,8 +9,8 @@ SARIF locations, finding records, crash artifacts:
   paths, and symlink escapes all refuse). Without it, a hostile
   finding record steers the analyser into reading arbitrary host
   files and quoting them into LLM prompts or reports.
-- **Size cap** — bounded-read discipline: open then ``read(cap + 1)``
-  and check the probe, never stat-then-read (the file can be
+- **Size cap** — bounded-read discipline: open then read at most
+  ``cap + 1`` units in total and check the probe, never stat-then-read (the file can be
   target-writable, so a size check followed by an unbounded read
   still races a growing plant). Without it, a multi-hundred-MB
   generated/planted file is loaded whole into host memory per
@@ -52,7 +52,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar
 
 from core.paths import confine
 from core.source.beneath import open_regular_beneath
@@ -121,6 +121,8 @@ def read_text_capped(
 ) -> tuple[str, bool] | None:
     """Read at most *max_chars* characters of UTF-8 text from *path*.
 
+    The cap must be non-negative.
+
     Returns ``(text, truncated)``, or ``None`` when the file cannot be
     opened or read (``OSError``), is not a regular file (FIFO, device,
     directory), or is a symlink at the final path component (resolve
@@ -145,11 +147,33 @@ def read_text_capped(
     return _text_capped_from(f, max_chars)
 
 
+_Chunk = TypeVar("_Chunk", str, bytes)
+
+
+def _read_probe_parts(f: IO[_Chunk], cap: int) -> list[_Chunk]:
+    """Probe cap + 1 units without allocating the entire cap up front.
+
+    The owning reader closes the stream, including on invalid caps or
+    read failures. File size is deliberately not used as a read budget.
+    """
+    if cap < 0:
+        raise ValueError("read cap must be non-negative")
+    remaining = cap + 1
+    parts: list[_Chunk] = []
+    while remaining > 0:
+        part = f.read(min(remaining, 64 * 1024))
+        if not part:
+            break
+        parts.append(part)
+        remaining -= len(part)
+    return parts
+
+
 def _text_capped_from(f: IO, max_chars: int) -> tuple[str, bool] | None:
     """Capped read + truncation shaping on an already-vetted stream."""
     try:
         with f:
-            content = f.read(max_chars + 1)
+            content = "".join(_read_probe_parts(f, max_chars))
     except OSError:
         return None
     if len(content) <= max_chars:
@@ -165,6 +189,8 @@ def read_bytes_capped(
     max_bytes: int,
 ) -> tuple[bytes, bool] | None:
     """Read at most *max_bytes* bytes from *path* (binary).
+
+    The cap must be non-negative.
 
     Returns ``(data, truncated)`` where ``truncated`` means the file
     held MORE than *max_bytes* (``data`` carries exactly the first
@@ -183,7 +209,7 @@ def read_bytes_capped(
 def _bytes_capped_from(f: IO, max_bytes: int) -> tuple[bytes, bool] | None:
     try:
         with f:
-            data = f.read(max_bytes + 1)
+            data = b"".join(_read_probe_parts(f, max_bytes))
     except OSError:
         return None
     if len(data) > max_bytes:
