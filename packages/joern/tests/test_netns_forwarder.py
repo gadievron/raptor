@@ -283,11 +283,14 @@ class TestListenerPermissions:
 
     def test_umask_restored(self, uds_dir):
         before = os.umask(0o022)
-        os.umask(before)
-        create_listener(os.path.join(uds_dir, "joern.sock")).close()
-        after = os.umask(0o022)
-        os.umask(after)
-        assert after == before
+        try:
+            os.umask(before)
+            with create_listener(os.path.join(uds_dir, "joern.sock")):
+                after = os.umask(0o022)
+                os.umask(after)
+                assert after == before
+        finally:
+            os.umask(before)
 
 
 class TestForwarderStop:
