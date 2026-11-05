@@ -10,6 +10,8 @@ import pytest
 from core.sandbox import egress_summary as summary
 from core.security import capped_read
 
+pytestmark = pytest.mark.usefixtures("private_egress_readers")
+
 
 def event():
     return {"host": "example.test", "port": 443, "result": "allowed"}
@@ -32,9 +34,9 @@ def test_oversized_line_does_not_hide_valid_neighbors(tmp_path, monkeypatch):
     real_loads = json.loads
     decoded = []
 
-    def decode(line):
+    def decode(line, **kwargs):
         decoded.append(line)
-        return real_loads(line)
+        return real_loads(line, **kwargs)
 
     monkeypatch.setattr(summary.json, "loads", decode)
     result = summary.summarise_egress(tmp_path)

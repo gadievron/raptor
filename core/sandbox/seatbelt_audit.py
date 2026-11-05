@@ -371,7 +371,10 @@ def _parse_kext_message(
 def _decode_log_entry(line: str) -> dict | None:
     """Decode one log line without letting malformed input end capture."""
     try:
-        entry = json.loads(line)
+        # Surrogate escapes preserve source damage until this per-line
+        # validation; replacement decoding would invent audit content.
+        line.encode("utf-8")
+        entry = json.loads(line, object_pairs_hook=_evidence_mod._unique_evidence_object)
     except (ValueError, RecursionError):
         # ValueError includes JSONDecodeError and oversized integers.
         return None
@@ -489,7 +492,7 @@ def _warm_up_log_lines(stream, deadline):
                 if (pending and not discarding
                         and len(pending) <= _MAX_WARM_UP_LINE_BYTES
                         and time.monotonic() < deadline):
-                    yield pending.decode("utf-8", errors="replace")
+                    yield pending.decode("utf-8", errors="surrogateescape")
                 return
             pending.extend(chunk)
             while True:
@@ -499,7 +502,7 @@ def _warm_up_log_lines(stream, deadline):
                 if time.monotonic() >= deadline:
                     return
                 if not discarding and end <= _MAX_WARM_UP_LINE_BYTES:
-                    yield pending[:end].decode("utf-8", errors="replace")
+                    yield pending[:end].decode("utf-8", errors="surrogateescape")
                 del pending[:end + 1]
                 discarding = False
             if len(pending) > _MAX_WARM_UP_LINE_BYTES:
@@ -982,7 +985,7 @@ class LogStreamer:
             stderr=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
-            errors="replace",
+            errors="surrogateescape",
             # Buffering: line-buffered so we get records as they
             # arrive rather than accumulating in a 4K pipe buffer.
             bufsize=1,
@@ -1247,6 +1250,7 @@ class LogStreamer:
                     continue
                 entry = _decode_log_entry(line)
                 if entry is None:
+                    self._reader_failed = True
                     continue
                 if entry.get("senderImagePath") == SANDBOX_KEXT_SENDER:
                     self._kext_lines_seen += 1
@@ -1630,11 +1634,20 @@ class LogStreamer:
                     self._append_record_locked(summary)
                 finally:
                     self._capture_closed = True
-                    if self._evidence is not None:
-                        try:
-                            self._evidence.close()
-                        finally:
-                            self._evidence = None
+                    try:
+                        if self._evidence is not None:
+                            verified = False
+                            try:
+                                verified = self._evidence.close()
+                            finally:
+                                self._evidence = None
+                                if not verified:
+                                    self._reader_failed = True
+                    finally:
+                        if (self._reader_failed or self._append_failures
+                                or not reader_drained):
+                            from .summary import _record_evidence_write_failure
+                            _record_evidence_write_failure(self._run_dir)
         except OSError:
             # WARNING (F070 W21 promote): the summary record is the
             # last write of every audit-mode run and the only record

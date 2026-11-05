@@ -1245,7 +1245,11 @@ def _load_jsonl_stream(
         skipping_oversize_line = False
         total = 0
         while True:
-            chunk = os.read(fd, 1 << 20)
+            remaining = _MAX_EVENTS_STREAM_BYTES - total
+            if remaining <= 0 or len(out) >= _MAX_EVENTS_PARSED:
+                over_bound = True  # conservative if the lookahead fails
+                return out, bool(os.read(fd, 1))
+            chunk = os.read(fd, min(1 << 20, remaining))
             if not chunk:
                 break
             total += len(chunk)

@@ -599,6 +599,12 @@ def parse_observe_log(run_dir, *,
     introspection" contract.
     """
     profile = ObserveProfile()
+    if current_run:
+        # The final descriptor check happens after the JSONL tail is
+        # appended. A clean-looking tail cannot overrule parent-known loss.
+        from .summary import get_evidence_inode_mismatch, get_evidence_write_failure
+        if get_evidence_write_failure(run_dir) or get_evidence_inode_mismatch(run_dir):
+            profile.capture_incomplete = True
     if expected_nonce is not None and sandbox_info is not None:
         info = sandbox_info if isinstance(sandbox_info, dict) else {}
         _isolated = info.get("mount_ns_active") is True or (

@@ -51,6 +51,7 @@ from core.security.log_sanitisation import has_nonprintable, sanitise_for_termin
 
 from ._parser_jail_child import FRAME_HEADER, MAX_FRAME_PAYLOAD, READY_FRAME_ID
 from ._request_head import CENSUS_VALUES, ParsedRequestLine, ParseRefusal
+from .evidence import _unique_evidence_object
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ def _validate_verdict(payload: bytes) -> "ParsedRequestLine | ParseRefusal":
     assumed compromisable. Raises ``_ProtocolError`` on any deviation.
     """
     try:
-        obj = json.loads(payload)
+        obj = json.loads(payload, object_pairs_hook=_unique_evidence_object)
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise _ProtocolError(f"verdict frame is not valid JSON: {exc}") from exc
     if not isinstance(obj, dict):
@@ -464,7 +465,8 @@ class ParserJail:
         if frame_id != READY_FRAME_ID or length > MAX_FRAME_PAYLOAD:
             raise _ProtocolError("malformed ready frame header")
         try:
-            obj = json.loads(self._recv_exact(sock, length, deadline=deadline))
+            obj = json.loads(self._recv_exact(sock, length, deadline=deadline),
+                             object_pairs_hook=_unique_evidence_object)
         except (ValueError, UnicodeDecodeError, RecursionError) as exc:
             raise _ProtocolError("ready frame is not valid JSON") from exc
         if not isinstance(obj, dict):
