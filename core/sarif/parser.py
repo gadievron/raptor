@@ -1060,6 +1060,62 @@ def rule_default_level(rule: dict[str, Any]) -> str | None:
     return None
 
 
+class ArtifactUriResolver:
+    """Resolve explicit and indexed artifact URIs using one run's tables.
+
+    Keep the existing 16-base depth bound and no index-chain traversal.
+    Cache indexed locations, including misses, without retaining result
+    payloads. Filesystem containment remains the caller's responsibility.
+    """
+
+    def __init__(self, run: dict[str, Any]):
+        self._uri_bases = _as_dict(run.get("originalUriBaseIds"))
+        artifacts = run.get("artifacts")
+        self._artifacts = artifacts if isinstance(artifacts, list) else []
+        self._artifact_uris: dict[int, str | None] = {}
+
+    def resolve(self, artifact: dict[str, Any]) -> str | None:
+        """Prefer explicit URIs; otherwise look up an exact integer index."""
+        art = _as_dict(artifact)
+        uri_bases, artifacts, artifact_uris = self._uri_bases, self._artifacts, self._artifact_uris
+        uri = art.get("uri")
+        index = None
+        if not isinstance(uri, str):
+            index = art.get("index")
+            if type(index) is not int or not 0 <= index < len(artifacts):
+                return None
+            if index in artifact_uris:
+                return artifact_uris[index]
+            artifact_uris[index] = None
+            art = _as_dict(_as_dict(artifacts[index]).get("location"))
+            uri = art.get("uri")
+            if not isinstance(uri, str):
+                return None
+        base_id = art.get("uriBaseId")
+        seen: set[str] = set()
+        depth = 0
+        while isinstance(base_id, str) and base_id not in seen and depth < 16:
+            seen.add(base_id)
+            depth += 1
+            base = uri_bases.get(base_id)
+            if not isinstance(base, dict):
+                break
+            base_uri = base.get("uri")
+            if not isinstance(base_uri, str):
+                break
+            # SARIF spec: base URIs end in '/'. Tolerate missing
+            # separator without doubling.
+            if not base_uri.endswith("/"):
+                base_uri = base_uri + "/"
+            # Don't double-slash if the inner URI happens to be
+            # absolute on its own.
+            uri = base_uri + uri.lstrip("/")
+            base_id = base.get("uriBaseId")
+        if index is not None:
+            artifact_uris[index] = uri
+        return uri
+
+
 def _uri_escapes_root(uri: str, source_root: Path) -> bool:
     """Containment check for a resolved artifact URI against a known
     source root — same defence as ``import_normalizer._is_under_root``,
@@ -1139,70 +1195,13 @@ def parse_sarif_findings(
         rule_resolver = ResultRuleResolver(run)
         rule_metadata: dict[int, tuple[str | None, str | None, str | None]] = {}
 
-        # Per-run originalUriBaseIds for relative-URI resolution.
-        # SARIF emitters commonly emit `result.locations[*].artifactLocation
-        # = {"uri": "src/foo.c", "uriBaseId": "%SRCROOT%"}` rather than
-        # an absolute URI. Pre-fix the parser took `artifact.get("uri")`
-        # verbatim — `findings[i].file` came out as `"src/foo.c"`,
-        # which subsequent consumers (vulnerability-rendering,
-        # editor-jump links, dedup keyed on file path) treated as a
-        # path relative to wherever they happened to be running.
-        # Resolve via the run's `originalUriBaseIds` table.
-        uri_bases = _as_dict(run.get("originalUriBaseIds"))
-        artifacts = run.get("artifacts")
-        artifacts = artifacts if isinstance(artifacts, list) else []
-        artifact_uris: dict[int, str | None] = {}
-
-        def _resolve_uri(
-            art: dict[str, Any], _uri_bases=uri_bases,
-        ) -> str | None:
-            """Resolve an explicit URI, or an index into this run's artifacts.
-
-            Explicit URIs retain precedence. Indexed table locations may
-            carry their own index, but resolution never follows index chains.
-            """
-            uri = art.get("uri")
-            index = None
-            if not isinstance(uri, str):
-                index = art.get("index")
-                if type(index) is not int or not 0 <= index < len(artifacts):
-                    return None
-                if index in artifact_uris:
-                    return artifact_uris[index]
-                artifact_uris[index] = None
-                art = _as_dict(_as_dict(artifacts[index]).get("location"))
-                uri = art.get("uri")
-                if not isinstance(uri, str):
-                    return None
-            base_id = art.get("uriBaseId")
-            seen: set[str] = set()
-            depth = 0
-            while isinstance(base_id, str) and base_id not in seen and depth < 16:
-                seen.add(base_id)
-                depth += 1
-                base = _uri_bases.get(base_id)
-                if not isinstance(base, dict):
-                    break
-                base_uri = base.get("uri")
-                if not isinstance(base_uri, str):
-                    break
-                # SARIF spec: base URIs end in '/'. Tolerate missing
-                # separator without doubling.
-                if not base_uri.endswith("/"):
-                    base_uri = base_uri + "/"
-                # Don't double-slash if the inner URI happens to be
-                # absolute on its own.
-                uri = base_uri + uri.lstrip("/")
-                base_id = base.get("uriBaseId")
-            if index is not None:
-                artifact_uris[index] = uri
-            return uri
+        uri_resolver = ArtifactUriResolver(run)
 
         flow_root_warning_reported = False
 
         def _resolve_flow_uri(artifact: dict[str, Any]) -> str | None:
             nonlocal flow_root_warning_reported
-            uri = _resolve_uri(artifact)
+            uri = uri_resolver.resolve(artifact)
             if uri and source_root is not None and _uri_escapes_root(uri, source_root):
                 if not flow_root_warning_reported:
                     logger.warning("SARIF parser: skipping dataflow paths with out-of-root URIs; first: %s",
@@ -1228,7 +1227,7 @@ def parse_sarif_findings(
             first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
             loc = _as_dict(first_loc.get("physicalLocation"))
             artifact = _as_dict(loc.get("artifactLocation"))
-            file_uri = _resolve_uri(artifact)
+            file_uri = uri_resolver.resolve(artifact)
 
             # finding_id resolution:
             #   1. SARIF tool-supplied fingerprint (best — survives

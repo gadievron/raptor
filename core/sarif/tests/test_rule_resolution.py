@@ -1098,3 +1098,35 @@ def test_parser_and_metrics_reuse_qualified_validation_independently(monkeypatch
     assert metrics['findings_by_rule'] == {'same': 10}
     assert metrics['findings_by_severity']['error'] == 10
     assert len(calls) == 2
+
+
+def test_artifact_resolver_caches_hits_and_misses_without_retaining_results():
+    import gc
+    import weakref
+    from core.sarif.parser import ArtifactUriResolver
+
+    class Tracked(dict):
+        pass
+
+    class Artifacts(list):
+        reads = 0
+
+        def __getitem__(self, index):
+            self.reads += 1
+            return super().__getitem__(index)
+
+    table = Artifacts([{'location': {'uri': 'source.c', 'uriBaseId': 'ROOT'}},
+                       {'location': {'index': 0}}])
+    result = Tracked(ruleId='rule')
+    run = Tracked(artifacts=table, originalUriBaseIds={'ROOT': {'uri': 'src/'}}, results=[result])
+    run_ref, result_ref = weakref.ref(run), weakref.ref(result)
+    resolver = ArtifactUriResolver(run)
+    del run, result
+    gc.collect(0)
+    assert run_ref() is None and result_ref() is None
+    assert resolver.resolve({'uri': 'explicit.c', 'index': 0}) == 'explicit.c'
+    assert table.reads == 0
+    for _ in range(10):
+        assert resolver.resolve({'index': 0}) == 'src/source.c'
+        assert resolver.resolve({'index': 1}) is None
+    assert table.reads == 2
