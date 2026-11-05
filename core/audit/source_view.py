@@ -583,6 +583,10 @@ _C_RANGE_MIN_CHARS_PER_MARKER = 32
 _C_ASCII_BLANK_TABLE = bytes(10 if code == 10 else 32 for code in range(128))
 
 
+_C_SHORT_STRING_PROBE = 128
+_C_SHORT_STRING_END_RE = re.compile(r'[^"\\\n]*(?:\\[\s\S][^"\\\n]*)*["\n]')
+
+
 def _render_c_blank_ranges(source: str, ranges: list[tuple[int, int]]) -> str:
     """Render ordered blanking ranges without a file-sized character list."""
     pieces: list[str] = []
@@ -941,8 +945,16 @@ def _scan_c_family(
                 # Single-line literals stop at the newline — they can
                 # never carry state past their own line; not reported.
                 eof = None
-            end = _string_end(source, i, ch, raw=(ch == "`"),
-                              multiline=multiline, on_eof=eof)
+            # Native C/C++ reaches this arm only for ordinary double quotes.
+            # A real quote or LF must close this bounded probe. A window
+            # boundary is never a terminator; misses use the existing loop.
+            if (c_blanks is not None and (short_match := _C_SHORT_STRING_END_RE.match(
+                    source, i + 1, min(n, i + 1 + _C_SHORT_STRING_PROBE),
+            )) is not None):
+                end = short_match.end()
+            else:
+                end = _string_end(source, i, ch, raw=(ch == "`"),
+                                  multiline=multiline, on_eof=eof)
             # Keep the delimiters so shapes like ``""`` stay visible;
             # blank only the contents. (_string_end never returns
             # past n, so the bound is simply end - 1.)
