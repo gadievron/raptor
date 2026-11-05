@@ -50,7 +50,7 @@ from typing import Any
 from collections.abc import Callable, Iterable
 
 from core.json import load_json, save_json
-from core.source.lines import split_lines
+from core.source.lines import _NON_NL_BREAKERS, split_lines
 
 from .struct_accessor_index import _MIN_FIELD_LEN, _NOISE_FIELDS, _detect_lock
 
@@ -1051,7 +1051,15 @@ def _scan_file_regex(
             lock_cache[span.name] = _detect_lock(segment)
         return lock_cache[span.name]
 
-    for lineno, text in enumerate(split_lines(source), 1):
+    # These views are identical without any non-LF line breakers.
+    # Keep both legacy splits for subclasses and differing line models.
+    scan_lines = (lines if type(source) is str
+                  and not any(char in source for char in _NON_NL_BREAKERS)
+                  else split_lines(source))
+    for lineno, text in enumerate(scan_lines, 1):
+        # Writes, accesses, and aliases all require this literal arrow.
+        if type(text) is str and "->" not in text:
+            continue
         span = (span_for_line(lineno) if span_for_line is not None
                 else _span_for_line(spans, lineno))
         function = span.name if span else ""
