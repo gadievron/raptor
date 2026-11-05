@@ -577,6 +577,40 @@ def _blank_c_region(chars: list[str], source: str, start: int, end: int) -> None
         cursor = stop + 1
 
 
+_C_RANGE_MIN_SOURCE = 16 * 1024
+_C_RANGE_MIN_CHARS_PER_MARKER = 32
+
+
+def _render_c_blank_ranges(source: str, ranges: list[tuple[int, int]]) -> str:
+    """Render ordered blanking ranges without a file-sized character list."""
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in ranges:
+        if end <= start:
+            continue
+        newlines = source.count("\n", start, end)
+        if (start < cursor or start < 0 or end > len(source)
+                or (newlines >= 1024 and newlines * 16 > end - start)):
+            # Preserve the character operation for unexpected overlapping,
+            # out-of-order, or invalid ranges instead of assuming order.
+            # LF-dense regions likewise retain legacy allocation behavior.
+            pieces.clear()
+            chars = list(source)
+            for left, right in ranges:
+                _blank(chars, left, right)
+            return "".join(chars)
+        pieces.append(source[cursor:start])
+        if not newlines:
+            pieces.append(" " * (end - start))
+        else:
+            pieces.append("\n".join(
+                " " * len(line) for line in source[start:end].split("\n")
+            ))
+        cursor = end
+    pieces.append(source[cursor:])
+    return "".join(pieces)
+
+
 def _strip_c_family(
     source: str, spec: _CFamilySpec, *, keep_strings: bool = False,
     reasons: set[str] | None = None,
@@ -628,7 +662,15 @@ def _scan_c_family(
                     or spec is _C_IDENTITY_SPECS[2]))
     if plain_c and "/" not in source and '"' not in source and "'" not in source:
         return source
-    chars = list(source)
+    # Known C/C++ grammars never inspect the modified character buffer.
+    # Other grammars still need that buffer as lexer state.
+    # Dense markers can create more range objects than the legacy buffer.
+    c_blanks: list[tuple[int, int]] | None = (
+        [] if (plain_c and len(source) >= _C_RANGE_MIN_SOURCE
+               and (source.count("/") + source.count('"') + source.count("'"))
+               <= len(source) // _C_RANGE_MIN_CHARS_PER_MARKER) else None
+    )
+    chars = list(source) if c_blanks is None else []
     n = len(source)
     flag = found.add
     # Capture an alias, keeping source as a fast local in the main loop.
@@ -641,6 +683,15 @@ def _scan_c_family(
                 _blank(chars, start, end)
             else:
                 _blank_c_region(chars, c_source, start, end)
+
+    if c_blanks is not None:
+        range_append = c_blanks.append
+
+        def blank_range_str(start: int, end: int) -> None:
+            if not keep_strings and end > start:
+                range_append((start, end))
+
+        blank_str = blank_range_str
 
     def verbatim(start: int, end: int) -> None:
         """Ambiguous region: shown as-is in both views, never lexed."""
@@ -700,7 +751,9 @@ def _scan_c_family(
             end = n if end < 0 else end
             if spec.php_tags:
                 end = _php_line_comment_end(source, i, end)
-            if c_source is None or end - i < _C_BULK_BLANK_MIN:
+            if c_blanks is not None:
+                c_blanks.append((i, end))
+            elif c_source is None or end - i < _C_BULK_BLANK_MIN:
                 _blank(chars, i, end)
             else:
                 _blank_c_region(chars, c_source, i, end)
@@ -722,7 +775,9 @@ def _scan_c_family(
                 if close < 0:
                     flag("unterminated-block-comment")
                 end = n if close < 0 else close + 2
-            if c_source is None or end - i < _C_BULK_BLANK_MIN:
+            if c_blanks is not None:
+                c_blanks.append((i, end))
+            elif c_source is None or end - i < _C_BULK_BLANK_MIN:
                 _blank(chars, i, end)
             else:
                 _blank_c_region(chars, c_source, i, end)
@@ -919,6 +974,8 @@ def _scan_c_family(
                 i = n if marker is None else marker.start()
             else:
                 i += 1
+    if c_blanks is not None:
+        return _render_c_blank_ranges(source, c_blanks)
     return "".join(chars)
 
 
