@@ -77,6 +77,11 @@ def _iter_enum_bodies(text: str):
     """Yield ``(block_start, body)`` per enum block, matching the old
     single-regex semantics (body = shortest non-empty run to the next
     ``}``, scan resumes after the block) at linear cost."""
+    # The regex starts with this literal keyword. Native substring
+    # search skips the regex pass on enum-free text; possible matches
+    # still use the original bounded parser. Preserve subclass behavior.
+    if type(text) is str and "enum" not in text:
+        return
     pos = 0
     while True:
         head = _ENUM_HEAD_RE.search(text, pos)
