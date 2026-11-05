@@ -64,7 +64,6 @@ import logging
 import math
 import os
 import select
-import shutil
 import struct
 import tempfile
 import threading
@@ -72,6 +71,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import rmtree_hardened
 from core.sandbox._daemon import _MAX_CAPTURE_BYTES as _DAEMON_CAPTURE_CAP
 
 log = logging.getLogger(__name__)
@@ -88,6 +88,18 @@ _DAEMON_SCRIPT = Path(__file__).resolve().parent / "_daemon.py"
 # rejected frames over 64 MiB only AFTER the daemon had already built
 # and half-sent them, wedging the persistent channel mid-frame.
 _MAX_REPLY_FRAME_BYTES = 4 * _DAEMON_CAPTURE_CAP + 1024 * 1024
+
+
+def _remove_owned_output(path: str) -> bool:
+    """Best-effort removal with honest accounting and a retryable result."""
+    try:
+        if rmtree_hardened(path):
+            return True
+    except Exception:
+        log.warning("Cannot remove sandbox host output %s", path, exc_info=True)
+    else:
+        log.warning("Sandbox host output retained after failed removal: %s", path)
+    return False
 
 
 def _resolve_output(target_path: Path, output: Path | None) -> tuple[str, str | None]:
@@ -344,7 +356,7 @@ class SandboxHost:
                 with contextlib.suppress(OSError):
                     os.close(fd)
             if owned_output:
-                shutil.rmtree(owned_output, ignore_errors=True)
+                _remove_owned_output(owned_output)
             raise
         try:
             worker_enabled = True
@@ -384,15 +396,17 @@ class SandboxHost:
                 os.close(fd)
 
     def _cleanup_owned_output(self) -> None:
-        """Remove private scratch once, after its backend has returned."""
+        """Keep ownership until the backend's private scratch is removed."""
         with self._daemon_fds_lock:
-            output, self._owned_output = self._owned_output, None
-        if output:
-            shutil.rmtree(output, ignore_errors=True)
+            output = self._owned_output
+            if output and _remove_owned_output(output):
+                self._owned_output = None
 
     def close(self) -> None:
         """Terminate the daemon and close the pipe fds."""
         if self._closed:
+            if not self._thread.is_alive():
+                self._cleanup_owned_output()
             return
         self._closed = True
         # Startup acknowledgement already released the daemon-side
@@ -656,7 +670,7 @@ def one_shot_call(
             raise HostRPCError(msg) from e
     finally:
         if owned_output:
-            shutil.rmtree(owned_output, ignore_errors=True)
+            _remove_owned_output(owned_output)
 
     if not r.stdout:
         stderr_tail = (r.stderr or b"").decode(

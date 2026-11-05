@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from core.run.scratch import scratch_dir
 from core.run.workdir import exec_workdir
 
 
@@ -49,8 +49,7 @@ def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
     if not p.is_file() or os.access(p, os.X_OK):
         yield p
         return
-    with tempfile.TemporaryDirectory(
-            prefix="raptor-exec-stage-", dir=exec_workdir()) as td:
+    with scratch_dir("raptor-exec-stage-", dir=exec_workdir()) as td:
         staged = Path(td) / p.name
         shutil.copy2(p, staged)
         staged.chmod(0o500)

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 from core.json import dumps_artifact
+from core.run.scratch import scratch_dir
 import subprocess
 import sys
 import tempfile
@@ -127,17 +128,16 @@ def _resolve_run_dir(args: argparse.Namespace,
         path = Path(args.out).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path, True
-    # Anonymous tmpdir — auto-clean unless --keep set.
-    tmp = tempfile.mkdtemp(prefix="raptor-observe-")
-    if not args.keep:
-        # Lazy import so the help/parse path doesn't need shutil.
-        import shutil
-
-        def _cleanup() -> None:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-        stack.callback(_cleanup)
-    return Path(tmp), bool(args.keep)
+    # Shared ownership keeps long-running observations alive and reclaims
+    # restricted output without masking probe failures.
+    if args.keep:
+        # Kept observations have a separate, deliberately unreaped prefix.
+        # An explicit parent avoids dynamic reaper registration as well.
+        owner = scratch_dir("raptor-observe-", dir=tempfile.gettempdir(), keep=True)
+    else:
+        owner = scratch_dir("raptor-observe-tmp-")
+    path = stack.enter_context(owner)
+    return path, bool(args.keep)
 
 
 def _format_summary(profile, *, run_dir: Path, kept: bool,

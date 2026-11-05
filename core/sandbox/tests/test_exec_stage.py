@@ -12,7 +12,17 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from core.sandbox import executable_stage
+
+
+@pytest.fixture(autouse=True)
+def _owned_stage_parent(tmp_path, monkeypatch):
+    """Stage fixtures under this test, independently of session workdir state."""
+    from core.sandbox import exec_stage
+
+    monkeypatch.setattr(exec_stage, "exec_workdir", lambda: tmp_path)
 
 
 def _mode(p: Path) -> int:
