@@ -5,8 +5,12 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import patch
+
+import pytest
 
 _PREP_PATH = (Path(__file__).resolve().parents[3]
               / "libexec" / "raptor-study-prep")
@@ -19,7 +23,10 @@ def _load_prep() -> ModuleType:
         "raptor_study_prep_redb", str(_PREP_PATH), loader=loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+            spec.loader.exec_module(mod)
     return mod
 
 

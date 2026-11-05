@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -25,7 +26,10 @@ def _load_prep() -> ModuleType:
         "raptor_study_prep_scoping", str(_PREP_PATH), loader=loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+            spec.loader.exec_module(mod)
     return mod
 
 
