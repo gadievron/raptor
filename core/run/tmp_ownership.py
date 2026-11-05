@@ -35,7 +35,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from core.atomic_fs import rmtree_hardened
+from core.atomic_fs import rmtree_hardened, write_text_atomically
 
 # Import-light (stdlib-only at module level) — shares the reaper's
 # in-use probes so both sweeps judge liveness the same way.
@@ -66,11 +66,10 @@ def write_owner_marker(dir_path: str | Path) -> None:
     marker = Path(dir_path) / OWNER_MARKER_NAME
     payload = json.dumps({"pid": os.getpid(), "created": time.time()})
     try:
-        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(fd, payload.encode("utf-8"))
-        finally:
-            os.close(fd)
+        # Do not recreate a scratch owner that has already torn down.
+        if not marker.parent.is_dir():
+            return
+        write_text_atomically(marker, payload, mode=0o600, replace=False)
     except OSError:
         # A missing marker only degrades the dir to the legacy age
         # gate — never worth failing the component boot over.
