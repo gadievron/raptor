@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 import sys
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import sandbox_wrapper_scope as scope
-from sandbox_wrapper_tests import registry_errors
+with patch.object(sys, "path", sys.path.copy()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import sandbox_wrapper_scope as scope
+    from sandbox_wrapper_tests import registry_errors
 
 
 @pytest.fixture
@@ -188,3 +190,25 @@ def test_shared_opaque_fixture_forces_full_runtime_coverage(tree):
     (root / 'conftest.py').write_text('import importlib\ndef fixture():\n    importlib.import_module(unknown)\n')
     contracts, families = selected(tree, ['core/one/wrapper.py'])
     assert len(contracts) == 2 and families == {'one', 'two'}
+
+
+def test_lazy_submodule_export_remains_finite_and_keeps_unrelated_runners_idle(tree):
+    root, _ = tree
+    _lazy_package(root)
+    path = root / 'core/lazy/__init__.py'
+    text = path.read_text().replace('("core.shared.helper", "VALUE")', '("core.shared.helper", None)')
+    text = text.replace('value = getattr(importlib.import_module(module_name), attribute)',
+                        'module = importlib.import_module(module_name)\n    value = module if attribute is None else getattr(module, attribute)')
+    path.write_text(text)
+    assert selected(tree, ['core/shared/helper.py'])[1] == {'one'}
+    assert selected(tree, ['core/unrelated/module.py']) == (set(), set())
+
+
+@pytest.mark.parametrize('invalid', ['(None, "VALUE")', '("core.shared.helper", 1)', '("core.shared.helper", "VALUE", "extra")'],
+                         ids=['invalid-module', 'invalid-attribute', 'invalid-arity'])
+def test_invalid_lazy_submodule_maps_still_broaden_conservatively(tree, invalid):
+    root, _ = tree
+    _lazy_package(root)
+    path = root / 'core/lazy/__init__.py'
+    path.write_text(path.read_text().replace('("core.shared.helper", "VALUE")', invalid))
+    assert selected(tree, ['core/unrelated/module.py'])[1] == {'one'}

@@ -69,7 +69,7 @@ def lazy_exports(path: str, tree: ast.Module) -> tuple[dict[str, str], set[int]]
         lookup_name = lookups[0].targets[0].id
         imported = imports[0].args[0]
         module_name = None
-        if all(isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, str) for x in v) for v in table.values()):
+        if all(isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], str) and (v[1] is None or isinstance(v[1], str)) for v in table.values()):
             for node in ast.walk(getter):
                 if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
                         and node.value.id == lookup_name and len(node.targets) == 1

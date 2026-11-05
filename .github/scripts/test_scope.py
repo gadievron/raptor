@@ -54,7 +54,10 @@ from codeql_scope import (
 TIERS: dict[str, dict] = {
     "sandbox": {
         "test_dirs": ["core/sandbox/tests"],
-        "extra_triggers": [".github/scripts/pytest_workers.py"],
+        "extra_triggers": [
+            ".github/scripts/pytest_workers.py",
+            ".github/scripts/macos_test_scope.py",
+        ],
         "env": "sandbox",
         "env_reason": "needs Linux namespaces / macOS sandbox-exec",
     },
@@ -87,6 +90,7 @@ TIERS: dict[str, dict] = {
         # The offline preparation tool calls SCA validators. Its tests live
         # in the dependency-equipped SCA tier, not the pytest-only CI tier.
         "extra_triggers": [
+            ".github/scripts/sca_test_matrix.py",
             ".github/scripts/prepare_sbom.py",
             ".github/sbom-provenance.json",
         ],
@@ -282,7 +286,6 @@ FAST_TIER_IGNORES = {
 #: and surfaced on the next real PR or the cron, misattributed —
 #: the same delayed-failure shape as the root pytest case above.
 ROOT_HARNESS_FILES = frozenset({
-    ".github/scripts/sca_test_matrix.py",
     "conftest.py",
     "pytest.ini",
     ".github/workflows/tests.yml",
@@ -1037,7 +1040,7 @@ def compute_tier_dispatch(
 def _force_all_dispatch(repo: Path) -> dict[str, dict]:
     """Full dispatch: discover all test files from disk, produce
     complete file lists and matrices for every tier."""
-    result: dict[str, dict] = {}
+    result: dict[str, dict] = {"_scope": {"full": True}}
 
     for tier_name, tier_config in TIERS.items():
         tier_files = _discover_tier_files(tier_config, repo)
@@ -1130,7 +1133,8 @@ def main() -> int:
         return 0
 
     result = compute_tier_dispatch(changed, repo)
-    set_output("scope_mode", "scoped")
+    scope_mode = "full" if result.get("_scope", {}).get("full") else "scoped"
+    set_output("scope_mode", scope_mode)
     _emit_outputs(result, set_output)
 
     active = sum(1 for t, i in result.items()
@@ -1142,9 +1146,10 @@ def main() -> int:
     n_changed = stats.get("changed", 0)
     n_deps = stats.get("dependents", 0)
     pct = f"{closure_n / total_files * 100:.0f}%" if total_files else "?"
-    notice = (f"scoped to {closure_n}/{total_files} files ({pct})"
-              f" — {n_changed} changed, {n_deps} dependents"
-              f"; {active}/{total_tiers} tiers active")
+    notice = ("full dispatch" if scope_mode == "full" else
+              f"scoped to {closure_n}/{total_files} files ({pct})"
+              f" — {n_changed} changed, {n_deps} dependents")
+    notice += f"; {active}/{total_tiers} tiers active"
     print(f"::notice::Test scope: {notice}")
     set_output("scope_summary", notice)
 

@@ -90,6 +90,8 @@ jobs:
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
       - name: Install isolated Chromium runtime
+        if: contains(matrix.families, 'playwright-browser')
+        timeout-minutes: 5
         shell: bash
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wrapper-browsers
