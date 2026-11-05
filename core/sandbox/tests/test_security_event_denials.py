@@ -89,6 +89,8 @@ def test_no_emission_without_active_run(events):
 
 
 def test_no_emission_past_per_run_cap(active_run, events, monkeypatch):
+    monkeypatch.setattr(summary_mod, "_evidence_write_failures",
+                        dict(summary_mod._evidence_write_failures))
     monkeypatch.setattr(summary_mod, "MAX_DENIALS_PER_RUN", 2)
     for _ in range(5):
         summary_mod.record_denial("curl https://x", 1, "network")

@@ -248,6 +248,18 @@ def get_active_run_dir() -> Path | None:
     return _active_run_dir
 
 
+def _record_evidence_write_failure(run_dir: Path) -> None:
+    """Retain producer loss for the captured run, including budget drops."""
+    try:
+        failure_key = str(run_dir.resolve())
+    except OSError:
+        logger.warning("record_denial: could not retain evidence failure state",
+                       exc_info=True)
+    else:
+        with _lock:
+            _evidence_write_failures.setdefault(failure_key, True)
+
+
 def record_denial(cmd_display: str, returncode: int,
                   denial_type: str, **details: Any) -> None:
     """Append a denial record to the active run's JSONL file.
@@ -259,8 +271,9 @@ def record_denial(cmd_display: str, returncode: int,
     details vary by type — `path` for write, `profile` for seccomp, etc.
     """
     global _denial_count
-    # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN.
-    # Logs once at the boundary so a developer can find it.
+    # Per-run cap: bound stored records to MAX_DENIALS_PER_RUN.
+    # The first dropped record retains producer loss for summary/triage
+    # and logs once at the boundary so a developer can find it.
     #
     # Pre-fix the comment claimed "lock-free increment is fine
     # under CPython GIL (slight overcount past cap is acceptable
@@ -288,6 +301,7 @@ def record_denial(cmd_display: str, returncode: int,
         is_boundary = (local_count == MAX_DENIALS_PER_RUN + 1)
     if local_count > MAX_DENIALS_PER_RUN:
         if is_boundary:
+            _record_evidence_write_failure(run_dir)
             logger.warning(
                 "sandbox summary cap reached (%d denials this run); "
                 "dropping further denials. Adversarial target or runaway "
@@ -386,14 +400,7 @@ def record_denial(cmd_display: str, returncode: int,
     except Exception:
         # Keep loss observable even when no disk artifact can be written.
         # Use the captured run, never a later active run.
-        try:
-            failure_key = str(run_dir.resolve())
-        except OSError:
-            logger.warning("record_denial: could not retain evidence failure state",
-                           exc_info=True)
-        else:
-            with _lock:
-                _evidence_write_failures.setdefault(failure_key, True)
+        _record_evidence_write_failure(run_dir)
         # WARNING (F071 W21 promote): operators rarely run with DEBUG
         # enabled, so pre-fix this swallow meant every dropped sandbox-
         # denial record was invisible — operator sees "no denials" with
