@@ -20,15 +20,23 @@ from packages.source_intel.analyze import (
     _lookup_cached_inventory,
     _register_inventory,
     _with_signature_memo,
-    clear_inventory_cache,
 )
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    clear_inventory_cache()
-    yield
-    clear_inventory_cache()
+    """Use a private inventory and an inactive per-run signature memo."""
+    from contextlib import ExitStack
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+    with ExitStack() as scope:
+        analyze_mod = import_module("packages.source_intel.analyze")
+        scope.enter_context(isolated_module_state(
+            analyze_mod, {"_INVENTORY_BY_TARGET": {}, "_SIG_MEMO": {},
+                          "_SIG_MEMO_DEPTH": 0}, lock=analyze_mod._INVENTORY_LOCK,
+        ))
+        yield
 
 
 def _counting_patch(calls):

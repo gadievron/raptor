@@ -26,9 +26,21 @@ from packages.source_intel.analyze import (
 
 @pytest.fixture(autouse=True)
 def _reset():
-    clear_cache_for_tests()
-    yield
-    clear_cache_for_tests()
+    """Use private result, flags, and signature caches for every test."""
+    from contextlib import ExitStack
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+    with ExitStack() as scope:
+        inject_mod = import_module("packages.llm_analysis.source_intel_inject")
+        scope.enter_context(isolated_module_state(
+            inject_mod, {"_SI_RESULT_CACHE": {}, "_SI_FLAGS_CACHE": {}},
+            lock=inject_mod._SI_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            inject_mod, {"_SIG_MEMO": {}}, lock=inject_mod._SIG_MEMO_LOCK,
+        ))
+        yield
 
 
 def _finding(**kw):
