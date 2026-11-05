@@ -270,5 +270,9 @@ for its family and Ruby only for the gadget-parser family. Python parser
 dependencies serve both gadget-parser and ELF-worker families; full selections
 retain every required tool. Parser setup
 steps have eight-minute limits within the existing thirty-minute acceptance job.
+Native acceptance runs at most two families concurrently on each existing runner,
+with separate homes, scratch directories, registries and reports. A failed family
+stops queued families; active families finish and clean up. Contract cases remain
+in one group, and skipped cases or execution-count drift still fail acceptance.
 `sandbox-wrappers-passed` reports selection and acceptance failures even
 when unrelated platform jobs are skipped.
