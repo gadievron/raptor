@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from core.security.cc_trust import (
-    _scan_cached,
     check_repo_claude_trust,
     set_trust_override,
 )
@@ -31,12 +30,20 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
-def _fresh_state():
-    _scan_cached.cache_clear()
-    set_trust_override(False)
-    yield
-    _scan_cached.cache_clear()
-    set_trust_override(False)
+def _fresh_state(monkeypatch):
+    from functools import lru_cache
+
+    from core.security import cc_trust
+    borrowed = cc_trust._scan_cached
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(cc_trust, {"_scan_cached": fresh, "_trust_override_set": False}):
+        try:
+            monkeypatch.setitem(globals(), "_scan_cached", fresh)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 class TestDispatchSitesRecheck:

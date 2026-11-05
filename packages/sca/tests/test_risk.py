@@ -80,26 +80,15 @@ def _finding(
 
 
 @pytest.fixture(autouse=True)
-def _flushed_calibration_cache():
-    """Flush the per-process calibration-status cache before AND after
-    every test in this module.
-
-    The pre-flush isolates a test from whatever an earlier test in the
-    same worker process left cached. The post-flush is the important
-    half: the calibration-status tests monkeypatch
-    ``_load_latest_validation_verdict`` and compute a risk estimate,
-    which refills the cache THROUGH the patched loader — monkeypatch
-    restores the loader at teardown, but the cache still holds the
-    patched verdict, and every later ``compute_risk_estimate`` in the
-    worker inherited it. Under pytest-xdist that made any downstream
-    test reading ``risk_components["calibration_status"]`` (the golden
-    byte-pins) order-dependent: green or red depending on which worker
-    the poisoning test landed on first.
-    """
+def _flushed_calibration_cache(monkeypatch):
     from packages.sca import risk
-    risk._reset_calibration_cache_for_tests()
-    yield
-    risk._reset_calibration_cache_for_tests()
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(risk, {"_CALIBRATION_STATUS_CACHE": None}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # ---------------------------------------------------------------------------

@@ -27,10 +27,14 @@ MACHINE_ID = "0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_latches():
-    hc._reset_warning_latches()
-    yield
-    hc._reset_warning_latches()
+def _fresh_latches(monkeypatch):
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(hc, {"_warned_reasons": set()}, lock=hc._warned_lock):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture()

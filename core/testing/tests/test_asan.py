@@ -8,11 +8,17 @@ from core.testing import asan
 
 
 @pytest.fixture(autouse=True)
-def clear_probe_cache():
-    probe = asan._runtime_unavailable_reason
-    probe.cache_clear()
-    yield
-    probe.cache_clear()
+def clear_probe_cache(monkeypatch):
+    from functools import lru_cache
+    borrowed = asan._runtime_unavailable_reason
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(asan, {"_runtime_unavailable_reason": fresh}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.mark.parametrize('mode', ['healthy', 'hang', 'compile-hang', 'compile-failure', 'startup-failure', 'no-main-marker'])
