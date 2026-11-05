@@ -686,6 +686,16 @@
    ],
    "verdict": "linear"
   },
+  "core/audit/source_view.py\u001f_C_SHORT_STRING_END_RE": {
+   "digests": [
+    "4c4c57a1899f"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/audit/struct_field_checker.py\u001f_STRUCT_FIELD_RE": {
    "digests": [
     "8e1c68a0973c"
