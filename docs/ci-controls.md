@@ -242,7 +242,13 @@ If one of these becomes a real gate, we should move it into the proper table abo
 
 Wrapper acceptance selection runs the full registration census before choosing
 per-platform contract selectors and native families. It follows shared Python
-imports, parent package initializers and test conftests, and broadens resource
+imports and parent package initializers. Parent conftests attach to each
+platform's collected test files, including platform-specific and native-only
+bindings. Importing a production or support module does not load its parent
+fixtures; explicit Python imports of conftests remain dependencies. Registered
+test inputs and their fixture candidates remain relevant outside the usual
+source roots, and the workflow trigger guard checks their path coverage.
+Selection broadens resource
 changes to their owning component. Sandbox backend, dependency or harness edits,
 deleted modules, missing history and unreadable dependencies retain full
 acceptance. Unresolved dynamic imports broaden selection for runtime edits.

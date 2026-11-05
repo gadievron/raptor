@@ -1,7 +1,8 @@
 """Select registered wrapper contracts and native families conservatively.
 
 The full registration census always runs first. Python dependencies include
-parent initializers, conftests, literal dynamic imports and repo-local paths.
+parent initializers, literal dynamic imports and repo-local paths. Collected
+test files inherit their parent conftests; imported modules do not.
 Computed imports without static targets broaden selection for runtime edits;
 resources broaden to their owning component. Unknown history and parse errors
 run everything. Selection never relies on a nightly run to repair a missing edge.
@@ -156,6 +157,15 @@ class Dependencies:
             )
         return self._module_files[prefix]
 
+    def collection_inputs(self, path: str) -> set[str]:
+        """Pytest loads conftests for collected paths, not Python imports."""
+        inputs = {path}
+        for parent in Path(path).parents:
+            candidate = (parent / 'conftest.py').as_posix()
+            if self._is_file(candidate):
+                inputs.add(candidate)
+        return inputs
+
     def package_exports(self, prefix: str) -> dict[str, str]:
         if prefix not in self.packages:
             path = prefix + '/__init__.py'
@@ -282,10 +292,9 @@ class Dependencies:
                 elif name in {'import_module', '__import__'} and isinstance(node.args[index].value, str):
                     deps.update(self.resolve(node.args[index].value))
         for parent in Path(path).parents:
-            for name in ('__init__.py', 'conftest.py'):
-                candidate = (parent / name).as_posix()
-                if candidate != path and self._is_file(candidate):
-                    deps.add(candidate)
+            candidate = (parent / '__init__.py').as_posix()
+            if candidate != path and self._is_file(candidate):
+                deps.add(candidate)
         self.edges[path] = deps, opaque
         return deps, opaque
 
@@ -313,6 +322,19 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
         if explanations is not None and message not in explanations:
             explanations.append(message)
 
+    collected = {selector.split('::', 1)[0] for row in registry['wrappers']
+                 for platform in PLATFORMS
+                 for selector in row.get('contract_platforms', {}).get(platform, row['contracts'])}
+    collected.update(selector.split('::', 1)[0] for family in registry['native']
+                     for platform, cell in family['platforms'].items() if platform in PLATFORMS and not cell.get('manual')
+                     for selector in (cell.get('tests') or ()))
+    bound = {row['source'] for row in registry['wrappers']} | collected
+    for path in collected:
+        # Include absent candidates too: adding or deleting a conftest changes
+        # collection even when its path is outside the usual source roots.
+        bound.update((parent / 'conftest.py').as_posix() for parent in Path(path).parents)
+    relevant = lambda p: (p.startswith(('core/', 'packages/', 'engine/', '.github/scripts/')) or p in bound
+                          or ('/' not in p and not p.endswith(('.md', '.txt'))))
     full = changed is None or any(p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS) for p in changed)
     if changed is None:
         if not explanations:
@@ -322,16 +344,11 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
         if triggers:
             explain('Full coverage: shared sandbox or test-harness inputs changed: ' + ', '.join(triggers))
     # Deleted modules can no longer supply the old dependency graph.
-    deleted = sorted(p for p in changed or [] if p.endswith('.py') and p.startswith(('core/', 'packages/', 'engine/'))
+    deleted = sorted(p for p in changed or [] if p.endswith('.py') and relevant(p)
                      and not (repo / p).is_file())
     full |= bool(deleted)
     if deleted:
         explain('Full coverage: deleted Python modules require the old dependency graph: ' + ', '.join(deleted))
-    bound = {row['source'] for row in registry['wrappers']}
-    bound.update(selector.split('::', 1)[0] for row in registry['wrappers']
-                 for selector in row['contracts'])
-    relevant = lambda p: (p.startswith(('core/', 'packages/', 'engine/', '.github/scripts/')) or p in bound
-                          or ('/' not in p and not p.endswith(('.md', '.txt'))))
     if not full and not any(relevant(p) for p in changed):
         explain('No platform runners: no wrapper source, dependency or harness inputs changed.')
         return {'include': []}
@@ -347,10 +364,13 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
             if graph.opaque_sources:
                 explain('Full coverage: computed imports in shared pytest dependencies: ' + ', '.join(sorted(graph.opaque_sources)))
             return select(repo, registry, None, explanations=explanations)
-    def affected(seeds):
+    def affected(sources, collected):
         if full:
             return True
-        closure, opaque = graph.closure(set(seeds), stop_on_opaque=runtime)
+        seeds = set(sources)
+        for path in collected:
+            seeds.update(graph.collection_inputs(path))
+        closure, opaque = graph.closure(seeds, stop_on_opaque=runtime)
         if runtime and opaque:
             explain('Broadened selection: computed imports in wrapper dependencies: ' + ', '.join(sorted(graph.opaque_sources & closure)))
             return True
@@ -363,12 +383,12 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
             for row in registry['wrappers']:
                 selectors = row.get('contract_platforms', {}).get(platform, row['contracts'])
                 for selector in selectors:
-                    if affected([row['source'], selector.split('::', 1)[0]]):
+                    if affected([row['source']], [selector.split('::', 1)[0]]):
                         contracts.add(selector)
             families = []
             for family in registry['native']:
                 cell = family['platforms'][platform]
-                if cell.get('tests') and not cell.get('manual') and affected(s.split('::', 1)[0] for s in cell['tests']):
+                if cell.get('tests') and not cell.get('manual') and affected((), (s.split('::', 1)[0] for s in cell['tests'])):
                     families.append(family['id'])
             if contracts or families:
                 matrix.append(dict(os=runner, platform=platform, contracts=sorted(contracts), families=families, full=full))

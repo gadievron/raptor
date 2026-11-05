@@ -125,9 +125,14 @@ def test_literal_dynamic_import_with_module_alias_is_followed(tree):
     assert selected(tree, ['core/shared/helper.py'])[1] == {'one'}
 
 
-def test_native_platform_exclusion_does_not_become_a_request(tree):
+@pytest.mark.parametrize('cell', [
+    {'reason': 'owned Linux probe'},
+    {'reason': 'owned Linux probe', 'tests': None},
+    {'reason': 'owned Linux probe', 'tests': []},
+], ids=['absent-tests', 'null-tests', 'empty-tests'])
+def test_native_platform_exclusion_does_not_become_a_request(tree, cell):
     root, registry = tree
-    registry['native'][0]['platforms']['darwin'] = {'reason': 'owned Linux probe'}
+    registry['native'][0]['platforms']['darwin'] = cell
     matrix = scope.select(root, registry, ['core/one/wrapper.py'])['include']
     assert matrix[0]['families'] == ['one']
     assert matrix[1]['families'] == []
@@ -315,7 +320,9 @@ def test_shared_ancestor_hooks_are_checked_once_per_analysis(tree):
     repo, checks, _ = _counted_repo(root)
     graph = scope.Dependencies(repo)
     checks.clear()
-    graph.closure({'core/one/tests/test_wrapper.py', 'core/two/tests/test_wrapper.py'})
+    seeds = graph.collection_inputs('core/one/tests/test_wrapper.py')
+    seeds.update(graph.collection_inputs('core/two/tests/test_wrapper.py'))
+    graph.closure(seeds)
     assert checks['conftest.py'] == 1
     assert checks['core/conftest.py'] == 1
     assert checks['core/__init__.py'] == 1
@@ -356,3 +363,94 @@ def test_attribute_resolution_retains_non_name_expression_prefixes(tree, express
     deps, opaque = scope.Dependencies(root).direct('core/shared/attributes.py')
     assert 'core/one/__init__.py' in deps
     assert opaque is False
+
+
+@pytest.mark.parametrize('changed', ['core/shared/conftest.py', 'core/unrelated/module.py'])
+def test_importing_a_runtime_module_does_not_load_its_conftest(tree, changed):
+    root, _ = tree
+    (root / 'core/shared/conftest.py').write_text('from core.unrelated import module\n')
+    assert selected(tree, [changed]) == (set(), set())
+
+
+def test_opaque_fixture_broadens_only_its_collected_consumers(tree):
+    root, _ = tree
+    wrapper = root / 'core/two/wrapper.py'
+    wrapper.write_text(wrapper.read_text() + 'from core.one import wrapper\n')
+    (root / 'core/one/conftest.py').write_text('import importlib\nimportlib.import_module(unknown)\n')
+    assert selected(tree, ['core/unrelated/module.py'])[1] == {'one'}
+
+
+@pytest.mark.parametrize('explicit', [False, True], ids=['ordinary-helper', 'explicit-conftest-import'])
+def test_imported_test_support_keeps_python_dependencies_without_inheriting_fixtures(tree, explicit):
+    root, _ = tree
+    (root / 'core/one/tests/conftest.py').write_text('TOKEN = 1\n')
+    helper = root / 'core/one/tests/support.py'
+    helper.write_text('from .conftest import TOKEN\n' if explicit else 'TOKEN = 1\n')
+    target = root / 'core/two/tests/test_wrapper.py'
+    target.write_text(target.read_text() + 'from core.one.tests import support\n')
+    assert selected(tree, ['core/one/tests/conftest.py'])[1] == ({'one', 'two'} if explicit else {'one'})
+    (root / 'core/one/conftest.py').write_text('PARENT = 1\n')
+    assert selected(tree, ['core/one/conftest.py'])[1] == {'one'}
+
+
+def _external_cases(tree, *, kind):
+    root, registry = tree
+    directory = root / '.github/acceptance'
+    directory.mkdir()
+    target = directory / 'cases.py'
+    target.write_text('def test_contract():\n    pass\ndef test_native():\n    pass\n')
+    if kind == 'default-contract':
+        registry['wrappers'][0]['contracts'] = ['.github/acceptance/cases.py::test_contract']
+    elif kind == 'platform-contract':
+        registry['wrappers'][0]['contract_platforms'] = {'darwin': ['.github/acceptance/cases.py::test_contract']}
+    else:
+        registry['native'][0]['platforms']['darwin']['tests'] = ['.github/acceptance/cases.py::test_native']
+    assert registry_errors(root, registry) == []
+    return root, registry
+
+
+@pytest.mark.parametrize('kind', ['default-contract', 'platform-contract', 'native-only'])
+@pytest.mark.parametrize('changed', ['.github/acceptance/cases.py', '.github/acceptance/conftest.py', '.github/conftest.py'])
+def test_registered_collection_inputs_outside_source_roots_are_not_skipped(tree, kind, changed):
+    root, registry = _external_cases(tree, kind=kind)
+    (root / '.github/acceptance/conftest.py').write_text('TOKEN = 1\n')
+    (root / '.github/conftest.py').write_text('TOKEN = 1\n')
+    matrix = scope.select(root, registry, [changed])['include']
+    assert {cell['platform'] for cell in matrix} == ({'linux', 'darwin'} if kind == 'default-contract' else {'darwin'})
+    for cell in matrix:
+        if kind == 'native-only':
+            assert cell['families'] == ['one'] and cell['contracts'] == []
+        else:
+            assert cell['contracts'] == ['.github/acceptance/cases.py::test_contract'] and cell['families'] == []
+
+
+@pytest.mark.parametrize('changed', ['.github/acceptance/cases.py', '.github/acceptance/conftest.py', '.github/conftest.py'])
+def test_deleted_registered_collection_inputs_keep_full_coverage(tree, changed):
+    root, registry = _external_cases(tree, kind='native-only')
+    (root / '.github/acceptance/conftest.py').write_text('TOKEN = 1\n')
+    (root / '.github/conftest.py').write_text('TOKEN = 1\n')
+    (root / changed).unlink()
+    matrix = scope.select(root, registry, [changed])['include']
+    assert len(matrix) == 2 and all(cell['full'] for cell in matrix)
+
+
+@pytest.mark.parametrize('changed', ['entrypoint.py', '.github/scripts/indirect.py'])
+def test_deleted_relevant_python_inputs_keep_full_coverage(tree, changed):
+    root, registry = tree
+    matrix = scope.select(root, registry, [changed])['include']
+    assert len(matrix) == 2 and all(cell['full'] for cell in matrix)
+
+
+@pytest.mark.parametrize('kind', ['unused-default', 'manual-native'])
+@pytest.mark.parametrize('changed', ['.github/acceptance/cases.py', '.github/acceptance/conftest.py'])
+def test_non_automated_bindings_do_not_become_trigger_inputs(tree, kind, changed):
+    root, registry = _external_cases(tree, kind='default-contract' if kind == 'unused-default' else 'native-only')
+    (root / '.github/acceptance/conftest.py').write_text('TOKEN = 1\n')
+    if kind == 'unused-default':
+        registry['wrappers'][0]['contract_platforms'] = {
+            platform: ['core/one/tests/test_wrapper.py::test_contract'] for platform in scope.PLATFORMS
+        }
+    else:
+        registry['native'][0]['platforms']['darwin'].update(manual=True, reason='owned manual acceptance')
+    assert registry_errors(root, registry) == []
+    assert scope.select(root, registry, [changed]) == {'include': []}
