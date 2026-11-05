@@ -26,10 +26,12 @@ from core.audit.sweep import run_codeql_sweep, run_semgrep_sweep
 
 
 @pytest.fixture(autouse=True)
-def _fresh_codeql_memo():
-    sweep_mod._reset_codeql_memo()
-    yield
-    sweep_mod._reset_codeql_memo()
+def _fresh_codeql_memo(monkeypatch):
+    """Use a private memo with the declared CodeQL capacity."""
+    from core.audit.run_memo import BoundedMemo
+
+    monkeypatch.setattr(sweep_mod, "_codeql_memo",
+                        BoundedMemo(sweep_mod._CODEQL_MEMO_MAX_ENTRIES))
 
 
 # ── semgrep: scanned-witness receipts ────────────────────────────────

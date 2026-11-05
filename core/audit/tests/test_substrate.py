@@ -16,7 +16,6 @@ from core.audit.substrate import (
     SubstrateScopeError,
     UNKNOWN_FAIL_OPEN,
     UNKNOWN_INCONCLUSIVE,
-    _reset_substrate_caches,
     canonical_file_language,
     classify_sweep_outcome,
     file_substrate_coverage,
@@ -30,9 +29,20 @@ from core.audit.sweep import SweepResult
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
-    _reset_substrate_caches()
-    yield
-    _reset_substrate_caches()
+    """Use private substrate caches; publish and restore under their locks."""
+    from contextlib import ExitStack
+
+    from core.audit import substrate
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(
+            substrate, {"_LANG_CACHE": {}}, lock=substrate._LANG_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            substrate, {"_TREE_CACHE": {}}, lock=substrate._TREE_LOCK,
+        ))
+        yield
 
 
 def _result(outcome: str, **kw) -> SweepResult:

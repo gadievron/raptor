@@ -24,12 +24,19 @@ FAKE_GCC = "/nonexistent/fake-gcc"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_caches():
-    compiler_sweep._reset_probe_cache()
-    compiler_sweep._reset_tu_cache()
-    yield
-    compiler_sweep._reset_probe_cache()
-    compiler_sweep._reset_tu_cache()
+def _fresh_caches(monkeypatch):
+    """Use private probe/TU caches without clearing borrowed memo state."""
+    from core.audit.run_memo import BoundedMemo
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        compiler_sweep, {"_PROBE_CACHE": {}}, lock=compiler_sweep._PROBE_LOCK,
+    ):
+        monkeypatch.setattr(compiler_sweep, "_tu_cache",
+                            BoundedMemo(compiler_sweep._TU_CACHE_MAX_ENTRIES))
+        monkeypatch.setattr(compiler_sweep, "_include_dirs_memo",
+                            BoundedMemo(compiler_sweep._TU_CACHE_MAX_ENTRIES))
+        yield
 
 
 @pytest.fixture(autouse=True)
