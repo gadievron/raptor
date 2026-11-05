@@ -276,10 +276,11 @@ def _verify_proxy_events(
             return usable, rejected, _INTEGRITY_TAMPERED, count_note
         seqs = []
         for e in usable:
-            try:
-                seqs.append(int(e.get("seq")))
-            except (TypeError, ValueError, OverflowError):
-                pass
+            seq = e.get("seq")
+            if type(seq) is not int or seq < 0:
+                count_note = "proxy-events stream has malformed sequence numbers"
+                return usable, rejected, _INTEGRITY_TAMPERED, count_note
+            seqs.append(seq)
         max_seq = max(seqs) if seqs else -1
         if len(usable) != count or max_seq != count - 1 or rejected:
             # Direction matters for the operator: fewer survivors
@@ -335,10 +336,14 @@ def _verify_proxy_events(
     if usable:
         seqs = []
         for e in usable:
-            try:
-                seqs.append(int(e.get("seq")))  # type: ignore[arg-type]
-            except (TypeError, ValueError, OverflowError):
+            seq = e.get("seq")
+            # The writer emits JSON integers. Coercion would silently turn
+            # booleans, fractional values, or numeric strings into positions.
+            if type(seq) is not int or seq < 0:
                 integrity = _INTEGRITY_TAMPERED
+                count_note = "proxy-events stream has malformed sequence numbers"
+                continue
+            seqs.append(seq)
         if seqs and (len(set(seqs)) != len(seqs)
                      or set(seqs) != set(range(min(seqs),
                                                min(seqs) + len(seqs)))
