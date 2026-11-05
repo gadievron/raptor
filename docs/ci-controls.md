@@ -223,7 +223,13 @@ not baseline.
 | CodeQL uploads are combined after all matrix entries finish, avoiding partial/missing-language baseline races | [`codeql.yml`](../.github/workflows/codeql.yml) |
 | Intentionally vulnerable fixtures are excluded from self-scanning where they would otherwise generate guaranteed false positives | `.semgrepignore`, [`codeql-config.yml`](../.github/codeql/codeql-config.yml) |
 | SCA data-refresh workflow confines the write token to the job that needs it | [`refresh-sca-data.yml`](../.github/workflows/refresh-sca-data.yml) |
-| Squash-merge dedup prevents redundant CI runs when the push-to-main SHA differs from the PR head SHA | `pre_check` job pattern across `tests.yml`, `lint.yml`, `codeql.yml`, `corpus-labels.yml` |
+| Each workflow validates its current event; a successful PR head cannot substitute for the main-push merge result or its selected checks | `tests.yml`, `lint.yml`, `codeql.yml`, `corpus-labels.yml` |
+
+These workflows no longer query prior successful runs to skip current
+validation. A PR head SHA does not establish equivalence of the checked-out
+merge result or the test selection for a later push. Changed-file scoping
+still limits the work; main pushes and explicit reruns execute the checks
+selected for their event.
 
 ## Runner Sizing
 

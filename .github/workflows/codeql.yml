@@ -50,57 +50,6 @@ permissions:
   contents: read
 
 jobs:
-  # Skip the analyze + upload jobs if a previous successful run already
-  # covered this exact commit SHA. Exact-SHA arm ONLY — unlike
-  # tests.yml, this workflow deliberately carries NO squash-merge
-  # fallback: GitHub's default-branch code-scanning alert baseline
-  # refreshes only from analyses uploaded for refs/heads/main, and the
-  # PR run's upload targets the PR ref. Skipping the push-to-main run
-  # because the PR head's (byte-identical) tree already passed starved
-  # main's alert state — new alerts opening and fixed alerts closing —
-  # until the weekly cron or the next direct push, contradicting the
-  # concurrency comment above. A true re-run of the SAME commit stays
-  # deduped: its earlier run already uploaded for this ref.
-  pre_check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      contents: read
-      actions: read
-      pull-requests: read
-    outputs:
-      should_skip: ${{ steps.dup.outputs.should_skip }}
-    steps:
-      - id: dup
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          WORKFLOW: ${{ github.workflow }}
-          SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          should_skip=false
-          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
-             && "$EVENT" != "merge_group" ]]; then
-            # 1. Exact-SHA match — covers fast-forward merges and
-            #    explicit re-runs where the SHA is identical.
-            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
-                    -f "head_sha=${SHA}" -f "status=success" \
-                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
-                  | head -n1 || true)
-            if [[ -n "${dup:-}" ]]; then
-              should_skip=true
-              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
-            fi
-            # NO arm 2 here: the squash-merge fallback (see tests.yml)
-            # must not gate this workflow — the push run's upload is
-            # the ONLY delivery to main's code-scanning baseline (see
-            # the pre_check heading comment).
-          fi
-          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
-
   # Per-language path scoping — the analyze matrix gates each entry on
   # its corresponding filter so a python-only PR skips the c-cpp and
   # actions matrix entries, etc. Reuses tests.yml's compute_filters.py
@@ -108,8 +57,6 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: pre_check
-    if: needs.pre_check.outputs.should_skip != 'true'
     permissions:
       contents: read
     outputs:
@@ -196,8 +143,7 @@ jobs:
   # happens here — the barrier job below collects all three and
   # delivers them atomically.
   analyze:
-    needs: [pre_check, changes]
-    if: needs.pre_check.outputs.should_skip != 'true'
+    needs: [changes]
     name: Analyze (${{ matrix.language }})
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
     timeout-minutes: 30
@@ -313,8 +259,8 @@ jobs:
       # race on proposed refs. GitHub treats an upload for the same
       # (tool, category, ref) as a REPLACEMENT of the previous
       # analysis, so a zero-result stub uploaded for refs/heads/main
-      # (e.g. a docs-only direct push, or a merge whose PR-head run
-      # the dedup didn't find) would close that category's open
+      # (e.g. a docs-only direct push or an explicit rerun) would
+      # close that category's open
       # alerts as no-longer-detected until the next real analysis.
       # On push, gated-out languages upload nothing instead — their
       # existing main-branch analysis stays authoritative.
@@ -371,7 +317,6 @@ jobs:
       # must keep guarding the paths that DO produce one.
       - name: Stash SARIF as artifact for atomic upload
         if: >-
-          needs.pre_check.outputs.should_skip != 'true' &&
           (steps.gate.outputs.run == 'true' ||
            github.event_name == 'pull_request' || github.event_name == 'merge_group')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -385,7 +330,7 @@ jobs:
   # into a single SARIF document and uploads in one POST so GitHub's
   # CodeQL meta-check sees all configs in one shot.
   upload:
-    needs: [pre_check, changes, analyze]
+    needs: [changes, analyze]
     # Skip entirely when no matrix entry produced a SARIF: on push,
     # gated-out languages write no stub (see the stub step), so an
     # all-gated push (e.g. docs-only direct push) has nothing to
@@ -394,7 +339,6 @@ jobs:
     # always have all three (stubs fill the gaps); force_full events
     # analyse everything.
     if: >-
-      needs.pre_check.outputs.should_skip != 'true' &&
       (github.event_name == 'pull_request' || github.event_name == 'merge_group' ||
        needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.codeql_python == 'true' ||
@@ -551,12 +495,12 @@ jobs:
 
   # Aggregate gate — gives GitHub a single job name to anchor the
   # workflow result on. Without this, a run where all real jobs are
-  # legitimately skipped (dedup hit) has no successful job and GitHub
+  # legitimately skipped by event/path filters has no successful job and GitHub
   # reports the workflow as failed/skipped, firing notification emails.
   codeql-passed:
     name: codeql-passed
     if: always()
-    needs: [pre_check, changes, analyze, upload]
+    needs: [changes, analyze, upload]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
