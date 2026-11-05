@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit, quote
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
 from core.detectors.compiler_paths import PathBudget, PATH_KIND, attach_paths
 from core.config import RaptorConfig
-from core.json import load_json, loads
+from core.json import dumps_canonical, load_json, loads
 from core.logging import get_logger
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -330,9 +330,7 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     tool_runs: dict[str | tuple[str, str], dict[str, Any]] = {}
 
     def content_identity(value):
-        return hashlib.sha256(json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-        ).encode("ascii")).hexdigest()
+        return hashlib.sha256(dumps_canonical(value).encode("ascii")).hexdigest()
 
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
