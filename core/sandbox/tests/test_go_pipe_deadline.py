@@ -26,8 +26,8 @@ def test_go_pipe_read_is_deadline_bounded():
         encoding="utf-8")
     step7 = src.index("Step 7: wait for parent 'go'")
     block = src[step7:step7 + 3000]
-    assert "_select_mod.select(" in block, (
-        "step-7 go wait lost its select bound")
+    assert "_pipe_readable_until(p_go_r, _go_deadline)" in block, (
+        "step-7 go wait lost its deadline-bound readiness check")
     assert "_go_deadline" in block
     assert "_P_READY_DEADLINE_S" in block
     # The bare blocking-read spelling must not come back.
