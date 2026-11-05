@@ -24,12 +24,11 @@ from core.audit.orchestrator import (
 
 @pytest.fixture(autouse=True)
 def _reset_term_state():
-    """Never leak TERM/shutdown state into other tests."""
-    yield
-    orch._sigterm_event.clear()
-    orch._shutdown_event.clear()
-    orch._sigterm_state["count"] = 0
-    orch._sigterm_flush_hooks.clear()
+    """Own shutdown state and keep incidental OS/thread mocks local."""
+    from core.testing.audit_shutdown import isolated_audit_shutdown
+
+    with isolated_audit_shutdown(orch):
+        yield
 
 
 # ── the bound itself, both directions ────────────────────────────────
