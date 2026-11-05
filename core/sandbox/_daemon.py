@@ -120,6 +120,9 @@ def _get_dumpable() -> int | None:
         return None
 
 
+_MAX_FRAME_BYTES = 64 * 1024 * 1024
+
+
 def _read_frame(fd: int) -> dict | None:
     hdr = b""
     while len(hdr) < 4:
@@ -130,7 +133,7 @@ def _read_frame(fd: int) -> dict | None:
             return None
         hdr += chunk
     (length,) = struct.unpack("!I", hdr)
-    if length > 64 * 1024 * 1024:
+    if length > _MAX_FRAME_BYTES:
         msg = f"frame too large: {length}"
         raise ValueError(msg)
     body = bytearray()
@@ -148,6 +151,8 @@ def _read_frame(fd: int) -> dict | None:
 
 def _write_frame(fd: int, payload: dict) -> None:
     body = json.dumps(payload).encode("utf-8")
+    if len(body) > _MAX_FRAME_BYTES:
+        raise ValueError(f"frame too large: {len(body)}")
     hdr = struct.pack("!I", len(body))
     # Loop the write: a frame larger than the pipe buffer may be
     # written partially, and a torn frame desyncs the whole channel.
