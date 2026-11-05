@@ -29807,8 +29807,19 @@ def _mechanism_specificity(mechanism: str) -> int:
     """
     if not mechanism:
         return 0
-    score = min(len(mechanism), 200) // 20
-    score += 4 * min(len(_IDENTIFIER_TOKEN_RE.findall(mechanism)), 5)
+    mechanism_length = len(mechanism)
+    score = min(mechanism_length, 200) // 20
+    if mechanism_length >= 512 and type(mechanism) is str:
+        # Longer mechanisms need at most five matches to saturate this
+        # score component. Avoid scanning and storing the remaining hits.
+        identifier_count = 0
+        for _match in _IDENTIFIER_TOKEN_RE.finditer(mechanism):
+            identifier_count += 1
+            if identifier_count == 5:
+                break
+    else:
+        identifier_count = min(len(_IDENTIFIER_TOKEN_RE.findall(mechanism)), 5)
+    score += 4 * identifier_count
     if _CWE_TAG_RE.search(mechanism):
         score += 3
     if _LINE_REF_RE.search(mechanism):
