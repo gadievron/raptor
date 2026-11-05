@@ -835,3 +835,40 @@ def test_empty_inputs_between_reports_do_not_reset_accumulated_findings(monkeypa
     monkeypatch.setattr(parser, 'load_sarif', lambda path: documents[str(path)])
     merged = parser.merge_sarif(['missing', 'first', 'empty', 'missing', 'last', 'empty'])
     assert merged['runs'][0]['results'] == [result]
+
+
+@pytest.mark.parametrize('separate_file_counts', [False, True], ids=['reports', 'original-file-counts'])
+def test_metrics_release_input_objects_before_the_next_read(monkeypatch, separate_file_counts):
+    import weakref
+    import core.sarif.parser as parser
+
+    class Tracked(dict):
+        pass
+
+    references = []
+
+    def load(path):
+        assert all(ref() is None for ref in references), (
+            'metrics retained a previous document, run, result, artifact or rule table'
+        )
+        rule = Tracked(id='rule', defaultConfiguration={'level': 'error'})
+        result = Tracked(ruleIndex=0, properties={'nosemgrep': {'suppressed': True}})
+        artifact = Tracked(location={'uri': 'a.c'})
+        run = Tracked(tool={'driver': {'name': 'CodeQL', 'rules': [rule]}},
+                      results=[result], artifacts=[artifact])
+        document = Tracked(runs=[run])
+        references.extend(weakref.ref(value) for value in [document, run, rule, result, artifact])
+        return document
+
+    monkeypatch.setattr(parser, 'load_sarif', load)
+    metrics = parser.generate_scan_metrics(
+        ['first.sarif', 'second.sarif'],
+        file_count_paths=['original-a.sarif', 'original-b.sarif'] if separate_file_counts else None,
+    )
+    assert all(ref() is None for ref in references)
+    assert metrics['total_findings'] == 2
+    assert metrics['total_files_scanned'] == 2
+    assert metrics['findings_by_rule'] == {'rule': 2}
+    assert metrics['findings_by_severity']['error'] == 2
+    assert metrics['nosemgrep_suppressed_count'] == 2
+    assert metrics['tools_used'] == ['CodeQL']

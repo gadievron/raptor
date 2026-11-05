@@ -1415,10 +1415,11 @@ def generate_scan_metrics(
     inputs = [(path, True, file_count_paths is None) for path in sarif_paths]
     if file_count_paths is not None:
         inputs.extend((path, False, True) for path in file_count_paths)
-    for sarif_path, count_findings, count_files in inputs:
+
+    def accumulate_file(sarif_path: str, count_findings: bool, count_files: bool) -> None:
         sarif_data = load_sarif(Path(sarif_path))
         if not sarif_data:
-            continue
+            return
 
         for run in (sarif_data.get("runs") or []):
             if not isinstance(run, dict):
@@ -1469,6 +1470,10 @@ def generate_scan_metrics(
                 metrics["findings_by_rule"][rule_id] = (
                     metrics["findings_by_rule"].get(rule_id, 0) + 1
                 )
+
+    # Metrics retain only counts and names, never the decoded input or resolver.
+    for sarif_path, count_findings, count_files in inputs:
+        accumulate_file(sarif_path, count_findings, count_files)
 
     return metrics
 
