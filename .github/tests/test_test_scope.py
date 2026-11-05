@@ -1194,3 +1194,50 @@ def test_workflow_rebalance_preserves_selected_cases(tmp_path, monkeypatch):
     assert sorted(path for batch in matrix for path in batch["files"].split()) == [
         "a.py", "b.py", "c.py",
     ]
+
+
+class TestSharedFixtureInventory:
+    def test_all_consumers_and_nested_directories_are_retained(self, tmp_path):
+        from test_scope import build_data_file_map
+
+        tests = tmp_path / "core/pkg/tests"
+        fixtures = tests / "fixtures"
+        nested = fixtures / "nested"
+        nested.mkdir(parents=True)
+        (fixtures / "top.json").write_text("{}")
+        (nested / "child.json").write_text("{}")
+        (fixtures / "ignored.py").write_text("pass")
+        paths = []
+        for name, suffix in [("test_a", ""), ("test_b", ""),
+                             ("test_nested", ' / "nested"')]:
+            path = tests / f"{name}.py"
+            path.write_text('from pathlib import Path\n'
+                            'DATA = Path(__file__).parent / "fixtures"' + suffix)
+            paths.append(path.relative_to(tmp_path))
+        result = build_data_file_map(paths, tmp_path)
+        assert result == {
+            Path("core/pkg/tests/fixtures/top.json"): set(paths[:2]),
+            Path("core/pkg/tests/fixtures/nested/child.json"): set(paths),
+        }
+
+    def test_next_dispatch_sees_added_and_deleted_data(self, tmp_path):
+        from test_scope import build_data_file_map
+
+        tests = tmp_path / "core/pkg/tests"
+        fixtures = tests / "fixtures"
+        fixtures.mkdir(parents=True)
+        test = tests / "test_data.py"
+        test.write_text('from pathlib import Path\n'
+                        'DATA = Path(__file__).parent / "fixtures"')
+        relative_test = test.relative_to(tmp_path)
+        old = fixtures / "old.json"
+        old.write_text("{}")
+        assert build_data_file_map([relative_test], tmp_path) == {
+            old.relative_to(tmp_path): {relative_test},
+        }
+        old.unlink()
+        new = fixtures / "new.json"
+        new.write_text("{}")
+        assert build_data_file_map([relative_test], tmp_path) == {
+            new.relative_to(tmp_path): {relative_test},
+        }
