@@ -387,3 +387,36 @@ def test_detector_runs_once_for_reused_hypotheses(tmp_path, sandbox_stub, monkey
     assert _sweep(target).outcome == "confirmed"
     assert len(_analysis_calls(sandbox_stub)) == len(executions) == 1
     assert executions[0].identifier == "compiler-diagnostics"
+
+
+def test_cached_families_keep_paths_and_unlocated_metadata_isolated(tmp_path, sandbox_stub):
+    target = _target(tmp_path, _UAF_SOURCE)
+    uaf = _gcc_json_diag('-Wanalyzer-use-after-free', 5, 'tu.c', "use after 'free' of 'p'")
+    uaf['path'] = [{
+        'location': {'file': 'tu.c', 'line': 5}, 'function': 'f',
+        'description': 'following the branch', 'depth': 0,
+    }]
+    unlocated = _gcc_json_diag('-Wanalyzer-use-after-free', 0, 'tu.c', 'unlocated use-after-free')
+    unlocated['locations'][0]['caret']['file'] = ['unlocatable']
+    sandbox_stub['diags'] = [
+        uaf, unlocated,
+        _gcc_json_diag('-Wanalyzer-null-dereference', 5, 'tu.c', "null dereference of 'p'"),
+    ]
+
+    first = _sweep(target)
+    assert first.outcome == 'confirmed'
+    assert len(first.matches) == 1
+    assert first.details['diagnostics_total'] == 3
+    event = first.matches[0]['code_flows'][0]['threadFlows'][0]['locations'][0]
+    event['location']['message']['text'] = 'consumer mutation'
+    first.details['unlocated_diagnostics'][0]['file'].append('consumer mutation')
+
+    second = _sweep(target)
+    assert second.outcome == 'confirmed'
+    assert second.matches[0]['code_flows'][0]['threadFlows'][0]['locations'][0]['location']['message']['text'] == 'following the branch'
+    assert second.details['unlocated_diagnostics'][0]['file'] == ['unlocatable']
+    null = _sweep(target, cwe='CWE-476', hypothesis='null dereference of `p`')
+    assert null.outcome == 'confirmed'
+    assert null.details['diagnostics_total'] == 3
+    assert [match['rule_id'] for match in null.matches] == ['-Wanalyzer-null-dereference']
+    assert len(_analysis_calls(sandbox_stub)) == 1

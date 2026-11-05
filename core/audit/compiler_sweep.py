@@ -2067,19 +2067,23 @@ def run_compiler_analyzer_sweep(
             rule_id=f"compiler:{norm_cwe.lower()}",
         )
 
-    # The cached record is shared by every hypothesis on this TU —
-    # hand out copies of the diagnostics (isolation parity with the
-    # CodeQL memo) so a consumer mutating its view cannot corrupt
-    # another hypothesis's.
-    diags = copy.deepcopy(record["diags"])
+    # Keep the shared record intact and isolate every returned view. Select
+    # by checker family before copying so unrelated diagnostics and their
+    # potentially large path payloads are not recopied for each hypothesis.
+    # Failed compiles still need all diagnostics for their error summary.
     returncode: int = record["returncode"]
+    selected = record["diags"]
+    if returncode == 0:
+        selected = [d for d in selected
+                    if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)]
+    diags = copy.deepcopy(selected)
     raw: str = record["raw"]
 
     details: dict[str, Any] = {
         "compiler": compiler_name,
         "mode": mode,
         "cwe": norm_cwe,
-        "diagnostics_total": len(diags),
+        "diagnostics_total": len(record["diags"]),
     }
 
     if returncode != 0:
@@ -2107,10 +2111,7 @@ def run_compiler_analyzer_sweep(
     )
     details["hypothesis_identifiers"] = identifiers
 
-    checker_diagnostics = [
-        d for d in diags
-        if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)
-    ]
+    checker_diagnostics = diags
     unlocated = [
         d for d in checker_diagnostics
         if not valid_diagnostic_location(d)
