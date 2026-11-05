@@ -46,8 +46,6 @@ import subprocess
 import sys
 import threading
 import time
-from core.sandbox._stream_ipc import recv_exact, send_all
-
 from pathlib import Path
 
 from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
@@ -546,11 +544,28 @@ class ParserJail:
         return obj
 
     @staticmethod
-    def _recv_exact(sock: socket.socket, n: int) -> bytes:
-        data = recv_exact(sock, n)
-        if data is None:
-            raise OSError("parser worker closed the socket")
-        return data
+    def _recv_exact(sock: socket.socket, n: int, *, deadline: float) -> bytes:
+        # Socket timeouts apply to individual recv calls. Recompute the
+        # remaining budget so fragmented input cannot extend the frame's
+        # deadline, and share that deadline across header and payload.
+        timeout = sock.gettimeout()
+        buf = bytearray()
+        try:
+            while len(buf) < n:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise socket.timeout("parser worker frame deadline exceeded")
+                sock.settimeout(remaining)
+                chunk = sock.recv(n - len(buf))
+                if not chunk:
+                    raise OSError("parser worker closed the socket")
+                buf.extend(chunk)
+            return bytes(buf)
+        finally:
+            try:
+                sock.settimeout(timeout)
+            except OSError:
+                pass
 
     @staticmethod
     def _new_req_id() -> int:
@@ -578,20 +593,20 @@ class ParserJail:
         # SILENT before a request is sent — one frame in, one frame
         # out. Any already-buffered bytes are unsolicited worker output
         # (a pre-queued frame or stream garbage): kill, deny, respawn.
-        # Zero-timeout readability probe, then a one-byte read to distinguish
-        # data from EOF (a worker that died between requests). Either outcome
-        # is fatal here, so preserving the unsolicited byte is unnecessary.
-        readable, _, _ = select.select([sock], [], [], 0)
-        if readable:
-            if os.read(sock.fileno(), 1):
+        # Zero-timeout readability probe, then a peek to distinguish
+        # data from EOF (a worker that died between requests).
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        if poller.poll(0):
+            if sock.recv(1, socket.MSG_PEEK):
                 raise _ProtocolError(
                     "unsolicited bytes from worker before request")
             raise OSError("parser worker closed the socket")
         req_id = self._new_req_id()
         deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
         try:
-            send_all(sock, FRAME_HEADER.pack(len(raw), req_id) + raw)
-            header = self._recv_exact(sock, FRAME_HEADER.size)
+            sock.sendall(FRAME_HEADER.pack(len(raw), req_id) + raw)
+            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline)
         except socket.timeout as exc:
             # Wedged worker: kill via the OSError path in parse().
             raise OSError("parser worker round-trip timed out") from exc
