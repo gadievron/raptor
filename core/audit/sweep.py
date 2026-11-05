@@ -43,7 +43,7 @@ from core.paths import strip_file_uri
 
 from ._util import is_valid_identifier, safe_join
 from .run_memo import BoundedMemo
-from .smt_evidence import is_predicate_only_smt_rule, scope_smt_feasibility as _scope_smt_feasibility
+from .smt_evidence import is_diagnostic_smt_rule, scope_smt_observation as _scope_smt_observation
 from .substrate import (
     Coverage,
     UNKNOWN_INCONCLUSIVE,
@@ -2229,7 +2229,7 @@ _SMT_VERB_ROLES = {
     # grade (a fired probe still corroborates and seeds; it no longer
     # convicts on its own).
     "check-auth-bypass": "detection",
-    "check-lock-discipline": "verification",
+    "check-lock-discipline": "detection",
     "check-resource-leak": "detection",
     "check-null-propagation": "detection",
     "check-integer-narrowing": "verification",
@@ -2286,7 +2286,7 @@ def is_detection_rule_id(stamp: str) -> bool:
     A ``:witness`` suffix records a concrete solver model and keeps the
     stamp's receipt; verbs the table does not name keep their current
     grading (the firewall only demotes what the channel has explicitly
-    classified as detection-role). Predicate-only path receipts and
+    classified as detection-role). Diagnostic SMT receipts and
     check-encoding-residual retain detection role even with a model:
     their premises are not verified against source semantics.
     """
@@ -2297,7 +2297,7 @@ def is_detection_rule_id(stamp: str) -> bool:
     if ":" not in stamp:
         return False
     verb = stamp.split(":", 2)[1]
-    if is_predicate_only_smt_rule(verb):
+    if is_diagnostic_smt_rule(verb):
         return True
     if stamp.endswith(":witness"):
         return verb == "check-encoding-residual"
@@ -2538,7 +2538,7 @@ def run_smt_sweep(
                     "meaningful",
                 )
 
-        outcome, scope_details = _scope_smt_feasibility(verb, outcome, result_data)
+        outcome, scope_details = _scope_smt_observation(verb, outcome, result_data)
         return SweepResult(
             tool="smt",
             file_path=file_path,
@@ -2729,11 +2729,11 @@ def _smt_verb_in_subprocess(
         # unexpected fields degrade to the crash sentinel below.
         with contextlib.suppress(TypeError):
             result = SweepResult(**out)
-            if verb == "validate-path" and result.outcome != "error":
-                result.outcome, result.details = _scope_smt_feasibility(
+            if is_diagnostic_smt_rule(verb) and result.outcome != "error":
+                result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
                 )
-                result.rule_id = "smt:validate-path"
+                result.rule_id = f"smt:{verb}"
                 if result.outcome != "confirmed":
                     result.matches = []
             return result
@@ -2921,19 +2921,12 @@ def _run_smt_verb_inner(
                     rule_id=f"smt:{verb}",
                 )
             lock_result = check_lock_discipline(source, vocab)
-            if lock_result.violation_found:
-                return SweepResult(
-                    tool="smt", file_path=file_path,
-                    function_name=function_name, outcome="confirmed",
-                    rule_id=f"smt:{verb}",
-                    details=lock_result.to_dict(),
-                )
+            verdict = "confirmed" if lock_result.violation_found else _negative_outcome(lock_result)
+            verdict, details = _scope_smt_observation(verb, verdict, lock_result.to_dict())
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name,
-                outcome=_negative_outcome(lock_result),
-                rule_id=f"smt:{verb}",
-                details=lock_result.to_dict(),
+                function_name=function_name, outcome=verdict,
+                rule_id=f"smt:{verb}", details=details,
             )
         elif verb == "check-null-propagation":
             from core.audit.condition_smt import check_null_propagation
@@ -3076,7 +3069,7 @@ def _run_smt_verb_inner(
         else:
             outcome = "inconclusive"
 
-        outcome, scope_details = _scope_smt_feasibility(verb, outcome, result)
+        outcome, scope_details = _scope_smt_observation(verb, outcome, result)
         return SweepResult(
             tool="smt", file_path=file_path,
             function_name=function_name, outcome=outcome,

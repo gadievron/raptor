@@ -24,3 +24,19 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
     details = dict(data)
     details.update(oracle_scope="supplied-predicates", feasible=feasible)
     return ("confirmed" if feasible is True else "inconclusive"), details
+
+
+def is_diagnostic_smt_rule(rule_id: str) -> bool:
+    """These producers do not model source semantics sufficiently for verdicts."""
+    if not isinstance(rule_id, str):
+        return False
+    verb = rule_id.removeprefix("smt:").split(":", 1)[0]
+    return is_predicate_only_smt_rule(rule_id) or verb == "check-lock-discipline"
+
+
+def scope_smt_observation(verb: str, outcome: str, data: dict) -> tuple[str, dict]:
+    if verb == "check-lock-discipline":
+        details = dict(data)
+        details["oracle_scope"] = "lexical-lock-discipline"
+        return ("confirmed" if outcome == "confirmed" else "inconclusive"), details
+    return scope_smt_feasibility(verb, outcome, data)

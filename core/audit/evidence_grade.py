@@ -353,7 +353,7 @@ def registered_spelling_role(part: str) -> str | None:
 # entries): unknown variants are ignored (non-poisonous), never
 # admitted. Sources per namespace: sweep._SMT_VERB_ROLES
 # verification rows (bare + ``:witness``; the ``:witness`` suffix
-# keeps its receipt on every verb except check-encoding-residual,
+# keeps its receipt except on diagnostic-only verbs and encoding checks,
 # mirroring sweep.is_detection_rule_id) plus the orchestrator's
 # ``smt:disproof:sat`` stamp; joern_verify's endpoint-bound stamps;
 # sweep's symbolic role split; each census channel's registry-grade
@@ -362,7 +362,6 @@ def registered_spelling_role(part: str) -> str | None:
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
     "check-overflow", "check-oob", "check-null-deref",
-    "check-lock-discipline",
     "check-integer-narrowing",
 )
 _SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
@@ -477,13 +476,13 @@ def _is_detection_variant(part: str) -> bool:
         )
     # smt: mirrors sweep._SMT_VERB_ROLES detection entries (":witness"
     # keeps its receipt — a concrete solver model discriminates).
-    # Supplied-predicate feasibility and encoding-description checks
-    # stay detection even with a model: neither verifies its premises
+    # Lexical lock checks, predicate feasibility and encoding-description checks
+    # stay detection even with a model: they do not verify their premises
     # against source semantics (mirrors sweep.is_detection_rule_id).
     if part.startswith("smt:"):
         verb = part.split(":", 2)[1]
-        from .smt_evidence import is_predicate_only_smt_rule
-        if verb == "check-encoding-residual" or is_predicate_only_smt_rule(verb):
+        from .smt_evidence import is_diagnostic_smt_rule
+        if verb == "check-encoding-residual" or is_diagnostic_smt_rule(verb):
             return True
         if part.endswith(":witness"):
             return False

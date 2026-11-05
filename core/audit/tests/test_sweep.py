@@ -1557,31 +1557,34 @@ class TestPromoteCleanRefuted:
         _promote_clean_refuted(result, self._config(tmp_path))
         assert result.outcomes[0].status == "clean"
 
-    def test_promotes_when_smt_confirms(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("verb,promotes", [("check-overflow", True), ("check-lock-discipline", False)])
+    def test_promotes_only_with_verification_receipt(self, tmp_path, monkeypatch, verb, promotes):
         from core.audit.orchestrator import _promote_clean_refuted
         outcome = self._outcome("a.c", "f", hypotheses=[
-            {"mechanism": "lock not released on error", "confidence": "refuted"},
+            {"mechanism": "integer overflow in size" if promotes else "lock not released on error",
+             "confidence": "refuted"},
         ])
         result = self._result([outcome])
 
         monkeypatch.setattr(
             "core.audit.orchestrator._hypothesis_to_smt_verb",
-            lambda h: "check-lock-discipline",
+            lambda h: verb,
         )
         monkeypatch.setattr(
             "core.audit.orchestrator._run_tool_chain",
-            lambda *a, **kw: ["smt:check-lock-discipline"],
+            lambda *a, **kw: [f"smt:{verb}"],
         )
         monkeypatch.setattr(
             "core.audit.orchestrator._read_raw_source",
-            lambda *a, **kw: "void f() { mutex_lock(&m); return; }",
+            lambda *a, **kw: "int f(int count) { return count; }",
         )
         _promote_clean_refuted(result, self._config(tmp_path))
-        assert result.outcomes[0].status == "finding"
-        assert "clean-refuted:smt:check-lock-discipline" in result.outcomes[0].evidence_tool
-        assert result.sweep_promoted == 1
-        assert result.clean == 0
-        assert result.findings == 1
+        assert result.outcomes[0].status == ("finding" if promotes else "clean")
+        if promotes:
+            assert f"clean-refuted:smt:{verb}" in result.outcomes[0].evidence_tool
+        assert result.sweep_promoted == int(promotes)
+        assert result.clean == int(not promotes)
+        assert result.findings == int(promotes)
 
     def test_no_promote_when_smt_refutes(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import _promote_clean_refuted
@@ -1633,24 +1636,24 @@ class TestPromoteCleanRefuted:
         from core.audit.orchestrator import _promote_clean_refuted
         calls = []
         outcome = self._outcome("a.c", "f", hypotheses=[
-            {"mechanism": "lock not released", "confidence": "refuted"},
-            {"mechanism": "missing unlock on error", "confidence": "refuted"},
+            {"mechanism": "integer overflow in size", "confidence": "refuted"},
+            {"mechanism": "integer overflow in offset", "confidence": "refuted"},
         ])
         result = self._result([outcome])
 
         monkeypatch.setattr(
             "core.audit.orchestrator._hypothesis_to_smt_verb",
-            lambda h: "check-lock-discipline",
+            lambda h: "check-overflow",
         )
 
         def mock_chain(*a, **kw):
             calls.append(kw.get("hypothesis", ""))
-            return ["smt:check-lock-discipline"]
+            return ["smt:check-overflow"]
 
         monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", mock_chain)
         monkeypatch.setattr(
             "core.audit.orchestrator._read_raw_source",
-            lambda *a, **kw: "void f() { mutex_lock(&m); return; }",
+            lambda *a, **kw: "int f(int count) { return count; }",
         )
         _promote_clean_refuted(result, self._config(tmp_path))
         assert result.outcomes[0].status == "finding"
