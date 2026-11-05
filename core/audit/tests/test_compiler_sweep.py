@@ -3800,3 +3800,49 @@ def test_unquoted_common_words_still_use_prose_filter():
     assert extract_hypothesis_identifiers(
         'buffer size index overflow', 'int buffer, size, index;', 'f',
     ) == []
+
+
+@needs_gcc
+def test_named_gcc_object_wins_over_unrelated_same_line_identifier(tmp_path, sandbox_spy):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'same_line.c'
+    source.write_text(
+        '#include <stdlib.h>\n'
+        'int f(void) { int *p = malloc(sizeof(int)); if (!p) return 0; '
+        'int q = 0; free(p); return *p + q; }\n'
+    )
+
+    def sweep(identifier):
+        return _guarded_compiler_sweep(
+            target_path=target, file_path=source.name, function_name='f',
+            cwe='CWE-416', hypothesis=f'use-after-free of `{identifier}`',
+            line_start=2, line_end=2, out_dir=tmp_path,
+        )
+
+    assert sweep('p').outcome == 'confirmed'
+    result = sweep('q')
+    assert result.outcome == 'inconclusive', result.details
+    assert result.details['unattributed']
+
+
+@pytest.mark.parametrize('quotes', [("'", "'"), ('‘', '’'), ('"', '"'), ('`', '`')])
+def test_named_gcc_subject_precedes_other_tokens_in_message_and_source(quotes):
+    left, right = quotes
+    diag = {'id': '-Wanalyzer-use-after-free', 'line': 1,
+            'message': f'use after free of {left}p{right}; q is unrelated'}
+    source = ['return *p + q;']
+    assert compiler_sweep._diag_implicates(diag, ['p'], source)
+    assert not compiler_sweep._diag_implicates(diag, ['q'], source)
+    assert compiler_sweep._diag_implicates(diag, [], source)
+
+
+@pytest.mark.parametrize('diag_id,message', [
+    ('cplusplus.NewDelete', 'Use of memory after it is freed'),
+    ('-Wanalyzer-use-after-free', 'pointer used after release'),
+    ('-Wanalyzer-use-after-free', "use after free of 'p’"),
+])
+def test_subjectless_diagnostics_keep_existing_attribution_fallback(diag_id, message):
+    diag = {'id': diag_id, 'line': 1, 'message': message}
+    assert compiler_sweep._diag_implicates(diag, ['p'], ['return *p;'])
+    assert not compiler_sweep._diag_implicates(diag, ['q'], ['return *p;'])

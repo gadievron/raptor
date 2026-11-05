@@ -481,6 +481,10 @@ identifier. Common names such as `buffer`, `size` and `index` are preserved
 when quoted, so they are checked as identifiers rather than interpreted as
 generic prose.
 
+When GCC explicitly names a simple identifier as the subject of a warning,
+`/audit` uses that name for attribution. Mentioning another variable on the
+same source line does not make that warning evidence about the other variable.
+
 ## Output
 
 ### SARIF Files
