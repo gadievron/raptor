@@ -26,35 +26,33 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _hermetic_resolution(monkeypatch, tmp_path):
-    """No inherited keys, no operator config, cold caches."""
-    from core.config import RaptorConfig
-    for var in RaptorConfig.LLM_API_KEY_VARS:
-        monkeypatch.delenv(var, raising=False)
-    for var in RaptorConfig.LLM_ROUTING_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-    for var in (
-        "RAPTOR_BEDROCK_API", "RAPTOR_BEDROCK_MODEL",
-        "RAPTOR_BEDROCK_PROFILE", "RAPTOR_BEDROCK_REGION",
-        "RAPTOR_CC_MODEL", "RAPTOR_LLM_SOCKET", "RAPTOR_LLM_TOKEN_FD",
-    ):
-        monkeypatch.delenv(var, raising=False)
-    empty = tmp_path / "models.json"
-    empty.write_text(json.dumps({"models": []}))
-    monkeypatch.setenv("RAPTOR_CONFIG", str(empty))
-    monkeypatch.setenv(
-        "RAPTOR_CC_PROBE_CACHE", str(tmp_path / "cc-probe.json"),
-    )
     import core.llm.config as cfg
     import core.llm.detection as det
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
-    monkeypatch.setattr(cfg, "_operator_primary_override", None)
-    monkeypatch.setattr(cfg, "_get_available_ollama_models", lambda: [])
-    yield
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
+    from core.testing.llm_state import isolated_llm_resolution
+
+    with isolated_llm_resolution(cfg, det):
+        try:
+            from core.config import RaptorConfig
+            for var in RaptorConfig.LLM_API_KEY_VARS:
+                monkeypatch.delenv(var, raising=False)
+            for var in RaptorConfig.LLM_ROUTING_ENV_VARS:
+                monkeypatch.delenv(var, raising=False)
+            for var in (
+                "RAPTOR_BEDROCK_API", "RAPTOR_BEDROCK_MODEL",
+                "RAPTOR_BEDROCK_PROFILE", "RAPTOR_BEDROCK_REGION",
+                "RAPTOR_CC_MODEL", "RAPTOR_LLM_SOCKET", "RAPTOR_LLM_TOKEN_FD",
+            ):
+                monkeypatch.delenv(var, raising=False)
+            empty = tmp_path / "models.json"
+            empty.write_text(json.dumps({"models": []}))
+            monkeypatch.setenv("RAPTOR_CONFIG", str(empty))
+            monkeypatch.setenv(
+                "RAPTOR_CC_PROBE_CACHE", str(tmp_path / "cc-probe.json"),
+            )
+            monkeypatch.setattr(cfg, "_get_available_ollama_models", lambda: [])
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _claude_on_path(monkeypatch):

@@ -22,45 +22,44 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch, tmp_path):
-    """Hermetic selection env: no cloud provider keys, cold caches, no
-    live Claude Code probe, and a stubbed availability object so
-    fallback resolution doesn't short-circuit on "no external LLM"."""
-    for var in (
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "GEMINI_API_KEY",
-        "MISTRAL_API_KEY",
-        "AWS_BEARER_TOKEN_BEDROCK",
-        "AWS_PROFILE",
-        "RAPTOR_CONFIG",
-    ):
-        monkeypatch.delenv(var, raising=False)
-
     import core.llm.config as cfg
     import core.llm.detection as det
+    from core.testing.llm_state import isolated_llm_resolution
 
-    # Selection precedence is under test; inventory lookup is separate I/O.
-    monkeypatch.setattr(
-        "core.llm.model_resolution.resolve_anthropic",
-        lambda name, api_key: name,
-    )
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
-    monkeypatch.setattr(cfg, "_operator_primary_override", None)
-    # External LLM is "available" so _get_default_fallback_models and the
-    # availability gates don't bail; the thinking-model scorer stays live
-    # (we want to prove cloud still wins when present).
-    monkeypatch.setattr(
-        cfg, "detect_llm_availability",
-        lambda: type("A", (), {"external_llm": True})(),
-    )
-    # No live `claude` binary → claudecode never resolves as a competitor.
-    monkeypatch.setattr("shutil.which", lambda _bin: None)
-    yield
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
+    with isolated_llm_resolution(cfg, det):
+        try:
+            for var in (
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "GEMINI_API_KEY",
+                "MISTRAL_API_KEY",
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "AWS_PROFILE",
+                "RAPTOR_CONFIG",
+            ):
+                monkeypatch.delenv(var, raising=False)
+
+            empty = tmp_path / "models.json"
+            empty.write_text(json.dumps({"models": []}))
+            monkeypatch.setenv("RAPTOR_CONFIG", str(empty))
+
+            # Selection precedence is under test; inventory lookup is separate I/O.
+            monkeypatch.setattr(
+                "core.llm.model_resolution.resolve_anthropic",
+                lambda name, api_key: name,
+            )
+            # External LLM is "available" so _get_default_fallback_models and the
+            # availability gates don't bail; the thinking-model scorer stays live
+            # (we want to prove cloud still wins when present).
+            monkeypatch.setattr(
+                cfg, "detect_llm_availability",
+                lambda: det.LLMAvailability(external_llm=True, claude_code=False, llm_available=True),
+            )
+            # No live `claude` binary → claudecode never resolves as a competitor.
+            monkeypatch.setattr("shutil.which", lambda _bin: None)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _write_config(tmp_path, monkeypatch, models):
