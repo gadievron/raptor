@@ -14,7 +14,14 @@ MODULES = [
     "packages.llm_analysis.tests.test_defense_wiring",
     "packages.llm_analysis.tests.test_orchestrator",
     "packages.sca.llm.tests.test_run_stage",
+    "packages.sca.llm.tests.test_adversarial_injection",
+    "packages.sca.llm.tests.test_cross_family",
+    "packages.fuzzing.tests.test_harness_generator",
+    "packages.binary_analysis.tests.test_radare2_understand",
 ]
+
+SCA_MODULES = {name for name in MODULES if name.startswith("packages.sca.")}
+HARNESS_MODULE = "packages.fuzzing.tests.test_harness_generator"
 
 
 def populated_collector():
@@ -45,12 +52,16 @@ def state(collector):
 def test_module_fixture_preserves_borrowed_state(module_name, error, monkeypatch):
     module = import_module(module_name)
     from packages.sca import llm
+    from packages.fuzzing import harness_generator
 
     borrowed = populated_collector()
     alias_borrowed = populated_collector()
+    harness_borrowed = populated_collector()
     monkeypatch.setattr(prompt_telemetry, "defense_telemetry", borrowed)
     monkeypatch.setattr(llm, "defense_telemetry", alias_borrowed)
+    monkeypatch.setattr(harness_generator, "defense_telemetry", harness_borrowed)
     before, alias_before = state(borrowed), state(alias_borrowed)
+    harness_before = state(harness_borrowed)
 
     def invoke():
         with pytest.MonkeyPatch.context() as scope:
@@ -58,8 +69,10 @@ def test_module_fixture_preserves_borrowed_state(module_name, error, monkeypatch
             owned = prompt_telemetry.defense_telemetry
             assert owned is not borrowed
             assert state(owned) == state(prompt_telemetry.DefenseTelemetry())
-            if module_name == MODULES[-1]:
+            if module_name in SCA_MODULES:
                 assert llm.defense_telemetry is owned
+            if module_name == HARNESS_MODULE:
+                assert harness_generator.defense_telemetry is owned
             owned.record_preflight(hit=True)
             owned.set_probe_result("owned", True)
             owned.record_weakened_override("owned", "test")
@@ -79,6 +92,8 @@ def test_module_fixture_preserves_borrowed_state(module_name, error, monkeypatch
     assert llm.defense_telemetry is alias_borrowed
     assert state(borrowed) == before
     assert state(alias_borrowed) == alias_before
+    assert harness_generator.defense_telemetry is harness_borrowed
+    assert state(harness_borrowed) == harness_before
 
 
 @pytest.mark.parametrize("module_name", MODULES)

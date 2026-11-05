@@ -5,12 +5,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from packages.fuzzing.harness_generator import (
     GeneratedHarness,
     HarnessGenerator,
     HarnessSpec,
     _extract_target_signature,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+    from packages.fuzzing import harness_generator
+
+    pin_defense_telemetry(monkeypatch, harness_generator)
 
 
 class TestExtractTargetSignature(unittest.TestCase):

@@ -4,9 +4,19 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pydantic import BaseModel
 
 from packages.sca.llm import StageResult, cross_family_check
+
+
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+    from packages.sca import llm
+
+    pin_defense_telemetry(monkeypatch, llm)
 
 
 class _MockVerdict(BaseModel):

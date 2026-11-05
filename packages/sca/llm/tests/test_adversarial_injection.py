@@ -31,6 +31,14 @@ from packages.sca.models import Confidence, Dependency, PinStyle, SupplyChainFin
 from core.security.prompt_input_preflight import preflight
 
 
+@pytest.fixture(autouse=True)
+def _isolated_defense_telemetry(monkeypatch):
+    from core.testing.telemetry import pin_defense_telemetry
+    from packages.sca import llm
+
+    pin_defense_telemetry(monkeypatch, llm)
+
+
 _FIXTURES_DIR = (
     Path(__file__).resolve().parents[2]  # packages/sca/
     / "tests" / "fixtures" / "prompt_injections"
