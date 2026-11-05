@@ -1636,6 +1636,7 @@ class TestCompilerSurfaceFences:
             calls, "run_compiler_analyzer_sweep_guarded",
         ) == {"_guarded_compiler_sweep"}
         assert _callers_of(calls, "_guarded_compiler_sweep") == {
+            "test_named_gcc_object_wins_over_unrelated_same_line_identifier",
             "test_explicit_common_identifier_does_not_confirm_another_objects_bug",
             "test_cpp_leak_checker_and_cleanup_controls",
             "test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs",
