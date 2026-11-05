@@ -303,3 +303,44 @@ class TestDumpsArtifact:
         pytest.importorskip("orjson")
         payload = {"unicode": "café", "n": [1, 2]}
         assert json.loads(dumps_artifact(payload)) == payload
+
+
+class TestIterencodeCanonical:
+    @pytest.mark.parametrize('payload', CANONICAL_FIXTURES + [
+        {'values': [float('nan'), float('inf'), -float('inf'), 2**70]},
+        {1: 'integer-key', 2: 'second'},
+        {'path': Path('/tmp/x'), 'time': datetime(2026, 8, 23, 12)},
+    ])
+    def test_bytes_match_frozen_canonical_form(self, payload):
+        from core.json.utils import iterencode_canonical
+        assert b''.join(iterencode_canonical(payload)) == dumps_canonical(payload).encode('ascii')
+
+    def test_large_escaped_strings_keep_chunk_bound_and_digest(self):
+        from core.json.utils import iterencode_canonical
+        payload = {'value': ('é🙂"' + chr(92) + chr(10) + chr(0xD800)) * 20_000}
+        digest = hashlib.sha256()
+        for chunk in iterencode_canonical(payload):
+            assert isinstance(chunk, bytes) and len(chunk) <= 64 * 1024
+            digest.update(chunk)
+        assert digest.hexdigest() == hashlib.sha256(dumps_canonical(payload).encode('ascii')).hexdigest()
+
+    def test_noncanonical_encoder_is_never_consulted(self, monkeypatch):
+        import core.json.utils as current_utils
+
+        class Poison:
+            def __getattr__(self, name):
+                raise AssertionError('canonical stream consulted orjson')
+
+        monkeypatch.setattr(current_utils, '_orjson', Poison())
+        assert b''.join(current_utils.iterencode_canonical({'value': 'é'})) == b'{"value":"\\u00e9"}'
+
+    def test_circular_input_still_raises(self):
+        from core.json.utils import iterencode_canonical
+        payload = []
+        payload.append(payload)
+        with pytest.raises(ValueError, match='Circular reference'):
+            list(iterencode_canonical(payload))
+
+    def test_lazy_public_export_is_callable(self):
+        import core.json as substrate
+        assert b''.join(substrate.iterencode_canonical({'a': 1})) == b'{"a":1}'

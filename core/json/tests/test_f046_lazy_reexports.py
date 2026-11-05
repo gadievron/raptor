@@ -19,8 +19,8 @@ Acceptance tests:
      load_json_with_comments} — round-trip identical to direct
      submodule import.
   3. AttributeError raised for unknown names (PEP 562 contract).
-  4. `__all__` still includes all 7 names (no documentation drift).
-  5. dir(core.json) surfaces all 7 (IDE tab-completion).
+  4. `__all__` still includes every public name (no documentation drift).
+  5. dir(core.json) surfaces every public name (IDE tab-completion).
   6. `import core.json` alone does NOT eagerly load `core.json.cache`
      into `sys.modules` (the proof that the re-export is lazy).
 
@@ -175,7 +175,7 @@ def test_f046_all_unchanged(fresh_core_json):
         "JsonBudgetExceededError", "JsonCache",
         "MISSING", "RE_DATABASE_MAX_BYTES", "TTL_FOREVER",
         "append_jsonl", "dumps_artifact", "dumps_canonical",
-        "dumps_display",
+        "dumps_display", "iterencode_canonical",
         "load_json", "load_json_bounded", "load_json_unbounded",
         "load_json_with_comments", "load_jsonl", "loads",
         "loads_bounded", "save_json",
