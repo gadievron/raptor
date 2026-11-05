@@ -182,11 +182,27 @@ def test_combined_native_rule_controls_have_ci_and_nightly_owners():
 def test_semgrep_native_fixture_checks_keep_their_nightly_owner():
     path = ROOT / "engine/semgrep/tests/test_rule_fixtures.py"
     tree = ast.parse(path.read_text())
+    fixtures = {
+        node.name: node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and any(ast.unparse(decorator).startswith("pytest.fixture")
+                for decorator in node.decorator_list)
+    }
+
+    def calls_with_fixtures(case, seen=None):
+        seen = set() if seen is None else seen
+        calls = {ast.unparse(n.func) for n in ast.walk(case) if isinstance(n, ast.Call)}
+        for argument in case.args.args + case.args.kwonlyargs:
+            if argument.arg in fixtures and argument.arg not in seen:
+                seen.add(argument.arg)
+                calls.update(calls_with_fixtures(fixtures[argument.arg], seen))
+        return calls
+
     native = []
     for case in tree.body:
         if not isinstance(case, ast.FunctionDef) or not case.name.startswith("test_"):
             continue
-        calls = {ast.unparse(n.func) for n in ast.walk(case) if isinstance(n, ast.Call)}
+        calls = calls_with_fixtures(case)
         markers = {ast.unparse(n) for n in case.decorator_list}
         if "_run_semgrep" in calls or "subprocess.run" in calls:
             native.append(case.name)

@@ -61,6 +61,9 @@ def _exercise(case, stage, error, tmp_path, monkeypatch):
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "socket", proxy)
+            if case == "qualifying":
+                # Exercise ownership independently of Linux SO_PEERCRED.
+                patcher.setattr(module, "_anon_socketpair_problem", lambda fd: None)
             expected = nullcontext() if stage == "none" else pytest.raises(
                 error, match="injected socket scope failure"
             )

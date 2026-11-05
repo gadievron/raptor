@@ -1345,3 +1345,12 @@ def raw_byte_filenames(tmp_path):
     else:
         os.close(fd)
         os.unlink(probe)
+
+
+@pytest.fixture
+def short_socket_dir():
+    """Private Unix-socket paths that fit macOS sun_path even in deep checkouts."""
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory(prefix="raptor-sk-", dir="/tmp") as directory:
+        yield Path(directory)

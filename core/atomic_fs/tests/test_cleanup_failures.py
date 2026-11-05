@@ -11,8 +11,8 @@ from core import atomic_fs as fs
 
 @pytest.mark.parametrize("kind", ["file", "fifo", "socket"])
 @pytest.mark.parametrize("mode", [0o600, 0o640, 0o444])
-def test_non_directory_roots_are_not_removed_or_chmodded(tmp_path, kind, mode):
-    root = tmp_path / "node"
+def test_non_directory_roots_are_not_removed_or_chmodded(tmp_path, short_socket_dir, kind, mode):
+    root = (short_socket_dir if kind == "socket" else tmp_path) / "node"
     sock = None
     if kind == "file":
         root.write_text("keep")
