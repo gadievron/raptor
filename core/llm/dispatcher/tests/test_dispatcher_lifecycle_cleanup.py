@@ -142,6 +142,10 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
         tracked_listeners(monkeypatch) as (listeners, threads, directories),
         monkeypatch.context() as fault,
     ):
+        # Pin/finalizer faults exercise the Linux descriptor-address branch.
+        # A zero budget deliberately forces that branch; on Darwin it would
+        # reject even the compact path before reaching the injected fault.
+        fault.setattr(server.sys, "platform", "linux")
         fault.setattr(server, "_SUN_PATH_BUDGET", 0)
         real_open = os.open
         failed_open = False

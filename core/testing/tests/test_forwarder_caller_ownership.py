@@ -137,10 +137,10 @@ def test_pair_close_failure_attempts_both_ends(name, error, tmp_path, monkeypatc
 @pytest.mark.parametrize("stage", ["construct", "start"])
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 def test_forwarder_setup_failure_releases_listener_and_path(
-    stage, error, tmp_path, monkeypatch
+    stage, error, short_socket_dir, monkeypatch
 ):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    path = tmp_path / "joern.sock"
+    path = short_socket_dir / "joern.sock"
     listener.bind(str(path))
     listener.listen()
     failure = error("injected forwarder setup failure")
@@ -164,7 +164,7 @@ def test_forwarder_setup_failure_releases_listener_and_path(
                 ),
             )
             with pytest.raises(error, match="injected forwarder setup failure"):
-                module._forwarder_to(1, str(tmp_path))
+                module._forwarder_to(1, str(short_socket_dir))
         assert listener.fileno() == -1, "setup left listener open"
         assert not path.exists(), "setup stranded the socket path"
     finally:
@@ -191,7 +191,7 @@ def test_uds_client_setup_releases_socket(stage, error, monkeypatch):
 
 
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
-def test_real_forwarder_start_then_raise_retires_thread(error, tmp_path, monkeypatch):
+def test_real_forwarder_start_then_raise_retires_thread(error, short_socket_dir, monkeypatch):
     real_forwarder = module.Forwarder
     owners, workers = [], []
 
@@ -209,13 +209,13 @@ def test_real_forwarder_start_then_raise_retires_thread(error, tmp_path, monkeyp
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "Forwarder", StartFailure)
             with pytest.raises(error, match="injected post-start failure"):
-                module._forwarder_to(1, str(tmp_path))
+                module._forwarder_to(1, str(short_socket_dir))
         assert owners and owners[0]._stopping.is_set(), (
             "failed helper did not stop forwarder"
         )
         assert not workers[0].is_alive()
         assert owners[0]._listener.fileno() == -1
-        assert not (tmp_path / "joern.sock").exists()
+        assert not (short_socket_dir / "joern.sock").exists()
     finally:
         for owner in owners:
             owner.stop()

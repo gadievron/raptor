@@ -36,6 +36,8 @@ def test_caller_failure_stops_upstream(owner, name, kind, stage, error, monkeypa
         patcher.setattr(errors_mod.proxy_mod, "EgressProxy", Mock(
             side_effect=failure if stage == "proxy" else None, return_value=proxy,
         ))
+        # This wrapper tests cleanup, not the owning test's Linux /proc census.
+        patcher.setattr(errors_mod, "_open_fds", lambda: 0)
         patcher.setattr(errors_mod, "_send_connect", Mock(side_effect=failure))
         caller = getattr(getattr(errors_mod, owner)(), name)
         with pytest.raises(error, match="injected upstream caller failure"):

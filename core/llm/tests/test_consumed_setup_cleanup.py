@@ -8,6 +8,9 @@ from unittest.mock import Mock
 
 import pytest
 
+# The owning module needs the SDK; direct helper calls share that prerequisite.
+pytest.importorskip("anthropic")
+
 from core.llm.tests import test_consumed_attempt_e2e as module
 from core.testing import fds as support
 

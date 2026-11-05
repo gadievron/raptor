@@ -318,14 +318,23 @@ class TestPreSweepWindow(unittest.TestCase):
             stub = Path(td) / "python3"
             stub.write_text('#!/bin/sh\nprintf "posix=%s\\n" "${POSIXLY_CORRECT-unset}"\n')
             stub.chmod(0o700)
+            env = {"PATH": f"{td}:/usr/bin:/bin", "HOME": td,
+                   "POSIXLY_CORRECT": "1"}
+            # Bash/sh may normalize this value (macOS uses "y"). Compare
+            # the launcher with the same shell's ordinary child environment.
+            baseline = subprocess.run(
+                ["bash", "-c", 'exec "$1"', "baseline", str(stub)],
+                capture_output=True, text=True, timeout=10, env=env,
+            )
             proc = subprocess.run(
                 ["bash", str(REPO / "bin/cve-diff"), "--help"],
                 capture_output=True, text=True, timeout=10,
-                env={"PATH": f"{td}:/usr/bin:/bin", "HOME": td,
-                     "POSIXLY_CORRECT": "1"},
+                env=env,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("posix=1", proc.stdout)
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        self.assertNotIn("posix=unset", baseline.stdout)
+        self.assertEqual(proc.stdout, baseline.stdout)
 
 
 @pytest.mark.parametrize("rel,arg", [("bin/cve-diff", "--help"), ("bin/raptor", "--version")])
