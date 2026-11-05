@@ -143,3 +143,21 @@ def test_pin_drift_in_synthetic_evidence_is_rejected(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="evidence absent"):
         bench.load_cases(path)
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('  a\t b\n c  ', 'a b c'),
+    ('x = "a  b";\n y = \'c  d\';', 'x = "a  b"; y = \'c  d\';'),
+    ('  "a\\"  b"  c ', '"a\\"  b" c'),
+    ("  'a\\'  b'  c ", "'a\\'  b' c"),
+    ('"a\\\\"  c ', '"a\\\\" c'),
+    ('"unterminated  literal  ', '"unterminated  literal  '),
+    ('a\u2003\u2003b', 'a b'),
+])
+def test_quote_normalization_preserves_literals_and_escape_state(text, expected):
+    assert bench.normalize_quote(text) == expected
+
+
+def test_unterminated_escaped_quote_run_is_preserved():
+    text = '"' + ('\\"  ' * 12000)
+    assert bench.normalize_quote(text) == text

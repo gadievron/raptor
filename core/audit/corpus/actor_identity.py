@@ -12,7 +12,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 from time import perf_counter
 
 from core.json import load_json, save_json
@@ -40,9 +39,31 @@ def digest(value) -> str:
 
 def normalize_quote(text: str) -> str:
     """Fold layout whitespace without changing quoted literal contents."""
-    parts = re.split(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', text)
-    return "".join(part if i % 2 else re.sub(r"\s+", " ", part)
-                   for i, part in enumerate(parts)).strip()
+    # Do not restart a quote regex at every escaped quote in an
+    # unterminated literal. Each character is consumed exactly once.
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    pending_space = False
+    for char in text:
+        if quote:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char.isspace():
+            pending_space = True
+        else:
+            if pending_space and out:
+                out.append(" ")
+            pending_space = False
+            out.append(char)
+            if char in ("'", '"'):
+                quote = char
+    return "".join(out)
 
 
 def load_cases(path: Path) -> list[dict]:
@@ -137,7 +158,7 @@ def grade(case: dict, response: dict) -> dict:
 def run_cases(cases: list[dict], generate, *, model: str, prior: dict | None = None, on_result=None) -> dict:
     """Run or explicitly reuse each independent response, then regrade it."""
     previous = {row["id"]: row for row in (prior or {}).get("cases", [])}
-    report = {"scope": "synthetic class-focused diagnostic, not real-corpus recall", "model": model,
+    report: dict = {"scope": "synthetic class-focused diagnostic, not real-corpus recall", "model": model,
               "fixtures_sha256": digest(cases),
               "prompt_sha256": digest(SYSTEM_PROMPT), "cases": [], "new_cost_usd": 0.0, "reused": 0}
     for case in cases:

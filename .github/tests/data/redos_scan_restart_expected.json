@@ -978,13 +978,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/orchestrator.py\u001f_RECEIPT_CALL_NAME_RE": {
-   "digests": [
-    "edc71504a399"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/orchestrator.py\u001ftoken_re": {
    "digests": [
     "9fd1fff39efa"
@@ -1296,6 +1289,13 @@
   "core/audit/ptr_lifecycle.py\u001fcall_re": {
    "digests": [
     "a323d32174b9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/receipt_resolution.py\u001f_RECEIPT_CALL_NAME_RE": {
+   "digests": [
+    "edc71504a399"
    ],
    "exp": 1.0,
    "verdict": "linear"
