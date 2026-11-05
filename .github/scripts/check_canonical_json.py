@@ -165,7 +165,14 @@ def _json_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
     """(module aliases, bare dumps/dump names) bound to stdlib json."""
     aliases: set[str] = set()
     bare: set[str] = set()
-    for node in ast.walk(tree):
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        # Imports cannot occur below expressions. Retain statement wrappers
+        # such as exception handlers and match cases, plus nested scopes.
+        if isinstance(node, ast.expr):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
         if isinstance(node, ast.Import):
             for al in node.names:
                 if al.name == "json":

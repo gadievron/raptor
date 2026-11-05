@@ -155,14 +155,21 @@ def _tail_name(node: ast.expr) -> str | None:
 def _symbol_aliases_by_target(
     tree: ast.AST, targets: frozenset[str],
 ) -> dict[str, set[str]]:
-    """Import renames grouped by original target in one AST walk.
+    """Import renames grouped by original target in one statement-branch walk.
 
     Only symbol renames matter: a module alias (``import x.y as z``)
     still constructs via ``z.LLMClient()``, whose Attribute tail the
     census already matches.
     """
     aliases = {target: set() for target in targets}
-    for node in ast.walk(tree):
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        # Imports cannot occur below expressions. Retain statement wrappers
+        # such as exception handlers and match cases, plus nested scopes.
+        if isinstance(node, ast.expr):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 base = alias.name.rsplit(".", 1)[-1]
