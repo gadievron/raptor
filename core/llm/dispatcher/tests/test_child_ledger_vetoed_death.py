@@ -21,8 +21,9 @@ from contextlib import ExitStack
 import http.server
 import json
 import os
-import threading
 import time
+
+from packages.web.tests import http_server as http_support
 
 import httpx
 import pytest
@@ -97,20 +98,15 @@ class _AbortSSEUpstream:
                 self.connection.close()
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        try:
+        with ExitStack() as cleanup:
+            self._thread = http_support.start_http_server(self._server, cleanup.callback)
             self.base_url = (
                 "http://127.0.0.1:%d" % self._server.server_address[1]
             )
-            threading.Thread(
-                target=self._server.serve_forever, daemon=True,
-            ).start()
-        except BaseException:
-            self._server.server_close()
-            raise
+            self._cleanup = cleanup.pop_all()
 
     def shutdown(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
+        self._cleanup.close()
 
 
 def _make_dispatcher(fake_creds, tmp_path, base_url: str) -> LLMDispatcher:
