@@ -162,10 +162,15 @@ def _call_target(node: ast.Call) -> str | None:
     return None
 
 
-def _literals_in(node: ast.AST) -> set[str]:
-    """Artifact names carried by string constants under *node*."""
+def _literals_in(
+    node: ast.AST, name_artifacts: dict[str, str] | None = None,
+) -> set[str]:
+    """Artifact names carried by literals and optional one-hop aliases."""
     out: set[str] = set()
     for sub in ast.walk(node):
+        if (name_artifacts and isinstance(sub, ast.Name)
+                and sub.id in name_artifacts):
+            out.add(name_artifacts[sub.id])
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
             name = _artifact_name(sub.value)
             if name:
@@ -268,11 +273,7 @@ class _Visitor(ast.NodeVisitor):
 
     # -- read-call census ---------------------------------------------
     def _artifacts_for_call(self, node: ast.Call) -> set[str]:
-        arts = _literals_in(node)
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Name) and sub.id in self._name_artifacts:
-                arts.add(self._name_artifacts[sub.id])
-        return arts
+        return _literals_in(node, self._name_artifacts)
 
     def visit_Call(self, node: ast.Call) -> None:
         target = _call_target(node)
