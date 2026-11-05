@@ -172,15 +172,6 @@ _ALLOWLIST: dict[tuple[str, str], str] = {
         "private TemporaryDirectory work dir"
     ),
     (
-        "packages/ghidra/project_util.py",
-        "shutil.copy2(src, dst_rep / rel / f, follow_symlinks=False)",
-    ): (
-        "destination tree is rmtree'd and rebuilt fresh by "
-        "prepare_working_copy immediately before this walk — no "
-        "planted entry can occupy the fresh destination names; "
-        "follow_symlinks=False covers the vetted source side"
-    ),
-    (
         "packages/web/benchmark.py",
         'args.out.write_text(rendered + "\\n", encoding="utf-8")',
     ): (
