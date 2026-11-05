@@ -10,6 +10,8 @@ import pytest
 
 from core.testing import logging_state
 
+pytestmark = pytest.mark.usefixtures("handler_removal_mode")
+
 
 @pytest.fixture
 def private_logs(monkeypatch, tmp_path):
@@ -34,7 +36,7 @@ def private_logs(monkeypatch, tmp_path):
     for logger in [root, *loggers.values()]:
         handler = logging.NullHandler()
         logger.addHandler(handler)
-        borrowed[logger] = (logger.handlers, handler, logger.level, logger.propagate)
+        borrowed[logger] = (handler, logger.level, logger.propagate)
     created = []
     proxy = SimpleNamespace(
         **(
@@ -67,8 +69,7 @@ def private_logs(monkeypatch, tmp_path):
             stream = getattr(handler, "stream", None)
             if isinstance(stream, io.StringIO):
                 assert stream.closed, "capture buffer remained open"
-        for logger, (original_list, handler, level, propagate) in borrowed.items():
-            assert logger.handlers is original_list
+        for logger, (handler, level, propagate) in borrowed.items():
             assert logger.handlers == [handler], "capture remained attached"
             assert logger.level == level, "logger level leaked"
             assert logger.propagate == propagate, "logger propagation leaked"
@@ -87,7 +88,7 @@ def private_logs(monkeypatch, tmp_path):
             logging.Logger.removeHandler(logger, handler)
         handler.close()
         stream.close()
-    for logger, (_, handler, _, _) in borrowed.items():
+    for logger, (handler, _, _) in borrowed.items():
         logging.Logger.removeHandler(logger, handler)
         handler.close()
 

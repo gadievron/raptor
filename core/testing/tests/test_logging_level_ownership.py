@@ -8,6 +8,8 @@ import pytest
 
 from core.testing import logging_state
 
+pytestmark = pytest.mark.usefixtures("handler_removal_mode")
+
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
@@ -48,12 +50,13 @@ def state(tmp_path, monkeypatch):
         created.append((handler, stream))
         return handler
 
-    def assert_restored():
+    def assert_restored(*, handler_list_identity=True):
         assert created, "capture setup was not reached"
         assert all(handler._closed and stream.closed for handler, stream in created), (
             "owned logging resource remained open"
         )
-        assert root.handlers is originals[0]
+        if handler_list_identity:
+            assert root.handlers is originals[0]
         assert tuple(root.handlers) == originals[1], "root handler list changed"
         assert root.level == originals[2], "root level leaked"
         assert borrowed.level == originals[3], "borrowed handler level leaked"
@@ -90,11 +93,12 @@ def test_describe_capture_restores_level(kind, stage, state, tmp_path, monkeypat
     deps = import_module("packages.describe.tests.test_deps")
     shape = import_module("packages.describe.tests.test_target_shape")
     import_module("core.build.build_detector")
+    import_module("packages.sca.discovery")
+    import_module("packages.sca.parsers")
     name = "packages.sca.discovery" if kind == "dependencies" else "raptor"
     logger = state.named[name]
     borrowed = logging.NullHandler()
     logger.addHandler(borrowed)
-    original_list = logger.handlers
     get_logger, init = logging.getLogger, logging.Handler.__init__
     add, remove, level = logger.addHandler, logger.removeHandler, logger.setLevel
 
@@ -153,7 +157,6 @@ def test_describe_capture_restores_level(kind, stage, state, tmp_path, monkeypat
                 with pytest.raises(OSError):
                     call()
         state.assert_restored()
-        assert logger.handlers is original_list
         assert logger.handlers == [borrowed]
         assert not borrowed._closed
     finally:
@@ -260,7 +263,9 @@ def test_sdk_capture_fixture_does_not_change_levels(stage, state, monkeypatch):
                 with pytest.raises(StopIteration):
                     next(scope)
             assert handler._closed
-        state.assert_restored()
+        # owned_log_handler delegates removal to stdlib; list identity is
+        # not its contract when removeHandler uses copy-on-write.
+        state.assert_restored(handler_list_identity=False)
     finally:
         scope.close()
 
