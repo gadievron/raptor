@@ -11,10 +11,9 @@ from packages.sca.parsers.requirements import parse
 
 
 @pytest.fixture(autouse=True)
-def _reset_toggle():
-    """Default off after every test so other tests aren't poisoned."""
-    yield
-    req_parser.set_include_commented(False)
+def _reset_toggle(monkeypatch):
+    """Start with commented requirements off and restore the caller's toggle."""
+    monkeypatch.setattr(req_parser, "_INCLUDE_COMMENTED", False)
 
 
 def _write(tmp_path: Path, body: str, name: str = "requirements.txt") -> Path:

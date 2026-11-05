@@ -39,15 +39,17 @@ def _hostname_in(hosts: list[str], target: str) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _reset_calibrate_memo():
-    """The module memoises calibrate results per-process; tests must
-    each start with a fresh memo so cross-test pollution doesn't
-    happen (one test setting up a calibrated profile would otherwise
-    leak into a subsequent test expecting the static fallback).
-    Autouse so every test gets it without opt-in."""
-    mod._reset_calibrate_cache_for_tests()
-    yield
-    mod._reset_calibrate_cache_for_tests()
+def _reset_calibrate_memo(tmp_path, monkeypatch):
+    """Own the override path and calibration memo without clearing caller state."""
+    from core.sandbox import calibrated_hosts
+    from core.testing.module_state import isolated_module_state
+
+    monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH",
+                        tmp_path / "proxy-hosts.json")
+    with isolated_module_state(
+        calibrated_hosts, {"_CACHE": {}}, lock=calibrated_hosts._CACHE_LOCK,
+    ):
+        yield
 
 
 @pytest.fixture

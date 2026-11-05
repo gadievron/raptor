@@ -23,21 +23,18 @@ import pytest
 
 from packages.sca.parsers.directory_packages_props import (
     CentralPackage,
-    _reset_cache_for_tests,
     find_cpm_chain,
     parse_directory_packages_props,
 )
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
-    """Each test gets a clean cache. The cache is correct
-    behaviour (one parse per file per process), but tests
-    that mutate file contents between calls need a reset to
-    see the new bytes."""
-    _reset_cache_for_tests()
-    yield
-    _reset_cache_for_tests()
+def _reset_cache(monkeypatch):
+    """Parse into a private cache and restore the caller's warm cache."""
+    from importlib import import_module
+
+    parser = import_module("packages.sca.parsers.directory_packages_props")
+    monkeypatch.setattr(parser, "_PARSE_CACHE", {})
 
 
 def _write(tmp_path: Path, body: str, name: str = "Directory.Packages.props") -> Path:
