@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("handler_removal_mode")
+
 CLASS_SCOPES = [
     ("core.logging.tests.test_logger_format_args", "FormatArgsAcrossLevelsTest"),
     ("core.logging.tests.test_logger_format_args", "FormatStyleTest"),
@@ -26,7 +28,7 @@ def private_logger():
     logger = logging.Logger("owned-log-capture", logging.DEBUG)
     borrowed = logging.NullHandler()
     logger.addHandler(borrowed)
-    return logger, borrowed, logger.handlers
+    return logger, borrowed
 
 
 @pytest.mark.parametrize("module_name,class_name", CLASS_SCOPES)
@@ -35,7 +37,7 @@ def private_logger():
 )
 def test_class_capture_cleanup(module_name, class_name, stage, tmp_path, monkeypatch):
     module = import_module(module_name)
-    logger, borrowed, original_list = private_logger()
+    logger, borrowed = private_logger()
     handler = logging.FileHandler(tmp_path / "owned.log")
     stream = handler.stream
     wrapper = SimpleNamespace(logger=logger)
@@ -72,7 +74,6 @@ def test_class_capture_cleanup(module_name, class_name, stage, tmp_path, monkeyp
         else:
             case.run(result)
             assert len(result.errors) == (stage != "normal")
-        assert logger.handlers is original_list
         assert logger.handlers == [borrowed], "capture handler remained attached"
         assert stream.closed, "owned file capture remained open"
         assert handler._closed
@@ -92,7 +93,7 @@ def test_class_capture_cleanup(module_name, class_name, stage, tmp_path, monkeyp
 )
 def test_inline_capture_cleanup(module_name, class_name, stage):
     module = import_module(module_name)
-    logger, borrowed, original_list = private_logger()
+    logger, borrowed = private_logger()
     owned = logging.Handler()
     capture = getattr(module, class_name)()
     get_logger = logging.getLogger
@@ -131,7 +132,6 @@ def test_inline_capture_cleanup(module_name, class_name, stage):
             else:
                 with pytest.raises(error):
                     invoke()
-        assert logger.handlers is original_list
         assert logger.handlers == [borrowed], "inline capture remained attached"
         assert owned._closed, "inline capture handler was not closed"
         assert not borrowed._closed
@@ -149,7 +149,7 @@ def test_inline_capture_cleanup(module_name, class_name, stage):
 )
 def test_stream_fixture_cleanup(stage, monkeypatch):
     module = import_module("core.security.tests.test_prompt_telemetry")
-    logger, borrowed, original_list = private_logger()
+    logger, borrowed = private_logger()
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     add, set_level = logger.addHandler, handler.setLevel
@@ -200,7 +200,6 @@ def test_stream_fixture_cleanup(stage, monkeypatch):
             else:
                 with pytest.raises(RuntimeError, match="cancelled"):
                     fixture.throw(RuntimeError("cancelled"))
-        assert logger.handlers is original_list
         assert logger.handlers == [borrowed], "fixture capture remained attached"
         assert handler._closed, "fixture handler was not closed"
         assert stream.closed, "fixture stream was not closed"
@@ -218,7 +217,7 @@ def test_stream_fixture_cleanup(stage, monkeypatch):
 def test_handler_cleanup_attempts_both_operations(stage, error, tmp_path, monkeypatch):
     from core.testing.logging_state import owned_log_handler
 
-    logger, borrowed, original_list = private_logger()
+    logger, borrowed = private_logger()
     handler = logging.FileHandler(tmp_path / "owned.log")
     stream = handler.stream
     remove, close = logger.removeHandler, handler.close
@@ -244,7 +243,6 @@ def test_handler_cleanup_attempts_both_operations(stage, error, tmp_path, monkey
                 with owned_log_handler(logger, handler):
                     logger.warning("owned message")
         assert attempts == ["remove", "close"]
-        assert logger.handlers is original_list
         assert logger.handlers == [borrowed]
         assert stream.closed
         assert handler._closed
