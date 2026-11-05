@@ -3271,10 +3271,10 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
                         integer_range(dest_type, dest_width), src_type,
                     ):
                         continue
-                    # Skip when the wide var appears only as a
-                    # function argument — the narrowing is from
-                    # the return value, not the argument.
-                    if _var_only_in_call_args(rhs, src_var):
+                    # Grouping preserves a value use; calls and unevaluated
+                    # operands need syntax-aware filtering. Reuse the guard
+                    # context's bounded parse rather than stripping parentheses.
+                    if not guards.may_use_value(src_var, i, m.end()):
                         continue
 
                     z3_result = _try_z3_integer_narrowing(
@@ -3443,27 +3443,6 @@ def _extract_local_decls(lines: list[str]) -> dict[str, str]:
         for m in _NARROWING_ASSIGN_RE.finditer(line):
             results[m.group(2)] = m.group(1).strip()
     return results
-
-
-def _var_only_in_call_args(rhs: str, var_name: str) -> bool:
-    """True when *var_name* appears on *rhs* only inside function-call parens.
-
-    ``int x = func(wide_var);``  → wide_var is a call argument, not the
-    value being assigned (the return value of func is).
-    """
-    # Strip the var from inside balanced (...) groups, then check if it
-    # still appears.
-    depth = 0
-    stripped: list = []
-    for ch in rhs:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth = max(0, depth - 1)
-        elif depth == 0:
-            stripped.append(ch)
-    remainder = "".join(stripped)
-    return not re.search(rf"\b{re.escape(var_name)}\b", remainder)
 
 
 # ------------------------------------------------------------------
