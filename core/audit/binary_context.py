@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
+from core.source.lines import splitlines_prefix
 
 from .run_memo import BoundedMemo
 
@@ -746,7 +747,7 @@ def _binary_callees(db, func) -> list[dict[str, Any]]:
                 entry["signature"] = callee.signature
             if callee.decompilation:
                 entry["source_snippet"] = "\n".join(
-                    callee.decompilation.splitlines()[:20]
+                    splitlines_prefix(callee.decompilation, 20)
                 )
             callees.append(entry)
             if len(callees) == 15:

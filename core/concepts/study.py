@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.json import dumps_display, save_json
+from core.source.lines import splitlines_prefix
 from core.llm.coerce import structured_result
 from core.paths import confine
 
@@ -2591,7 +2592,7 @@ def _apply_receipts(
             # trigger verdict-affecting re-reviews.
             r = mechanical_receipt(
                 item.file, item.line,
-                "\n".join(item.definition.splitlines()[:6]),
+                "\n".join(splitlines_prefix(item.definition, 6)),
             )
             ct.provenance = TIER_LLM_SUMMARIZED
             ct.receipt = r.to_dict()
