@@ -445,7 +445,8 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
 
     ID-only runs without URI-base tables are grouped by tool name and
     deduplicated by ``_result_key`` (latest occurrence wins). Runs carrying
-    URI-base tables, referenced artifacts or qualified rules retain their metadata;
+    URI-base tables, referenced artifacts, cached logical/dataflow locations or
+    qualified rules retain their metadata;
     only identical contexts and exact reports are coalesced.
 
     Args:
@@ -486,12 +487,13 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
             results = run.get("results") or []
             artifacts = run.get("artifacts")
             if (_as_dict(run.get("originalUriBaseIds")) or
+                    any(name in run for name in ("logicalLocations", "threadFlowLocations")) or
                     any(isinstance(result, dict) and ("ruleIndex" in result or "rule" in result)
                         for result in results) or
                     (isinstance(artifacts, list) and artifacts and
                      any(_uses_artifact_table(result) for result in results if isinstance(result, dict)))):
-                # Rules, URI bases and referenced artifacts belong to this
-                # run. Combining tables can rebind a rule or source file.
+                # Rules, URI bases and cached locations belong to this run.
+                # Combining tables can rebind rules, functions or evidence hops.
                 metadata = {key: value for key, value in run.items() if key != "results"}
                 context_key = (tool_name, content_identity(metadata, stream=True))
                 if context_key not in tool_runs:
