@@ -14,7 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-import pytest
+from core.testing.logging_state import isolated_cli_logging
 from pathlib import Path
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[4])
@@ -55,39 +55,9 @@ def test_sweep_logging_single_prefixed_emission(tmp_path: Path) -> None:
     assert "INFO packages.sca.osv" in debug
 
 
-@pytest.fixture
-def _restore_root_logger():
-    """Snapshot/restore root logger state.
-
-    ``configure_sweep_logging`` sets root to DEBUG and attaches a
-    FileHandler into the test's tmp dir; without restore, every test
-    collected AFTER this one in the same process ran with a DEBUG root
-    console and a handler pointing into a deleted directory —
-    order-dependent noise under randomized scheduling.
-    """
-    import logging
-
-    root = logging.getLogger()
-    saved_level = root.level
-    saved_handlers = list(root.handlers)
-    try:
-        yield
-    finally:
-        for h in list(root.handlers):
-            if h not in saved_handlers:
-                root.removeHandler(h)
-                try:
-                    h.close()
-                except Exception:  # noqa: BLE001 — teardown best-effort
-                    pass
-        for h in saved_handlers:
-            if h not in root.handlers:
-                root.addHandler(h)
-        root.setLevel(saved_level)
-
-
+@isolated_cli_logging()
 def test_sweep_logging_installs_one_console_handler(
-    tmp_path: Path, _restore_root_logger,
+    tmp_path: Path,
 ) -> None:
     """In-process invariant: one console StreamHandler on root, in
     the canonical prefixed format, plus the DEBUG file handler."""

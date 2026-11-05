@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler
+
 from packages.describe.deps import (
     DependencyCounts,
     detect_dependency_counts,
@@ -124,6 +126,7 @@ class TestBestEffortAndLoggerRestore:
 
 
 class TestThreadScopedSuppression:
+    @isolated_cli_logging(logger_names=("packages.sca.discovery",))
     def test_concurrent_threads_records_survive_window(
         self, tmp_path, monkeypatch,
     ):
@@ -141,28 +144,22 @@ class TestThreadScopedSuppression:
                 records.append(record.getMessage())
 
         disc = logging.getLogger("packages.sca.discovery")
-        cap = _Cap()
-        prev_level = disc.level
-        disc.addHandler(cap)
-        disc.setLevel(logging.INFO)
+        with owned_log_handler(disc, _Cap()):
+            disc.setLevel(logging.INFO)
 
-        def fake_find(_path):
-            # While the suppression window is open, a concurrent
-            # thread emits an INFO record on the same logger.
-            t = threading.Thread(
-                target=lambda: disc.info("concurrent sca info line"),
+            def fake_find(_path):
+                # While the suppression window is open, a concurrent
+                # thread emits an INFO record on the same logger.
+                t = threading.Thread(
+                    target=lambda: disc.info("concurrent sca info line"),
+                )
+                t.start()
+                t.join(timeout=5)
+                assert not t.is_alive()
+                return []
+
+            monkeypatch.setattr(
+                "packages.sca.discovery.find_manifests", fake_find,
             )
-            t.start()
-            t.join(timeout=5)
-            assert not t.is_alive()
-            return []
-
-        monkeypatch.setattr(
-            "packages.sca.discovery.find_manifests", fake_find,
-        )
-        try:
             detect_dependency_counts(tmp_path)
-        finally:
-            disc.removeHandler(cap)
-            disc.setLevel(prev_level)
         assert "concurrent sca info line" in records

@@ -9,6 +9,7 @@ must cap those loggers at WARNING without touching RAPTOR's own.
 """
 
 import logging
+from contextlib import contextmanager
 import os
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import core.logging as core_logging
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -39,39 +41,30 @@ class _CaptureHandler(logging.Handler):
 
 @pytest.fixture
 def root_capture():
-    """Capture handler on the root logger, with full state restore.
-
-    Saves and restores the root level, root handler list, and the SDK
-    logger levels so tests here never leak configuration into the rest
-    of the suite. Root level is pinned to INFO — the state
-    ``RaptorLogger.__init__`` establishes for run streams — so
-    propagation reflects the real run-stream condition regardless of
-    test ordering. SDK logger levels are reset to NOTSET so each test
-    exercises what the setup call itself applies, not process history.
-    """
+    """Own the capture handler without changing levels during fixture setup."""
     root = logging.getLogger()
-    saved_root_level = root.level
-    saved_root_handlers = list(root.handlers)
-    saved_sdk_levels = {
-        name: logging.getLogger(name).level for name in _SDK_LOGGERS
-    }
-    handler = _CaptureHandler()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-    for name in _SDK_LOGGERS:
-        logging.getLogger(name).setLevel(logging.NOTSET)
-    try:
+    with owned_log_handler(root, _CaptureHandler()) as handler:
         yield handler
-    finally:
-        root.setLevel(saved_root_level)
-        root.handlers[:] = saved_root_handlers
-        for name, level in saved_sdk_levels.items():
-            logging.getLogger(name).setLevel(level)
+
+
+@contextmanager
+def _sdk_logging_baseline():
+    """Set the baseline inside the call phase, after pytest capture enters.
+
+    INFO root logging matches the run-stream setup. SDK levels start at
+    NOTSET so each test exercises the cap applied by the setup call.
+    """
+    with isolated_cli_logging(logger_names=_SDK_LOGGERS):
+        logging.getLogger().setLevel(logging.INFO)
+        for name in _SDK_LOGGERS:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+        yield
 
 
 class TestQuietThirdPartyLoggers:
     """The cap itself — the helper both setup chokepoints call."""
 
+    @_sdk_logging_baseline()
     def test_botocore_info_does_not_reach_stream_handlers(
         self, root_capture: _CaptureHandler,
     ) -> None:
@@ -81,6 +74,7 @@ class TestQuietThirdPartyLoggers:
         )
         assert root_capture.records == []
 
+    @_sdk_logging_baseline()
     def test_botocore_warning_still_reaches_stream_handlers(
         self, root_capture: _CaptureHandler,
     ) -> None:
@@ -92,6 +86,7 @@ class TestQuietThirdPartyLoggers:
             "Refreshing temporary credentials failed",
         ]
 
+    @_sdk_logging_baseline()
     def test_every_named_sdk_logger_is_capped(
         self, root_capture: _CaptureHandler,
     ) -> None:
@@ -102,6 +97,7 @@ class TestQuietThirdPartyLoggers:
             )
             assert logging.getLogger(name).isEnabledFor(logging.WARNING)
 
+    @_sdk_logging_baseline()
     def test_raptor_loggers_keep_info(
         self, root_capture: _CaptureHandler,
     ) -> None:
@@ -169,6 +165,7 @@ class TestRunStreamSetupAppliesCap:
 class TestCliSetupAppliesCap:
     """``configure_cli_logging`` is the standalone-CLI chokepoint."""
 
+    @_sdk_logging_baseline()
     def test_cli_setup_caps_sdk_loggers(
         self, root_capture: _CaptureHandler,
     ) -> None:
