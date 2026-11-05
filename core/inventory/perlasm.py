@@ -47,10 +47,11 @@ import os
 import re
 import shutil
 import stat
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.atomic_fs import write_bytes_atomically
+from core.source import open_regular_gated, read_bytes_gated
 from core.run.scratch import scratch_dir
 
 logger = logging.getLogger(__name__)
@@ -246,8 +247,12 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{_cache_key(gen, flavour, target)}.S"
-    if cached.is_file():
-        return cached, None
+    try:
+        with open_regular_gated(cached, follow_symlinks=False) as hit:
+            if 0 < os.fstat(hit.fileno()).st_size <= _MAX_ASM_BYTES:
+                return cached, None
+    except (OSError, ValueError):
+        pass  # Invalid or unavailable entries are cache misses, never evidence.
 
     from core.sandbox.context import run_untrusted
     from core.sandbox.errors import SandboxSetupError
@@ -322,33 +327,28 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
                     f"{flavour!r} is not a non-empty regular file — "
                     "refusing to cache it"
                 )
-            out_fd, out_name = tempfile.mkstemp(
-                prefix=".perlasm-tmp-", dir=str(cache_dir))
-            try:
+            if st.st_size > _MAX_ASM_BYTES:
+                return None, f"{gen.rel_path}: generated asm exceeds {_MAX_ASM_BYTES}-byte budget"
+
+            def chunks():
+                remaining = _MAX_ASM_BYTES
                 while True:
-                    chunk = os.read(fd, 1 << 20)
+                    chunk = os.read(fd, min(1 << 20, remaining + 1))
                     if not chunk:
                         break
-                    view = memoryview(chunk)
-                    written = 0
-                    while written < len(view):
-                        n = os.write(out_fd, view[written:])
-                        if n <= 0:
-                            raise OSError("short write to cache entry")
-                        written += n
-                os.close(out_fd)
-                out_fd = -1
-                os.replace(out_name, cached)
-            except OSError as exc:
-                if out_fd != -1:
-                    os.close(out_fd)
-                try:
-                    os.unlink(out_name)
-                except OSError:
-                    pass
-                return None, (
-                    f"{gen.rel_path}: caching generated asm failed: {exc}"
-                )
+                    if len(chunk) > remaining:
+                        raise ValueError(f"generated asm exceeds {_MAX_ASM_BYTES}-byte budget")
+                    remaining -= len(chunk)
+                    yield chunk
+                after = os.fstat(fd)
+                if (st.st_size, st.st_mtime_ns, st.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError("generated asm changed while being cached")
+
+            try:
+                write_bytes_atomically(cached, chunks(), tmp_prefix=".perlasm-tmp-")
+            except (OSError, ValueError) as exc:
+                return None, f"{gen.rel_path}: caching generated asm failed: {exc}"
         finally:
             try:
                 os.close(fd)
@@ -370,10 +370,12 @@ def _build_file_record(gen: PerlasmGenerator, flavour: str,
     from core.inventory.extractors import AsmExtractor
 
     try:
-        with Path(cached).open("rb") as fh:
-            raw = fh.read(_MAX_ASM_BYTES)
-    except OSError as exc:
+        raw = read_bytes_gated(cached, _MAX_ASM_BYTES, follow_symlinks=False)
+    except (OSError, ValueError) as exc:
         logger.warning("perlasm: cannot read cached asm %s: %s", cached, exc)
+        return None
+    if not raw:
+        logger.warning("perlasm: empty cached asm %s", cached)
         return None
     text = raw.decode("utf-8", "replace")
     virtual_path = f"{GENERATED_PREFIX}/{gen.rel_path}.{flavour}.S"
