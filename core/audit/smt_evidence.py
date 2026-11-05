@@ -43,11 +43,20 @@ def is_diagnostic_smt_rule(rule_id: str) -> bool:
     """These producers do not model source semantics sufficiently for verdicts."""
     if not isinstance(rule_id, str):
         return False
+    if "supplied-model" in rule_id.split(":"):
+        return True
     verb = rule_id.removeprefix("smt:").split(":", 1)[0]
     return is_predicate_only_smt_rule(rule_id) or verb in _DIAGNOSTIC_ORACLE_SCOPES
 
 
 def scope_smt_observation(verb: str, outcome: str, data: dict) -> tuple[str, dict]:
+    if "supplied-model" in verb.split(":"):
+        details = dict(data)
+        feasible = data.get("feasible")
+        if not isinstance(feasible, bool):
+            feasible = True if outcome == "confirmed" else False if outcome == "refuted" else None
+        details.update(oracle_scope="supplied-model", feasible=feasible)
+        return ("confirmed" if outcome == "confirmed" else "inconclusive"), details
     if verb in _DIAGNOSTIC_ORACLE_SCOPES:
         details = dict(data)
         details["oracle_scope"] = _DIAGNOSTIC_ORACLE_SCOPES[verb]

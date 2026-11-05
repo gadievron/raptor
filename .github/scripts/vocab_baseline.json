@@ -413,11 +413,6 @@
     "count": 13,
     "kind": "literal"
   },
-  "core/audit/condition_smt.py::_SIGNED_TYPES": {
-    "count": 19,
-    "kind": "literal",
-    "note": "C/C++ signed integer type spellings (int, __s32, ptrdiff_t, ...) used to thread operand signedness into the overflow-disproof SMT encoding \u2014 fixed language/kernel-typedef grammar, not a learned API vocabulary"
-  },
   "core/audit/condition_smt.py::_SIGNED_TYPE_NAMES": {
     "count": 20,
     "kind": "literal",
@@ -2170,9 +2165,9 @@
     "reviewed": "2026-11-01"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 57,
+    "count": 58,
     "kind": "literal",
-    "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
+    "note": "Serialised run-option field names for audit-run-config.json, including the operator-selected integer ABI pinned for resume. Closed CLI/run-state schema, not target API vocabulary."
   },
   "libexec/raptor-audit::dispatch": {
     "count": 15,

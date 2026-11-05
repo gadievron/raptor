@@ -1,4 +1,4 @@
-"""Lexically visible C declaration types at one narrowing initializer."""
+"""Lexically visible C declarations at one selected source location."""
 
 
 def _node_source(node, source):
@@ -21,7 +21,7 @@ def _declarations(node, source, *, before=None):
             for item in body.named_children:
                 name = item.child_by_field_name("name")
                 if name is not None:
-                    result[_node_source(name, source)] = None
+                    result[_node_source(name, source)] = (None, node)
     for declarator in node.children_by_field_name("declarator"):
         if before is not None and declarator.start_byte > before:
             continue
@@ -41,7 +41,7 @@ def _declarations(node, source, *, before=None):
                 child = declarator.named_children[0]
             declarator = child
         if declarator is not None:
-            result[_node_source(declarator, source)] = type_name if plain else None
+            result[_node_source(declarator, source)] = (type_name if plain else None, node)
     return result
 
 
@@ -58,8 +58,8 @@ def _preceding_declarations(node, source, before):
     return result
 
 
-def visible_types(target, source: bytes) -> dict[str, str | None]:
-    """Collect only declarations in scopes containing this initializer.
+def visible_declarations(target, source: bytes):
+    """Collect only declarations in scopes containing this source use.
 
     Unknown types and non-scalar declarators mask outer names. No type is
     borrowed from another function, a sibling block, or a later declaration.
@@ -102,3 +102,8 @@ def visible_types(target, source: bytes) -> dict[str, str | None]:
         elif node.type == "declaration":
             result.update(_declarations(node, source, before=target.start_byte))
     return result
+
+
+def visible_types(target, source: bytes) -> dict[str, str | None]:
+    """Type-only view of the shared, lexically visible declaration records."""
+    return {name: record[0] for name, record in visible_declarations(target, source).items()}

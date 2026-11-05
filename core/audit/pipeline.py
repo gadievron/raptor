@@ -17,6 +17,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from .integer_abi import IntegerABIInput
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +74,7 @@ class AuditPipelineOpts:
     max_tokens: int | None = None
     budget: int | None = None
     strategy_filter: str | None = None
+    integer_abi: IntegerABIInput = None
     review_passes: int = 1
     batch_sloc_threshold: int | None = None
     include_kinds: set | None = None
@@ -421,6 +424,14 @@ def _build_orchestrator_config(
     """
     from core.audit.orchestrator import OrchestratorConfig
 
+    from .integer_abi import resolve_integer_abi
+    abi = resolve_integer_abi(opts.integer_abi)
+    if opts.integer_abi is not None and abi is None:
+        raise ValueError("unknown target integer ABI")
+    if abi is None:
+        logger.info("Target integer ABI unknown: source overflow SMT is inconclusive")
+    else:
+        logger.info("Target integer ABI: %s (explicit target assertion)", abi.name)
     return OrchestratorConfig(
         target_path=opts.target_path,
         out_dir=opts.out_dir,
@@ -429,6 +440,7 @@ def _build_orchestrator_config(
         scope_floor=opts.scope_floor,
         pins=opts.pins,
         strategy_filter=opts.strategy_filter,
+        integer_abi=opts.integer_abi,
         models=models,
         multi_model=len(models) > 1,
         adversarial=opts.adversarial,

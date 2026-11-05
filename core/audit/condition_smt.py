@@ -5188,37 +5188,6 @@ _INT_HYPO_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DISPROOF_TYPE_WIDTHS = _TYPE_WIDTHS
-
-# Signedness of the resolvable C type spellings. Plain ``char`` is
-# implementation-defined and deliberately ABSENT — unknown signedness
-# must gate a disproof to inconclusive, never default to unsigned.
-_UNSIGNED_TYPES = frozenset({
-    "unsigned char", "unsigned short", "unsigned int", "unsigned",
-    "unsigned long", "unsigned long long",
-    "u8", "u16", "u32", "u64", "__u8", "__u16", "__u32", "__u64",
-    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
-    "size_t", "uintptr_t",
-})
-_SIGNED_TYPES = frozenset({
-    "signed char", "short", "int", "long", "long long",
-    "s8", "s16", "s32", "s64", "__s8", "__s16", "__s32", "__s64",
-    "int8_t", "int16_t", "int32_t", "int64_t",
-    "ssize_t", "off_t", "loff_t", "ptrdiff_t",
-})
-
-
-def _type_signedness(vtype: str) -> str | None:
-    """``"unsigned"`` / ``"signed"`` / ``None`` (unknown) for a
-    resolved C type spelling."""
-    t = " ".join(vtype.split())
-    if t in _UNSIGNED_TYPES:
-        return "unsigned"
-    if t in _SIGNED_TYPES:
-        return "signed"
-    return None
-
-
 @dataclass
 class HypothesisDisproofResult:
     """Result of attempting to mechanically disprove a hypothesis."""
@@ -5250,6 +5219,7 @@ def disprove_integer_overflow(
     *,
     file_path: str = "",
     function_name: str | None = None,
+    integer_abi=None,
 ) -> HypothesisDisproofResult:
     """Attempt to disprove an integer overflow/underflow hypothesis via SMT.
 
@@ -5264,6 +5234,14 @@ def disprove_integer_overflow(
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
+
+    from .integer_abi import resolve_integer_abi
+    abi = resolve_integer_abi(integer_abi)
+    if abi is None:
+        return HypothesisDisproofResult(
+            hypothesis_class="integer_overflow",
+            reasoning="target integer ABI unavailable — inconclusive",
+        )
 
     import importlib.util
     if not importlib.util.find_spec("z3"):
@@ -5321,87 +5299,32 @@ def disprove_integer_overflow(
             reasoning=f"no variables found in expression '{expr_text}'",
         )
 
-    resolved_types: dict[str, int] = {}
-    resolved_signs: set[str | None] = set()
-    for vn in var_names:
-        vtype = var_types.get(vn, "")
-        if not vtype:
-            type_re = re.compile(
-                r"\b((?:unsigned\s+)?(?:int|long|short|char)"
-                r"|[su]?int(?:8|16|32|64)_t"
-                r"|size_t|ssize_t|off_t)\s+" + re.escape(vn) + r"\b",
-            )
-            tm = type_re.search(source_context)
-            if tm:
-                vtype = tm.group(1).strip()
-        width = _TYPE_WIDTHS.get(vtype, 0)
-        if width:
-            resolved_types[vn] = width
-            resolved_signs.add(_type_signedness(vtype))
-
-    if not resolved_types:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="could not resolve type widths for any variables",
-        )
-
-    # Signedness threads into the model: encoding a signed product as
-    # unsigned wrap moved the overflow boundary from 2^31 to 2^32, so
-    # a genuine signed int32 overflow (UB) at 3.27e9 came back UNSAT
-    # -> 'disproved'. Unknown or mixed signedness cannot be modelled
-    # honestly with one profile — inconclusive, never a guess.
-    if None in resolved_signs:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=(
-                "operand signedness unresolved (implementation-"
-                "defined or unrecognised type) — cannot model; "
-                "inconclusive"
-            ),
-        )
-    if len(resolved_signs) > 1:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=(
-                "mixed signed/unsigned operands — usual-arithmetic-"
-                "conversion semantics not modelled; inconclusive"
-            ),
-        )
-    signedness = resolved_signs.pop()
-    if signedness == "signed" and op_char == "-":
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=(
-                "signed subtraction overflow is not modellable by the "
-                "check-overflow verb — inconclusive"
-            ),
-        )
-
-    # Guard premises: without source-level constraints on the operands
-    # the model is vacuous — SAT merely restates that unconstrained
-    # bitvector arithmetic can wrap (no evidence value), and the UNSAT
-    # branch is unreachable. Use the sweep's source-operation and
-    # guard-context admission rather than collecting arbitrary comparisons.
-    width = max(resolved_types.values())
-    if width not in (8, 16, 32, 64):
-        width = 64
-    profile = (f"int{width}" if signedness == "signed"
-               else f"uint{width}")
-    overflow_kind = ("signed_wrap" if signedness == "signed"
-                     else "unsigned_wrap")
     from .arithmetic_operation import bind_arithmetic_operation
     from .sweep import _premise_gate
 
     # Preserve expression order, including literals. Reordering variables
     # ahead of constants would change subtraction's intrinsic predicate.
     operands = [part.strip() for part in parts if part.strip()]
-    operation = bind_arithmetic_operation(source_context, operands, op_char, language=language)
+    operation = bind_arithmetic_operation(source_context, operands, op_char, language=language, integer_abi=abi)
     if operation.status != "bound" or operation.guard_status == "unavailable":
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",
             reasoning="source operation or guard context unavailable — inconclusive",
         )
-    premises = list(operation.premises)
+    if operation.type_status != "bound":
+        return HypothesisDisproofResult(
+            hypothesis_class="integer_overflow",
+            reasoning="source integer types or conversions unavailable — inconclusive",
+        )
+    from .arithmetic_types import integer_type
+    if any(name in var_types and integer_type(var_types[name], abi) != integer_type(spelling, abi)
+           for name, spelling in operation.types):
+        return HypothesisDisproofResult(
+            hypothesis_class="integer_overflow",
+            reasoning="provided integer types disagree with source declarations — inconclusive",
+        )
+    profile, overflow_kind = operation.profile, operation.kind
+    premises = list(operation.premises + operation.domains)
     gate = _premise_gate(premises, profile)
     if gate is not None:
         return HypothesisDisproofResult(

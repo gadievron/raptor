@@ -479,7 +479,7 @@ def _is_detection_variant(part: str) -> bool:
     if part.startswith("smt:"):
         verb = part.split(":", 2)[1]
         from .smt_evidence import is_diagnostic_smt_rule
-        if verb == "check-encoding-residual" or is_diagnostic_smt_rule(verb):
+        if verb == "check-encoding-residual" or is_diagnostic_smt_rule(part):
             return True
         if part.endswith(":witness"):
             return False

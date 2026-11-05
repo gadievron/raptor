@@ -546,7 +546,7 @@ class TestRunSmtSweep:
         )
         # Either succeeds (sat/unsat) or errors (z3 not installed)
         assert result.tool == "smt"
-        assert result.rule_id == "smt:check-overflow"
+        assert result.rule_id == "smt:check-overflow:supplied-model"
         assert result.outcome in ("confirmed", "refuted", "error", "inconclusive")
 
     def test_sweep_result_log_entry(self):
@@ -2140,6 +2140,7 @@ class TestVacuousVerbPolicyDirect:
             verb=verb,
             source=source,
             hypothesis=hypothesis,
+            integer_abi="ilp32",
         )
 
     def test_overflow_guardless_source_is_inconclusive(self):
@@ -2158,7 +2159,7 @@ class TestVacuousVerbPolicyDirect:
         # free variable, so a wrap inside the guarded space exists.
         result = self._run(
             "check-overflow",
-            "int f(unsigned count, unsigned size) {\n"
+            "int f(unsigned count, unsigned size, unsigned max_len) {\n"
             "    if (count < max_len) { return count * size; }\n"
             "    return 0;\n"
             "}\n",
@@ -2266,14 +2267,15 @@ class TestRunSmtSweepVacuityPolicy:
         )
         assert result.outcome == "confirmed"
 
-    def test_unsat_stays_refuted_without_guards(self, monkeypatch):
+    def test_unsat_remains_a_supplied_model_observation(self, monkeypatch):
         self._patch_shim(monkeypatch, '{"result": "unsat"}')
         result = run_smt_sweep(
             file_path="a.c", function_name="f",
             verb="check-overflow",
             smt_args={"op": "+", "operand": ["a", "b"]},
         )
-        assert result.outcome == "refuted"
+        assert result.outcome == "inconclusive"
+        assert result.details["feasible"] is False
 
     def test_non_vacuous_verb_sat_still_confirms(self, monkeypatch):
         self._patch_shim(monkeypatch, '{"result": "sat"}')

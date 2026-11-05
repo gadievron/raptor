@@ -23,7 +23,7 @@ def c_grammar():
 ])
 def test_one_matching_operation_binds(c_grammar, expression, operator, operands):
     source = f"unsigned Read(unsigned a, unsigned b) {{\n    return {expression};\n}}"
-    result = operation.bind_arithmetic_operation(source, operands, operator, language="c")
+    result = operation.bind_arithmetic_operation(source, operands, operator, language="c", integer_abi="ilp32")
     assert result.status == "bound"
     assert result.line == 2
     assert result.column == 12
@@ -54,13 +54,13 @@ def test_one_matching_operation_binds(c_grammar, expression, operator, operands)
 ])
 def test_nonmatching_or_ambiguous_operations_decline(c_grammar, body, operator, status):
     source = f"unsigned Read(unsigned a, unsigned b) {{ {body} }}"
-    result = operation.bind_arithmetic_operation(source, ["a", "b"], operator, language="c")
+    result = operation.bind_arithmetic_operation(source, ["a", "b"], operator, language="c", integer_abi="ilp32")
     assert result.status == status
 
 
 @pytest.mark.parametrize("language", [None, "go", "rust", "python"])
 def test_unsupported_language_cannot_fall_back_to_text(language):
-    result = operation.bind_arithmetic_operation("a + b", ["a", "b"], "+", language=language)
+    result = operation.bind_arithmetic_operation("a + b", ["a", "b"], "+", language=language, integer_abi="ilp32")
     assert result.status == "unavailable"
 
 
@@ -72,12 +72,12 @@ def test_parser_unavailability_declines_without_lexical_fallback(monkeypatch, pa
         return None
 
     monkeypatch.setattr(operation, "_get_parser", unavailable)
-    result = operation.bind_arithmetic_operation("a + b", ["a", "b"], "+", language="c")
+    result = operation.bind_arithmetic_operation("a + b", ["a", "b"], "+", language="c", integer_abi="ilp32")
     assert result.status == "unavailable"
 
 
 def test_malformed_source_does_not_earn_operation_identity(c_grammar):
-    assert operation.bind_arithmetic_operation("int Read( { a + b", ["a", "b"], "+", language="c").status == "unavailable"
+    assert operation.bind_arithmetic_operation("int Read( { a + b", ["a", "b"], "+", language="c", integer_abi="ilp32").status == "unavailable"
 
 
 @pytest.mark.parametrize("expression,operator,expected", [
@@ -92,6 +92,7 @@ def test_cpp_operation_identity(expression, operator, expected):
     result = operation.bind_arithmetic_operation(
         f"unsigned Read(unsigned a, unsigned b) {{ return {expression}; }}",
         ["a", "b"], operator, language="cpp",
+        integer_abi="ilp32",
     )
     assert result.status == expected
 
@@ -114,7 +115,7 @@ def test_unbound_queries_stop_before_premise_or_solver_work(c_grammar, monkeypat
     monkeypatch.setattr(smt_verbs, "check_overflow", forbidden)
     source = f"unsigned Read(unsigned a, unsigned b) {{ if (a <= 10 && b <= 10) {{ {body} }} return 0; }}"
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read",
-                                     verb="check-overflow", source=source, hypothesis=hypothesis)
+                                     verb="check-overflow", source=source, hypothesis=hypothesis, integer_abi="ilp32")
     assert result.outcome == "inconclusive"
     assert not result.errors
     assert result.details["arithmetic_operation_status"] in {"unbound", "ambiguous"}
@@ -128,7 +129,7 @@ def test_bound_query_reaches_the_real_solver(c_grammar, expression, hypothesis):
     pytest.importorskip("z3")
     source = f"unsigned Read(unsigned a, unsigned b) {{ if (a <= 10 && b <= 10) return {expression}; return 0; }}"
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read",
-                                     verb="check-overflow", source=source, hypothesis=hypothesis)
+                                     verb="check-overflow", source=source, hypothesis=hypothesis, integer_abi="ilp32")
     assert result.outcome == "refuted"
     assert result.details["source_operation"]["line"] == 1
     assert result.details["source_operation"]["column"] > 1
@@ -139,7 +140,7 @@ def test_cpp_default_argument_does_not_bind_to_the_callee_body():
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_cpp")
     source = "unsigned a, b; unsigned Read(unsigned value = a + b) { return value; }"
-    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp")
+    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp", integer_abi="ilp32")
     assert result.status == "unbound"
 
 
@@ -147,13 +148,13 @@ def test_cpp_nested_callback_does_not_supply_the_outer_operation():
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_cpp")
     source = "unsigned Read(unsigned a, unsigned b) { auto cb = [&](){return a + b;}; return 0; }"
-    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp")
+    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp", integer_abi="ilp32")
     assert result.status == "unbound"
 
 
 def test_unevaluated_occurrence_does_not_make_a_real_operation_ambiguous(c_grammar):
     source = "unsigned Read(unsigned a, unsigned b) { unsigned width = sizeof(a + b); return a + b; }"
-    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="c")
+    result = operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="c", integer_abi="ilp32")
     assert result.status == "bound"
 
 
@@ -164,7 +165,7 @@ def test_same_source_worker_from_before_operation_binding_is_rejected(c_grammar,
 
     source = "unsigned Read(unsigned a, unsigned b) { if (a <= 10 && b <= 10) return a + b; return 0; }"
     _, selected = source_for_function(source, "record.c", "Read")
-    old_binding = source_binding(selected, "Read", verb="check-overflow")
+    old_binding = source_binding(selected, "Read", verb="check-overflow", integer_abi="ilp32", hypothesis="integer overflow in `a` + `b`")
     del old_binding["query_contract"]
     old = sweep.SweepResult(tool="smt", file_path="record.c", function_name="Read",
                             rule_id="smt:check-overflow", outcome=outcome,
@@ -173,6 +174,7 @@ def test_same_source_worker_from_before_operation_binding_is_rejected(c_grammar,
     result = sweep._smt_verb_in_subprocess(
         file_path="record.c", function_name="Read", verb="check-overflow", source=source,
         hypothesis="integer overflow in `a` + `b`",
+        integer_abi="ilp32",
     )
     assert result.outcome == "inconclusive"
     assert not result.matches
@@ -186,11 +188,11 @@ def test_same_source_worker_from_before_operation_binding_is_rejected(c_grammar,
 ])
 def test_unknown_evaluation_cannot_hide_a_second_occurrence(c_grammar, body):
     source = f"unsigned Read(unsigned a, unsigned b) {{ {body} }}"
-    assert operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="c").status == "unavailable"
+    assert operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="c", integer_abi="ilp32").status == "unavailable"
 
 
 def test_cpp_compile_time_condition_does_not_bind_runtime_arithmetic():
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_cpp")
     source = "unsigned Read(unsigned a, unsigned b) { if constexpr (a + b > 0) return 1; return 0; }"
-    assert operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp").status == "unavailable"
+    assert operation.bind_arithmetic_operation(source, ["a", "b"], "+", language="cpp", integer_abi="ilp32").status == "unavailable"

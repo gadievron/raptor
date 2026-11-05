@@ -2939,6 +2939,15 @@ def _reuse_ineligibility(
       never at the stale recorded lines (see
       :func:`_context_staleness`). ``None`` skips the short-circuit.
     """
+    if getattr(entry, "verdict", None) == "clean":
+        # Prior integer disproofs have no durable target-ABI binding in the
+        # journal schema. A source hash alone cannot reauthorize that clean
+        # under a different or unknown target layout; require a fresh review.
+        receipts = getattr(entry, "evidence_tools", None) or []
+        body = getattr(entry, "body", "") or ""
+        if any("smt:disproof:" in receipt or "smt:check-overflow" in receipt
+               for receipt in receipts if isinstance(receipt, str)) or body.startswith("[smt-disproof:"):
+            return "integer disproof requires target ABI revalidation"
     if getattr(entry, "context_reduced", None):
         return "context_reduced verdict"
     if getattr(entry, "provisional", None):
@@ -2992,6 +3001,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("integer disproof"):
+        return "integer_abi_unbound"
     if reason.startswith("context_reduced"):
         return "context_reduced"
     if reason.startswith("provisional"):

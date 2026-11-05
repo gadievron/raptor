@@ -2262,6 +2262,8 @@ def get_smt_verb_role(verb: str) -> str:
 
     Unknown verbs default to ``"detection"``.
     """
+    if is_diagnostic_smt_rule(verb):
+        return "detection"
     bare = verb.split(":", maxsplit=1)[0]
     return _SMT_VERB_ROLES.get(bare, "detection")
 
@@ -2298,7 +2300,7 @@ def is_detection_rule_id(stamp: str) -> bool:
     if ":" not in stamp:
         return False
     verb = stamp.split(":", 2)[1]
-    if is_diagnostic_smt_rule(verb):
+    if is_diagnostic_smt_rule(stamp):
         return True
     if stamp.endswith(":witness"):
         return verb == "check-encoding-residual"
@@ -2367,6 +2369,10 @@ def run_smt_sweep(
         SweepResult with outcome ``confirmed`` (sat — the condition is
         feasible) or ``refuted`` (unsat — the condition is infeasible).
     """
+    # A shim solves caller-supplied arithmetic, without a source/ABI binding.
+    receipt_verb = (f"{verb}:supplied-model" if verb in {
+        "check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass",
+    } else verb)
     shim_name = _SMT_VERBS.get(verb)
     if not shim_name:
         if verb in _SMT_DIRECT_ONLY_VERBS:
@@ -2494,7 +2500,7 @@ def run_smt_sweep(
                 outcome="error",
                 errors=[proc.stderr.strip() or f"exit code {proc.returncode}"],
                 raw_output=raw,
-                rule_id=f"smt:{verb}",
+                rule_id=f"smt:{receipt_verb}",
             )
 
         try:
@@ -2539,7 +2545,7 @@ def run_smt_sweep(
                     "meaningful",
                 )
 
-        outcome, scope_details = _scope_smt_observation(verb, outcome, result_data)
+        outcome, scope_details = _scope_smt_observation(receipt_verb, outcome, result_data)
         return SweepResult(
             tool="smt",
             file_path=file_path,
@@ -2547,7 +2553,7 @@ def run_smt_sweep(
             outcome=outcome,
             details=scope_details,
             matches=[result_data] if outcome == "confirmed" else [],
-            rule_id=f"smt:{verb}",
+            rule_id=f"smt:{receipt_verb}",
             raw_output=raw,
         )
     except subprocess.TimeoutExpired:
@@ -2557,7 +2563,7 @@ def run_smt_sweep(
             function_name=function_name,
             outcome="error",
             errors=["SMT solver timed out (60s)"],
-            rule_id=f"smt:{verb}",
+            rule_id=f"smt:{receipt_verb}",
         )
     except Exception as exc:  # noqa: BLE001
         return SweepResult(
@@ -2566,7 +2572,7 @@ def run_smt_sweep(
             function_name=function_name,
             outcome="error",
             errors=[str(exc)],
-            rule_id=f"smt:{verb}",
+            rule_id=f"smt:{receipt_verb}",
         )
 
 
@@ -2617,6 +2623,7 @@ def run_smt_verb_direct(
     source: str,
     hypothesis: str,
     target_path: str | None = None,
+    integer_abi=None,
 ) -> SweepResult:
     """Call an SMT verb directly from Python (no shim subprocess).
 
@@ -2637,7 +2644,7 @@ def run_smt_verb_direct(
         verb=verb,
         source=source,
         hypothesis=hypothesis,
-        target_path=target_path,
+        target_path=target_path, integer_abi=integer_abi,
     )
 
 
@@ -2695,6 +2702,7 @@ def _smt_verb_in_subprocess(
     hypothesis: str,
     timeout: int = 10,
     target_path: str | None = None,
+    integer_abi=None,
 ) -> SweepResult:
     """Run SMT verb in an isolated subprocess.
 
@@ -2704,6 +2712,14 @@ def _smt_verb_in_subprocess(
     """
     from .subproc_json import run_json_child
     from dataclasses import fields
+    from .integer_abi import integer_abi_record
+    abi_record = integer_abi_record(integer_abi)
+    if verb == "check-overflow" and abi_record is None:
+        return SweepResult(
+            tool="smt", file_path=file_path, function_name=function_name,
+            outcome="inconclusive", rule_id=f"smt:{verb}",
+            details={"integer_abi_status": "unavailable"},
+        )
     expected_binding = None
     if verb in _FUNCTION_SCOPED_SOURCE_VERBS:
         from .probe_function_scope import source_for_function, source_binding
@@ -2714,7 +2730,7 @@ def _smt_verb_in_subprocess(
                 outcome="inconclusive", rule_id=f"smt:{verb}",
                 details={"source_scope_status": scope.status},
             )
-        expected_binding = source_binding(selected, function_name, verb=verb)
+        expected_binding = source_binding(selected, function_name, verb=verb, integer_abi=integer_abi, hypothesis=hypothesis)
     vocab = _verb_vocab(target_path)
     vocabulary = {f.name: sorted(getattr(vocab, f.name)) for f in fields(vocab)}
 
@@ -2728,6 +2744,7 @@ def _smt_verb_in_subprocess(
             "hypothesis": hypothesis,
             "target_path": None,
             "vocabulary": vocabulary,
+            "integer_abi": abi_record,
         },
         env=smt_child_env(),
         timeout=timeout,
@@ -2769,9 +2786,17 @@ def _smt_verb_in_subprocess(
 
 def _run_smt_verb_inner(
     *, file_path: str, function_name: str, verb: str, source: str,
-    hypothesis: str, target_path: str | None = None, vocab=None,
+    hypothesis: str, target_path: str | None = None, vocab=None, integer_abi=None,
 ) -> SweepResult:
     """Confined-worker admission for source-derived function observations."""
+    from .integer_abi import integer_abi_record
+    abi_record = integer_abi_record(integer_abi)
+    if verb == "check-overflow" and abi_record is None:
+        return SweepResult(
+            tool="smt", file_path=file_path, function_name=function_name,
+            outcome="inconclusive", rule_id=f"smt:{verb}",
+            details={"integer_abi_status": "unavailable"},
+        )
     binding = None
     if verb in _FUNCTION_SCOPED_SOURCE_VERBS:
         from .probe_function_scope import source_for_function, source_binding
@@ -2783,10 +2808,10 @@ def _run_smt_verb_inner(
                 details={"source_scope_status": scope.status},
             )
         source = selected
-        binding = source_binding(source, function_name, verb=verb)
+        binding = source_binding(source, function_name, verb=verb, integer_abi=integer_abi, hypothesis=hypothesis)
     result = _run_smt_verb_on_source(
         file_path=file_path, function_name=function_name, verb=verb,
-        source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab,
+        source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab, integer_abi=abi_record,
     )
     if binding is not None and is_diagnostic_smt_rule(verb) and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
@@ -2806,6 +2831,7 @@ def _run_smt_verb_on_source(
     hypothesis: str,
     target_path: str | None = None,
     vocab=None,
+    integer_abi=None,
 ) -> SweepResult:
     """Actual SMT verb execution (runs inside the confined worker)."""
     if vocab is None:
@@ -2850,7 +2876,7 @@ def _run_smt_verb_on_source(
             from .condition_extraction import language_for_file
             op = _extract_arith_operator(hypothesis)
             operation = bind_arithmetic_operation(
-                source, operands, op, language=language_for_file(file_path),
+                source, operands, op, language=language_for_file(file_path), integer_abi=integer_abi,
             )
             if operation.status != "bound":
                 return SweepResult(
@@ -2868,8 +2894,14 @@ def _run_smt_verb_on_source(
                     outcome="inconclusive", rule_id=f"smt:{verb}",
                     details={"arithmetic_guard_status": "unavailable"},
                 )
-            premises = list(operation.premises)
-            gate = _premise_gate(premises, "uint32")
+            if operation.type_status != "bound":
+                return SweepResult(
+                    tool="smt", file_path=file_path, function_name=function_name,
+                    outcome="inconclusive", rule_id=f"smt:{verb}",
+                    details={"arithmetic_type_status": "unavailable"},
+                )
+            premises = list(operation.premises + operation.domains)
+            gate = _premise_gate(premises, operation.profile)
             if gate is not None:
                 return SweepResult(
                     tool="smt", file_path=file_path,
@@ -2878,7 +2910,7 @@ def _run_smt_verb_on_source(
                     details={"summary": gate},
                 )
             result = check_overflow(
-                operands, op, profile="uint32", guards=premises,
+                operands, op, profile=operation.profile, guards=premises, kind=operation.kind,
             )
         elif verb == "check-oob":
             if _lang_has_overflow_safety(file_path):
@@ -3135,6 +3167,9 @@ def _run_smt_verb_on_source(
             scope_details["source_operation"] = {
                 "line": operation.line, "column": operation.column,
                 "guards": list(operation.premises),
+                "profile": operation.profile, "kind": operation.kind,
+                "types": dict(operation.types), "domains": list(operation.domains),
+                "integer_abi": integer_abi,
             }
         return SweepResult(
             tool="smt", file_path=file_path,

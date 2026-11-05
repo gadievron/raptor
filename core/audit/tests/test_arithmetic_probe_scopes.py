@@ -26,11 +26,11 @@ def test_arithmetic_dispatch_binds_only_the_requested_function(monkeypatch, verb
 
     monkeypatch.setattr(sweep, "_run_smt_verb_on_source", observe)
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name=function,
-                                     verb=verb, source=SOURCE, hypothesis="claim")
+                                     verb=verb, source=SOURCE, hypothesis="claim", integer_abi="ilp32")
     assert result.outcome == "confirmed"
     assert len(seen) == 1
     assert ("37" in seen[0]) is found
-    assert result.details["source_scope"] == source_binding(seen[0], function, verb=verb)
+    assert result.details["source_scope"] == source_binding(seen[0], function, verb=verb, integer_abi="ilp32", hypothesis="claim")
     assert result.details["test_observation"] is True
 
 
@@ -43,7 +43,7 @@ def test_unresolved_function_does_not_dispatch_arithmetic(monkeypatch, verb, nam
     monkeypatch.setattr(sweep, "_run_smt_verb_on_source", forbidden)
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", forbidden)
     request = dict(file_path="record.c", function_name=name, verb=verb,
-                   source=SOURCE, hypothesis="claim")
+                   source=SOURCE, hypothesis="claim", integer_abi="ilp32")
     assert sweep._run_smt_verb_inner(**request).outcome == "inconclusive"
     assert sweep._smt_verb_in_subprocess(**request).outcome == "inconclusive"
 
@@ -53,7 +53,7 @@ def test_unresolved_function_does_not_dispatch_arithmetic(monkeypatch, verb, nam
 @pytest.mark.parametrize("outcome", ["confirmed", "refuted"])
 def test_arithmetic_parent_rejects_unbound_or_misattributed_results(monkeypatch, verb, changed, outcome):
     _, selected = source_for_function(SOURCE, "record.c", "Read")
-    binding = source_binding(selected, "Read", verb=verb)
+    binding = source_binding(selected, "Read", verb=verb, integer_abi="ilp32", hypothesis="claim")
     result = sweep.SweepResult(
         tool="smt", file_path="record.c", function_name="Read", rule_id=f"smt:{verb}",
         outcome=outcome, details={"source_scope": binding}, matches=[{"model": {}}],
@@ -75,6 +75,7 @@ def test_arithmetic_parent_rejects_unbound_or_misattributed_results(monkeypatch,
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", lambda *a, **kw: asdict(result))
     observed = sweep._smt_verb_in_subprocess(
         file_path="record.c", function_name="Read", verb=verb, source=SOURCE, hypothesis="claim",
+        integer_abi="ilp32",
     )
     assert observed.outcome == "inconclusive"
     assert not observed.matches
@@ -88,11 +89,12 @@ def test_bound_current_worker_results_survive_parent_admission(monkeypatch, verb
     _, selected = source_for_function(SOURCE, "record.c", "Read")
     result = sweep.SweepResult(
         tool="smt", file_path="record.c", function_name="Read", rule_id=f"smt:{verb}",
-        outcome=outcome, details={"source_scope": source_binding(selected, "Read", verb=verb)},
+        outcome=outcome, details={"source_scope": source_binding(selected, "Read", verb=verb, integer_abi="ilp32", hypothesis="claim")},
     )
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", lambda *a, **kw: asdict(result))
     observed = sweep._smt_verb_in_subprocess(
         file_path="record.c", function_name="Read", verb=verb, source=SOURCE, hypothesis="claim",
+        integer_abi="ilp32",
     )
     assert observed.outcome == outcome
     assert observed.details == result.details
@@ -109,7 +111,7 @@ def test_real_solver_cannot_borrow_a_neighboring_comparison(requested, expected)
     )
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name=requested,
                                      verb="check-overflow", source=source,
-                                     hypothesis="integer overflow in `a` + `b`")
+                                     hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32")
     assert result.outcome == expected
     if requested == "Read":
         assert "no source-level guard premises" in result.details["summary"]
@@ -127,7 +129,7 @@ def test_nested_callable_does_not_supply_arithmetic_source(monkeypatch, verb):
 
     monkeypatch.setattr(sweep, "_run_smt_verb_on_source", observe)
     sweep._run_smt_verb_inner(file_path="record.cpp", function_name="Read", verb=verb,
-                              source=source, hypothesis="claim")
+                              source=source, hypothesis="claim", integer_abi="ilp32")
     assert len(seen) == 1
     assert "37" not in seen[0]
 
@@ -157,7 +159,7 @@ def test_neighbor_names_cannot_complete_missing_operands(monkeypatch, verb, chec
 
     monkeypatch.setattr(smt_verbs, checker, forbidden)
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read", verb=verb,
-                                     source=source, hypothesis=hypothesis)
+                                     source=source, hypothesis=hypothesis, integer_abi="ilp32")
     assert result.outcome == "inconclusive"
     assert not result.errors
 
@@ -174,7 +176,7 @@ def test_unresolvable_arithmetic_scope_stops_before_vocabulary_or_child(monkeypa
 
     monkeypatch.setattr(sweep, "_verb_vocab", forbidden)
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", forbidden)
-    request = dict(file_path=path, function_name="Read", verb=verb, source=source, hypothesis="claim")
+    request = dict(file_path=path, function_name="Read", verb=verb, source=source, hypothesis="claim", integer_abi="ilp32")
     for runner in (sweep._run_smt_verb_inner, sweep._smt_verb_in_subprocess):
         result = runner(**request)
         assert result.outcome == "inconclusive"

@@ -19,7 +19,7 @@ def source(body):
 
 
 def bind(body, *, language="c"):
-    return operation.bind_arithmetic_operation(source(body), ["a", "b"], "+", language=language)
+    return operation.bind_arithmetic_operation(source(body), ["a", "b"], "+", language=language, integer_abi="ilp32")
 
 
 @pytest.mark.parametrize("body,expected", [
@@ -93,7 +93,7 @@ def test_unmodeled_context_declines_instead_of_guessing(c_grammar, body):
 def test_real_solver_verdict_uses_only_credited_guards(c_grammar, body, expected):
     pytest.importorskip("z3")
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read", verb="check-overflow",
-                                     source=source(body), hypothesis="integer overflow in `a` + `b`")
+                                     source=source(body), hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32")
     assert result.outcome == expected
     assert not result.errors
     if expected == "refuted":
@@ -113,7 +113,7 @@ def test_unavailable_guard_context_stops_before_solver(c_grammar, monkeypatch, b
     monkeypatch.setattr(sweep, "_premise_gate", forbidden)
     monkeypatch.setattr(smt_verbs, "check_overflow", forbidden)
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read", verb="check-overflow",
-                                     source=source(body), hypothesis="integer overflow in `a` + `b`")
+                                     source=source(body), hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32")
     assert result.outcome == "inconclusive"
     assert result.details["arithmetic_guard_status"] == "unavailable"
 
@@ -122,14 +122,14 @@ def test_unavailable_guard_context_stops_before_solver(c_grammar, monkeypatch, b
 def test_worker_with_old_guard_contract_cannot_supply_a_verdict(c_grammar, monkeypatch, outcome):
     text = source("if (a <= 10 && b <= 10) return a + b; return 0;")
     _, selected = source_for_function(text, "record.c", "Read")
-    binding = source_binding(selected, "Read", verb="check-overflow")
+    binding = source_binding(selected, "Read", verb="check-overflow", integer_abi="ilp32", hypothesis="integer overflow in `a` + `b`")
     binding["query_contract"] = "unique-binary-operation-v1"
     old = sweep.SweepResult(tool="smt", file_path="record.c", function_name="Read",
                             rule_id="smt:check-overflow", outcome=outcome,
                             details={"source_scope": binding}, matches=[{"model": {}}])
     monkeypatch.setattr("core.audit.subproc_json.run_json_child", lambda *a, **kw: asdict(old))
     result = sweep._smt_verb_in_subprocess(file_path="record.c", function_name="Read", verb="check-overflow",
-                                         source=text, hypothesis="integer overflow in `a` + `b`")
+                                         source=text, hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32")
     assert result.outcome == "inconclusive"
     assert not result.matches
     assert result.details["source_scope_status"] == "unbound-worker-result"
@@ -173,7 +173,7 @@ def test_cpp_aliases_and_unmodeled_exits_do_not_reuse_guard_values(body):
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_cpp")
     text = f"unsigned Read(unsigned &a, unsigned b, unsigned &alias, unsigned flag) {{ {body} }}"
-    result = operation.bind_arithmetic_operation(text, ["a", "b"], "+", language="cpp")
+    result = operation.bind_arithmetic_operation(text, ["a", "b"], "+", language="cpp", integer_abi="ilp32")
     assert result.guard_status == "unavailable"
     assert not result.premises
 
@@ -199,7 +199,7 @@ def test_auxiliary_disproof_obeys_the_same_guard_boundary(c_grammar, body, expec
 
     text = source(body).replace("unsigned", "unsigned int")
     result = disprove_integer_overflow("integer overflow in `a + b`", text,
-                                      file_path="record.c", function_name="Read")
+                                      file_path="record.c", function_name="Read", integer_abi="ilp32")
     assert result.disproved is expected, result.reasoning
     assert not result.error
 
@@ -214,7 +214,7 @@ def test_auxiliary_disproof_cannot_borrow_a_neighboring_function(c_grammar, name
         "unsigned int Read(unsigned int a, unsigned int b) { return a + b; }\n"
     )
     result = disprove_integer_overflow("integer overflow in `a + b`", text,
-                                      file_path="record.c", function_name=name)
+                                      file_path="record.c", function_name=name, integer_abi="ilp32")
     assert result.disproved is expected, result.reasoning
     assert not result.error
 
@@ -225,7 +225,7 @@ def test_auxiliary_disproof_preserves_literal_subtraction_order(c_grammar):
 
     text = "unsigned int Read(unsigned int a) { if (a <= 4) return 4 - a; return 0; }"
     result = disprove_integer_overflow("integer underflow in `4 - a`", text,
-                                      file_path="record.c", function_name="Read")
+                                      file_path="record.c", function_name="Read", integer_abi="ilp32")
     assert result.disproved is True, result.reasoning
     assert not result.error
 
@@ -233,7 +233,7 @@ def test_auxiliary_disproof_preserves_literal_subtraction_order(c_grammar):
 @pytest.mark.parametrize("literal", ["4", "0x10"])
 def test_operation_identity_accepts_exact_canonical_literals(c_grammar, literal):
     text = f"unsigned int Read(unsigned int a) {{ if (a <= 10) return a + {literal}; return 0; }}"
-    result = operation.bind_arithmetic_operation(text, ["a", literal], "+", language="c")
+    result = operation.bind_arithmetic_operation(text, ["a", literal], "+", language="c", integer_abi="ilp32")
     assert result.status == "bound"
     assert result.premises == ("a <= 10",)
 
@@ -244,8 +244,8 @@ def test_empty_named_scope_cannot_use_the_legacy_single_function_fallback(c_gram
 
     text = "unsigned int Read(unsigned int a, unsigned int b) { if (a <= 10 && b <= 10) return a + b; return 0; }"
     hypothesis = "integer overflow in `a + b`"
-    assert disprove_integer_overflow(hypothesis, text).disproved is True
+    assert disprove_integer_overflow(hypothesis, text, integer_abi="ilp32").disproved is True
     for kwargs in [dict(file_path="record.c"), dict(file_path="record.c", function_name="")]:
-        result = disprove_integer_overflow(hypothesis, text, **kwargs)
+        result = disprove_integer_overflow(hypothesis, text, **kwargs, integer_abi="ilp32")
         assert result.disproved is None
         assert "function scope unavailable" in result.reasoning
