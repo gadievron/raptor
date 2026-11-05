@@ -119,9 +119,16 @@ def _duplicate_key(
         "ruleId", "ruleIndex", "rule", "level", "is_exploitable",
         "exploitability_score", "tree_class",
     }}
+    # A readable ID can name a specific sub-rule of an indexed descriptor.
+    # Descriptor equality alone must not merge those distinct checks.
+    logical_id = rule["id"]
+    reference = result.get("rule")
+    for value in (result.get("ruleId"), reference.get("id") if isinstance(reference, dict) else None):
+        if isinstance(value, str) and value:
+            logical_id = value
     return _content_key({
         "driver": namespace(driver), "component": namespace(owner),
-        "descriptor": context_keys[descriptor_key], "evidence": evidence,
+        "descriptor": context_keys[descriptor_key], "logical_rule_id": logical_id, "evidence": evidence,
         "source_context": context_keys[source_key],
     })
 

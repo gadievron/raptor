@@ -399,6 +399,9 @@ rule/component metadata, source context, and finding evidence match. The
 strongest-ranked original report is retained. Different messages, locations,
 fingerprints, or dataflow paths remain separate; incomplete metadata disables
 deduplication. Raw SARIF files are preserved.
+Indexed rule references retain their own severity, including when rule IDs
+repeat. Conflicting references do not supply rule metadata or enable
+deduplication. Distinct sub-rule IDs remain separate candidates.
 Equal-signal ties use stable content identities rather than file order.
 The limit counts attempted findings, including calls that raise an error;
 exceptions do not draw additional findings into the selected set. A limit

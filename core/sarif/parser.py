@@ -703,6 +703,7 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
     """Resolve a result's descriptor within its referenced tool component.
 
     An explicit extension reference must never borrow a same-ID driver rule.
+    Indexed references select directly and must agree with readable IDs/GUIDs.
     Support descriptor IDs/GUIDs and indexes, rejecting ambiguous matches and
     malformed component references. Legacy ID-only results prefer the driver
     and may use a uniquely matching extension when the driver has no match.
@@ -721,19 +722,39 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
     rule_id = reference_id or result_id
     guid = reference.get("guid")
     guid = guid if isinstance(guid, str) and guid else None
-    rule_index = reference.get("index", result.get("ruleIndex"))
+    for mapping, name in ((reference, "index"), (result, "ruleIndex")):
+        if name in mapping and (type(mapping[name]) is not int or mapping[name] < -1):
+            return {}
+    if "index" in reference and "ruleIndex" in result and reference["index"] != result["ruleIndex"]:
+        return {}
+    rule_index = reference.get("index", result.get("ruleIndex", -1))
 
     def resolve(component):
         rules = _as_dict(component).get("rules")
         if not isinstance(rules, list):
             return {}
+        if rule_index >= 0:
+            if rule_index >= len(rules) or not isinstance(rules[rule_index], dict):
+                return None
+            descriptor = rules[rule_index]
+            if rule_id:
+                descriptor_id = descriptor.get("id")
+                compatible = descriptor_id == rule_id
+                # SARIF permits one sub-rule component in a readable ID.
+                if not compatible and isinstance(descriptor_id, str) and descriptor_id:
+                    suffix = rule_id[len(descriptor_id) + 1:]
+                    compatible = (rule_id.startswith(descriptor_id + "/")
+                                  and bool(suffix) and "/" not in suffix)
+                if not compatible:
+                    return None
+            if guid and descriptor.get("guid") != guid:
+                return None
+            return descriptor
         if rule_id or guid:
             matches = [r for r in rules if isinstance(r, dict)
                        and (not rule_id or r.get("id") == rule_id)
                        and (not guid or r.get("guid") == guid)]
             return matches[0] if len(matches) == 1 else (None if matches else {})
-        if type(rule_index) is int and 0 <= rule_index < len(rules):
-            return _as_dict(rules[rule_index])
         return {}
 
     if "toolComponent" in reference:
@@ -764,7 +785,7 @@ def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, An
         return resolve(component) or {}
 
     rule = resolve(driver)
-    if rule is None or rule or not (rule_id or guid):
+    if rule_index >= 0 or rule is None or rule or not (rule_id or guid):
         return rule or {}
     resolved = [resolve(component) for component in extensions]
     if any(rule is None for rule in resolved):
