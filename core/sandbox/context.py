@@ -582,8 +582,8 @@ def _persist_proxy_events(
 
     Non-fatal on every write failure. Observability is nice-to-
     have, not a reason to break the caller — the write failure
-    surfaces in a DEBUG log line so operators investigating
-    missing audit data can find the cause.
+    surfaces in a warning and sticky persistence state so operators
+    investigating missing audit data can find the cause.
     """
     if not events or not output:
         return
@@ -659,6 +659,8 @@ def _persist_proxy_events(
             _persist_lock.release()
         return
     _fd_owned = True
+    _seq_start = None
+    _written = 0
     try:
         _log_st = os.fstat(_log_fd)
         if not stat.S_ISREG(_log_st.st_mode):
@@ -667,8 +669,8 @@ def _persist_proxy_events(
                 "(mode=0o%o); skipping proxy event persistence",
                 _log_path, _log_st.st_mode,
             )
-            os.close(_log_fd)
             _fd_owned = False
+            os.close(_log_fd)
             # Same tamper class as the open failure above.
             _state["flags"].add("persist_open_failure")
             _count = _state["next_seq"]
@@ -723,7 +725,6 @@ def _persist_proxy_events(
             _state["flags"].add("stream_truncated")
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
             _fd_owned = False  # fdopen took ownership
-            _written = 0
             for _i, e in enumerate(events):
                 # Provenance stamp: triage verifies this token before
                 # letting the event drive a verdict — the target can
@@ -739,6 +740,10 @@ def _persist_proxy_events(
                 line = {**stamped, "mac": token} if token else e
                 _f.write(_json.dumps(line) + "\n")
                 _written += 1
+            # The count sidecar is durable; its healthy count must never
+            # reach disk before the corresponding event records do.
+            _f.flush()
+            os.fsync(_f.fileno())
         _state["next_seq"] = _seq_start + _written
         # Ordering note (inherent two-file window): events append
         # first, sidecar second. A crash between the two leaves
@@ -760,13 +765,29 @@ def _persist_proxy_events(
                 pass
         if not isinstance(_persist_exc, Exception):
             raise
-        # Demoted from raise → debug-log: persistence failure
-        # shouldn't poison the caller, same posture as the open
-        # failure above.
-        logger.debug(
+        logger.warning(
             "Sandbox: could not write proxy events to %s",
             _log_path, exc_info=True,
         )
+        # Preserve the failure and every acknowledged write across later
+        # batches. Recounting alone must not renumber over missing history.
+        _state["flags"].add("persist_write_failure")
+        try:
+            if _seq_start is None:
+                _side_count, _side_flags, _side_invalid = (
+                    _read_proxy_count_sidecar(output, _run_binding))
+                _state["flags"] |= _side_flags
+                if _side_invalid:
+                    _state["flags"].add("count_sidecar_invalid")
+                _count = max(_state["next_seq"] or 0, _side_count or 0)
+            else:
+                _count = max(_state["next_seq"] or 0, _seq_start + _written)
+            _state["next_seq"] = _count
+            _write_proxy_count_sidecar(
+                output, _count, _state["flags"], _run_binding)
+        except Exception:  # secondary persistence must not break the caller
+            logger.warning("Sandbox: could not persist proxy write-failure state",
+                           exc_info=True)
     finally:
         _persist_lock.release()
 
