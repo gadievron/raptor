@@ -290,8 +290,7 @@ def _tracked_verdict_names(scope: ast.AST,
     shape-checked ladders are the audited legal alternative to
     ``read_verdict`` and the scan cannot adjudicate branch
     placement."""
-    counts = _scope_binding_counts(scope, own)
-    tracked: dict[str, str] = {}
+    candidates: list[tuple[str, str]] = []
     for n in own:
         target = None
         value = None
@@ -301,11 +300,17 @@ def _tracked_verdict_names(scope: ast.AST,
         elif (isinstance(n, ast.AnnAssign) and n.value is not None
                 and isinstance(n.target, ast.Name)):
             target, value = n.target, n.value
-        if target is None or counts[target.id] != 1:
+        if target is None:
             continue
         key = _read_key(value, VERDICT_KEYS) or _alias_get_key(value)
         if key is not None:
-            tracked[target.id] = key
+            candidates.append((target.id, key))
+    if not candidates:
+        return {}
+    # Most runtime scopes have no verdict assignments. Count every binding
+    # only when there is a candidate whose single-assignment status matters.
+    counts = _scope_binding_counts(scope, own)
+    tracked = {name: key for name, key in candidates if counts[name] == 1}
     if tracked:
         for n in own:
             if (isinstance(n, ast.Call)
@@ -360,7 +365,10 @@ def _violations_in(path: Path) -> list[str]:
             tests.append(node.args[0])
         return tests
 
+    scopes: list[ast.AST] = [tree]
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scopes.append(node)
         # Verdict-fabricating .get defaults. Bool keys: only an
         # explicit None default preserves the abstention (and equals
         # the no-default read). Graded keys: only None/"unknown" do.
@@ -478,9 +486,6 @@ def _violations_in(path: Path) -> list[str]:
     # ``not v``, and ``v == w`` between two tracked raw reads (the
     # junk==junk agreement mint). See the module docstring for the
     # tracking and laundering rules.
-    scopes: list[ast.AST] = [tree]
-    scopes += [n for n in ast.walk(tree)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     for scope in scopes:
         own = _scope_own_nodes(scope)
         tracked = _tracked_verdict_names(scope, own)
