@@ -13,7 +13,6 @@ injected clients without that keyword keep working.
 import contextlib
 import importlib.util
 import io
-import os
 import sys
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -28,19 +27,27 @@ FULL_ID = "12345678-1234-5678-1234-567812345678"
 _cli = None
 
 
-def setUpModule() -> None:
+def setUpModule():
     global _cli
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    loader = SourceFileLoader(
-        "raptor_sage_cli_task_create_status",
-        str(REPO_ROOT / "libexec" / "raptor-sage"),
-    )
-    spec = importlib.util.spec_from_loader(
-        "raptor_sage_cli_task_create_status", loader,
-    )
-    _cli = importlib.util.module_from_spec(spec)
-    with patch.object(sys, "path", sys.path.copy()):
-        loader.exec_module(_cli)
+    from core.testing.module_scope import module_fixture_setup
+    import pytest
+
+    with module_fixture_setup(globals(), ('_cli',)):
+        loader = SourceFileLoader(
+            "raptor_sage_cli_task_create_status",
+            str(REPO_ROOT / "libexec" / "raptor-sage"),
+        )
+        spec = importlib.util.spec_from_loader(
+            "raptor_sage_cli_task_create_status", loader,
+        )
+        _cli = importlib.util.module_from_spec(spec)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(_cli)
+
+
+def tearDownModule():
+    globals()["_module_fixture_scope"].close()
 
 
 class _FakeClient:

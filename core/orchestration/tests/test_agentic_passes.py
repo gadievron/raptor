@@ -46,14 +46,17 @@ _interactive_patch = None
 
 def setUpModule():
     global _interactive_patch
-    _interactive_patch = patch(
-        "core.security.rule_of_two._session_has_human_terminal",
-        return_value=True,
-    )
-    _interactive_patch.start()
+    from core.testing.module_scope import module_fixture_setup, start_module_patch
+
+    with module_fixture_setup(globals(), ('_interactive_patch',)) as cleanup:
+        _interactive_patch = patch(
+            "core.security.rule_of_two._session_has_human_terminal",
+            return_value=True,
+        )
+        start_module_patch(cleanup, _interactive_patch)
 
 def tearDownModule():
-    _interactive_patch.stop()
+    globals()["_module_fixture_scope"].close()
 
 
 @contextlib.contextmanager

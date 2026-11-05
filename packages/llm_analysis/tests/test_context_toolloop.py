@@ -20,7 +20,8 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import packages.llm_analysis.context_toolloop as toolloop  # noqa: E402
 from packages.llm_analysis.context_toolloop import (  # noqa: E402

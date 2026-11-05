@@ -30,7 +30,8 @@ from unittest.mock import patch
 import pytest
 
 _REPO_ROOT = Path(__file__).parents[3]  # packages/openant/tests -> repo root
-sys.path.insert(0, str(_REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(_REPO_ROOT))
 
 _FAKE_MAIN_EXIT3 = "import sys\nsys.exit(3)\n"
 

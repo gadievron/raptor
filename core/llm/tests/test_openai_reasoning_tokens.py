@@ -11,7 +11,8 @@ from pathlib import Path
 
 # core/llm/tests/test_openai_reasoning_tokens.py -> parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from core.llm.providers import (  # noqa: E402
     _is_openai_reasoning_model,

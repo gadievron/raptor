@@ -26,7 +26,8 @@ from pathlib import Path
 
 
 # packages/llm_analysis/tests/... → repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis import orchestrator
 from packages.llm_analysis.orchestrator import _attach_reasoning_divergence

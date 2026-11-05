@@ -6,7 +6,8 @@ from pathlib import Path
 import sys
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_RAPTOR_DIR))
+if __name__ == "__main__":
+    sys.path.insert(0, str(_RAPTOR_DIR))
 
 from core.llm.prompt_budget import (
     PromptSection,

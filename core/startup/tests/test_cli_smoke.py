@@ -72,14 +72,15 @@ _CHILD_OUT_DIR: str | None = None
 
 @pytest.fixture(autouse=True, scope="module")
 def _child_isolation(tmp_path_factory):
-    global _CHILD_TMPDIR, _CHILD_HOME, _CHILD_OUT_DIR
-    _CHILD_TMPDIR = str(tmp_path_factory.mktemp("raptor-smoke-tmp"))
-    _CHILD_HOME = str(tmp_path_factory.mktemp("raptor-smoke-home"))
-    _CHILD_OUT_DIR = str(tmp_path_factory.mktemp("raptor-smoke-out"))
-    yield
-    _CHILD_TMPDIR = None
-    _CHILD_HOME = None
-    _CHILD_OUT_DIR = None
+    """Restore borrowed child paths even if a later allocation fails."""
+    with pytest.MonkeyPatch.context() as patch:
+        for name, prefix in (
+            ("_CHILD_TMPDIR", "raptor-smoke-tmp"),
+            ("_CHILD_HOME", "raptor-smoke-home"),
+            ("_CHILD_OUT_DIR", "raptor-smoke-out"),
+        ):
+            patch.setitem(globals(), name, str(tmp_path_factory.mktemp(prefix)))
+        yield
 
 
 @pytest.fixture(autouse=True, scope="module")

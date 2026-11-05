@@ -35,17 +35,24 @@ _cli = None
 
 def setUpModule():
     global _cli
-    loader = SourceFileLoader(
-        "raptor_sage_cli_task_domain",
-        str(REPO_ROOT / "libexec" / "raptor-sage"),
-    )
-    spec = importlib.util.spec_from_loader(
-        "raptor_sage_cli_task_domain", loader,
-    )
-    _cli = importlib.util.module_from_spec(spec)
-    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
-        mp.setenv("_RAPTOR_TRUSTED", "1")
-        loader.exec_module(_cli)
+    from core.testing.module_scope import module_fixture_setup
+
+    with module_fixture_setup(globals(), ('_cli',)):
+        loader = SourceFileLoader(
+            "raptor_sage_cli_task_domain",
+            str(REPO_ROOT / "libexec" / "raptor-sage"),
+        )
+        spec = importlib.util.spec_from_loader(
+            "raptor_sage_cli_task_domain", loader,
+        )
+        _cli = importlib.util.module_from_spec(spec)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(_cli)
+
+
+def tearDownModule():
+    globals()["_module_fixture_scope"].close()
 
 
 class _FakeClient:

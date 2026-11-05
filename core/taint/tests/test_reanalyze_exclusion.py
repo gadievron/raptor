@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 
 # core/taint/tests/... -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from raptor_agentic import (  # noqa: E402
     _TAINT_SARIF_FILENAME,

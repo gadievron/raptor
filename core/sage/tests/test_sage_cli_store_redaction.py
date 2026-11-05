@@ -35,34 +35,33 @@ _saved_sdk_modules: dict[str, object] = {}
 
 def setUpModule():
     global _cli
-    # sage_sdk is an optional dependency the CLI must tolerate missing
-    # when a client is injected (the cmd_remember/cmd_task guard).
-    # Poison it out of sys.modules so the sdk-absent path is exercised
-    # deterministically — on a box where the sdk happens to be
-    # installed, and on a runner where it never was.
-    for name in _SDK_MODULES:
-        _saved_sdk_modules[name] = sys.modules.pop(name, None)
-        sys.modules[name] = None  # import raises ImportError
-    loader = SourceFileLoader(
-        "raptor_sage_cli_store_redaction",
-        str(REPO_ROOT / "libexec" / "raptor-sage"),
-    )
-    spec = importlib.util.spec_from_loader(
-        "raptor_sage_cli_store_redaction", loader,
-    )
-    _cli = importlib.util.module_from_spec(spec)
-    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
-        mp.setenv("_RAPTOR_TRUSTED", "1")
-        loader.exec_module(_cli)
+    from core.testing.module_scope import module_fixture_setup
+
+    with module_fixture_setup(globals(), ('_cli',)) as cleanup:
+        # sage_sdk is an optional dependency the CLI must tolerate missing
+        # when a client is injected (the cmd_remember/cmd_task guard).
+        # Poison it out of sys.modules so the sdk-absent path is exercised
+        # deterministically — on a box where the sdk happens to be
+        # installed, and on a runner where it never was.
+        sdk_patch = pytest.MonkeyPatch()
+        cleanup.callback(sdk_patch.undo)
+        for name in _SDK_MODULES:
+            sdk_patch.setitem(sys.modules, name, None)
+        loader = SourceFileLoader(
+            "raptor_sage_cli_store_redaction",
+            str(REPO_ROOT / "libexec" / "raptor-sage"),
+        )
+        spec = importlib.util.spec_from_loader(
+            "raptor_sage_cli_store_redaction", loader,
+        )
+        _cli = importlib.util.module_from_spec(spec)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(_cli)
 
 
 def tearDownModule():
-    for name in _SDK_MODULES:
-        saved = _saved_sdk_modules.pop(name, None)
-        if saved is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = saved
+    globals()["_module_fixture_scope"].close()
 
 
 class _RecordingClient:

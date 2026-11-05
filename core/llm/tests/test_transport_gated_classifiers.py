@@ -21,7 +21,8 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
 
 from core.llm.client import (  # noqa: E402
     LLMClient,

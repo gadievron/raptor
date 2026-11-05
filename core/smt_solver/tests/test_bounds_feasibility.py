@@ -9,7 +9,8 @@ from unittest.mock import patch
 import pytest
 
 # core/smt_solver/tests/ → repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.smt_solver.bounds_feasibility import (
     _BOUNDS_CONDITION_RE,

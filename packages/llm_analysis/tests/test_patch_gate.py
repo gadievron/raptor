@@ -37,7 +37,8 @@ import pytest
 
 # packages/llm_analysis/tests/test_patch_gate.py — parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from packages.llm_analysis import patch_gate  # noqa: E402
 from packages.llm_analysis.patch_gate import (  # noqa: E402

@@ -12,7 +12,8 @@ from unittest.mock import patch, MagicMock
 
 # Add parent directories to path for imports
 # packages/llm_analysis/tests/test_llm_callbacks.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 import core.llm.client as _client_mod
 from core.llm.client import (

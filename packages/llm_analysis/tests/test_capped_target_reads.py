@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.source import DEFAULT_MAX_SOURCE_CHARS  # noqa: E402
 from packages.llm_analysis.agent import AutonomousSecurityAgentV2  # noqa: E402

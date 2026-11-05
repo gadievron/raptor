@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 # core/smt_solver/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.smt_solver import z3_available
 from core.smt_solver._testing import eval_bv as _eval_bv, eval_predicate as _eval_predicate

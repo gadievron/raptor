@@ -15,7 +15,8 @@ from typing import Any
 import pytest
 
 # core/llm/tests/test_ollama_warning.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.config import RaptorConfig
 from core.llm.client import _OLLAMA_PRECISION_WARNING, LLMClient

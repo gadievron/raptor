@@ -31,7 +31,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER = REPO_ROOT / "libexec" / "raptor-validation-helper"
 
-sys.path.insert(0, str(REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import load_json, save_json  # noqa: E402
 

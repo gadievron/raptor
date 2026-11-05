@@ -33,7 +33,8 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-graph-query"
 
-sys.path.insert(0, str(REPO_ROOT))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import save_json  # noqa: E402
 from core.understand_graph import ingest_run  # noqa: E402
