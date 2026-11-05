@@ -117,7 +117,7 @@ class TestSystemPromptArgvHygiene:
             assert "--system-prompt-file" not in cmd
 
     @pytest.mark.skipif(sys.platform != "linux", reason="/proc is Linux-only")
-    def test_child_proc_cmdline_never_contains_prompt(self, tmp_path):
+    def test_child_proc_cmdline_never_contains_prompt(self, tmp_path, sysprompt_cache):
         """Empirical /proc check: spawn a stub ``claude`` through the
         CM + file-form pairing and read the child's OWN
         /proc/self/cmdline — the exact bytes ``ps -eaf`` shows any
@@ -147,13 +147,9 @@ class TestSystemPromptArgvHygiene:
 
 class TestSystemPromptFileFor:
     @pytest.fixture(autouse=True)
-    def _fresh_cache(self):
-        # The cache is process-global; isolate each test and remove
-        # any files this test created.
-        from core.llm import cc_adapter
-        cc_adapter._cleanup_sysprompt_cache()
-        yield
-        cc_adapter._cleanup_sysprompt_cache()
+    def _fresh_cache(self, sysprompt_cache):
+        # The shared fixture preserves inherited state and owns all test files.
+        return sysprompt_cache
 
     def test_yields_none_when_no_prompt(self):
         for sp in (None, "", "   \n"):
@@ -221,10 +217,14 @@ class TestSystemPromptFileFor:
                 errors.append(exc)
 
         threads = [threading.Thread(target=_use) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        try:
+            for t in threads:
+                t.start()
+        finally:
+            for t in threads:
+                if t.ident is not None:
+                    t.join(timeout=3)
+            assert not any(t.is_alive() for t in threads), "prompt-cache workers did not exit"
         assert not errors
         assert len(set(paths)) == 1
         assert paths[0].exists()
@@ -292,6 +292,8 @@ class TestSystemPromptFileFor:
             # Adopt the child's dir for the fixture's cleanup, then
             # remove the parent's leftover explicitly.
             cc_adapter._sysprompt_owner_pid = os.getpid()
+            from core.run.scratch import keepalive_unregister
+            keepalive_unregister(parent_dir)
             with contextlib.suppress(OSError):
                 os.unlink(parent_file)
                 os.rmdir(parent_dir)
@@ -317,6 +319,8 @@ class TestSystemPromptFileFor:
             assert parent_file.exists()  # parent's file untouched
         finally:
             cc_adapter._sysprompt_owner_pid = os.getpid()
+            from core.run.scratch import keepalive_unregister
+            keepalive_unregister(parent_dir)
             with contextlib.suppress(OSError):
                 os.unlink(parent_file)
                 os.rmdir(parent_dir)

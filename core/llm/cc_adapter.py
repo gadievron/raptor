@@ -14,11 +14,13 @@ import logging
 import math
 import os
 import stat
-import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from core.atomic_fs import rmtree_hardened, write_text_atomically
+from core.source import read_bytes_gated
 
 from core.security.credential_env import (
     ANTHROPIC_FIRST_PARTY_AUTH_VARS,
@@ -759,142 +761,117 @@ _sysprompt_dir: Path | None = None
 _sysprompt_owner_pid: int | None = None
 
 
-def _sysprompt_cache_dir() -> Path:
-    """The calling process's private 0700 cache directory, created on
-    first use (and re-created after a fork or an external sweep).
-    Caller holds ``_sysprompt_lock``."""
-    global _sysprompt_dir, _sysprompt_owner_pid
-    pid = os.getpid()
-    if (
-        _sysprompt_dir is None
-        or _sysprompt_owner_pid != pid
-        or not _sysprompt_dir.is_dir()
-    ):
-        from core.run.scratch import (
-            keepalive_register,
-            keepalive_unregister,
-            scratch_dir,
-        )
+def _reset_sysprompt_lock_after_fork() -> None:
+    """The child must not inherit a mutex held by a vanished parent thread."""
+    global _sysprompt_lock
+    _sysprompt_lock = threading.Lock()
 
-        _sysprompt_cache.clear()
-        if _sysprompt_dir is not None and _sysprompt_owner_pid == pid:
-            # Externally-swept dir: stop refreshing the vanished path.
-            # A forked child (pid mismatch) never touches the
-            # inherited registration — it is the PARENT's (and the
-            # scratch substrate's at-fork hook already dropped the
-            # child's copy).
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_sysprompt_lock_after_fork)
+
+
+def _sysprompt_cache_dir() -> Path:
+    """Return a private process-owned directory; caller holds the cache lock."""
+    global _sysprompt_dir, _sysprompt_owner_pid
+    from core.run.scratch import keepalive_register, keepalive_unregister, scratch_dir
+
+    pid = os.getpid()
+    if _sysprompt_dir is not None and _sysprompt_owner_pid == pid:
+        try:
+            info = _sysprompt_dir.lstat()
+        except FileNotFoundError:
             keepalive_unregister(_sysprompt_dir)
-        # Ownership-transfer shape (``keep=True``): the substrate
-        # creates the directory and lists the prefix for the stale-tmp
-        # sweep; deletion is ours, at the pid-guarded atexit cleanup
-        # below. A lexically-held context would be wrong here — the
-        # directory must outlive every dispatch in the process.
-        with scratch_dir("cc-sysprompt-", keep=True) as d:
-            pass
-        # 0700 is guaranteed by scratch_dir's mkdtemp contract; assert
-        # anyway — same fail-loud posture as the 0600 file assert
-        # below.
-        mode = stat.S_IMODE(d.stat().st_mode)
-        if mode != 0o700:
-            msg = f"scratch dir has mode {mode:04o}, expected 0700"
-            raise AssertionError(msg)
-        # Non-context-manager owner of a reaper-listed prefix: keep
-        # the live dir's mtime fresh so a long-quiet session is never
-        # false-reaped; unregistered at the cleanup site (the scratch
-        # substrate's own registration ended with the block above).
-        keepalive_register(d)
-        _sysprompt_dir = d
-        _sysprompt_owner_pid = pid
-    return _sysprompt_dir
+        else:
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o700):
+                raise OSError("system-prompt cache directory is not private and process-owned")
+            # A previous failed cleanup may have dropped the keepalive.
+            keepalive_register(_sysprompt_dir)
+            return _sysprompt_dir
+    # An inherited directory belongs to the parent; never unregister/remove it.
+    _sysprompt_cache.clear()
+    with scratch_dir("cc-sysprompt-", keep=True) as directory:
+        pass
+    # Record ownership before validation/registration, both of which can fail.
+    _sysprompt_dir, _sysprompt_owner_pid = directory, pid
+    try:
+        if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+            raise AssertionError("system-prompt cache directory must have mode 0700")
+        keepalive_register(directory)
+    except BaseException:
+        _cleanup_sysprompt_cache_locked(preserve_error=True)
+        raise
+    return directory
+
+
+def _cleanup_sysprompt_cache_locked(*, preserve_error: bool = False) -> None:
+    """Remove the complete owned tree; retain failed teardown for retry."""
+    global _sysprompt_dir, _sysprompt_owner_pid
+    if _sysprompt_owner_pid is not None and _sysprompt_owner_pid != os.getpid():
+        return
+    if _sysprompt_dir is None:
+        _sysprompt_cache.clear()
+        _sysprompt_owner_pid = None
+        return
+    from core.run.scratch import keepalive_unregister
+
+    directory = _sysprompt_dir
+    interrupted = None
+    unregistered = False
+    removed = False
+    try:
+        keepalive_unregister(directory)
+        unregistered = True
+    except BaseException as exc:
+        logger.warning("System-prompt keepalive teardown failed at %s", directory, exc_info=True)
+        if not isinstance(exc, Exception):
+            interrupted = exc
+    try:
+        removed = rmtree_hardened(directory)
+        if not removed:
+            logger.warning("System-prompt cache retained after failed removal: %s", directory)
+    except BaseException as exc:
+        logger.warning("System-prompt removal failed at %s", directory, exc_info=True)
+        if interrupted is None and not isinstance(exc, Exception):
+            interrupted = exc
+    if removed and unregistered:
+        _sysprompt_cache.clear()
+        _sysprompt_dir = None
+        _sysprompt_owner_pid = None
+    if interrupted is not None and not preserve_error:
+        raise interrupted
 
 
 def _cleanup_sysprompt_cache() -> None:
-    """Remove this process's cached system-prompt files and their
-    directory (atexit). Creator-pid-guarded: in a forked child the
-    inherited state belongs to the parent — removing it would yank
-    files out from under the parent's live dispatches."""
-    global _sysprompt_dir, _sysprompt_owner_pid
+    """Clean only this process's cache, including partial or restricted output."""
     with _sysprompt_lock:
-        if (
-            _sysprompt_owner_pid is not None
-            and _sysprompt_owner_pid != os.getpid()
-        ):
-            return
-        paths = list(_sysprompt_cache.values())
-        _sysprompt_cache.clear()
-        cache_dir = _sysprompt_dir
-        _sysprompt_dir = None
-        _sysprompt_owner_pid = None
-    if cache_dir is not None:
-        from core.run.scratch import keepalive_unregister
-
-        keepalive_unregister(cache_dir)
-    for path in paths:
-        with contextlib.suppress(OSError):
-            os.unlink(path)
-    if cache_dir is not None:
-        with contextlib.suppress(OSError):
-            os.rmdir(cache_dir)
+        _cleanup_sysprompt_cache_locked()
 
 
 atexit.register(_cleanup_sysprompt_cache)
 
 
 def _sysprompt_file(content: str) -> Path:
-    """Return the process-lifetime 0600 file holding *content*.
-
-    Creates the file on first use for this content (atomic
-    write-temp-then-rename inside the process-private directory);
-    later calls with the same content reuse the same path. Recreates
-    the file if an external scratch sweeper (tmpwatch, session-scratch
-    cleanup) removed it mid-run.
-    """
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:24]
+    """Return a private, verified process-cached file containing *content*."""
+    payload = content.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:24]
     with _sysprompt_lock:
+        directory = _sysprompt_cache_dir()
         cached = _sysprompt_cache.get(digest)
-        # The hit is honored only for the creating process: a forked
-        # child inheriting a warm cache must not lean on the parent's
-        # file (the parent's exit unlinks it, possibly mid-dispatch) —
-        # it falls through to the miss path, where _sysprompt_cache_dir
-        # resets the inherited state and gives it a fresh directory.
-        if (
-            cached is not None
-            and _sysprompt_owner_pid == os.getpid()
-            and cached.exists()
-        ):
-            # Refresh mtime: an age-based TMPDIR sweeper must see a
-            # file in active use, not an hours-old candidate. Best
-            # effort — a lost race with the sweeper is recreated on
-            # the next call.
-            with contextlib.suppress(OSError):
-                os.utime(cached)
-            return cached
-        cache_dir = _sysprompt_cache_dir()
-        final = cache_dir / f"{digest}.txt"
-        fd, raw_path = tempfile.mkstemp(
-            prefix=".part-", suffix=".txt", dir=str(cache_dir),
-        )
-        try:
+        if cached is not None:
             try:
-                # 0600 is guaranteed by the mkstemp contract; assert
-                # anyway — the prompt can embed operator context and
-                # target excerpts, so a permissive-umask regression in
-                # a future tempfile implementation must fail loud, not
-                # leak. os.replace preserves the temp file's mode.
-                mode = stat.S_IMODE(os.fstat(fd).st_mode)
-                if mode != 0o600:
-                    msg = f"mkstemp returned mode {mode:04o}, expected 0600"
-                    raise AssertionError(msg)
-            except BaseException:
-                os.close(fd)
-                raise
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(content)
-            os.replace(raw_path, final)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(raw_path)
-            raise
+                info = cached.lstat()
+                private = (stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                           and stat.S_IMODE(info.st_mode) == 0o600)
+                if private and read_bytes_gated(cached, len(payload), follow_symlinks=False) == payload:
+                    with contextlib.suppress(OSError, NotImplementedError):
+                        os.utime(cached, follow_symlinks=False)
+                    return cached
+            except (OSError, ValueError):
+                pass  # A missing or changed cached file is recreated atomically.
+        final = directory / f"{digest}.txt"
+        write_text_atomically(final, content, mode=0o600, tmp_prefix=".part-")
         _sysprompt_cache[digest] = final
         return final
 
