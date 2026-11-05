@@ -74,7 +74,7 @@ from typing import Any
 from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 from core.logging import log_security_event as _log_security_event
-from core.security.capped_read import path_may_exist
+from core.security.capped_read import path_may_exist, read_capped
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
@@ -683,7 +683,8 @@ def read_cli_disable_annotation(run_dir: Path) -> str | None:
     Returns the consent-source label (escaped + bounded for terminal
     display) when ``run_dir``'s ``sandbox-summary.json`` records that
     the run executed with the CLI sandbox disable in force, else
-    None. Best-effort — never raises.
+    None. Best-effort — never raises. Final-component symlinks,
+    non-regular files, and over-budget summaries are refused.
 
     Trust note: this reads the target-writable run dir WITHOUT MAC
     verification, which is acceptable for this field only because the
@@ -694,12 +695,15 @@ def read_cli_disable_annotation(run_dir: Path) -> str | None:
     may use this; verdict-grade consumers must go through
     ``core.sandbox.triage``'s verified read instead.
     """
-    from core.json import load_json
+    from core.json import loads
     from core.security.prompt_output_sanitise import escape_nonprintable
 
     try:
-        data = load_json(Path(run_dir) / SUMMARY_FILE,
-                         max_bytes=_MARKER_MAX_BYTES)
+        raw = read_capped(Path(run_dir) / SUMMARY_FILE, _MARKER_MAX_BYTES)
+        if raw is None:
+            return None
+        # Keep load_json's strict UTF-8, single-BOM tolerance, and backend.
+        data = loads(raw.decode("utf-8"))
     except Exception:  # noqa: BLE001 — best-effort display annotation
         return None
     if not isinstance(data, dict) or not data.get("cli_sandbox_disabled"):
