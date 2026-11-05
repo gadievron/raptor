@@ -163,8 +163,10 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
         "endLine": end_line,
     }
 
-    for field in ("startColumn", "endColumn"):
+    for field, alias in (("startColumn", "start_column"), ("endColumn", "end_column")):
         column = _coerce_line(finding.get(field))
+        if column is None or column < 1:
+            column = _coerce_line(finding.get(alias))
         if column is not None and column > 0:
             region[field] = column
 

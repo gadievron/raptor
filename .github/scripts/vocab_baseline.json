@@ -2739,9 +2739,9 @@
     "note": "JSON-schema property-name manifest for checklist.json items (source line anchors + binary address anchors) \u2014 schema keys, not a learned name vocabulary"
   },
   "packages/exploitability_validation/schemas.py::FINDING_SCHEMA": {
-    "count": 53,
+    "count": 56,
     "kind": "literal",
-    "note": "Closed finding-schema property names; rule_scope carries the existing SARIF correlation namespace through validation serialization, not a learned detector vocabulary."
+    "note": "Closed finding-schema property names; end_line/start_column/end_column retain imported SARIF spans alongside rule_scope through validation serialization. These are schema fields, not a learned detector vocabulary."
   },
   "packages/exploitability_validation/schemas.py::HYPOTHESIS_SCHEMA": {
     "count": 11,
