@@ -821,12 +821,17 @@ def _set_rlimits(limits: dict, status_fd: "int | None" = None) -> None:
         os._exit(99)
 
 
+_CHILD_CLEANUP_TIMEOUT_S = 5.0
+
+
 def _kill_and_reap(pid: int) -> None:
     """SIGKILL `pid` AND its descendants, then reap. Best-effort — if
     the child already exited (ProcessLookupError) or was reaped
     elsewhere (ChildProcessError), we just return.
 
-    The caller must be the sole reaper until this function returns,
+    Cleanup waits share a bounded monotonic deadline, including when
+    signaling is unavailable. The caller must be the sole reaper until
+    this function returns,
     including against other threads and SIGCHLD handlers. WNOWAIT observes
     ownership; it is not a lock against another waitpid(). Suppressing
     ESRCH cannot protect against signalling a successfully recycled PID.
@@ -850,12 +855,27 @@ def _kill_and_reap(pid: int) -> None:
     silently — by the time the second call fires the first may have
     swept the leader; that's fine.
     """
-    # Only this helper's unreaped direct child authorises numeric signals.
-    # A stale/reaped PID can already name an unrelated process or group.
-    try:
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-    except (ChildProcessError, ProcessLookupError):
-        # Linux normally reports ECHILD; tolerate ESRCH defensively too.
+    if type(pid) is not int or not 0 < pid <= 0x7fffffff:
+        return
+    deadline = time.monotonic() + _CHILD_CLEANUP_TIMEOUT_S
+
+    def owns_child() -> bool:
+        # WNOWAIT preserves even a terminal leader until group cleanup.
+        while True:
+            try:
+                os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                return True
+            except InterruptedError:
+                if time.monotonic() >= deadline:
+                    logger.warning("sandbox: child %d ownership check timed out", pid)
+                    return False
+            except OSError as exc:
+                if (not isinstance(exc, (ChildProcessError, ProcessLookupError))
+                        and exc.errno not in (errno.ECHILD, errno.ESRCH)):
+                    logger.warning("sandbox: child %d ownership check failed: %s", pid, exc)
+                return False
+
+    if not owns_child():
         return
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
@@ -873,6 +893,7 @@ def _kill_and_reap(pid: int) -> None:
         pgid = os.getpgid(pid)
     except ProcessLookupError:
         pgid = None
+    needs_pid_signal = True
     if pidfd_open is not None and pidfd_send_signal is not None:
         pidfd = -1
         try:
@@ -883,19 +904,23 @@ def _kill_and_reap(pid: int) -> None:
             if pidfd >= 0:
                 try:
                     pidfd_send_signal(pidfd, signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    pass
+                    needs_pid_signal = False
+                except (AttributeError, OSError) as exc:
+                    needs_pid_signal = getattr(exc, "errno", None) != errno.ESRCH
         finally:
             if pidfd >= 0:
                 try:
                     os.close(pidfd)
                 except OSError:
                     pass
-    else:
+    if needs_pid_signal:
+        if not owns_child():
+            return
         try:
             os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                logger.warning("sandbox: child %d kill failed: %s", pid, exc)
     # Belt-and-braces: kill the whole process group so descendants
     # (codeql java → index.py → python_tracer.py → forkserver workers)
     # don't get orphaned to init. Uses the PGID captured pre-signal
@@ -914,10 +939,23 @@ def _kill_and_reap(pid: int) -> None:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
+    while True:
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            pass
+        except OSError as exc:
+            if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
+                logger.warning("sandbox: child %d reap failed: %s", pid, exc)
+            return
+        else:
+            if waited == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+                return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("sandbox: child %d did not reap within cleanup budget", pid)
+            return
+        time.sleep(min(0.01, remaining))
 
 
 def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
