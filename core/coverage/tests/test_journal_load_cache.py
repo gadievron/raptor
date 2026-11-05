@@ -41,12 +41,15 @@ from core.coverage.journal import (
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    """Each test starts and ends with an empty load cache."""
-    with journal_mod._load_cache_lock:
-        journal_mod._load_cache.clear()
-    yield
-    with journal_mod._load_cache_lock:
-        journal_mod._load_cache.clear()
+    """Use a private load cache; publish and restore it under its lock."""
+    cache_patch = pytest.MonkeyPatch()
+    try:
+        with journal_mod._load_cache_lock:
+            cache_patch.setattr(journal_mod, "_load_cache", {})
+        yield
+    finally:
+        with journal_mod._load_cache_lock:
+            cache_patch.undo()
 
 
 # ── helpers ──────────────────────────────────────────────────────────

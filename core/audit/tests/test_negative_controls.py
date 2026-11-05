@@ -27,17 +27,17 @@ from core.audit.sweep import (
     _KEYWORD_FIXTURE_STEMS,
     _NEGATIVE_CONTROLS_DIR,
     _hypothesis_identifiers,
-    _negative_control_cache,
     negative_control_fixture,
     run_semgrep_sweep,
 )
 
 
 @pytest.fixture(autouse=True)
-def _clear_negative_control_cache():
-    _negative_control_cache.clear()
-    yield
-    _negative_control_cache.clear()
+def _clear_negative_control_cache(monkeypatch):
+    """Use a private cache and restore the caller's cache object."""
+    from core.audit import sweep as sweep_mod
+
+    monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
 
 
 def _install_fake_semgrep(monkeypatch, run_rule):
