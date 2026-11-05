@@ -58,9 +58,10 @@ def test_open_failure_is_counted_before_recovery(tmp_path, monkeypatch):
     assert profile.capture_incomplete is True
 
 
-@pytest.mark.parametrize('value,expected', [(0, False), (1, True), (-1, False),
-                                           (True, False), ('1', False), (None, False)])
-def test_summary_failure_count_requires_positive_integer(tmp_path, value, expected):
+@pytest.mark.parametrize('value,expected', [(0, False), (1, True), (-1, True),
+                                           (True, True), ('1', True), (None, True),
+                                           (0.0, True), (False, True)])
+def test_present_summary_failure_count_is_clean_only_for_integer_zero(tmp_path, value, expected):
     (tmp_path / observe.OBSERVE_FILENAME).write_text(json.dumps({
         'type': 'audit_summary', 'append_failures': value}) + '\n')
     assert observe.parse_observe_log(tmp_path).capture_incomplete is expected
