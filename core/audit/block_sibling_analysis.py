@@ -367,9 +367,18 @@ def _collect_case_groups(case_matches, lines, source, _file_path, groups) -> Non
             continue
 
         branches: list[tuple[str, str, int]] = []
+        native_source = type(source) is str
+        start_line = 0
+        line_offset = 0
+        # Indentation groups are independently ordered, not globally so.
         for i, m in enumerate(matches):
             label = (m.group(2) or m.group(3) or "default").strip()
-            start_line = source.count("\n", 0, m.start())
+            if native_source:
+                offset = m.start()
+                start_line += source.count("\n", line_offset, offset)
+                line_offset = offset
+            else:
+                start_line = source.count("\n", 0, m.start())
             if i + 1 < len(matches):
                 end_pos = matches[i + 1].start()
             else:
@@ -414,11 +423,19 @@ def _collect_if_groups_regex(lines, source, _file_path, groups) -> None:
     if len(current_chain) >= MIN_BRANCHES:
         chains.append(current_chain)
 
+    native_source = type(source) is str
+    start_line = 1
+    line_offset = 0
     for chain in chains:
         branches: list[tuple[str, str, int]] = []
         for i, m in enumerate(chain):
             label = re.sub(r"\s+", " ", m.group(2)).strip()
-            start_line = source.count("\n", 0, m.start()) + 1
+            if native_source:
+                offset = m.start()
+                start_line += source.count("\n", line_offset, offset)
+                line_offset = offset
+            else:
+                start_line = source.count("\n", 0, m.start()) + 1
             if i + 1 < len(chain):
                 body = source[m.end():chain[i + 1].start()]
             else:

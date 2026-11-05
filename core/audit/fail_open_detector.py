@@ -197,6 +197,9 @@ def _detect_optional_not_checked(
             m.group(1) for m in _IS_NOT_NONE_RE.finditer(body)
         }
 
+        native_body = type(body) is str
+        match_line = start_line
+        line_offset = 0
         for m in is_false_matches:
             var_name = m.group(1)
             if var_name in none_checked_vars:
@@ -209,7 +212,12 @@ def _detect_optional_not_checked(
             if broad_check:
                 continue
 
-            match_line = start_line + body.count("\n", 0, m.start())
+            if native_body:
+                offset = m.start()
+                match_line += body.count("\n", line_offset, offset)
+                line_offset = offset
+            else:
+                match_line = start_line + body.count("\n", 0, m.start())
             results.append(FailOpenPattern(
                 file=file_path,
                 function=name,
@@ -275,9 +283,17 @@ def _extract_c_functions(source: str, file_path: str = "file.c") -> list[tuple[s
         pass
 
     funcs = []
+    native_source = type(source) is str
+    start_line = 1
+    line_offset = 0
     for m in _C_FUNC_RE.finditer(source):
         name = m.group(1)
-        start_line = source.count("\n", 0, m.start()) + 1
+        if native_source:
+            offset = m.start()
+            start_line += source.count("\n", line_offset, offset)
+            line_offset = offset
+        else:
+            start_line = source.count("\n", 0, m.start()) + 1
         brace_start = source.index("{", m.start())
         depth = 1
         i = brace_start + 1

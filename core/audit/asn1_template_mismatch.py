@@ -125,6 +125,9 @@ def scan_source(file_path: str, source: str) -> list[Asn1Mismatch]:
     if not templates:
         return []
     findings: list[Asn1Mismatch] = []
+    native_source = type(source) is str
+    line = 1
+    line_offset = 0
     for m in _ANY_ACCESS_RE.finditer(source):
         field = m.group("field")
         hit = templates.get(field) or templates.get(
@@ -137,7 +140,12 @@ def scan_source(file_path: str, source: str) -> list[Asn1Mismatch]:
             # The template really does build an ASN1_TYPE — the
             # access matches the declared type.
             continue
-        line = source.count("\n", 0, m.start()) + 1
+        if native_source:
+            offset = m.start()
+            line += source.count("\n", line_offset, offset)
+            line_offset = offset
+        else:
+            line = source.count("\n", 0, m.start()) + 1
         findings.append(Asn1Mismatch(
             file=file_path, line=line, field=field,
             declared=decl, struct=struct,
