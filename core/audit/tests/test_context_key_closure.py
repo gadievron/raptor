@@ -189,7 +189,7 @@ class TestContextKeyClosure:
                    if f"CLOSUREMARKER_{i}" not in out]
         assert missing == [], f"markers not rendered: {missing}"
         assert "security decision point" in out.lower()
-        assert "SECURITY CONSEQUENCE" in out
+        assert "SECURITY CALL-GRAPH HINT" in out
         assert "os.system" in out
         assert "TYPE CONSTRAINTS" in out
         assert "UNIVERSAL CALLER CONSTRAINT" in out

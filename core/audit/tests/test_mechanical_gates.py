@@ -299,12 +299,12 @@ class TestBuildFeedsSecurityMap:
 class TestFormatSecurityDecisionForContext:
     def test_with_callees(self):
         text = format_security_decision_for_context(True, ["check_access", "verify_token"])
-        assert "SECURITY CONSEQUENCE" in text
+        assert "SECURITY CALL-GRAPH HINT" in text
         assert "check_access" in text
 
     def test_without_callees(self):
         text = format_security_decision_for_context(True)
-        assert "SECURITY CONSEQUENCE" in text
+        assert "SECURITY CALL-GRAPH HINT" in text
 
     def test_not_feeds_returns_empty(self):
         assert format_security_decision_for_context(False) == ""

@@ -331,7 +331,7 @@ _SECURITY_DECISION_PATTERNS = re.compile(
 def build_security_decision_set(
     context_map: dict[str, Any],
 ) -> frozenset[str]:
-    """Identify functions that are security-decision points.
+    """Identify functions with security-related naming (a review hint).
 
     Returns ``frozenset`` of ``file:function`` keys for functions whose
     names match security-decision patterns.
@@ -356,7 +356,9 @@ def build_feeds_security_map(
     context_map: dict[str, Any],
     security_keys: frozenset[str] | None = None,
 ) -> frozenset[str]:
-    """Find functions whose output feeds a security-decision function.
+    """Find direct callers of functions with security-related names.
+
+    This is call-graph context, not proof of output-to-decision data flow.
 
     Returns ``frozenset`` of ``file:function`` keys for functions that
     are direct callers of security-decision functions.
@@ -383,21 +385,18 @@ def format_security_decision_for_context(
     feeds_security: bool,
     security_callees: list[str] | None = None,
 ) -> str:
-    """Format security-decision annotation for LLM context."""
+    """Format a direct-call naming hint without claiming data flow."""
     if not feeds_security:
         return ""
     if security_callees:
         callee_list = ", ".join(f"`{c}`" for c in security_callees[:5])
-        return (
-            f"SECURITY CONSEQUENCE: This function's output feeds "
-            f"security-decision functions: {callee_list}. A correctness "
-            f"bug here has SECURITY impact — do not dismiss as "
-            f"non-security."
-        )
+        relation = f"calls functions with security-related names: {callee_list}."
+    else:
+        relation = "calls functions with security-related names."
     return (
-        "SECURITY CONSEQUENCE: This function's output feeds a "
-        "security-decision function. A correctness bug here has "
-        "SECURITY impact."
+        f"SECURITY CALL-GRAPH HINT: This function {relation} "
+        "Inspect whether its output influences a security decision. "
+        "Names and call edges alone do not establish data flow or security impact."
     )
 
 
