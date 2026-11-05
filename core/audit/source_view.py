@@ -953,10 +953,23 @@ def _line_block_comment_end(
     return m.end()
 
 
+_HASH_BLANKING_START_RE = re.compile(r"""[=#"']""")
+
+
 def _strip_python_like(
     source: str, *, keep_strings: bool = False, lang: str | None = None,
     reasons: set[str] | None = None,
 ) -> str:
+    skip_inert = type(source) is str
+    if skip_inert:
+        if _HASH_BLANKING_START_RE.search(source) is None:
+            return source
+        # Regex setup costs more than stepping through very short runs.
+        # Native counts keep marker-dense text on the original loop.
+        skip_inert = (
+            source.count("=") + source.count("#")
+            + source.count('"') + source.count("'")
+        ) <= len(source) // 6
     chars = list(source)
     n = len(source)
 
@@ -1060,7 +1073,13 @@ def _strip_python_like(
                     _blank(chars, i + 1, end - 1)
                 i = end
         else:
-            i += 1
+            if skip_inert:
+                # Only these openers can change lexical state; handlers
+                # still see each one at its original source position.
+                marker = _HASH_BLANKING_START_RE.search(source, i + 1)
+                i = n if marker is None else marker.start()
+            else:
+                i += 1
     return "".join(chars)
 
 
