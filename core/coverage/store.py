@@ -34,6 +34,7 @@ from __future__ import annotations
 import bisect
 import contextlib
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -913,66 +914,124 @@ def _store_backup_path(path: Path) -> Path:
     """First free ``.pre-compact`` sibling — an existing backup is
     never overwritten."""
     base = path.with_name(path.name + ".pre-compact")
-    if not base.exists():
+    if not os.path.lexists(base):
         return base
     n = 2
     while True:
         candidate = base.with_name(f"{base.name}.{n}")
-        if not candidate.exists():
+        if not os.path.lexists(candidate):
             return candidate
         n += 1
 
 
+@dataclass(frozen=True)
+class StoreCompactStats:
+    """Exact accounting, including the backup actually created (if any)."""
+
+    bytes_before: int
+    bytes_after: int
+    backup: Path | None = None
+
+
 def compact_store_file(path: Path) -> tuple[int, int]:
-    """Rewrite an on-disk coverage store in its compact, normalised
-    form — the remedial path for a store past the read budget.
+    """Compact a coverage store; return its before/after byte counts.
 
-    Reads under an elevated bound (:data:`_COMPACT_READ_MAX_BYTES`),
-    re-normalises through the same schema pass a healthy load applies
-    (malformed rows dropped, interval form canonical), and atomically
-    replaces the file ONLY when the result fits the read budget; the
-    original is preserved as ``coverage.json.pre-compact``. Returns
-    ``(bytes_before, bytes_after)``.
-
-    Raises ``ValueError`` when the file is missing/unparseable and
-    :class:`StoreWriteOverBudget` when even the compact form exceeds
-    the budget (the union genuinely outgrew it — the file is left
-    untouched; shrink the project, then delete the store and let the
-    per-run-record backfill rebuild it).
+    Unchanged stores retain their inode and create no backup. Rewrites
+    preserve the original at the first free ``.pre-compact`` sibling.
+    See :func:`compact_store_file_disclosed` for the actual backup path.
     """
-    from core.json.utils import load_json
+    stats = compact_store_file_disclosed(path)
+    return stats.bytes_before, stats.bytes_after
+
+
+def compact_store_file_disclosed(path: Path) -> StoreCompactStats:
+    """Normalise under the writers' lock, bounded to the remedial budget.
+
+    A required lock refuses unsafe unlocked compaction. Source version
+    checks also detect non-cooperating edits before backup/publication.
+    The source must itself be regular, never a final-component symlink.
+    """
+    from core.json.bounded import loads_bounded
+    from core.source.gated import read_bytes_gated
 
     p = Path(path)
+    if not p.parent.is_dir():
+        raise ValueError(f"no coverage store at {p}")
+    lock = p.with_suffix(p.suffix + ".lock")
+    with sidecar_flock(lock, subject="coverage store compaction",
+                       create_parent=False, required=True):
+        try:
+            original = p.lstat()
+        except OSError as exc:
+            raise ValueError(f"no coverage store at {p}: {exc}") from exc
+        raw = read_bytes_gated(p, _COMPACT_READ_MAX_BYTES, follow_symlinks=False)
+        version_before = _store_file_version(original)
+        _check_store_version(p, version_before)
+        data = loads_bounded(raw.decode("utf-8-sig"),
+                             max_bytes=_COMPACT_READ_MAX_BYTES)
+        if not isinstance(data, dict):
+            raise ValueError(f"coverage store at {p} is not a JSON object")
+        version = data.get("version", SCHEMA_VERSION)
+        check_version(version, SCHEMA_VERSION, str(p))
+        out = {
+            "version": version,
+            # Storage maintenance does not generate new coverage.
+            "generated_at": data.get("generated_at") or _now_iso(),
+            "target": data.get("target"),
+            "content_id": data.get("content_id"),
+            "files": normalise_loaded_files(data.get("files", {}) or {}, str(p)),
+        }
+        content = dumps_artifact(out, indent=None, sort_keys=True) + "\n"
+        after = len(content.encode("utf-8"))
+        if after > _MAX_STORE_BYTES:
+            raise StoreWriteOverBudget(
+                f"coverage store at {p} still serialises to {after} bytes "
+                f"compacted (over the {_MAX_STORE_BYTES}-byte read budget) "
+                "— the durable union genuinely outgrew the budget. File "
+                "left untouched; shrink the project's runs, then delete "
+                "the store and let the per-run-record backfill rebuild it."
+            )
+        _check_store_version(p, version_before)
+        before = len(raw)
+        if raw == content.encode("utf-8"):
+            return StoreCompactStats(before, after)
+        backup = _store_backup_path(p)
+        os.link(p, backup, follow_symlinks=False)
+        linked = None
+        try:
+            # Linking changes ctime, but must not change identity, size,
+            # or mtime. Both names must still denote the same version.
+            linked = _store_file_version(backup.lstat())
+            if linked[:4] != version_before[:4]:
+                raise ValueError(f"coverage store at {p} changed during backup")
+            _check_store_version(p, linked)
+            write_text_atomically(p, content, tmp_prefix=".~savejson-")
+        except BaseException:
+            # A failed publication needs no extra full-size backup when
+            # both names still denote the intact original. Otherwise keep
+            # the recovery copy; never remove the sole remaining version.
+            try:
+                if (linked is not None
+                        and _store_file_version(p.lstat()) == linked
+                        and _store_file_version(backup.lstat()) == linked):
+                    backup.unlink()
+            except OSError:
+                _get_logger(__name__).warning(
+                    "Could not clean compaction backup %s; retained for recovery",
+                    backup, exc_info=True,
+                )
+            raise
+        return StoreCompactStats(before, after, backup)
+
+
+def _store_file_version(st: os.stat_result) -> tuple[int, int, int, int, int]:
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+def _check_store_version(path: Path, expected: tuple[int, int, int, int, int]) -> None:
     try:
-        before = p.stat().st_size
+        actual = _store_file_version(path.lstat())
     except OSError as exc:
-        msg = f"no coverage store at {p}: {exc}"
-        raise ValueError(msg) from exc
-    data = load_json(p, strict=True, max_bytes=_COMPACT_READ_MAX_BYTES)
-    if not isinstance(data, dict):
-        msg = f"coverage store at {p} is not a JSON object"
-        raise ValueError(msg)
-    version = data.get("version", SCHEMA_VERSION)
-    check_version(version, SCHEMA_VERSION, str(p))
-    out = {
-        "version": version,
-        "generated_at": _now_iso(),
-        "target": data.get("target"),
-        "content_id": data.get("content_id"),
-        "files": normalise_loaded_files(data.get("files", {}) or {},
-                                        str(p)),
-    }
-    content = dumps_artifact(out, indent=None, sort_keys=True) + "\n"
-    after = len(content.encode("utf-8"))
-    if after > _MAX_STORE_BYTES:
-        raise StoreWriteOverBudget(
-            f"coverage store at {p} still serialises to {after} bytes "
-            f"compacted (over the {_MAX_STORE_BYTES}-byte read budget) "
-            "— the durable union genuinely outgrew the budget. File "
-            "left untouched; shrink the project's runs, then delete "
-            "the store and let the per-run-record backfill rebuild it."
-        )
-    backup = _store_backup_path(p)
-    os.link(str(p), str(backup))
-    write_text_atomically(p, content, tmp_prefix=".~savejson-")
-    return before, after
+        raise ValueError(f"coverage store at {path} changed during compaction") from exc
+    if actual != expected:
+        raise ValueError(f"coverage store at {path} changed during compaction")

@@ -2944,16 +2944,20 @@ def cmd_coverage(args: argparse.Namespace) -> int:
     path = Path(args.store_path).resolve()
     if path.is_dir():
         path = path / "coverage.json"
-    from core.coverage.store import StoreWriteOverBudget, compact_store_file
+    from core.coverage.store import StoreWriteOverBudget, compact_store_file_disclosed
     try:
-        before, after = compact_store_file(path)
+        stats = compact_store_file_disclosed(path)
+        before, after = stats.bytes_before, stats.bytes_after
     except (ValueError, OSError, StoreWriteOverBudget) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     ratio = f"{before / after:.1f}x" if after else "n/a"
     print(f"coverage store: {path}")
     print(f"  bytes: {before} -> {after} ({ratio})")
-    print(f"  backup: {path.name}.pre-compact (same directory)")
+    if stats.backup is None:
+        print("  unchanged; no backup created")
+    else:
+        print(f"  backup: {stats.backup.name} (same directory)")
     return 0
 
 
