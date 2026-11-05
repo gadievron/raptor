@@ -237,38 +237,48 @@ def test_rule_file_is_valid(rule_rel: str):
     assert proc.returncode == 0, f"--validate failed: {proc.stderr[:500]}"
 
 
+@pytest.fixture(scope="module")
+def fixture_findings():
+    """Share one native scan per rule without sharing test outcomes.
+
+    Run lazily inside the requesting test so function-scoped Semgrep
+    state isolation is already active. Each xdist worker owns its cache.
+    Exceptions are not cached: a failed invocation cannot become a pass.
+    """
+    cache = {}
+
+    def findings(rule_rel, fixtures):
+        if rule_rel not in cache:
+            positives, negatives = _CASES[rule_rel]
+            targets = [_FIXTURES / name for name in positives + negatives]
+            for target in targets:
+                assert target.is_file(), target
+            results = _run_semgrep(_RULES_DIR / rule_rel, targets)["results"]
+            expected = {target.name for target in targets}
+            unexpected = {Path(r["path"]).name for r in results} - expected
+            assert not unexpected, f"{rule_rel}: unexpected result paths: {unexpected}"
+            cache[rule_rel] = results
+        names = set(fixtures)
+        return [r for r in cache[rule_rel] if Path(r["path"]).name in names]
+
+    return findings
+
+
 @pytest.mark.integration
-@pytest.mark.parametrize("rule_rel", sorted(_CASES))
-def test_positive_fixtures_fire(rule_rel: str):
+@pytest.mark.parametrize("rule_rel", sorted(_CASES), scope="module")
+def test_positive_fixtures_fire(rule_rel: str, fixture_findings):
     positives, _ = _CASES[rule_rel]
-    rule_file = _RULES_DIR / rule_rel
-    for fixture in positives:
-        assert (_FIXTURES / fixture).is_file(), fixture
-    # ONE semgrep run over all of the rule's positive fixtures, then
-    # per-fixture attribution via each result's path: the contract is
-    # per-fixture (every one must fire), but a run per fixture re-paid
-    # semgrep's ~1.3s startup for each — the multi-second parametrized
-    # cases were pure spawn overhead, not scan time.
-    results = _run_semgrep(
-        rule_file, [_FIXTURES / f for f in positives],
-    )["results"]
+    results = fixture_findings(rule_rel, positives)
     fired = {Path(r["path"]).name for r in results}
     silent = [f for f in positives if f not in fired]
     assert not silent, f"{rule_rel} produced no findings on {silent}"
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("rule_rel", sorted(_CASES))
-def test_negative_fixtures_stay_silent(rule_rel: str):
+@pytest.mark.parametrize("rule_rel", sorted(_CASES), scope="module")
+def test_negative_fixtures_stay_silent(rule_rel: str, fixture_findings):
     _, negatives = _CASES[rule_rel]
-    rule_file = _RULES_DIR / rule_rel
-    for fixture in negatives:
-        assert (_FIXTURES / fixture).is_file(), fixture
-    # ONE batched run (see test_positive_fixtures_fire); any hit
-    # anywhere is a failure, attributed by result path.
-    results = _run_semgrep(
-        rule_file, [_FIXTURES / f for f in negatives],
-    )["results"]
+    results = fixture_findings(rule_rel, negatives)
     hits = [
         (Path(r["path"]).name, r["check_id"], r["start"]["line"])
         for r in results
