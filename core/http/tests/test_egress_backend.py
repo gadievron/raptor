@@ -6,16 +6,19 @@ Seatbelt child-to-parent proxy route without external network access.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import os
 import ssl
 import subprocess
 import sys
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from packages.web.tests.http_server import start_http_server
 
 import urllib3
 
@@ -250,16 +253,17 @@ class TestSeatbeltParentProxy:
                 pass
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        tls.minimum_version = ssl.TLSVersion.TLSv1_2
-        tls.load_cert_chain(certfile=cert, keyfile=key)
-        server.socket = tls.wrap_socket(server.socket, server_side=True)
-        server_thread = threading.Thread(
-            target=server.serve_forever, daemon=True,
-        )
-        server_thread.start()
-
         try:
+            tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls.minimum_version = ssl.TLSVersion.TLSv1_2
+            tls.load_cert_chain(certfile=cert, keyfile=key)
+            server.socket = tls.wrap_socket(server.socket, server_side=True)
+        except BaseException:
+            server.server_close()
+            raise
+        with ExitStack() as cleanup:
+            start_http_server(server, cleanup.callback)
+            cleanup.callback(proxy_mod._reset_for_tests)
             for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                          "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
                 monkeypatch.delenv(name, raising=False)
@@ -318,11 +322,6 @@ class TestSeatbeltParentProxy:
                 "allowed-ok", "disallowed-denied",
             ], (result.stdout, result.stderr)
             assert hits == ["/ok"]
-        finally:
-            proxy_mod._reset_for_tests()
-            server.shutdown()
-            server.server_close()
-            server_thread.join(timeout=5)
 
     @pytest.mark.parametrize("bad_url", [
         "http://127.0.0.1:0",
