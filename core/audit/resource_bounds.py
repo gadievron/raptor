@@ -506,7 +506,7 @@ def _enumerate_sites(
     insert_re = _call_re(tuple(insert_vocab)) if insert_vocab else None
     alloc_re = _call_re(tuple(alloc_vocab)) if alloc_vocab else None
     view_lines = _segment_view_lines(segment_lines, file_path)
-    loop_set = _loop_lines(view_lines, span_start)
+    loop_set: set[int] | None = None
     for idx, raw in enumerate(segment_lines):
         code = view_lines[idx]
         # Every exact-name and naming-stem site pattern requires '('.
@@ -532,9 +532,13 @@ def _enumerate_sites(
                 provenance=_STEM_PROVENANCE,
             ))
             continue
-        if alloc_re is not None and line_no in loop_set:
+        if alloc_re is not None:
             m = alloc_re.search(code)
             if m:
+                if loop_set is None:
+                    loop_set = _loop_lines(view_lines, span_start)
+                if line_no not in loop_set:
+                    continue
                 src, prov = alloc_vocab[m.group(1)]
                 sites.append(_Site(
                     line=line_no, code=raw.strip()[:200],
@@ -738,8 +742,12 @@ def _c_function_spans(source: str) -> list[tuple[str, int, int]]:
     definitions — used only to attribute caller call sites to their
     enclosing function; misses degrade to a smaller searched set,
     which the receipt reports honestly."""
+    return _c_function_spans_from_lines(split_lines(source))
+
+
+def _c_function_spans_from_lines(lines: list[str]) -> list[tuple[str, int, int]]:
+    """Extract spans from a read-only canonical line list."""
     spans: list[tuple[str, int, int]] = []
-    lines = split_lines(source)
     header_re = re.compile(r"^[A-Za-z_][\w\s\*]*?\b(\w+)\s*\([^;{}]*\)\s*\{?\s*$")
     i = 0
     while i < len(lines):
@@ -1411,6 +1419,8 @@ def run_resource_bounds_prepass(
     insert_re = _call_re(tuple(insert_vocab)) if insert_vocab else None
 
     def _has_insert(text: str) -> bool:
+        if type(text) is str and "(" not in text:
+            return False
         # Exact vocabulary OR naming-stem structural match — the stem
         # tier is what binds macro-generated project insert APIs the
         # study loop can never learn (no definition to index).
@@ -1420,13 +1430,25 @@ def run_resource_bounds_prepass(
 
     candidates: list[tuple[str, str, int, int]] = []
     lines_cache: dict[str, list[str]] = {}
+
+    def _lines_for(fp: str, source: str) -> list[str]:
+        if type(fp) is str and type(source) is str:
+            cached = lines_cache.get(fp)
+            if cached is not None:
+                return cached
+        # Preserve observable split calls for custom source objects.
+        return lines_cache.setdefault(fp, split_lines(source))
+
     for fp, source in sorted(source_texts.items()):
         if not fp.endswith(_SOURCE_SUFFIXES):
             continue
         if not _has_insert(source):
             continue
-        lines = lines_cache.setdefault(fp, split_lines(source))
-        for name, start, end in _c_function_spans(source):
+        lines = _lines_for(fp, source)
+        spans = (_c_function_spans_from_lines(lines)
+                 if type(source_texts) is dict and type(fp) is str and type(source) is str
+                 else _c_function_spans(source))
+        for name, start, end in spans:
             segment = "\n".join(lines[start - 1:end])
             if _has_insert(segment):
                 candidates.append((fp, name, start, end))
@@ -1441,7 +1463,7 @@ def run_resource_bounds_prepass(
             telemetry["budget_exceeded"] = True
             break
         source = source_texts[fp]
-        lines = lines_cache.setdefault(fp, split_lines(source))
+        lines = _lines_for(fp, source)
         segment_lines = lines[start - 1:end]
         sites = _enumerate_sites(
             segment_lines, start, insert_vocab, alloc_vocab,
