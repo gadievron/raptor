@@ -23,16 +23,14 @@ is injectable so the orchestration is unit-testable with no LLM and no CodeQL.
 
 from __future__ import annotations
 
-import os
 import re
-import shutil
 import sqlite3
 import subprocess
 import time
-import uuid
 from collections import Counter
 from pathlib import Path
 
+from core.run.scratch import scratch_dir
 from core.config import RaptorConfig
 from core.json import load_json
 from core.dataflow import cvefix_walk
@@ -478,9 +476,9 @@ def synthesize_one(
         mode = "autobuild"
     else:
         mode = None
-    repo, after_db, before_db = work_dir / "repo", work_dir / "after", work_dir / "before"
-    sarif, synth = work_dir / "after.sarif", work_dir / "synth"
-    try:
+    with scratch_dir(prefix="synth-", dir=work_dir) as scratch:
+        repo, after_db, before_db = scratch / "repo", scratch / "after", scratch / "before"
+        sarif, synth = scratch / "after.sarif", scratch / "synth"
         if not cvefix_walk._fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
             return ("fetch_fail", None, _BACKEND_NONE, None, "")
         # Build the post-fix DB first; the repo is then at the fix commit, so the
@@ -574,9 +572,6 @@ def synthesize_one(
         # so it's the diagnostic material for improving the proposer's few-shot.
         return ("not_sound", proposal.finding_id, _BACKEND_CODEQL, res.query_ql,
                 "; ".join(reasons))
-    finally:
-        for p in (repo, after_db, before_db, synth, sarif):
-            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
 
 
 def _aggregate(syn: sqlite3.Connection) -> tuple[CorpusSynthReport, dict]:
@@ -661,12 +656,9 @@ def synthesize_from_results(
             pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
             try:
                 status, fid, backend, barrier_q, detail = synthesize_one(
-                    # Unique per-candidate scratch: the fixed "item"
-                    # subpath let two bridge processes sharing a work
-                    # dir interleave clone/build state (and each
-                    # other's finally-rmtree) mid-candidate.
-                    pair,
-                    work_dir=work_dir / f"item-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+                    # synthesize_one owns a unique, fully reclaimed child
+                    # directory even for callers outside this batch loop.
+                    pair, work_dir=work_dir,
                     proposer=proposer, status=row_status,
                     codeql_bin=codeql_bin, search_path=search_path,
                     max_attempts=max_attempts,
