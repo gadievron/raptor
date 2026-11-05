@@ -993,7 +993,7 @@ def filter_enforced_from_sarif(
             value = value[2:]
         return value
 
-    def _line(value: Any) -> int | None:
+    def _positive_source_line(value: Any) -> int | None:
         if isinstance(value, str):
             try:
                 value = int(value)
@@ -1011,7 +1011,7 @@ def filter_enforced_from_sarif(
         for entry in enforced:
             if not isinstance(entry, dict):
                 continue
-            rule, file, line = entry.get("rule_id"), _norm(entry.get("file")), _line(entry.get("line"))
+            rule, file, line = entry.get("rule_id"), _norm(entry.get("file")), _positive_source_line(entry.get("line"))
             if isinstance(rule, str) and rule and file and line is not None:
                 keys.setdefault((rule, line), set()).add(file)
         if not keys:
@@ -1036,7 +1036,7 @@ def filter_enforced_from_sarif(
                     continue
                 try:
                     location = result["locations"][0]["physicalLocation"]
-                    line = _line(location["region"].get("startLine"))
+                    line = _positive_source_line(location["region"].get("startLine"))
                     files = keys.get((rule, line), ()) if line is not None else ()
                     if not files:
                         continue
