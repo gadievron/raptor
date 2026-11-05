@@ -150,8 +150,13 @@ def source_binding(source: str, function_name: str, *, verb: str) -> dict[str, s
     """A worker receipt must describe the exact scoped input it analyzed."""
     import hashlib
 
-    return {
+    binding = {
         "function": function_name,
         "verb": verb,
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
+    if verb == "check-overflow":
+        # Same-source replies from workers predating operation admission must
+        # not inherit the current producer's contract merely by matching input.
+        binding["query_contract"] = "unique-binary-operation-v1"
+    return binding
