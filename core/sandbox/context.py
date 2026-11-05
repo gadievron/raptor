@@ -373,7 +373,7 @@ def _run_teardown_first_timeout(
 def _apply_capture_ceiling(
     result: subprocess.CompletedProcess, cap: int,
 ) -> None:
-    """Clamp captured stdout/stderr on *result* to *cap* per stream,
+    """Clamp captured stdout/stderr to *cap* bytes per stream (UTF-8 for text),
     appending the spawn backend's truncation-marker shape.
 
     Keep-head semantics matching ``_spawn.run_sandboxed``'s drain cap.
@@ -385,15 +385,24 @@ def _apply_capture_ceiling(
     cap = max(0, int(cap))
     for attr, label in (("stdout", "stdout"), ("stderr", "stderr")):
         val = getattr(result, attr, None)
-        if val is None or len(val) <= cap:
+        if val is None:
             continue
-        marker = (
-            f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
-        )
         if isinstance(val, bytes):
-            setattr(result, attr, val[:cap] + marker.encode("ascii"))
+            if len(val) <= cap:
+                continue
+            prefix = val[:cap]
         else:
-            setattr(result, attr, val[:cap] + marker)
+            # At most cap characters can fit in cap UTF-8 bytes. Encode only
+            # that prefix, not the entire already-buffered subprocess output.
+            raw = val[:cap].encode("utf-8", errors="replace")
+            if len(val) <= cap and len(raw) <= cap:
+                continue
+            prefix = raw[:cap].decode("utf-8", errors="ignore")
+        marker = f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
+        if isinstance(val, bytes):
+            setattr(result, attr, prefix + marker.encode("ascii"))
+        else:
+            setattr(result, attr, prefix + marker)
 
 
 # Byte ceiling for recounting the (target-writable) event log. A
