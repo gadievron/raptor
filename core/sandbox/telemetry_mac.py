@@ -202,7 +202,12 @@ def _read_existing_key(path: Path):
     except OSError:
         return None
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            # A read-only close failure cannot invalidate recovered bytes
+            # or replace a refusal/cancellation from the read itself.
+            pass
 
 
 def tamper_marker_path() -> Path:
@@ -391,6 +396,7 @@ def _load_or_create_key() -> bytes | None:
                     "key is created on the next stamp",
                 )
             return None
+        write_failed = False
         try:
             remaining = memoryview(key)
             while remaining:
@@ -398,8 +404,17 @@ def _load_or_create_key() -> bytes | None:
                 if written <= 0:
                     raise OSError(errno.EIO, "telemetry key write made no progress")
                 remaining = remaining[written:]
+        except BaseException:
+            write_failed = True
+            raise
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                if not write_failed:
+                    raise
+                logger.warning("telemetry_mac: key descriptor cleanup failed",
+                               exc_info=True)
         return key
     return None
 
