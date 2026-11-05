@@ -387,22 +387,40 @@ def check_operation_order(
     if not ops_a or not ops_b:
         return None
 
-    common = [op for op in ops_a if op in ops_b]
+    # Index membership only; preserve the original occurrence order and
+    # duplicates. Custom containers and string subclasses keep list matching.
+    if (type(ops_a) is list and type(ops_b) is list
+            and len(ops_a) >= 64 and len(ops_b) >= 64
+            and all(type(op) is str for op in ops_a)
+            and all(type(op) is str for op in ops_b)):
+        other_ops = set(ops_b)
+        common = [op for op in ops_a if op in other_ops]
+        del other_ops
+    else:
+        common = [op for op in ops_a if op in ops_b]
     if len(common) < 2:
         return None
 
     positions_a: dict[str, list[int]] = {}
     for idx, op in enumerate(ops_a):
-        positions_a.setdefault(op, []).append(idx)
+        grouped_values = positions_a.get(op)
+        if grouped_values is None:
+            grouped_values = []
+            positions_a[op] = grouped_values
+        grouped_values.append(idx)
     positions_b: dict[str, list[int]] = {}
     for idx, op in enumerate(ops_b):
-        positions_b.setdefault(op, []).append(idx)
+        grouped_values = positions_b.get(op)
+        if grouped_values is None:
+            grouped_values = []
+            positions_b[op] = grouped_values
+        grouped_values.append(idx)
 
     for i in range(len(common) - 1):
-        idxs_a_i = positions_a.get(common[i], [])
-        idxs_a_next = positions_a.get(common[i + 1], [])
-        idxs_b_i = positions_b.get(common[i], [])
-        idxs_b_next = positions_b.get(common[i + 1], [])
+        idxs_a_i = positions_a.get(common[i], ())
+        idxs_a_next = positions_a.get(common[i + 1], ())
+        idxs_b_i = positions_b.get(common[i], ())
+        idxs_b_next = positions_b.get(common[i + 1], ())
         if not idxs_a_i or not idxs_a_next or not idxs_b_i or not idxs_b_next:
             continue
         idx_a_i = idxs_a_i[-1]

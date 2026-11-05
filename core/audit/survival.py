@@ -105,7 +105,12 @@ def aggregate_survival(out_dir: Path) -> dict[str, dict[str, int]]:
     for e in entries:
         if not e.evidence_tools:
             continue
-        tools_by_key.setdefault(e.key, []).append(e)
+        group_key = e.key
+        grouped_values = tools_by_key.get(group_key)
+        if grouped_values is None:
+            grouped_values = []
+            tools_by_key[group_key] = grouped_values
+        grouped_values.append(e)
 
     result: dict[str, dict[str, int]] = {}
     for key, corr in corrections.items():
@@ -113,11 +118,11 @@ def aggregate_survival(out_dir: Path) -> dict[str, dict[str, int]]:
         if corr.evidence_tools:
             source = corr
         else:
-            candidates = [
-                e for e in tools_by_key.get(key, []) if e.ts <= corr.ts
-            ]
-            if candidates:
-                source = max(candidates, key=lambda e: e.ts)
+            source = max(
+                (e for e in tools_by_key.get(key, ()) if e.ts <= corr.ts),
+                key=lambda e: e.ts,
+                default=None,
+            )
 
         channels = _channels(source.evidence_tools if source else [])
         verdict = (corr.validate_verdict or "").strip().lower()
@@ -129,9 +134,10 @@ def aggregate_survival(out_dir: Path) -> dict[str, dict[str, int]]:
             bucket = "unknown"
 
         for channel in channels:
-            counts = result.setdefault(
-                channel, {"survived": 0, "disproven": 0, "unknown": 0},
-            )
+            counts = result.get(channel)
+            if counts is None:
+                counts = {"survived": 0, "disproven": 0, "unknown": 0}
+                result[channel] = counts
             counts[bucket] += 1
 
     return result

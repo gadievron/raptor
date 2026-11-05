@@ -368,7 +368,11 @@ def _link_by_call_graph(
     # Also build a name-only lookup for cross-file resolution
     by_func_name: dict[str, list[_FunctionLiterals]] = {}
     for (_fp, fn), fl in by_name.items():
-        by_func_name.setdefault(fn, []).append(fl)
+        grouped_values = by_func_name.get(fn)
+        if grouped_values is None:
+            grouped_values = []
+            by_func_name[fn] = grouped_values
+        grouped_values.append(fl)
 
     for file_path, cg in call_graphs.items():
         # Attribute presence, not truthiness (type_confusion's shape
@@ -440,7 +444,11 @@ def _link_by_field_heuristic(
         # Use the directory as the package key.
         parts = file_path.replace("\\", "/").rsplit("/", 1)
         pkg = parts[0] if len(parts) > 1 else ""
-        by_package.setdefault(pkg, []).extend(funcs)
+        grouped_values = by_package.get(pkg)
+        if grouped_values is None:
+            grouped_values = []
+            by_package[pkg] = grouped_values
+        grouped_values.extend(funcs)
 
     for funcs in by_package.values():
         producers: dict[str, list[_FunctionLiterals]] = {}
@@ -448,11 +456,19 @@ def _link_by_field_heuristic(
 
         for fl in funcs:
             for fname in fl.field_produced:
-                producers.setdefault(fname, []).append(fl)
+                grouped_values = producers.get(fname)
+                if grouped_values is None:
+                    grouped_values = []
+                    producers[fname] = grouped_values
+                grouped_values.append(fl)
             for fname in fl.field_consumed:
-                consumers.setdefault(fname, []).append(fl)
+                grouped_values = consumers.get(fname)
+                if grouped_values is None:
+                    grouped_values = []
+                    consumers[fname] = grouped_values
+                grouped_values.append(fl)
 
-        for field_name in sorted(set(producers) & set(consumers)):
+        for field_name in sorted(producers.keys() & consumers.keys()):
             if field_name.lower() in _GENERIC_FIELD_NAMES:
                 continue
             emitted = 0

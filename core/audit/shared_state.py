@@ -269,9 +269,17 @@ class SharedState:
             caller_bare = f"{edge.get('caller_file', '')}:{edge.get('caller', '')}"
             callee_file = edge.get("callee_file") or edge.get("caller_file", "")
             callee_bare = f"{callee_file}:{edge.get('callee', '')}"
-            edge_index.setdefault(caller_bare, []).append(edge)
+            grouped_values = edge_index.get(caller_bare)
+            if grouped_values is None:
+                grouped_values = []
+                edge_index[caller_bare] = grouped_values
+            grouped_values.append(edge)
             if callee_bare != caller_bare:
-                edge_index.setdefault(callee_bare, []).append(edge)
+                grouped_values = edge_index.get(callee_bare)
+                if grouped_values is None:
+                    grouped_values = []
+                    edge_index[callee_bare] = grouped_values
+                grouped_values.append(edge)
 
         cl_index: dict[tuple[str, str], dict[str, Any]] = {}
         for file_info in checklist.get("files", []):

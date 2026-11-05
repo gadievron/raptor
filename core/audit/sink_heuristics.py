@@ -227,8 +227,16 @@ def _build_edge_maps(
                 continue
             caller_key = (filepath, caller)
             callee_key = (filepath, callee)
-            forward.setdefault(caller_key, set()).add(callee_key)
-            reverse.setdefault(callee_key, set()).add(caller_key)
+            grouped_values = forward.get(caller_key)
+            if grouped_values is None:
+                grouped_values = set()
+                forward[caller_key] = grouped_values
+            grouped_values.add(callee_key)
+            grouped_values = reverse.get(callee_key)
+            if grouped_values is None:
+                grouped_values = set()
+                reverse[callee_key] = grouped_values
+            grouped_values.add(caller_key)
 
     return forward, reverse
 
@@ -316,7 +324,11 @@ def _discover_by_naming(
             chain = _get(call, "chain", [])
             callee = ".".join(chain) if isinstance(chain, list) else str(chain)
             if callee:
-                callee_map.setdefault(caller, set()).add(callee)
+                grouped_values = callee_map.get(caller)
+                if grouped_values is None:
+                    grouped_values = set()
+                    callee_map[caller] = grouped_values
+                grouped_values.add(callee)
 
         for func in callers_in_file:
             key = (filepath, func)
@@ -375,7 +387,11 @@ def _discover_side_effect_wrappers(
             chain = _get(call, "chain", [])
             callee = ".".join(chain) if isinstance(chain, list) else str(chain)
             if callee:
-                func_callees.setdefault(caller, set()).add(callee)
+                grouped_values = func_callees.get(caller)
+                if grouped_values is None:
+                    grouped_values = set()
+                    func_callees[caller] = grouped_values
+                grouped_values.add(callee)
 
         for func, callees in func_callees.items():
             key = (filepath, func)
@@ -410,7 +426,11 @@ def _compute_reachable_from_entries(
     forward: dict[tuple[str, str], set[tuple[str, str]]] = {}
     for callee, callers in reverse_edges.items():
         for caller in callers:
-            forward.setdefault(caller, set()).add(callee)
+            grouped_values = forward.get(caller)
+            if grouped_values is None:
+                grouped_values = set()
+                forward[caller] = grouped_values
+            grouped_values.add(callee)
 
     reachable: set[tuple[str, str]] = set(entry_points)
     frontier = list(entry_points)
