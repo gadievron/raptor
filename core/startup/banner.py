@@ -69,6 +69,8 @@ def format_banner(
     lang_line: str | None = None,
     tool_updates: set[str] | None = None,
     codex: bool = False,
+    *,
+    protection_notice: str | None = None,
 ) -> str:
     """Format the startup banner from gathered data.
 
@@ -85,6 +87,7 @@ def format_banner(
         lang_line: Pre-formatted language support line, or None.
         tool_updates: Tool names that have a newer version on PyPI.
         codex: Use Codex skill names for command references.
+        protection_notice: Verified installation status, or a verification warning.
 
     Returns:
         Formatted banner string.
