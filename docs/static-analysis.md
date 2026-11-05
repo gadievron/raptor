@@ -509,10 +509,12 @@ come from that same descriptor unless the result supplies its own CWE.
 Ambiguous or conflicting references cannot borrow another rule’s metadata. Rule IDs
 omitted from a result are recovered from its validated rule reference, so
 different indexed rules at the same location remain separate findings.
-When combining findings for analysis, evidence from different tools remains
-separate. If tools reuse a finding ID, only the colliding IDs are qualified
-by tool; `source_finding_id` retains the original for correlation. Ordinary
-IDs remain unchanged.
+When combining findings for analysis, evidence from different tools and
+validated rule namespaces remains separate. If they reuse a finding ID,
+only the colliding IDs are qualified; `source_finding_id` retains the original
+for correlation. Rule provenance uses component and descriptor identities,
+so moving rules within their tables does not change it. Ordinary IDs remain
+unchanged.
 
 Per-rule scan counts use these same recovered IDs; unresolved IDs are counted as `unknown`.
 

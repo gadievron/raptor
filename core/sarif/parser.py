@@ -214,28 +214,32 @@ def extract_dataflow_path(code_flows: list[dict[str, Any]]) -> dict[str, Any] | 
 def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Retain distinct tool evidence and collapse repeated reports.
 
-    Identity includes the normalized tool, location, rule and finding ID.
-    When different tools reuse a finding ID, qualify only those colliding
-    IDs so downstream artifact files and ID-keyed maps remain distinct.
+    Identity includes the normalized tool, validated rule scope, location,
+    rule and finding ID. When distinct tool or rule scopes reuse a finding
+    ID, qualify only those colliding IDs so downstream artifact files and
+    ID-keyed maps remain distinct.
     The original ID is retained as source_finding_id. Input rows are not
     mutated; ordinary IDs and legacy same-tool deduplication are unchanged.
     """
-    scopes: dict[str, str] = {}
+    scopes: dict[tuple[str, str], str] = {}
 
-    def tool_scope(finding):
+    def finding_scope(finding):
         name = finding.get("tool")
-        if not isinstance(name, str):
-            return ""
-        if name not in scopes:
-            scopes[name] = _normalise_tool_name(name)
-        return scopes[name]
+        name = name if isinstance(name, str) else ""
+        origin = finding.get("rule_scope")
+        origin = origin if isinstance(origin, str) else ""
+        key = (name, origin)
+        if key not in scopes:
+            tool = _normalise_tool_name(name)
+            scopes[key] = dumps_canonical([tool, origin]) if origin else tool
+        return scopes[key]
 
     owners: dict[str, str] = {}
     collisions: set[str] = set()
     seen: set[tuple] = set()
     unique: list[dict[str, Any]] = []
     for finding in findings:
-        scope = tool_scope(finding)
+        scope = finding_scope(finding)
         fid = finding.get("finding_id")
         if isinstance(fid, str) and fid:
             if owners.setdefault(fid, scope) != scope:
@@ -254,7 +258,7 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
 
     if not collisions:
         return unique
-    sources = {(finding["finding_id"], tool_scope(finding)) for finding in unique
+    sources = {(finding["finding_id"], finding_scope(finding)) for finding in unique
                if isinstance(finding.get("finding_id"), str)
                and finding["finding_id"] in collisions}
     qualified: dict[tuple[str, str], str] = {}
@@ -270,14 +274,14 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
                 reserved.add(candidate)
                 break
         else:
-            raise ValueError("Unable to allocate distinct tool-qualified finding IDs")
+            raise ValueError("Unable to allocate distinct qualified finding IDs")
     for index, finding in enumerate(unique):
         fid = finding.get("finding_id")
         if isinstance(fid, str) and fid in collisions:
             source_id = finding.get("source_finding_id")
             if not isinstance(source_id, str) or not source_id:
                 source_id = fid
-            unique[index] = dict(finding, finding_id=qualified[(fid, tool_scope(finding))],
+            unique[index] = dict(finding, finding_id=qualified[(fid, finding_scope(finding))],
                                  source_finding_id=source_id)
     return unique
 
@@ -854,23 +858,51 @@ class ResultRuleResolver:
         tool = _as_dict(run.get("tool"))
         self._run = {"tool": tool}
         self._by_id: dict[str, dict[str, Any] | None] = {}
+        self._owners: dict[int, tuple[str, str]] = {}
+        self._scopes: dict[int, str] = {}
         extensions = tool.get("extensions")
         for component in extensions if isinstance(extensions, list) else []:
-            for rule in self._rules(component):
+            for rule in self._rules(component, "extension"):
                 rid = rule["id"]
                 self._by_id[rid] = None if rid in self._by_id else rule
         driver_ids: set[str] = set()
-        for rule in self._rules(tool.get("driver")):
+        for rule in self._rules(tool.get("driver"), "driver"):
             rid = rule["id"]
             self._by_id[rid] = None if rid in driver_ids else rule
             driver_ids.add(rid)
 
-    @staticmethod
-    def _rules(component):
-        rules = _as_dict(component).get("rules")
+    def _rules(self, component, kind):
+        component = _as_dict(component)
+        rules = component.get("rules")
+        guid, name = component.get("guid"), component.get("name")
+        owner = (kind, guid if isinstance(guid, str) and guid else
+                 name if isinstance(name, str) else "")
         if isinstance(rules, list):
-            yield from (rule for rule in rules if isinstance(rule, dict)
-                        and isinstance(rule.get("id"), str) and rule["id"])
+            for rule in rules:
+                if isinstance(rule, dict) and isinstance(rule.get("id"), str) and rule["id"]:
+                    self._owners[id(rule)] = owner
+                    yield rule
+
+    def scope(
+        self, rule: dict[str, Any], *, cwe: str | None, level: str | None,
+    ) -> str | None:
+        """Stable provenance for an already validated descriptor, never an index."""
+        key = id(rule)
+        owner = self._owners.get(key)
+        if owner is None:
+            return None
+        # A unique driver ID already has the default namespace. Keep its
+        # legacy shape and identity; only extensions and ambiguous driver
+        # descriptors require additional provenance.
+        if owner[0] == "driver" and self._by_id.get(rule["id"]) is rule:
+            return None
+        if key not in self._scopes:
+            guid, name = rule.get("guid"), rule.get("name")
+            identity = (["guid", guid] if isinstance(guid, str) and guid else
+                        ["id", rule["id"], "name", name if isinstance(name, str) else "", cwe, level])
+            payload = dumps_canonical([owner, identity])
+            self._scopes[key] = hashlib.sha256(payload.encode("ascii")).hexdigest()
+        return self._scopes[key]
 
     def resolve(self, result: dict[str, Any]) -> dict[str, Any]:
         index = result.get("ruleIndex", -1)
@@ -988,7 +1020,7 @@ def parse_sarif_findings(
         tool_name = get_tool_name(run)
 
         rule_resolver = ResultRuleResolver(run)
-        rule_metadata: dict[int, tuple[str | None, str | None]] = {}
+        rule_metadata: dict[int, tuple[str | None, str | None, str | None]] = {}
 
         # Per-run originalUriBaseIds for relative-URI resolution.
         # SARIF emitters commonly emit `result.locations[*].artifactLocation
@@ -1134,13 +1166,17 @@ def parse_sarif_findings(
 
             rule_cwe: str | None = None
             default_level: str | None = None
+            rule_scope: str | None = None
             if rule:
                 descriptor_key = id(rule)
                 if descriptor_key not in rule_metadata:
+                    cwe = _extract_cwe_from_rule(rule)
+                    inherited_level = rule_default_level(rule)
                     rule_metadata[descriptor_key] = (
-                        _extract_cwe_from_rule(rule), rule_default_level(rule),
+                        cwe, inherited_level,
+                        rule_resolver.scope(rule, cwe=cwe, level=inherited_level),
                     )
-                rule_cwe, default_level = rule_metadata[descriptor_key]
+                rule_cwe, default_level, rule_scope = rule_metadata[descriptor_key]
 
             file_uri = _resolve_uri(artifact)
             # Containment gate at the parse boundary (opt-in via
@@ -1178,6 +1214,7 @@ def parse_sarif_findings(
             findings.append(
                 {
                     "finding_id": finding_id,
+                    **({"rule_scope": rule_scope} if rule_scope else {}),
                     "rule_id": rule_id,
                     "message": message_text,
                     "file": file_uri,
