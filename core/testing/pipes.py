@@ -1,6 +1,6 @@
 """Guard pipe acquisition until test setup transfers ownership."""
 
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, ExitStack, suppress
 import os
 
 
@@ -17,10 +17,17 @@ def pipes_for_setup(count):
             pairs.append(os.pipe())
         yield pairs
     except BaseException:
-        for pair in reversed(pairs):
-            for fd in pair:
-                with suppress(OSError):
-                    os.close(fd)
+
+        def close_pipe(fd):
+            with suppress(OSError):
+                os.close(fd)
+
+        with ExitStack() as cleanup:
+            # LIFO preserves reverse-pair, read-then-write close order.
+            # Every descriptor is attempted even if a close is interrupted.
+            for pair in pairs:
+                for fd in reversed(pair):
+                    cleanup.callback(close_pipe, fd)
         raise
 
 

@@ -33,11 +33,13 @@ def socket_worker_setup(fd):
             if thread is not None and thread.ident is not None:
                 # A started worker may be blocked in recv. shutdown wakes it;
                 # close alone does not reliably interrupt another thread.
-                with suppress(OSError):
-                    owned.shutdown(socket.SHUT_RDWR)
-                thread.join(timeout=5)
-                if thread.is_alive():
-                    raise RuntimeError("socket fixture worker did not stop")
+                try:
+                    with suppress(OSError):
+                        owned.shutdown(socket.SHUT_RDWR)
+                finally:
+                    thread.join(timeout=5)
+                    if thread.is_alive():
+                        raise RuntimeError("socket fixture worker did not stop")
         finally:
             owned.close()
         raise
