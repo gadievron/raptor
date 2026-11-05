@@ -3,14 +3,12 @@
 import json
 import os
 import re
-import sys
 import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.coccinelle import runner as runner_mod
 from packages.coccinelle.models import SpatchMatch
@@ -38,19 +36,14 @@ from packages.coccinelle.runner import (
 
 
 @pytest.fixture(autouse=True)
-def _isolated_spatch_resolution():
-    """Each test owns its execution cache, including cached absence.
+def _isolated_spatch_resolution(monkeypatch):
+    from core.testing.module_state import isolated_module_state
 
-    Keep pinning intact within a test so executable-identity tests continue
-    to exercise production behavior, without leaking mocks to other tests.
-    """
-    runner_mod._spatch_resolved = False
-    runner_mod._resolved_spatch = None
-    try:
-        yield
-    finally:
-        runner_mod._spatch_resolved = False
-        runner_mod._resolved_spatch = None
+    with isolated_module_state(runner_mod, {"_spatch_resolved": False, "_resolved_spatch": None}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _nonced_prefix_from_cmd(cmd) -> str:

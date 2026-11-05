@@ -32,15 +32,16 @@ def tmp_path():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_toolchain_paths():
-    # The lease client is a fresh interpreter. Resolve the controller's
-    # paths afresh too: earlier PATH/which mocks may have populated the
-    # process-wide prerequisite cache with a different toolchain identity.
-    prereqs.reset_path_cache()
-    try:
-        yield
-    finally:
-        prereqs.reset_path_cache()
+def _fresh_toolchain_paths(monkeypatch):
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(prereqs, {"_resolved_joern": None, "_joern_resolved": False,
+        "_resolved_joern_parse": None, "_joern_parse_resolved": False,
+        "_resolved_java": None, "_java_resolved": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture

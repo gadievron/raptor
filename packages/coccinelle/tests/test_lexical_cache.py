@@ -9,10 +9,17 @@ from packages.coccinelle import runner
 
 
 @pytest.fixture(autouse=True)
-def empty_lexical_cache():
-    runner._cached_lexical_scan.cache_clear()
-    yield
-    runner._cached_lexical_scan.cache_clear()
+def empty_lexical_cache(monkeypatch):
+    from functools import lru_cache
+    borrowed = runner._cached_lexical_scan
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(runner, {"_cached_lexical_scan": fresh}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.mark.parametrize("text", [

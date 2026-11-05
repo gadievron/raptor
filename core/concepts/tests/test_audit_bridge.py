@@ -1559,14 +1559,18 @@ class TestGrepHintGuard:
 
     @pytest.fixture(autouse=True)
     def _fresh_demotion_log(self, monkeypatch):
-        # The guard's verdict cache would swallow the demotion-log
-        # side effect for hints another test already scored — clear
-        # it around every test so log assertions see cache misses.
+        from functools import lru_cache
+
         from core.concepts import audit_bridge as ab
-        monkeypatch.setattr(ab, "_demoted_hints_logged", set())
-        ab._grep_hint_compilable.cache_clear()
-        yield
-        ab._grep_hint_compilable.cache_clear()
+        borrowed = ab._grep_hint_compilable
+        fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+        from core.testing.module_state import isolated_module_state
+
+        with isolated_module_state(ab, {"_grep_hint_compilable": fresh, "_demoted_hints_logged": set()}):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
 
     def test_plain_literal_hint_compiles(self):
         from core.concepts.audit_bridge import _grep_hint_compilable
