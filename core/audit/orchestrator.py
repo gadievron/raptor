@@ -25926,46 +25926,10 @@ def _proactive_validate(
     if skipped:
         outcome.tools_skipped = (outcome.tools_skipped or set()) | skipped
 
-    # Path feasibility: check whether flow trace conditions are jointly
-    # satisfiable (strengthens or refutes the finding's reachability claim)
-    if flow_traces:
-        try:
-            from .path_feasibility import (
-                check_path_feasibility,
-                extract_conditions_from_flow_trace,
-                extract_conditions_from_hypothesis,
-            )
-
-            all_conditions = []
-            for trace in flow_traces:
-                trace_file = trace.get("entry_point", {}).get("file", "")
-                if trace_file == outcome.file or not trace_file:
-                    all_conditions.extend(extract_conditions_from_flow_trace(trace))
-            if outcome.hypothesis:
-                all_conditions.extend(
-                    extract_conditions_from_hypothesis(outcome.hypothesis)
-                )
-            if all_conditions:
-                feas = check_path_feasibility(all_conditions)
-                if feas.feasible is True:
-                    confirmed_tools.append("smt:path-feasible")
-                elif feas.feasible is False:
-                    logger.info(
-                        "path infeasible for %s:%s — demoting",
-                        outcome.file,
-                        outcome.function,
-                    )
-                    return _demote_outcome(
-                        outcome,
-                        "[path feasibility: conditions unsatisfiable]",
-                    )
-        except Exception:
-            logger.debug(
-                "path_feasibility failed for %s:%s",
-                outcome.file,
-                outcome.function,
-                exc_info=True,
-            )
+    # Feasibility of supplied trace/hypothesis predicates is diagnostic:
+    # it neither proves this defect nor exhausts the code's possible paths.
+    # In particular, alternative traces must never be AND-ed into a
+    # purported refutation of the entire finding.
 
     # Lifecycle-precondition check: detect context-drift bugs where a
     # state field is read without the guard that held at write time

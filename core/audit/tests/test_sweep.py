@@ -2431,14 +2431,15 @@ else:
         assert result.outcome == "confirmed"
         assert result.matches and result.matches[0]["feasible"] is True
 
-    def test_unsat_refutes(self, monkeypatch, tmp_path: Path):
+    def test_unsat_remains_a_predicate_observation(self, monkeypatch, tmp_path: Path):
         from core.audit.sweep import run_smt_sweep
         self._install_stub(monkeypatch, tmp_path)
         result = run_smt_sweep(
             file_path="a.c", function_name="f", verb="validate-path",
             smt_args={"conditions": ["size > 0", "want-unsat"]},
         )
-        assert result.outcome == "refuted"
+        assert result.outcome == "inconclusive"
+        assert result.details["feasible"] is False
 
     def test_null_feasible_inconclusive(self, monkeypatch, tmp_path: Path):
         from core.audit.sweep import run_smt_sweep
@@ -2461,7 +2462,8 @@ else:
                 "want-unsat",
             ]},
         )
-        assert result.outcome == "refuted"
+        assert result.outcome == "inconclusive"
+        assert result.details["feasible"] is False
 
     def test_check_path_feasibility_both_directions(
         self, monkeypatch, tmp_path: Path,

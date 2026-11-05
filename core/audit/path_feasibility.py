@@ -1,8 +1,10 @@
 """SMT path feasibility for LLM-generated cross-function paths.
 
 Extracts branch conditions from flow traces and annotations, builds
-condition sets for source-to-sink paths, and validates them via the
-``validate-path`` SMT verb.
+condition sets for source-to-sink paths, and checks their mathematical
+satisfiability via the ``validate-path`` SMT verb. These inputs are not a
+source-semantics model: SAT does not prove a defect, and UNSAT does not
+refute a finding across all possible paths.
 
 Integration patterns:
 1. Inline with /audit review — after an LLM generates a hypothesis
@@ -219,6 +221,16 @@ def check_path_feasibility(
             smt_args=smt_args,
         )
 
+        # The sweep's outcome is about claim admission; these explicit
+        # details answer only the mathematical question about our inputs.
+        details = result.details or {}
+        if details.get("oracle_scope") == "supplied-predicates" and not result.errors:
+            feasible = details.get("feasible")
+            return FeasibilityResult(
+                feasible=feasible if isinstance(feasible, bool) else None,
+                conditions=list(conditions),
+                reasoning=result.raw_output or "predicate feasibility observation",
+            )
         if result.outcome == "confirmed":
             return FeasibilityResult(
                 feasible=True,
