@@ -18,9 +18,16 @@ from core.run.toolprobe import ToolInfo, probe, reset_probe_cache
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    reset_probe_cache()
-    yield
-    reset_probe_cache()
+    """Probe into a private cache, restoring borrowed entries under its lock."""
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+
+    toolprobe = import_module("core.run.toolprobe")
+    with isolated_module_state(
+        toolprobe, {"_CACHE": {}}, lock=toolprobe._CACHE_LOCK,
+    ):
+        yield
 
 
 class TestProbe:

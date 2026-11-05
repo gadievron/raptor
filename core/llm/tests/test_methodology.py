@@ -74,10 +74,13 @@ class TestStripFrontmatter:
 
 class TestLoadMethodology:
     @pytest.fixture(autouse=True)
-    def _clear(self):
-        clear_cache()
-        yield
-        clear_cache()
+    def _clear(self, monkeypatch):
+        """Use private persona text and root caches for this test."""
+        from importlib import import_module
+
+        methodology = import_module("core.llm.methodology")
+        monkeypatch.setattr(methodology, "_cache", {})
+        monkeypatch.setattr(methodology, "_raptor_dir", None)
 
     def test_loads_existing_file(self, tmp_path, monkeypatch):
         persona = tmp_path / "personas"

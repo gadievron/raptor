@@ -14,7 +14,6 @@ import pytest
 
 from packages.sca.models import PinStyle
 from packages.sca.parsers._pnpm_catalog import (
-    _clear_cache,
     find_workspace_root,
     get_catalogs,
     resolve_catalog_spec,
@@ -27,11 +26,12 @@ from packages.sca.parsers.package_json import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_catalog_cache():
-    """The catalog cache is module-global. Tests must start clean."""
-    _clear_cache()
-    yield
-    _clear_cache()
+def _clear_catalog_cache(monkeypatch):
+    """Keep workspace catalogs local to the test instead of clearing caller state."""
+    from importlib import import_module
+
+    catalog = import_module("packages.sca.parsers._pnpm_catalog")
+    monkeypatch.setattr(catalog, "_CATALOG_CACHE", {})
 
 
 def _write_pkg(path: Path, data: dict) -> Path:
