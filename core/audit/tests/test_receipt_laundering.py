@@ -47,7 +47,7 @@ def _restore(outcome: ReviewOutcome, receipt: str) -> ReviewOutcome:
 
 # Narrowing shape: a parsed integer cast to a fixed-width unsigned type
 # without a range check. The pre-loop screen's check-integer-narrowing
-# verb (verification role) confirms on this mechanically.
+# verb records this mechanically as a diagnostic width observation.
 _NARROWING_GO = (
     "package cfg\n"
     "\n"
@@ -158,16 +158,27 @@ def _hermetic_config(target: Path, out: Path) -> OrchestratorConfig:
         # fixture) must not resolve the function without review.
         prefilter_skip=False,
         immediate_verify=False,
+        # This reviewer returns one outcome, not the batch-review schema.
+        batch_sloc_threshold=0,
     )
 
 
 @pytest.mark.slow
 class TestScreenReceiptSurvives:
-    def test_receipt_not_laundered_by_model_restatement(
+    @pytest.fixture(autouse=True)
+    def no_live_llm(self, monkeypatch):
+        # Full orchestration may discover optional model-backed passes.
+        # These scenarios test receipt provenance with a stub reviewer;
+        # they must never contact a provider, even when credentials exist.
+        def blocked(*args, **kwargs):
+            raise AssertionError("live LLM disabled in stub-review provenance test")
+
+        monkeypatch.setattr("core.llm.client.LLMClient.__init__", blocked)
+
+    def test_width_observation_reaches_reviewer_without_verification(
         self, tmp_path: Path,
     ) -> None:
-        """The run's own confirming receipt must be the stamp, not the
-        model's ``llm-claimed:`` restatement of the same tool."""
+        """Real width observations reach review without granting a defect oracle."""
         target, out = _setup_go_target(
             tmp_path, _NARROWING_GO, "SetUser", 6, 13,
         )
@@ -177,23 +188,25 @@ class TestScreenReceiptSurvives:
         result = run_orchestrator(_hermetic_config(target, out), review_fn)
         assert calls, "the review stub never ran — scenario is vacuous"
 
-        row = next(
-            o for o in result.outcomes if o.function == "SetUser"
-        )
+        rows = [o for o in result.outcomes if o.function == "SetUser"]
+        assert rows, ([(o.file, o.function, o.status) for o in result.outcomes],
+                      [(c.get("file"), c.get("function")) for c in calls])
+        row = rows[0]
         assert row.status == "suspicious"
 
-        # The merged row's provenance is the pipeline's receipt.
-        first_stamp = (row.evidence_tool or "").split("+")[0]
-        assert first_stamp.startswith("smt:check-integer-narrowing"), (
-            f"expected the screen's confirming receipt, got "
-            f"{row.evidence_tool!r}"
-        )
-
-        # The exemption that protects tool-verified rows fires.
+        # The actual pre-pass observation reaches the reviewer. Later
+        # model-only refinements need not preserve it as a verifying stamp.
         assert any(
+            str(ctx.get("smt_pre_evidence", "")).startswith("smt:check-integer-narrowing")
+            for ctx in calls
+        ), "the real width observation never reached the reviewer"
+
+        # A real width observation retains provenance but grants no
+        # verification exemption: the model is not a source defect oracle.
+        assert not any(
             is_verification_evidence(part.strip())
             for part in (row.evidence_tool or "").split("+")
-        ), f"no verification-grade part in {row.evidence_tool!r}"
+        ), f"width-only observation gained verification grade: {row.evidence_tool!r}"
 
         # Dispatch record names the tool family that earned the stamp.
         assert "smt" in {
@@ -216,7 +229,8 @@ class TestScreenReceiptSurvives:
         assert calls, "the review stub never ran — scenario is vacuous"
 
         rows = [o for o in result.outcomes if o.function == "Describe"]
-        assert rows, "Describe row missing from outcomes"
+        assert rows, ([(o.file, o.function, o.status) for o in result.outcomes],
+                      [(c.get("file"), c.get("function")) for c in calls])
         row = rows[0]
 
         ev = row.evidence_tool or ""

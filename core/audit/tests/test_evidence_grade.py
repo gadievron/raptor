@@ -706,7 +706,7 @@ class TestSanitizedCompositeOrdering:
 
     # A claim whose text names a genuine verification receipt plus a
     # detection variant — raw, the receipt part would qualify.
-    CLAIMED_MIXED = "smt:check-integer-narrowing+consistency:return-check-majority"
+    CLAIMED_MIXED = "smt:check-overflow+consistency:return-check-majority"
     # Historical aggregation-shaped claims remain non-verification.
     CLAIMED_AGGREGATION = (
         "consistency:return-check-majority"
@@ -760,7 +760,7 @@ class TestSanitizedCompositeOrdering:
         # The documented evidence-combine shape stays open: a PIPELINE
         # receipt joined ahead of a sanitized claim keeps its status.
         assert is_verification_evidence(
-            "smt:check-integer-narrowing+llm-claimed:smt",
+            "smt:check-overflow+llm-claimed:smt",
         )
 
 

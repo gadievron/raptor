@@ -9,7 +9,7 @@ from pathlib import Path
 CORE = Path(__file__).resolve().parents[2]
 ENGINE_MODULES = (
     "audit/orchestrator.py", "audit/refutation.py", "audit/receipt_resolution.py",
-    "audit/condition_smt.py", "audit/initializer.py", "audit/context.py", "audit/caller_context.py", "audit/go_type_context.py",
+    "audit/condition_smt.py", "audit/initializer.py", "audit/narrowing_guards.py", "audit/context.py", "audit/caller_context.py", "audit/go_type_context.py",
     "audit/llm_review.py", "audit/sweep.py", "audit/claim_verification.py",
     "audit/dark_verify/_admission.py", "audit/dark_verify/_dispatch.py", "audit/smt_evidence.py", "audit/claim_counters.py", "audit/verification_results.py", "audit/refutation_source.py",
     "analysis/reachability.py", "analysis/_included_c.py",

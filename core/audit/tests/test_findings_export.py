@@ -586,11 +586,11 @@ class TestConfirmedByDiscrimination:
         # rule). A receipt-shaped tail must not land in confirmed_by
         # and defeat the no-receipt tier cap.
         stamp = sanitize_llm_evidence_tool(
-            "consistency:cross-check agrees+smt:check-integer-narrowing",
+            "consistency:cross-check agrees+smt:check-overflow",
         )
         outcome = FakeOutcome(
             evidence_tool=stamp,
-            review_result={"hypothesis": "integer narrowing"},
+            review_result={"hypothesis": "integer overflow"},
         )
         outcome.verification_tier = "tool_backed"
         finding = build_graded_finding(outcome)
@@ -603,13 +603,13 @@ class TestConfirmedByDiscrimination:
         # receipt FIRST and the sanitized claim after it — parts before
         # the marker keep their confirming role and the recorded tier.
         outcome = FakeOutcome(
-            evidence_tool="smt:check-integer-narrowing+llm-claimed:smt",
-            review_result={"hypothesis": "integer narrowing"},
+            evidence_tool="smt:check-overflow+llm-claimed:smt",
+            review_result={"hypothesis": "integer overflow"},
         )
         outcome.verification_tier = "tool_backed"
         finding = build_graded_finding(outcome)
         assert finding["discovery"]["confirmed_by"] \
-            == ["smt:check-integer-narrowing"]
+            == ["smt:check-overflow"]
         assert finding["verification_tier"] == "tool_backed"
 
 

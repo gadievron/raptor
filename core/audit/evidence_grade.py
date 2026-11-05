@@ -362,7 +362,6 @@ def registered_spelling_role(part: str) -> str | None:
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
     "check-overflow", "check-oob", "check-null-deref",
-    "check-integer-narrowing",
 )
 _SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
     "invariant-preservation", "check-overflow-to-oob",
@@ -476,7 +475,7 @@ def _is_detection_variant(part: str) -> bool:
         )
     # smt: mirrors sweep._SMT_VERB_ROLES detection entries (":witness"
     # keeps its receipt — a concrete solver model discriminates).
-    # Lexical lock checks, predicate feasibility and encoding-description checks
+    # Lexical lock checks, width-only narrowing, predicate feasibility and encoding checks
     # stay detection even with a model: they do not verify their premises
     # against source semantics (mirrors sweep.is_detection_rule_id).
     if part.startswith("smt:"):

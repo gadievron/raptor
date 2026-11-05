@@ -3179,15 +3179,6 @@ _CAST_NARROWING_RE = re.compile(
     r"\s*(\w+)"
 )
 
-_BOUNDS_CHECK_RE_TEMPLATE = (
-    r"if\s*\(\s*{var}\s*[<>]=?\s*\w+\s*\)"
-    r"|if\s*\(\s*{var}\s*[<>]=?\s*\d+\s*\)"
-    r"|min\s*\(\s*{var}\s*,"
-    r"|min_t\s*\([^,]+,\s*{var}\s*,"
-    r"|clamp\s*\(\s*{var}\s*,"
-)
-
-
 @dataclass
 class IntegerNarrowingResult:
     """Result of checking integer narrowing."""
@@ -3242,9 +3233,11 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
     # a range check; preserve positions for the resulting observation.
     from .source_view import sanitized_view
     from .initializer import initializer_text
+    from .narrowing_guards import NarrowingGuardContext, integer_range
 
     source = sanitized_view(source, language="c")
     lines = source.split("\n")
+    guards = NarrowingGuardContext(source)
     params = _extract_param_types(source)
     decls = _extract_local_decls(lines)
 
@@ -3273,7 +3266,10 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
                 if src_width <= dest_width:
                     continue
                 if re.search(rf"\b{re.escape(src_var)}\b", rhs):
-                    if _has_bounds_check_before(lines, src_var, i):
+                    if guards.protects(
+                        src_var, i, m.end(), integer_range(src_type, src_width),
+                        integer_range(dest_type, dest_width), src_type,
+                    ):
                         continue
                     # Skip when the wide var appears only as a
                     # function argument — the narrowing is from
@@ -3830,19 +3826,6 @@ def check_parsed_int_contract(
     return IntegerNarrowingResult(
         reasoning="all text-parsed integers are range-checked or unconsumed",
     )
-
-
-def _has_bounds_check_before(
-    lines: list[str], var_name: str, before_line: int,
-) -> bool:
-    """Check if there's a bounds check on var_name before the given line."""
-    pat = re.compile(
-        _BOUNDS_CHECK_RE_TEMPLATE.format(var=re.escape(var_name))
-    )
-    for i in range(max(0, before_line - 15), before_line):
-        if pat.search(lines[i]):
-            return True
-    return False
 
 
 def _try_z3_integer_narrowing(
