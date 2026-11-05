@@ -25,7 +25,7 @@ def automatic_witness_skip_reason(file: str, cwe: str = "") -> str:
     Unknown native claims remain eligible for a possible sanitizer result.
     """
     language = language_for_file(file)
-    compiler = _COMPILERS.get(language)
+    compiler = _COMPILERS.get(language) if language is not None else None
     if compiler is None:
         return "no-independent-witness-oracle"
     label = cwe.strip().upper() if isinstance(cwe, str) else ""

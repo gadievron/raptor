@@ -387,6 +387,7 @@ def _apply_capture_ceiling(
         val = getattr(result, attr, None)
         if val is None:
             continue
+        prefix: bytes | str
         if isinstance(val, bytes):
             if len(val) <= cap:
                 continue
@@ -399,7 +400,7 @@ def _apply_capture_ceiling(
                 continue
             prefix = raw[:cap].decode("utf-8", errors="ignore")
         marker = f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
-        if isinstance(val, bytes):
+        if isinstance(prefix, bytes):
             setattr(result, attr, prefix + marker.encode("ascii"))
         else:
             setattr(result, attr, prefix + marker)

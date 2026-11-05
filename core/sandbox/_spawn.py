@@ -4331,6 +4331,7 @@ def run_sandboxed(
             # arrives regardless; only the EOF-on-death signal can be
             # withheld, which the deadline bounds.
             _tracer_ready_wait_timed_out = False
+            assert t_ready_r is not None  # The tracer-ready pipe was opened for this phase.
             try:
                 os.set_blocking(t_ready_r, False)  # type: ignore[arg-type]
                 _tr_deadline = time.monotonic() + 15.0
@@ -4644,14 +4645,14 @@ def run_sandboxed(
                         # Reap-poll cadence while the child is alive
                         # (same order as the waitpid poll loop below).
                         waits.append(0.05)
-                    ready = _readable_fds(fds, min(waits))
-                    for fd in ready:
-                        chunk = os.read(fd, 65536)
+                    _capture_ready_fds = _readable_fds(fds, min(waits))
+                    for _capture_fd in _capture_ready_fds:
+                        chunk = os.read(_capture_fd, 65536)
                         if not chunk:
-                            os.close(fd)
-                            _parent_fds.discard(fd)
-                            fds.remove(fd)
-                        elif fd == out_r:
+                            os.close(_capture_fd)
+                            _parent_fds.discard(_capture_fd)
+                            fds.remove(_capture_fd)
+                        elif _capture_fd == out_r:
                             out_len, discarded = _append_capture_chunk(
                                 stdout_chunks, out_len, chunk, _capture_cap,
                             )
@@ -4678,12 +4679,12 @@ def run_sandboxed(
                 # no later reader sees a stale buffer.
                 _materialize()
                 # Close any pipes we didn't drain (timeout, exception).
-                for fd in fds:
+                for _capture_fd in fds:
                     try:
-                        os.close(fd)
+                        os.close(_capture_fd)
                     except OSError:
                         pass
-                    _parent_fds.discard(fd)
+                    _parent_fds.discard(_capture_fd)
 
         try:
             # waitpid with a remaining timeout window. `is not None`,

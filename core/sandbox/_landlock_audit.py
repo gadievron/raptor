@@ -283,6 +283,7 @@ def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
                     return
                 try:
                     if use_pidfd:
+                        assert pidfd is not None  # The pidfd phase exists only for an opened fd.
                         signal.pidfd_send_signal(pidfd, sig)
                     else:
                         os.kill(pid, sig)
