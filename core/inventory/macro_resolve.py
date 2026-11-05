@@ -155,6 +155,20 @@ def _parse_enumerator_value(text: str, start: int) -> str:
     """Extract value from enumerator, respecting parentheses."""
     depth = 0
     i = start
+    # Native strings have immutable length; subclasses keep observable
+    # __len__ behavior on the original loop below.
+    if type(text) is str:
+        size = len(text)
+        while i < size:
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch in ",}" and depth == 0:
+                break
+            i += 1
+        return text[start:i].strip()
     while i < len(text):
         ch = text[i]
         if ch == "(":
