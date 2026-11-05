@@ -21,15 +21,12 @@ from packages.sca.calibration.stress import StressDiff, StressResult
 
 
 @pytest.fixture(autouse=True)
-def _clean_in_flight_registry():
-    """Abandoned workers deliberately keep their in-flight entries
-    (post-mortems must name them); clear the process-global registry
-    around every test so leakage stays order-independent."""
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
-    yield
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
+def _clean_in_flight_registry(monkeypatch):
+    """Own registry entries and finish test workers before restoring the caller."""
+    from core.testing.stress_state import isolated_stress_workers
+
+    with isolated_stress_workers(stress_mod, monkeypatch):
+        yield
 
 
 def _sample(name: str) -> ProjectSample:

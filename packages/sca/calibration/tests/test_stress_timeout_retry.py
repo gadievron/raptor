@@ -28,15 +28,12 @@ from packages.sca.calibration.stress import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_in_flight_registry():
-    """Abandoned workers deliberately keep their in-flight entries
-    (post-mortems must name them); clear the process-global registry
-    around every test so leakage stays order-independent."""
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
-    yield
-    with stress_mod._ACTIVE_SCANS_LOCK:
-        stress_mod._ACTIVE_SCANS.clear()
+def _clean_in_flight_registry(monkeypatch):
+    """Own registry entries and finish test workers before restoring the caller."""
+    from core.testing.stress_state import isolated_stress_workers
+
+    with isolated_stress_workers(stress_mod, monkeypatch):
+        yield
 
 
 def _sample(name: str) -> ProjectSample:
@@ -100,12 +97,18 @@ def _await_a_done_future(deadline_s: float = 30.0) -> None:
 def recording_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> "type[_RecordingExecutor]":
-    _RecordingExecutor.submitted = []
+    # Preserve the caller's recorded futures and keep the executor inside the
+    # autouse fixture's worker-ownership scope.
+    monkeypatch.setattr(_RecordingExecutor, "submitted", [])
+
+    class RecordingExecutor(_RecordingExecutor, stress_mod.concurrent.futures.ThreadPoolExecutor):
+        pass
+
     monkeypatch.setattr(
         stress_mod.concurrent.futures, "ThreadPoolExecutor",
-        _RecordingExecutor,
+        RecordingExecutor,
     )
-    return _RecordingExecutor
+    return RecordingExecutor
 
 
 def test_timeout_retry_succeeds_and_replaces_result_wholesale(
