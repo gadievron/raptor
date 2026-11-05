@@ -9,7 +9,6 @@ import pytest
 
 from packages.llm_analysis.flow_context_inject import (
     MAX_HOPS_PER_TRACE,
-    clear_flow_context_cache,
     context_blocks_for_finding,
     prepare_flow_context,
 )
@@ -17,9 +16,17 @@ from packages.llm_analysis.flow_context_inject import (
 
 @pytest.fixture(autouse=True)
 def _reset():
-    clear_flow_context_cache()
-    yield
-    clear_flow_context_cache()
+    """Restore the caller's flow-context cache after each test."""
+    from contextlib import ExitStack
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+    with ExitStack() as scope:
+        flow_mod = import_module("packages.llm_analysis.flow_context_inject")
+        scope.enter_context(isolated_module_state(
+            flow_mod, {"_FC_CACHE": {}}, lock=flow_mod._FC_LOCK,
+        ))
+        yield
 
 
 def _trace(trace_id="TRACE-001", steps=None, **extra):

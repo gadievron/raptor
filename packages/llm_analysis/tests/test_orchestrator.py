@@ -182,22 +182,25 @@ def _mock_subprocess_ok(results_by_call):
 
 @pytest.fixture(autouse=True)
 def _clear_prep_caches():
-    """orchestrate() drives the real prepare_source_intel /
-    prepare_flow_context, which populate process-global caches keyed by
-    repo path — clear around every test (matching
-    test_source_intel_inject) so entries neither accumulate for process
-    life nor cross-pollinate same-path tests."""
-    from packages.llm_analysis.flow_context_inject import (
-        clear_flow_context_cache,
-    )
-    from packages.llm_analysis.source_intel_inject import (
-        clear_si_result_cache,
-    )
-    clear_si_result_cache()
-    clear_flow_context_cache()
-    yield
-    clear_si_result_cache()
-    clear_flow_context_cache()
+    """Prepare source and flow context into private, fixture-owned caches."""
+    from contextlib import ExitStack
+    from importlib import import_module
+
+    from core.testing.module_state import isolated_module_state
+    with ExitStack() as scope:
+        inject_mod = import_module("packages.llm_analysis.source_intel_inject")
+        scope.enter_context(isolated_module_state(
+            inject_mod, {"_SI_RESULT_CACHE": {}, "_SI_FLAGS_CACHE": {}},
+            lock=inject_mod._SI_LOCK,
+        ))
+        scope.enter_context(isolated_module_state(
+            inject_mod, {"_SIG_MEMO": {}}, lock=inject_mod._SIG_MEMO_LOCK,
+        ))
+        flow_mod = import_module("packages.llm_analysis.flow_context_inject")
+        scope.enter_context(isolated_module_state(
+            flow_mod, {"_FC_CACHE": {}}, lock=flow_mod._FC_LOCK,
+        ))
+        yield
 
 
 class TestOrchestrate:

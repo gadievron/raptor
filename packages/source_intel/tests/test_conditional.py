@@ -13,12 +13,17 @@ from packages.source_intel.conditional import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache_between_tests():
-    """File-index cache is global; clear between tests so each test's
-    file content is freshly parsed."""
-    clear_cache()
-    yield
-    clear_cache()
+def _clear_cache_between_tests(monkeypatch):
+    """Wrap the parser in a private LRU, preserving the caller's warm cache."""
+    from functools import lru_cache
+    from importlib import import_module
+
+    conditional = import_module("packages.source_intel.conditional")
+    cached = conditional._index_file_stat
+    monkeypatch.setattr(
+        conditional, "_index_file_stat",
+        lru_cache(**cached.cache_parameters())(cached.__wrapped__),
+    )
 
 
 # =====================================================================
