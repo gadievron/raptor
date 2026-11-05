@@ -66,13 +66,15 @@ def reset_llm_egress_state(
     """
     from core.llm import egress
     egress._reset_for_tests()
-    for var in PROXY_ENV_VARS:
-        monkeypatch.setenv(var, "")
-        monkeypatch.delenv(var)
-    if pin_ollama_host:
-        monkeypatch.setenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
-    yield
-    egress._reset_for_tests()
+    try:
+        for var in PROXY_ENV_VARS:
+            monkeypatch.setenv(var, "")
+            monkeypatch.delenv(var)
+        if pin_ollama_host:
+            monkeypatch.setenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
+        yield
+    finally:
+        egress._reset_for_tests()
 
 
 __all__ = [
