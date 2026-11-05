@@ -94,8 +94,8 @@ class _TamperedKey:
     (or debris no honest writer produces): permission bits granted to
     group/other on an own-uid regular file (the creator opens with
     0600 atomically — umask can only narrow that), a symlink at the
-    key path, a non-regular file, or over-length content (a partial
-    32-byte creation write can be SHORT, never long).
+    key path, a non-regular file, extra hard links, or over-length
+    content (a partial 32-byte creation write can be SHORT, never long).
 
     Deliberately NOT ``_REFUSED``: refusing forever turns a same-uid
     ``chmod g+r`` — cheap from any lane whose DAC reaches the key,
@@ -145,8 +145,8 @@ def _read_existing_key(path: Path):
 
     Returns the raw bytes, ``None`` (absent), ``_REFUSED``
     (foreign-owned / unreadable — unattributable, never recovered),
-    or a ``_TamperedKey`` (own-uid symlink, non-regular file, or
-    group/other permission bits — states no honest writer
+    or a ``_TamperedKey`` (own-uid symlink, non-regular file, extra
+    hard links, or group/other permission bits — states no honest writer
     produces; the caller quarantines and re-keys)."""
     try:
         # O_NONBLOCK lets fstat reject a FIFO without waiting for a
@@ -182,6 +182,9 @@ def _read_existing_key(path: Path):
             return _REFUSED
         if not stat.S_ISREG(st.st_mode):
             return _TamperedKey("not a regular file")
+        if st.st_nlink > 1:
+            return _TamperedKey(
+                f"key has {st.st_nlink} hard links (expected one)")
         if st.st_mode & 0o077:
             return _TamperedKey(
                 f"mode {stat.S_IMODE(st.st_mode):04o} grants "
