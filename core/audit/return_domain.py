@@ -538,6 +538,7 @@ def _find_definitions(
 # ── domain derivation ────────────────────────────────────────────────
 
 
+_GUARD_IFNDEF_START_RE = re.compile(r"#\s*ifndef\b")
 _GUARD_COND_RE = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
 _GUARD_IFNDEF_RE = re.compile(r"^\s*#\s*ifndef\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
 _GUARD_ENDIF_RE = re.compile(r"^\s*#\s*endif\b")
@@ -555,6 +556,11 @@ def _strip_include_guard(text: str) -> str:
     conditional is ``#ifndef X`` immediately followed by
     ``#define X`` (bare), and its matching ``#endif`` closes the file.
     """
+    # A recognised guard must contain this prefix. Positive matches still
+    # pass through the full line-based parser, including its Unicode line
+    # model. Keep subclasses on their existing splitlines path.
+    if type(text) is str and _GUARD_IFNDEF_START_RE.search(text) is None:
+        return text
     lines = text.splitlines()
     first = None
     for i, ln in enumerate(lines):
