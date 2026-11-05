@@ -1908,3 +1908,75 @@ def test_flow_warnings_keep_original_finding_index_after_a_skipped_primary(tmp_p
     warning = next(warning for warning in imported.warnings if warning.field == 'dataflow_path')
     assert warning.finding_index == 1
     assert len(imported.findings) == 1
+
+
+def test_snippet_batch_refuses_an_oversized_file_once_for_all_findings(tmp_path, monkeypatch, caplog):
+    import core.sarif.import_normalizer as normalizer
+
+    root = _source_tree(tmp_path)
+    monkeypatch.setattr(normalizer, '_SNIPPET_SOURCE_MAX_BYTES', 0)
+    imported = normalize_imported_findings([
+        _make_finding(startLine=line, endLine=line) for line in [1, 2, 3]
+    ], root)
+    assert len(imported.findings) == 3
+    assert imported.stats.snippet_synthesized == 0
+    warnings = [record for record in caplog.records if 'oversized' in record.message]
+    assert len(warnings) == 1
+
+
+def test_snippet_reader_confines_files_to_source_root_and_allows_in_root_links(tmp_path):
+    from core.sarif.import_normalizer import _synthesize_snippet
+
+    root = tmp_path / 'source'
+    root.mkdir()
+    (root / 'inside.c').write_text('inside\n')
+    (tmp_path / 'outside.c').write_text('outside\n')
+    (root / 'outside-link.c').symlink_to(tmp_path / 'outside.c')
+    (root / 'inside-link.c').symlink_to(root / 'inside.c')
+    assert _synthesize_snippet(root, '../outside.c', 1, 1) == ''
+    assert _synthesize_snippet(root, 'outside-link.c', 1, 1) == ''
+    assert _synthesize_snippet(root, 'inside-link.c', 1, 1) == 'inside'
+
+
+def test_snippets_read_each_file_once_and_release_lines_between_files(tmp_path, monkeypatch):
+    import weakref
+    import core.sarif.import_normalizer as normalizer
+
+    class Tracked(list):
+        pass
+
+    root = _source_tree(tmp_path)
+    original = normalizer._read_snippet_lines
+    reads = []
+    references = []
+
+    def read(source_root, rel_path):
+        assert all(reference() is None for reference in references), 'previous file lines survived into the next read'
+        lines = Tracked(original(source_root, rel_path))
+        reads.append(rel_path)
+        references.append(weakref.ref(lines))
+        return lines
+
+    monkeypatch.setattr(normalizer, '_read_snippet_lines', read)
+    imported = normalize_imported_findings([
+        _make_finding(startLine=1, endLine=1),
+        _make_finding(file='src/main.c', startLine=1, endLine=1),
+        _make_finding(startLine=2, endLine=2),
+        _make_finding(startLine=3, snippet='supplied snippet'),
+    ], root)
+    assert reads == ['src/auth.c', 'src/main.c']
+    assert all(reference() is None for reference in references)
+    assert imported.stats.snippet_synthesized == 3
+    assert imported.findings[0]['snippet'].startswith('int check_password(')
+    assert imported.findings[1]['snippet'] == 'int main() { return 0; }'
+    assert imported.findings[2]['snippet'].startswith('    // line 2\n')
+    assert imported.findings[3]['snippet'] == 'supplied snippet'
+
+
+def test_snippet_batches_do_not_cache_source_across_imports(tmp_path):
+    root = _source_tree(tmp_path)
+    first = normalize_imported_findings([_make_finding(startLine=1, endLine=1)], root)
+    (root / 'src' / 'auth.c').write_text('updated source\n')
+    second = normalize_imported_findings([_make_finding(startLine=1, endLine=1)], root)
+    assert first.findings[0]['snippet'].startswith('int check_password(')
+    assert second.findings[0]['snippet'] == 'updated source'

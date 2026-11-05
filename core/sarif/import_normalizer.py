@@ -18,6 +18,8 @@ from typing import Any, Callable
 from urllib.parse import unquote
 
 from core.logging import get_logger
+from core.paths import confine
+from core.source.beneath import open_regular_beneath
 from core.sarif import emit
 from core.sarif.parser import _coerce_line, _sanitize_step_properties, _scope_fingerprint
 from core.security.log_sanitisation import escape_nonprintable
@@ -431,72 +433,50 @@ _SNIPPET_CONTEXT_LINES = 3
 _SNIPPET_SOURCE_MAX_BYTES = 10 * 1024 * 1024
 
 
+def _read_snippet_lines(source_root: Path, rel_path: str) -> list[str] | None:
+    """Read one contained regular source file, with the size gate on its fd."""
+    resolved = confine(source_root, rel_path)
+    if resolved is None:
+        return None
+    try:
+        root = source_root.resolve()
+        relative = resolved.relative_to(root)
+        fh = open_regular_beneath(root, relative, "rb")
+        if fh is None:
+            return None
+        with fh:
+            st = os.fstat(fh.fileno())
+            if not _stat_mod.S_ISREG(st.st_mode):
+                return None
+            if st.st_size > _SNIPPET_SOURCE_MAX_BYTES:
+                logger.warning(
+                    "SARIF import: skipping snippet synthesis for oversized "
+                    "file (>%d MiB): %s",
+                    _SNIPPET_SOURCE_MAX_BYTES // (1024 * 1024),
+                    escape_nonprintable(rel_path),
+                )
+                return None
+            raw = fh.read(_SNIPPET_SOURCE_MAX_BYTES + 1)
+        if len(raw) > _SNIPPET_SOURCE_MAX_BYTES:
+            return None  # grew past the cap during the read
+        return split_lines(raw.decode("utf-8", errors="replace"))
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _snippet_from_lines(lines: list[str], start_line: int, end_line: int | None) -> str:
+    start = max(0, start_line - 1)
+    end = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
+    return "\n".join(lines[start:end])
+
+
 def _synthesize_snippet(
     source_root: Path, rel_path: str,
     start_line: int, end_line: int | None,
 ) -> str:
-    """Read the finding's source lines plus trailing context.
-
-    The snippet starts at ``start_line`` (no leading context) and
-    extends ``_SNIPPET_CONTEXT_LINES`` lines past the finding's end.
-    Files larger than ``_SNIPPET_SOURCE_MAX_BYTES`` are skipped (the
-    finding keeps flowing, just without a synthesized snippet).
-    """
-    # Gated read on the OPEN fd: the file lives in the UNTRUSTED
-    # scanned tree and the (also untrusted) SARIF picks which path is
-    # read, so both the size gate and the file-type gate must hold on
-    # the fd actually read — a stat-by-name gate misses a FIFO
-    # planted in the tree (stats 0 bytes, then blocks the import
-    # stage forever at the open) and a swap-after-stat grow.
-    full = source_root / rel_path
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-    try:
-        fd = os.open(str(full), flags)
-    except OSError:
-        return ""
-    try:
-        st = os.fstat(fd)
-        if not _stat_mod.S_ISREG(st.st_mode):
-            # rel_path is a filename from the UNTRUSTED scanned tree
-            # (archives/git admit control bytes in names) and these
-            # WARNINGs reach the operator terminal raw through the
-            # console handler — escape at creation, like the module's
-            # ImportWarning messages and parser.py's out-of-root twin.
-            logger.warning(
-                "SARIF import: skipping snippet synthesis for "
-                "non-regular file: %s",
-                escape_nonprintable(rel_path),
-            )
-            return ""
-        if st.st_size > _SNIPPET_SOURCE_MAX_BYTES:
-            logger.warning(
-                "SARIF import: skipping snippet synthesis for oversized "
-                "file (>%d MiB): %s",
-                _SNIPPET_SOURCE_MAX_BYTES // (1024 * 1024),
-                escape_nonprintable(rel_path),
-            )
-            return ""
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
-            raw = fh.read(_SNIPPET_SOURCE_MAX_BYTES + 1)
-        if len(raw) > _SNIPPET_SOURCE_MAX_BYTES:
-            return ""  # grew past the cap during the read
-        lines = split_lines(raw.decode("utf-8", errors="replace"))
-        s = max(0, start_line - 1)
-        e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
-        return "\n".join(lines[s:e])
-    except OSError:
-        return ""
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+    """Read source lines plus trailing context; refuse oversized or uncontained files."""
+    lines = _read_snippet_lines(source_root, rel_path)
+    return _snippet_from_lines(lines, start_line, end_line) if lines is not None else ""
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +589,7 @@ def normalize_imported_findings(
     resolved_memo: dict[str, str] = {}
     scan_clock: list[float] = [0.0]
     pending_dataflows: list[tuple[int, dict[str, Any]]] = []
+    pending_snippets: dict[str, list[dict[str, Any]]] = {}
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
@@ -666,15 +647,10 @@ def normalize_imported_findings(
             end_line = start_line
         finding["endLine"] = end_line
 
-        # --- snippet synthesis ---
+        # Defer source reads until locations are known, grouping all spans
+        # for a file so it is opened, decoded and split only once.
         if not finding.get("snippet"):
-            snippet = _synthesize_snippet(
-                source_root, resolved,
-                start_line, finding.get("endLine"),
-            )
-            if snippet:
-                finding["snippet"] = snippet
-                result.stats.snippet_synthesized += 1
+            pending_snippets.setdefault(resolved, []).append(finding)
 
         # --- CWE inference ---
         if not finding.get("cwe_id"):
@@ -708,6 +684,20 @@ def normalize_imported_findings(
         result.findings.append(finding)
         if finding.get("has_dataflow"):
             pending_dataflows.append((idx, finding))
+
+    def fill_snippets(rel_path: str, findings_for_file: list[dict[str, Any]]) -> None:
+        lines = _read_snippet_lines(source_root, rel_path)
+        if lines is None:
+            return
+        for finding in findings_for_file:
+            snippet = _snippet_from_lines(lines, finding["startLine"], finding.get("endLine"))
+            if snippet:
+                finding["snippet"] = snippet
+                result.stats.snippet_synthesized += 1
+
+    # Function scope releases each file's decoded lines before the next read.
+    for rel_path, findings_for_file in pending_snippets.items():
+        fill_snippets(rel_path, findings_for_file)
 
     # Primary finding locations get the URI scan budget first. Optional flow
     # hops then reuse the same successes, failed-URI memo and remaining budget.
