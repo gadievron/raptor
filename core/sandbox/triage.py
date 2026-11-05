@@ -338,7 +338,18 @@ def _verify_summary(
     the summariser wrote is "this run's evidence was tampered with"."""
     if summary is None:
         return None, _INTEGRITY_VERIFIED
+    # Shape checks precede both legacy acceptance and MAC construction.
+    # Parsed JSON can still carry values unsuitable for counters or rows.
+    if not isinstance(summary, dict):
+        return None, _INTEGRITY_TAMPERED
     corrupt_lines = summary.get("corrupt_lines", 0)
+    total_denials = summary.get("total_denials", 0)
+    denials = summary.get("denials", [])
+    if (type(corrupt_lines) is not int or corrupt_lines < 0
+            or type(total_denials) is not int or total_denials < 0
+            or not isinstance(denials, list)
+            or not all(isinstance(row, dict) for row in denials)):
+        return None, _INTEGRITY_TAMPERED
     inode_mismatch = bool(summary.get("inode_mismatch"))
     planted_object = str(summary.get("planted_object") or "")
     writer_flagged = (bool(corrupt_lines) or inode_mismatch
