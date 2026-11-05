@@ -101,6 +101,14 @@ def validate_user_state(paths: list[Path], frontend: str | None = None) -> None:
     for path in paths:
         if path == home or path in home.parents:
             raise ProtectionError('protected code covers the user home; keep installation and user state separate')
+    if frontend == 'codex':
+        configuration = physical_path(Path(os.environ.get('CODEX_HOME') or home / '.codex'), strict=False)
+        for path in paths:
+            covers_config = path == configuration or path in configuration.parents
+            foreign_config = configuration in path.parents and not (path == ROOT or ROOT in path.parents)
+            if covers_config or foreign_config:
+                raise ProtectionError('protected code overlaps Codex user configuration; use independent installation content')
+        return
     if frontend != 'claude':
         return
     configuration = physical_path(Path(os.environ.get('CLAUDE_CONFIG_DIR') or home / '.claude'), strict=False)
@@ -776,7 +784,7 @@ def main() -> int:
             return 0
         frontend = None
         if arguments[:1] == ["--frontend"]:
-            if len(arguments) < 4 or arguments[1] != "claude":
+            if len(arguments) < 4 or arguments[1] not in {"claude", "codex"}:
                 raise ProtectionError("invalid frontend identity")
             frontend = arguments[1]
             arguments = arguments[2:]

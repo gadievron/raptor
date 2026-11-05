@@ -1,5 +1,6 @@
 """Real same-user IPC with a live identity-stamped owner; no command rewrite."""
 import select
+from pathlib import Path
 import os
 import subprocess
 import sys
@@ -363,3 +364,24 @@ def test_other_root_child_cannot_consume_root_receipt(child_outcome, monkeypatch
     finally:
         environment.restore(other)
         assert sessions.end_codex_session(process.pid, credential[1])
+
+
+@pytest.fixture
+def delayed_broker_start(monkeypatch):
+    original = subprocess.Popen
+    def spawn(command, *args, **kwargs):
+        if (len(command) >= 3 and
+                Path(command[2]).name == 'raptor-codex-env-broker'):
+            command = [command[0], '-I', '-c',
+                       'import runpy,sys,time; time.sleep(3.2); '
+                       'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")',
+                       *command[2:]]
+        return original(command, *args, **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', spawn)
+
+
+def test_broker_startup_allows_slower_interpreter_initialization(delayed_broker_start, host):
+    sid, process, credential = host
+    values = broker.request(sid, {'op': 'environment'})['environment']
+    assert values['RAPTOR_SESSION_PID'] == str(process.pid)
+    assert values['RAPTOR_SESSION_TOKEN'] == credential[1]

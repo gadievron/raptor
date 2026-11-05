@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux protection bootstrap')
-def test_protection_bootstrap_skips_environment_site_hooks(tmp_path):
+@pytest.mark.parametrize('frontend_name,explicit_codex', [('claude', False), ('codex', True), ('codex', False)])
+def test_protection_bootstrap_skips_environment_site_hooks(tmp_path, frontend_name, explicit_codex):
     import venv
     environment = tmp_path / 'python-environment'
     venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
@@ -31,10 +32,11 @@ def test_protection_bootstrap_skips_environment_site_hooks(tmp_path):
     (install / 'core/startup').mkdir()
     # Bootstrap oracle only: exit before namespace setup or frontend execution.
     (install / 'core/startup/install_guard.py').write_text(
-        'import json,sys\nprint(json.dumps([sys.flags.no_site, sys.dont_write_bytecode]))\n')
+        'import json,sys\nprint(json.dumps([sys.flags.no_site, sys.dont_write_bytecode, '
+        'sys.argv[sys.argv.index("--frontend")+1]]))\n')
     stubs = tmp_path / 'stubs'
     stubs.mkdir()
-    frontend = stubs / 'claude'
+    frontend = stubs / frontend_name
     frontend.write_text('#!/bin/sh\nexit 99\n')
     frontend.chmod(0o755)
     home = tmp_path / 'home'
@@ -49,10 +51,11 @@ def test_protection_bootstrap_skips_environment_site_hooks(tmp_path):
     assert control.returncode == 0, control.stderr
     assert marker.exists()
     marker.unlink()
-    result = subprocess.run(['/bin/bash', str(install / 'bin/raptor'), '--protect-install'],
+    result = subprocess.run(['/bin/bash', str(install / 'bin/raptor'), '--protect-install',
+                             *(['--codex'] if explicit_codex else [])],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [1, True]
+    assert json.loads(result.stdout) == [1, True, frontend_name]
     assert not marker.exists()
 
 

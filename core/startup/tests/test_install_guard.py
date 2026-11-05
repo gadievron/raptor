@@ -897,3 +897,20 @@ def test_precompile_without_affinity_validates_all_sources_serially(tmp_path, mo
     for index in range(10):
         source = tmp_path / f'module{index}.py'
         assert Path(importlib.util.cache_from_source(str(source))).read_bytes() == guard._compile_bytecode(source.read_bytes(), str(source))
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_codex_user_configuration_must_remain_outside_protected_code(tmp_path, monkeypatch, override):
+    home = tmp_path / 'home'
+    home.mkdir()
+    root = tmp_path / 'install'
+    root.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(guard, 'ROOT', root)
+    configuration = tmp_path / 'codex-state' if override else home / '.codex'
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    if override:
+        monkeypatch.setenv('CODEX_HOME', str(configuration))
+    guard.validate_user_state([root], 'codex')
+    with pytest.raises(guard.ProtectionError, match='Codex user configuration'):
+        guard.validate_user_state([root, configuration], 'codex')

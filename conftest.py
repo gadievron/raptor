@@ -468,17 +468,28 @@ _SESSIONS_DIR_SEQ = _itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def _registry_paths(_llm_egress_env_hermetic):
-    """Keep registry isolation outside the test body's undo stack.
-
-    A unique, never-created base avoids pytest's numbered-directory scan per
-    test. Writers create it on demand inside the session-owned scratch tree.
-    One registry-home value also keeps reloaded modules and children aligned
-    with the in-process project, active-link and session overrides.
-    """
-    from core.testing.state_isolation import pin_user_state_dirs
-
-    base = (
+def _sessions_registry_in_tmp(monkeypatch):
+    # An agent running pytest is not the logical owner of each test's runs.
+    # Tests for Codex restoration establish their own context after this reset.
+    for key in list(os.environ):
+        if key.startswith("RAPTOR_CODEX_") or key in {
+            "CODEX", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_TOOL_CALL_ID",
+        }:
+            monkeypatch.delenv(key, raising=False)
+    # The redirect target is a UNIQUE PATH, not a pytest ``tmp_path``:
+    # requesting ``tmp_path`` here made every test in the suite allocate
+    # a numbered dir under the session basetemp, and pytest's
+    # ``make_numbered_dir`` scans the basetemp per allocation — a cost
+    # that grows with every test the session has already run (~30ms per
+    # SETUP by the 10k-test mark, minutes of pure setup overhead across
+    # a full single-process run). Nothing here needs a directory up
+    # front: registry writers ``mkdir(parents=True)`` on demand and
+    # readers treat a missing dir as an empty registry, so a fresh
+    # never-created path per test keeps the write-isolation guarantee
+    # at zero allocation cost. Created dirs land under the contained
+    # session tmp (``_contained_system_tmp``) and are removed with it.
+    from core.project import sessions as _sessions
+    unique = (
         Path(_tempfile.gettempdir())
         / f"raptor-test-registries-{os.getpid()}-{next(_SESSIONS_DIR_SEQ)}"
     )

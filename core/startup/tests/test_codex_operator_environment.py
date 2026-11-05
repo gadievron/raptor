@@ -17,7 +17,8 @@ pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='live Linux owne
 
 def test_operator_vocabulary_reuses_shared_policy(monkeypatch):
     for key in (*RaptorConfig.LLM_API_KEY_VARS, *RaptorConfig.LLM_ROUTING_ENV_VARS,
-                'RAPTOR_CONFIG', 'RAPTOR_OUT_DIR', 'RAPTOR_BEDROCK_MODEL'):
+                'RAPTOR_CONFIG', 'RAPTOR_OUT_DIR', 'RAPTOR_BEDROCK_MODEL',
+                '_RAPTOR_JOERN_TMP_BASE', '_RAPTOR_SERVICE_TMP_BASE'):
         assert operator.allowed_name(key)
     for key in ('BASH_ENV', 'PYTHONPATH', 'LD_PRELOAD', 'RAPTOR_SESSION_TOKEN',
                 'RAPTOR_LLM_TOKEN_FD', 'RAPTOR_LLM_SOCKET', 'RAPTOR_DIR'):
@@ -29,7 +30,9 @@ def test_filtered_dispatch_recovers_launch_settings(request, monkeypatch, hidden
     # Set before starting the broker so filtering happens after publication.
     values = {'RAPTOR_CONFIG': '/operator/models.json',
               'RAPTOR_OUT_DIR': '/operator/results', 'GEMINI_API_KEY': 'fake-key',
-              'AWS_PROFILE': 'fixture-profile', 'RAPTOR_CC_MODEL': 'fixture-model'}
+              'AWS_PROFILE': 'fixture-profile', 'RAPTOR_CC_MODEL': 'fixture-model',
+              '_RAPTOR_JOERN_TMP_BASE': '/operator/service-scratch',
+              '_RAPTOR_SERVICE_TMP_BASE': '/operator/service-scratch'}
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)

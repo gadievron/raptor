@@ -25,6 +25,10 @@ def launch(tmp_path):
     install = tmp_path / 'install'
     for folder in ('bin', 'core/security', 'libexec'):
         (install / folder).mkdir(parents=True, exist_ok=True)
+    # Exercise the real launcher boundary, including scratch supervision.
+    for name in ('launch_scratch.py', 'scratch_lifecycle.py', 'scratch_supervisor.py',
+                 'cgroup_scope.py', 'log_sanitisation.py'):
+        shutil.copy2(ROOT / 'core/security' / name, install / 'core/security' / name)
     shutil.copy2(ROOT / 'bin/raptor', install / 'bin/raptor')
     shutil.copy2(ROOT / 'libexec/raptor-session-init', install / 'libexec/raptor-session-init')
     shutil.copy2(ROOT / 'core/security/_dangerous_env_strip.sh', install / 'core/security/_dangerous_env_strip.sh')
@@ -59,7 +63,7 @@ print(json.dumps({'cli':Path(sys.argv[0]).name,'args':sys.argv[1:],'cwd':os.getc
             path.chmod(0o755)
         env={'PATH':str(stubs)+':/usr/bin:/bin','HOME':str(home),'TMPDIR':str(scratch),
              'RAPTOR_REGISTRY_HOME':str(tmp_path/'registry'), **(extra or {})}
-        result=subprocess.run(['/bin/bash',str(install/'bin/raptor'),*args],cwd=home,env=env,capture_output=True,text=True,timeout=20)
+        result=subprocess.run(['/bin/bash',str(install/'bin/raptor'),'--allow-degraded-cleanup',*args],cwd=home,env=env,capture_output=True,text=True,timeout=20)
         payload=next((json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')),None)
         return result,payload
     return run
@@ -86,6 +90,7 @@ def test_backend_preference_and_shared_session_seed(launch,clis,args,expected):
 @pytest.mark.parametrize('clis,args,message', [
     (['claude'], ['--codex'], '--codex requested but codex not found'),
     ([], [], 'neither claude nor codex found'),
+    ([], ['--codex'], '--codex requested but codex not found'),
     (['codex'], ['--codex','-v'], 'supported only by Claude'),
 ])
 def test_selection_errors_do_not_launch_another_cli(launch,clis,args,message):

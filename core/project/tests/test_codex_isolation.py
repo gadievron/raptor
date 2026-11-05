@@ -479,3 +479,15 @@ def test_already_retired_launcher_seed_is_an_idempotent_handoff(launcher_seed, m
     assert seed(ROOT_A)
     assert sessions.session_binding() == ('launcher-project', 'bound')
     assert len(sessions.all_sessions(prune=False)) == 1
+
+
+def test_launcher_handoff_preserves_scratch_metadata(launcher_seed):
+    seed, base = launcher_seed
+    fields = sessions._parse_entry(base)
+    fields['scratch_metadata'] = '/private/session/metadata/launch.json'
+    sessions._atomic_write(base, sessions._entry_content(fields['project'], fields))
+    assert seed(ROOT_A)
+    assert not base.exists()
+    scoped = sessions._parse_entry(sessions._sessions_dir() / str(PID))
+    assert scoped['scratch_metadata'] == fields['scratch_metadata']
+    assert scoped['token'] != fields['token']

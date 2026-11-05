@@ -561,7 +561,7 @@ def main() -> int:
              "RAPTOR_NO_SANDBOX_NONCE") if keep_trust_markers
             else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
                   "_RAPTOR_TRUSTED", "CLAUDECODE", "CODEX",
-                  "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                  "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_TOOL_CALL_ID",
                   "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_CODEX_HOOK",
                   "RAPTOR_CODEX_HOOK_ROOT",
                   "RAPTOR_CODEX_CONTEXT_ID",
