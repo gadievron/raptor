@@ -520,6 +520,10 @@ def _edges_for_event(
     return edges
 
 
+_EVENT_CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+_EVENT_SPACE_RE = re.compile(r"\s+")
+
+
 def _find_events(
     segment_lines: list[str],
     start_line: int,
@@ -535,6 +539,10 @@ def _find_events(
     pattern = _event_call_re(names)
     events: list[dict[str, Any]] = []
     for offset, text in enumerate(segment_lines):
+        native_line = type(text) is str
+        if native_line and "(" not in text:
+            continue
+        site_code: str | None = None
         for m in pattern.finditer(text):
             verb, target = m.group(1), m.group(2)
             source = _event_vocab_source(verb, vocab)
@@ -543,18 +551,20 @@ def _find_events(
             # A member-expression argument (``free(conn->scratch)``)
             # releases the FIELD's referent, not the base object:
             # record which field so edge matching can require it.
-            chain = re.findall(r"[A-Za-z_]\w*", m.group(3) or "")
-            events.append({
+            chain_text = m.group(3) or ""
+            chain = _EVENT_CHAIN_IDENT_RE.findall(chain_text)
+            site = {
                 "verb": verb,
                 "target": target,
                 "target_field": chain[-1] if chain else None,
-                "target_expr": re.sub(
-                    r"\s+", "", target + (m.group(3) or ""),
-                ),
+                "target_expr": _EVENT_SPACE_RE.sub("", target + chain_text),
                 "line": start_line + offset,
-                "code": text.strip()[:200],
+                "code": site_code if site_code is not None else text.strip()[:200],
                 "vocab_source": source,
-            })
+            }
+            events.append(site)
+            if native_line:
+                site_code = site["code"]
     return events
 
 
@@ -597,7 +607,10 @@ def _invalidation_receipt(
     if pattern is not None:
         for offset in range(event_line - function_span.start,
                             len(lines)):
-            if pattern.search(lines[offset]):
+            text = lines[offset]
+            if type(text) is str and "=" not in text:
+                continue
+            if pattern.search(text):
                 return {
                     "kind": "null-write",
                     "line": function_span.start + offset,
@@ -636,14 +649,19 @@ def _post_event_reads(
     rec = census.fields.get(edge.name)
     if rec is None:
         return []
-    out: list[dict[str, Any]] = [{
+    out: list[dict[str, Any]] = []
+    for r in rec.reads:
+        if r.function != event_function or r.line > event_line:
+            out.append({
                 "file": r.file,
                 "line": r.line,
                 "function": r.function,
                 "context": r.context,
                 "code": r.code,
-            } for r in rec.reads if r.function != event_function or r.line > event_line]
-    return out[:3]
+            })
+            if len(out) == 3:
+                break
+    return out
 
 
 def _local_post_event_reads(
@@ -669,7 +687,9 @@ def _local_post_event_reads(
                 "context": "expr",
                 "code": text.strip()[:200],
             })
-    return out[:3]
+            if len(out) == 3:
+                break
+    return out
 
 
 def _local_alias_escapes(
@@ -699,7 +719,10 @@ def _local_alias_escapes(
     start_off = max(edge.line - function_span.start + 1, 0)
     end_off = min(event_line - function_span.start, len(lines))
     for offset in range(start_off, end_off):
-        m = call_re.search(lines[offset])
+        text = lines[offset]
+        if type(text) is str and "(" not in text:
+            continue
+        m = call_re.search(text)
         if m and m.group(1) not in known_functions and \
                 _event_vocab_source(m.group(1)) is None:
             return (

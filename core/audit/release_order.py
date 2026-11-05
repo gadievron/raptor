@@ -390,6 +390,11 @@ def _call_args(code: str, open_paren_end: int) -> list[str]:
     return args
 
 
+_DEST_TERNARY_RE = re.compile(r".+\?\s*([^\s:](?:[^:\n]*[^\s:])?)\s*:\s*(.+)")
+_DEST_BASE_RE = re.compile(r"[&*]*\s*([A-Za-z_]\w*)\s*$")
+_DEST_CALL_RE = re.compile(r"([A-Za-z_]\w*)\s*\(")
+
+
 def _classify_destination(
     dest: str,
     segment_lines: list[str],
@@ -406,6 +411,8 @@ def _classify_destination(
     classes: set[str] = set()
     assign_re = re.compile(rf"\b{re.escape(dest)}\s*=\s*([^;=][^;]*)")
     for raw in segment_lines:
+        if type(raw) is str and "=" not in raw:
+            continue
         code = raw.split("//", 1)[0]
         m = assign_re.search(code)
         if not m:
@@ -421,14 +428,12 @@ def _classify_destination(
         # are unchanged; only invalid shapes (whitespace-only or
         # colon-leading true-arm) no longer match, and those arms
         # classified as garbage either way.
-        cond = re.match(
-            r".+\?\s*([^\s:](?:[^:\n]*[^\s:])?)\s*:\s*(.+)", rhs,
-        )
+        cond = _DEST_TERNARY_RE.match(rhs)
         arms = [cond.group(1), cond.group(2)] if cond else [rhs]
         for arm in arms:
             arm = arm.strip()
-            base = re.match(r"[&*]*\s*([A-Za-z_]\w*)\s*$", arm)
-            call = re.match(r"([A-Za-z_]\w*)\s*\(", arm)
+            base = _DEST_BASE_RE.match(arm)
+            call = _DEST_CALL_RE.match(arm)
             if base and base.group(1) in params:
                 classes.add("escaping")
             elif call and call.group(1) in _DESCRIPTOR_CONSTRUCTORS:
@@ -512,14 +517,17 @@ def _status_bindings(
         rf"(?:\b([A-Za-z_]\w*)\s*=\s*)?\b{re.escape(finalizer)}\s*\(",
     )
     for idx, raw in enumerate(segment_lines):
+        if type(raw) is str and "(" not in raw:
+            continue
         code = raw.split("//", 1)[0]
         m = call_re.search(code)
         if not m:
             continue
         if not first_line:
             first_line = span_start + idx
-        if m.group(1) and m.group(1) not in bindings:
-            bindings.append(m.group(1))
+        binding = m.group(1)
+        if binding and binding not in bindings:
+            bindings.append(binding)
     return bindings, first_line
 
 
