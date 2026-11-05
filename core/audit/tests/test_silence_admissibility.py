@@ -953,7 +953,7 @@ class TestToolRefutedNeedsProbativeRefutation:
         assert [o["kind"] for o in obs] == []
         assert stored == []
 
-    def test_control_probative_refutation_is_recorded(self, monkeypatch):
+    def test_control_probative_refutation_is_recorded(self, monkeypatch, tmp_path):
         """Control: a probative channel still records and stores the
         tool_refutation."""
         from core.audit.orchestrator import _accumulate_observations
@@ -969,9 +969,18 @@ class TestToolRefutedNeedsProbativeRefutation:
             tools_dispatched={"semgrep", "smt"},
             tools_inconclusive={"smt"},
         )
+        from core.audit.refutation_source import capture_source_identity
+        from core.audit.verification_results import ClaimRefutation, ProbeOutcome
+
+        (tmp_path / "a.php").write_text("<?php function q() {}")
+        outcome.claim_refutations = (ClaimRefutation(
+            outcome.file, outcome.function, outcome.line, outcome.hypothesis,
+            (ProbeOutcome("semgrep", "refuted", "specific-rule"),),
+            capture_source_identity(tmp_path, outcome.file),
+        ),)
         _accumulate_observations(
             obs, outcome, {"file": "a.php", "name": "q"},
-            sweep_pre_status="finding",
+            sweep_pre_status="finding", target_path=tmp_path,
         )
         assert [o["kind"] for o in obs] == ["tool_refutation"]
         assert stored == ["tool_refutation"]
