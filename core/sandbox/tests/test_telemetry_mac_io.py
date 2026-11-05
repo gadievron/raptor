@@ -61,9 +61,14 @@ def test_failed_creation_never_returns_an_unpersisted_key(monkeypatch, failure):
     with pytest.raises(OSError) as exc:
         os.fstat(calls[0])
     assert exc.value.errno == errno.EBADF
-    # Preserve partial content: removing a path here could disturb a
-    # concurrent creator. Existing short-key refusal handles recovery.
-    assert len(tmac._key_path().read_bytes()) == 5
+    # Failed exclusive creation removes only its own incomplete inode.
+    # A later healthy call can create a usable key instead of refusing forever.
+    assert not tmac._key_path().exists()
+    monkeypatch.setattr(tmac.os, "write", real_write)
+    monkeypatch.setattr(tmac.os, "close", real_close)
+    token = tmac.mint({"kind": "proxy-event"})
+    assert token
+    assert tmac.verify({"kind": "proxy-event"}, token)
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires FIFO support")
