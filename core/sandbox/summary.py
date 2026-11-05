@@ -755,14 +755,22 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     (apparmor sysctl=1) sees no summary and may interpret it as "audit
     found nothing" rather than "audit didn't actually happen".
 
-    Idempotent across multiple sandbox calls in one run: writes once,
-    skips on subsequent calls. Safe to invoke from each per-call site
-    that detected degradation.
+    Idempotent across multiple sandbox calls in one run: the first
+    parent-memory payload owns the marker, including while its write is
+    pending. Finalization retries failed writes and detects later deletion.
+    Safe to invoke from each per-call site that detected degradation.
     """
     run_dir = Path(run_dir)
     out = run_dir / AUDIT_DEGRADED_FILE
-    if out.exists():
+    try:
+        run_key = str(run_dir.resolve())
+    except OSError:
+        logger.warning("record_audit_degraded: cannot resolve run directory",
+                       exc_info=True)
         return
+    with _lock:
+        if run_key in _degraded_markers:
+            return
     payload = {
         "audit_requested": True,
         "audit_engaged": False,
@@ -784,34 +792,30 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     # marker in an unparseable state, and operator tooling treats
     # "corrupt marker" as "audit engaged" (safest default) — silently
     # hiding the degradation signal we needed to surface.
-    persisted = True
     try:
-        write_text_atomically(
-            out,
-            dumps_artifact(payload, ensure_ascii=True) + "\n",
-            tmp_prefix=".~audit-degraded-",
-        )
-    except OSError:
-        persisted = False
+        text = dumps_artifact(payload, ensure_ascii=True) + "\n"
+    except (ValueError, TypeError, RecursionError):
+        logger.warning("record_audit_degraded: marker serialization failed",
+                       exc_info=True)
+        return
+    with _lock:
+        # Claim once in parent memory, never by trusting the target-writable
+        # pathname. A pending writer also owns the slot, so concurrent calls
+        # cannot replace its payload or race its atomic write.
+        if run_key in _degraded_markers:
+            return
+        entry = {"payload": payload, "restored": False, "persisted": False}
+        _degraded_markers[run_key] = entry
+    try:
+        write_text_atomically(out, text, tmp_prefix=".~audit-degraded-")
+    except (OSError, ValueError, TypeError):
         logger.warning(
             "record_audit_degraded: marker write failed; retaining state "
             "for finalization retry under %s", run_dir, exc_info=True,
         )
-    except (ValueError, TypeError):
-        # An unserialisable payload cannot be retried safely.
-        logger.warning("record_audit_degraded: marker serialization failed",
-                       exc_info=True)
-        return
-    # Retain both persisted markers and pending writes. Only a marker known
-    # to have reached disk can later support a deletion/tampering claim.
-    run_key = str(run_dir.resolve())
-    with _lock:
-        prev = _degraded_markers.get(run_key)
-        _degraded_markers[run_key] = {
-            "payload": payload,
-            "restored": bool(prev and prev.get("restored")),
-            "persisted": persisted or bool(prev and prev.get("persisted", True)),
-        }
+    else:
+        with _lock:
+            entry["persisted"] = True
 
 
 def _read_marker_bytes(path: Path) -> bytes | None:
