@@ -189,3 +189,85 @@ def test_non_optional_import_ignored(det, tmp_path):
     })
     findings, _ = det.scan(root)
     assert findings == {}
+
+
+@pytest.mark.parametrize("statement", [
+    "import ａｎｔｈｒｏｐｉｃ",
+    "from ａｎｔｈｒｏｐｉｃ import Client",
+    "def test_nested():\n    import anthropic",
+    "class Suite:\n    import anthropic",
+    "try:\n    pass\nfinally:\n    import anthropic",
+    "try:\n    pass\nexcept ImportError:\n    import anthropic",
+    "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    import anthropic",
+])
+def test_import_prescreen_retains_nested_and_unicode_imports(det, tmp_path, statement):
+    root = _tree(tmp_path, {"core/tests/test_reader.py": statement + "\n"})
+    findings, _ = det.scan(root)
+    assert set(findings) == {"core/tests/test_reader.py::anthropic"}
+
+
+def test_dotted_optional_module_with_continued_import(det, tmp_path):
+    root = _tree(tmp_path, {
+        "core/tests/test_reader.py": 'from google \\\n    . genai import Client\n',
+    })
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace('"anthropic==0.103.1",', '"google-genai==1.0.0",'))
+    findings, mods = det.scan(root)
+    assert "google.genai" in mods
+    assert findings == {"core/tests/test_reader.py::google.genai": 1}
+
+
+def test_prescreen_reloads_optional_groups_between_scans(det, tmp_path):
+    root = _tree(tmp_path, {"core/tests/test_reader.py": "import new_capability\n"})
+    assert det.scan(root)[0] == {}
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace('"anthropic==0.103.1",', '"new-capability==1.0.0",'))
+    findings, mods = det.scan(root)
+    assert "new_capability" in mods
+    assert findings == {"core/tests/test_reader.py::new_capability": 1}
+
+
+def test_empty_optional_set_retains_empty_result(det, tmp_path):
+    root = _tree(tmp_path, {"core/tests/test_reader.py": "import anthropic\n"})
+    (root / "pyproject.toml").write_text('[project]\nname = "empty"\nversion = "0.1.0"\n')
+    assert det.scan(root) == ({}, set())
+
+
+@pytest.mark.parametrize("ancestor", [".out", "build", "data", "fixtures", "tests"])
+def test_checkout_ancestors_do_not_change_scan_scope(det, tmp_path, ancestor):
+    checkout = tmp_path / ancestor / "checkout"
+    checkout.mkdir(parents=True)
+    root = _tree(checkout, {
+        "core/tests/test_reader.py": "import anthropic\n",
+        "core/runtime_reader.py": "import botocore\n",
+        "core/tests/fixtures/test_example.py": "import botocore\n",
+    })
+    findings, _ = det.scan(root)
+    assert findings == {"core/tests/test_reader.py::anthropic": 1}
+
+
+def test_discovery_keeps_root_and_lexical_order(det, tmp_path):
+    files = {
+        "core/z/tests/test_z.py": "import anthropic\n",
+        "core/a/tests/test_a.py": "import anthropic\n",
+        "packages/tests/test_pkg.py": "import anthropic\n",
+        "engine/tests/test_rule.py": "import anthropic\n",
+        "core/tests/build/test_generated.py": "import anthropic\n",
+        "core/tests/data/test_sample.py": "import anthropic\n",
+    }
+    root = _tree(tmp_path, files)
+    assert [p.relative_to(root).as_posix() for p in det.iter_test_files(root)] == [
+        "core/a/tests/test_a.py", "core/z/tests/test_z.py",
+        "packages/tests/test_pkg.py", "engine/tests/test_rule.py",
+    ]
+
+
+def test_discovery_preserves_file_links_without_following_directory_links(det, tmp_path):
+    root = _tree(tmp_path, {
+        "core/runtime_reader.py": "import anthropic\n",
+        "outside/test_hidden.py": "import botocore\n",
+    })
+    (root / "core/test_link.py").symlink_to(root / "core/runtime_reader.py")
+    (root / "core/linked_tests").symlink_to(root / "outside", target_is_directory=True)
+    findings, _ = det.scan(root)
+    assert findings == {"core/test_link.py::anthropic": 1}

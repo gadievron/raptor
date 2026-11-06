@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -304,3 +305,43 @@ class TestRepoBaseline:
         baseline = set(det.load_baseline(det.DEFAULT_BASELINE))
         assert findings - baseline == set(), "new vocabulary lists"
         assert baseline - findings == set(), "stale baseline entries"
+
+
+@pytest.mark.parametrize("container", ["list", "tuple", "set", "dict"])
+def test_reported_container_suppresses_descendants(det, tmp_path, container):
+    names = [f"api_{i!s}" for i in range(12)]
+    nested = repr("|".join(f"nested_{i}" for i in range(12)))
+    if container == "dict":
+        expression = "{" + ",".join(f"{name!r}: {nested}" for name in names) + "}"
+    else:
+        left, right = {"list": ("[", "]"), "tuple": ("(", ")"), "set": ("{", "}")}[container]
+        expression = left + ",".join([*(repr(name) for name in names), nested]) + right
+    findings = det.scan_tree(_tree(tmp_path, "core/foo.py", f"OUTER = {expression}\n"))
+    assert [(f.key, f.kind, f.count) for f in findings] == [("core/foo.py::OUTER", "literal", 12)]
+
+
+@pytest.mark.parametrize("expression", [
+    "[NAMES]", "(NAMES,)", "{NAMES}", "{'description with spaces': NAMES}",
+    "[NAMES for item in items]", "(lambda: NAMES)()",
+    "[NAMES, *other]", "dict(key=NAMES)",
+])
+def test_unreported_expression_retains_nested_findings(det, tmp_path, expression):
+    names = repr([f"api_{i}" for i in range(12)])
+    expression = expression.replace("NAMES", names)
+    findings = det.scan_tree(_tree(tmp_path, "core/foo.py", f"OUTER = {expression}\n"))
+    assert [(f.key, f.kind, f.count) for f in findings] == [("core/foo.py::OUTER", "literal", 12)]
+
+
+def test_pruning_preserves_following_scope_order_and_borrowed_ast(det):
+    names = repr([f"api_{i}" for i in range(12)])
+    alts = repr("|".join(f"call_{i}" for i in range(11)))
+    tree = ast.parse(f"class Owner:\n    FIRST = {names}\n    def second(self):\n        return {alts}\nLAST = {names}\n")
+    original = ast.dump(tree, include_attributes=True)
+    scanner = det._Scanner("core/foo.py")
+    scanner.visit(tree)
+    assert [(f.key, f.kind, f.count) for f in scanner.findings] == [
+        ("core/foo.py::FIRST", "literal", 12),
+        ("core/foo.py::second", "alternation", 11),
+        ("core/foo.py::LAST", "literal", 12),
+    ]
+    assert ast.dump(tree, include_attributes=True) == original

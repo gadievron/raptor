@@ -164,7 +164,20 @@ class _Scanner(ast.NodeVisitor):
         self.scope: list[str] = []
         self.assign: list[str] = []
         self.findings: list[_Finding] = []
-        self._seen_nodes: set[int] = set()
+        self._visitor_methods = {}
+
+    def visit(self, node: ast.AST) -> None:
+        kind = type(node)
+        method = self._visitor_methods.get(kind)
+        if method is None:
+            method = getattr(type(self), "visit_" + kind.__name__, type(self).generic_visit)
+            self._visitor_methods[kind] = method
+        method(self, node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # Names have only scalar/context fields; all detections happen
+        # at containers or string constants.
+        pass
 
     # -- scope tracking ------------------------------------------------
     def _walk_scoped(self, node, label) -> None:
@@ -217,18 +230,13 @@ class _Scanner(ast.NodeVisitor):
             sorted(names)[:6], line,
         ))
 
-    def _check_literal(self, node) -> None:
-        if id(node) in self._seen_nodes:
-            return
+    def visit_List(self, node) -> None:
         names = _literal_names(node)
         if names:
             self._record("literal", names, node.lineno)
-            # Suppress nested re-reports (dict values that are lists...)
-            for sub in ast.walk(node):
-                self._seen_nodes.add(id(sub))
-
-    def visit_List(self, node) -> None:
-        self._check_literal(node)
+            # Every descendant was already suppressed by policy. Stop
+            # here rather than walking once to mark it and again to skip it.
+            return
         self.generic_visit(node)
 
     visit_Tuple = visit_List
@@ -236,11 +244,10 @@ class _Scanner(ast.NodeVisitor):
     visit_Dict = visit_List
 
     def visit_Constant(self, node) -> None:
-        if isinstance(node.value, str) and id(node) not in self._seen_nodes:
+        if isinstance(node.value, str):
             names = _alternation_names(node.value)
             if len(names) > MAX_SEED_NAMES:
                 self._record("alternation", names, node.lineno)
-        self.generic_visit(node)
 
 
 def iter_python_files(root: Path):
