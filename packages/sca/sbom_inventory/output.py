@@ -101,3 +101,49 @@ def export_notices(out, inventory, records, source, embedded, *, include_unassoc
         # looking complete when a late blob is corrupt or missing.
         staging.rename(out)
     return {"notice_records": len(notices), "unique_texts": len({n.sha256 for n in notices})}
+
+
+def upgrade_plan_markdown(report, *, limit=50):
+    """Present proposals and unavailable evidence without asserting build safety."""
+    lines = ["# SBOM upgrade plan", "", "Mode: " + md_inline(report["mode"]), "",
+             "Proposals require review. A missing finding is not proof of complete advisory coverage.", "",
+             "| Check | Count |", "|---|---:|"]
+    for key, value in report["summary"].items():
+        lines.append("| " + md_inline(key.replace("_", " ")) + " | " + md_inline(value) + " |")
+    rows = [row for row in report["packages"] if row["advisories"] or row["gaps"]]
+    shown = rows if limit is None else rows[:limit]
+    lines.extend(["", "| Package | Installed | Proposed | Target scope | Status |", "|---|---|---|---|---|"])
+    for row in shown:
+        lines.append("| " + " | ".join(md_inline(value) for value in (
+            row["name"], row["installed_version"], row["proposed_version"] or "unavailable",
+            row["target_scope"], row["status"])) + " |")
+    for row in shown:
+        lines.extend(["", "## " + md_inline(row["name"]) + " " + md_inline(row["installed_version"]), ""])
+        lines.extend("- " + md_inline(gap) for gap in row["gaps"])
+        for candidate in row["candidates"]:
+            checked = candidate["status"] not in {"not_checked", "lookup_unavailable"}
+            empty = "none recorded" if checked else "not assessed"
+            lines.append("- " + md_inline(candidate["version"]) + ": " + md_inline(candidate["status"]) +
+                         "; resolved: " + md_inline(", ".join(candidate["resolved"]) or empty) +
+                         "; remaining: " + md_inline(", ".join(candidate["remaining"]) or empty) +
+                         "; introduced: " + md_inline(", ".join(candidate["introduced"]) or empty))
+            lines.extend("  - " + md_inline(gap) for gap in candidate["gaps"])
+    if len(shown) < len(rows):
+        lines.extend(["", "Showing " + str(len(shown)) + " of " + str(len(rows)) + " actionable/uncertain groups; saved JSON and Markdown contain the full plan."])
+    lines.extend(["", "## Coverage gaps", ""])
+    lines.extend("- " + md_inline(row["reason"]) for row in [*report["unmatched_findings"], *report["scan_gaps"]])
+    lines.extend(["", "## Scope", ""])
+    lines.extend("- " + md_inline(value) for value in report["limitations"])
+    return "\n".join(lines) + "\n"
+
+
+def write_upgrade_plan(out, report):
+    """Commit both report files together into a new directory."""
+    if path_may_exist(out):
+        raise ValueError("plan output already exists; choose a new directory")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="raptor-sca-plan-", dir=out.parent) as temporary:
+        staging = Path(temporary)
+        save_json(staging / "upgrade-plan.json", report, stream=True)
+        write_text_atomically(staging / "upgrade-plan.md", upgrade_plan_markdown(report, limit=None))
+        staging.rename(out)

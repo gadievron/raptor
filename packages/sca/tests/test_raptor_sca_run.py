@@ -108,8 +108,7 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
 
         Offline + PyPI + django + no advisories cached → review still
         runs and emits its review-report markdown. We assert positively:
-        - exit 0 or 1 (Clean or Review verdict — never 2/3 which would
-          mean argparse error or internal crash)
+        - exit 2 with an unavailable advisory verdict for the cold cache
         - stdout contains the review-report markdown header
           ``# raptor-sca check —`` so we know review.main was reached
           (not just any subcommand dispatch failure).
@@ -117,9 +116,10 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
         result = _run("check", "PyPI", "django", "4.2.10",
                       "--no-transitive", "--offline")
         self.assertNotIn("unknown subcommand", result.stderr)
-        self.assertIn(result.returncode, (0, 1),
+        self.assertEqual(result.returncode, 2,
                       msg=f"unexpected rc={result.returncode}; "
                           f"stderr={result.stderr[:200]}")
+        self.assertIn("verdict unavailable", result.stdout.lower())
         self.assertIn("# raptor-sca check —", result.stdout,
                       msg="review report header missing — dispatch may have "
                           "failed before reaching review.main")

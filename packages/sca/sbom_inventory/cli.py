@@ -62,6 +62,19 @@ def parser():
     origin.add_argument("--registry-ref", help="explicit IMAGE@sha256:PLATFORM_MANIFEST_DIGEST; enables registry network access")
     collect.add_argument("--identify", action="append", default=[], help="catalogued image path to hash without retaining executable bytes (repeatable)")
     collect.add_argument("--out", type=Path, required=True, help="new evidence directory; existing paths are refused")
+    plan = commands.add_parser("plan", help="plan upgrades from an SBOM scan's findings",
+        description="Build read-only upgrade proposals from an inventory and saved SCA findings. Candidate advisory rechecks are explicit; this does not rewrite manifests or rebuild images.",
+        epilog="Examples:\n  raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json --out plan\n  raptor-sca sbom plan release.spdx.json --findings scan/findings.json --check-candidates --format json\n\nExit codes: saved plan: 0 on success; candidate recheck: 0 with an advisory-clear option per affected package, 1 without one, 2 for unavailable evidence or invalid input.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    plan.add_argument("input", type=Path, help="SBOM, inventory snapshot or evidence bundle used for the scan")
+    plan.add_argument("--findings", type=Path, required=True, help="RAPTOR findings.json from that SBOM scan")
+    plan.add_argument("--check-candidates", action="store_true", help="recheck installed and candidate versions with the advisory client (default: saved findings only)")
+    plan.add_argument("--offline", action="store_true", help="candidate checks use cached advisories only; missing entries remain unknown")
+    plan.add_argument("--cache-root", type=Path, help="advisory cache directory (default: normal SCA cache)")
+    plan.add_argument("--max-candidates", type=int, default=5, help="candidates per package (default: 5, maximum: 20)")
+    plan.add_argument("--max-queries", type=int, default=1000, help="total unique installed/candidate coordinates (default: 1000, maximum: 10000)")
+    plan.add_argument("--format", choices=("text", "json"), default="text", help="stdout format (default: text)")
+    plan.add_argument("--out", type=Path, help="new directory for upgrade-plan.json and upgrade-plan.md (default: stdout only)")
     return result
 
 
@@ -74,6 +87,29 @@ def main(argv=None):
     args = parser().parse_args(argv)
     configure_cli_logging(logging.WARNING)
     try:
+        if args.command == "plan":
+            from .plan import build_plan
+            from .plan_inputs import read_findings
+            from .output import upgrade_plan_markdown, write_upgrade_plan
+            with Source(args.input) as source:
+                inventory, _ = read_inventory(source)
+            findings, sha = read_findings(args.findings)
+            osv = None
+            if args.check_candidates:
+                from .. import default_client, sca_cache_root
+                from ..osv import OsvClient
+                from core.json import JsonCache
+                cache = JsonCache(root=args.cache_root or sca_cache_root())
+                osv = OsvClient(default_client(offline=args.offline), cache, offline=args.offline)
+            report = build_plan(inventory, findings, sha, osv=osv,
+                                max_candidates=args.max_candidates, max_queries=args.max_queries)
+            if args.out:
+                write_upgrade_plan(args.out, report)
+            if args.format == "json":
+                _emit(report)
+            else:
+                print(escape_nonprintable(upgrade_plan_markdown(report), preserve_newlines=True))
+            return report["exit_code"]
         if args.command == "collect":
             from .collection import collect_image
             _emit(collect_image(args.syft, args.out, oci_layout=args.oci_layout,

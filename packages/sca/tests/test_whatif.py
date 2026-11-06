@@ -411,7 +411,7 @@ def test_degraded_osv_lookups_refuse_to_conclude(
     out = capsys.readouterr().out
     assert rc == 2
     assert "verdict unavailable" in out
-    assert "lookup(s) failed" in out
+    assert "lookup(s) were unavailable" in out
 
 
 def test_modal_hostile_osv_id_rendered_inert(

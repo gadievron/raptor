@@ -237,6 +237,16 @@ class OsvResult:
     advisories: list[Advisory]
 
 
+def primary_query_supported(ecosystem: str) -> bool:
+    """Whether normal package/version queries use the primary advisory index.
+
+    OSS-Fuzz and unindexed source identities need their dedicated fallback
+    mapping; they must not be advertised as primary-index candidate checks.
+    """
+    from .ecosystems import KNOWN_ECOSYSTEMS, distro_base
+    return ecosystem != "OSS-Fuzz" and (ecosystem in KNOWN_ECOSYSTEMS or distro_base(ecosystem) is not None)
+
+
 class OsvClient:
     """Thin OSV.dev client with caching.
 
@@ -388,24 +398,8 @@ class OsvClient:
             # / Red Hat) ARE OSV-indexed and join the batch — this
             # filter silently zeroed every base-image package's
             # advisory lookup when it treated them as unindexed.
-            from .ecosystems import KNOWN_ECOSYSTEMS, distro_base
-            _OSV_QUERYABLE = {
-                e for e in KNOWN_ECOSYSTEMS
-                # OSS-Fuzz is queried only via the dedicated fallback
-                # path (different candidate-name mapping), not the
-                # primary batch.
-                if e != "OSS-Fuzz"
-            }
-
-            def _osv_indexed(d: Dependency) -> bool:
-                return (
-                    d.ecosystem in _OSV_QUERYABLE
-                    or distro_base(d.ecosystem) is not None
-                )
-
-            queryable = [d for d in uncached if _osv_indexed(d)]
-            non_queryable = [d for d in uncached
-                             if not _osv_indexed(d)]
+            queryable = [d for d in uncached if primary_query_supported(d.ecosystem)]
+            non_queryable = [d for d in uncached if not primary_query_supported(d.ecosystem)]
             # Build all chunk-payloads up front so the parallel
             # dispatch below has a flat list to map over.
             chunk_payloads: list[tuple[list[Dependency], list[dict]]] = []
@@ -556,7 +550,14 @@ class OsvClient:
                     self._record_failed_lookup(dep.key())
                     self.coverage_gaps[dep.key()] = "offline advisory data could not be evaluated"
                     advs = []
+                else:
+                    self._failed_keys.discard(dep.key())
                 offline_db_advisories[dep.key()] = advs
+        if self._offline:
+            for dep in uncached:
+                if dep.key() not in offline_db_advisories:
+                    self._record_failed_lookup(dep.key())
+                    self.coverage_gaps[dep.key()] = "offline advisory query is not cached and no offline database answer is available"
 
         # Pass 2: hydrate unique vuln IDs via shared client. Raw
         # records are retained for corridor and distro queries: their filters
@@ -617,10 +618,10 @@ class OsvClient:
             seen_keys.add(d.key())
             ids = dep_to_ids.get(d.key(), [])
             advisories = [vuln_records[i] for i in ids if i in vuln_records]
+            if any(identifier not in vuln_records for identifier in ids):
+                self._record_failed_lookup(d.key())
+                self.coverage_gaps[d.key()] = "advisory record unavailable for version validation"
             if d.ecosystem.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}:
-                if any(identifier not in vuln_records for identifier in ids):
-                    self._record_failed_lookup(d.key())
-                    self.coverage_gaps[d.key()] = "distro advisory record unavailable for release validation"
                 scoped = []
                 for advisory in advisories:
                     record = corridor_records.get(advisory.osv_id)

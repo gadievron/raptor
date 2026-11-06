@@ -54,3 +54,22 @@ def test_byte_budget_and_nesting_are_enforced():
     raw = b'{"rows":[' + b'['*130 + b'0' + b']'*130 + b']}'
     with pytest.raises(ValueError, match="nesting"):
         project_object(io.BytesIO(raw), max_bytes=len(raw), projectors={"rows": lambda row: None})
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 65536])
+def test_top_level_array_projection_keeps_hash_and_discards_descriptions(chunk):
+    from core.json.projection import project_array
+    value = [{"id": "one", "description": "x" * 300}, None, {"id": "two"}]
+    raw = json.dumps(value).encode()
+    result, sha = project_array(Chunks(raw, chunk), max_bytes=len(raw),
+                                project=lambda row: {"id": row["id"]} if row else None)
+    assert result == [{"id": "one"}, {"id": "two"}]
+    assert sha == hashlib.sha256(raw).hexdigest()
+    assert project_array(io.BytesIO(raw), max_bytes=len(raw))[0] == value
+
+
+@pytest.mark.parametrize("raw", [b'{}', b'[1,]', b'[{"x":1,"x":2}]', b'[NaN]', b'[1e999]', b'[] garbage'])
+def test_projected_array_invalid_values_fail_even_when_discarded(raw):
+    from core.json.projection import project_array
+    with pytest.raises(ValueError):
+        project_array(io.BytesIO(raw), max_bytes=len(raw), project=lambda row: None)

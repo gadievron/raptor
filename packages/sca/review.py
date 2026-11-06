@@ -22,7 +22,7 @@ Exit codes:
     0  — clean: no advisories, no supply-chain hits.
     1  — review: advisories with available fixes, or distance-2 typosquat.
     2  — block: KEV-listed CVE, critical without fix, or distance-1 typosquat.
-         Also returned when OSV lookups degraded transiently — the
+         Also returned when OSV lookups are unavailable — the
          verdict is unavailable, never Clean (mirror of the whatif
          degraded refusal).
     3  — invalid arguments / internal error.
@@ -230,11 +230,10 @@ def _checked_main(
         )
         report += (
             "\n## OSV lookups degraded — verdict unavailable\n\n"
-            f"{osv.failed_lookups} advisory lookup(s) failed "
-            "transiently"
+            f"{osv.failed_lookups} advisory lookup(s) were unavailable"
             + (f" (e.g. {sample})" if sample else "")
             + "; the verdict above may be missing real advisories. "
-            "Re-run when the network/OSV recovers.\n"
+            "Re-run with available advisory data (online or cached).\n"
         )
         exit_code = 2
 
@@ -655,8 +654,8 @@ def _render_review_markdown(
         buf.write(
             "## Recommendation\n\n"
             "Verdict unavailable — advisory lookups degraded "
-            "transiently, so this version is unvetted. Re-run when "
-            "the network/OSV recovers before installing.\n"
+            "or lack cached data, so this version is unvetted. Re-run with "
+            "available advisory data before installing.\n"
         )
     elif verdict == _VERDICT_REVIEW:
         buf.write(

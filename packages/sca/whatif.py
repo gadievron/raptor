@@ -25,7 +25,7 @@ Output: markdown to stdout (or ``--out``). Exit code:
     1  — non-trivial trade-off: some advisories regressed, or no
          candidate fully resolves the open set.
     2  — invalid arguments, or verdict unavailable: the OSV lookup
-         degraded (network outage, registry error) and the report
+         degraded (network, cache or advisory-record failure) and the report
          carries a "verdict unavailable" section — never a wrong
          exit 0/1 minted from missing data.
 """
@@ -142,11 +142,10 @@ def main(
         )
         report += (
             "\n## OSV lookups degraded — verdict unavailable\n\n"
-            f"{osv.failed_lookups} advisory lookup(s) failed "
-            "transiently"
+            f"{osv.failed_lookups} advisory lookup(s) were unavailable"
             + (f" (e.g. {sample})" if sample else "")
             + "; the advisory counts above may be incomplete. "
-            "Re-run when the network/OSV recovers.\n"
+            "Re-run with available advisory data (online or cached).\n"
         )
         exit_code = 2
 

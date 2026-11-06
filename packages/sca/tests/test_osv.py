@@ -1147,3 +1147,28 @@ def test_lookup_failed_tracks_per_key_and_clears_on_retry(
     assert client.lookup_failed("npm:lodash@1.0.0") is False
     # The run-level degradation telemetry keeps its history.
     assert client.failed_lookups == 1
+
+
+def test_offline_missing_query_is_unknown_until_a_real_cached_answer(tmp_path):
+    cache = JsonCache(root=tmp_path)
+    http = FakeHttp(batch_results=[[]])
+    dep = _dep("missing")
+    offline = OsvClient(http, cache, offline=True)
+    assert offline.query_batch([dep])[0].advisories == []
+    assert offline.lookup_failed(dep.key())
+    assert "not cached" in offline.coverage_gaps[dep.key()]
+    assert not http.posts
+    online = OsvClient(http, cache)
+    assert online.query_batch([dep])[0].advisories == []
+    assert not online.lookup_failed(dep.key())
+    assert offline.query_batch([dep])[0].advisories == []
+    assert not offline.lookup_failed(dep.key())
+
+
+def test_missing_hydrated_advisory_is_not_a_clear_package(tmp_path):
+    http = FakeHttp(batch_results=[["MISSING-ID"]], get_error=HttpError("unavailable"))
+    client = OsvClient(http, JsonCache(root=tmp_path))
+    dep = _dep("missing")
+    assert client.query_batch([dep])[0].advisories == []
+    assert client.lookup_failed(dep.key())
+    assert "record unavailable" in client.coverage_gaps[dep.key()]
