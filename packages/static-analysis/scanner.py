@@ -2557,6 +2557,25 @@ def run_source_wrapper_stage(
     return paths, wrapper_names
 
 
+def _semgrep_source_region(finding: dict, *, repeat_end_line: bool = False) -> dict:
+    """Preserve direct-source spans without inventing an unknown start line."""
+    from core.sarif.parser import _coerce_line
+    start = _coerce_line(finding.get("line") or finding.get("start_line"))
+    if start is None or start <= 0:
+        return {}
+    region = {"startLine": start}
+    end = _coerce_line(finding.get("line_end") or finding.get("end_line"))
+    if end is not None and end >= start:
+        region["endLine"] = end
+    elif repeat_end_line:
+        region["endLine"] = start
+    for source, target in (("column", "startColumn"), ("column_end", "endColumn")):
+        value = _coerce_line(finding.get(source))
+        if value is not None and value > 0:
+            region[target] = value
+    return region
+
+
 def _stage_findings_to_sarif(
     findings: list[tuple[str, dict]],
     *,
@@ -2588,14 +2607,7 @@ def _stage_findings_to_sarif(
             f.get("message") or f"{rule_prefix} rule matched",
             [sarif_emit.location(
                 f.get("file") or f.get("path") or "",
-                {
-                    "startLine": f.get("line")
-                                 or f.get("start_line") or 1,
-                    "endLine": f.get("line_end")
-                               or f.get("end_line")
-                               or f.get("line")
-                               or f.get("start_line") or 1,
-                },
+                _semgrep_source_region(f, repeat_end_line=True),
             )],
             level=f.get("level") or "warning",
             properties={"provenance": "mechanical-source-summary"},
@@ -2632,7 +2644,7 @@ def _graduated_findings_to_sarif(
             sarif_rule_id,
             f.get("message") or f"graduated rule {rule_id} matched",
             [sarif_emit.location(
-                f.get("file", ""), {"startLine": f.get("line", 0)},
+                f.get("file", ""), _semgrep_source_region(f),
             )],
             level=f.get("level") or "warning",
             properties={

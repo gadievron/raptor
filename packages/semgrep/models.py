@@ -1,5 +1,6 @@
 """Data models for Semgrep results."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,11 +40,16 @@ _SKIPPED_REASON_MAXLEN = 100
 
 
 def _coerce_int(value: Any) -> int:
-    """Best-effort int coercion for SARIF region fields; 0 on failure."""
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return 0
+    """Positive source coordinate; retain legacy integer-string compatibility."""
+    from core.sarif.parser import _coerce_line
+
+    if isinstance(value, str):
+        try:
+            value = int(value)
+        except ValueError:
+            return 0
+    coordinate = _coerce_line(value)
+    return coordinate if coordinate is not None and coordinate > 0 else 0
 
 
 @dataclass
@@ -64,6 +70,8 @@ class SemgrepFinding:
         cls,
         result: dict,
         rule_levels: dict[str, str] | None = None,
+        *, resolved_rule: dict[str, Any] | None = None,
+        resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
     ) -> "SemgrepFinding":
         """Build from a single SARIF runs[].results[] entry.
 
@@ -73,41 +81,51 @@ class SemgrepFinding:
         severity inheritance; verified against semgrep 1.172.0), so
         without the table every rule-declared severity — including
         error-severity rules — flattens to "warning".
+
+        Run-aware callers supply a validated descriptor and URI resolver;
+        standalone callers retain inline-location and rule-level-map support.
         """
         if not result or not isinstance(result, dict):
             return cls(file="", line=0)
 
-        rule_id = result.get("ruleId", "")
-        message = ""
+        from core.sarif.parser import _as_dict, _result_rule_id, rule_default_level, sarif_uri_path
+
+        rule_id = _result_rule_id(result, resolved_rule or {}) or ""
         msg = result.get("message")
-        if isinstance(msg, dict):
-            message = msg.get("text", "")
-        elif isinstance(msg, str):
-            message = msg
+        message = msg.get("text", "") if isinstance(msg, dict) else msg
+        if not isinstance(message, str):
+            message = ""
 
         level = result.get("level")
         if not isinstance(level, str) or not level:
-            level = (rule_levels or {}).get(rule_id) or "warning"
+            level = (rule_default_level(resolved_rule) if resolved_rule is not None
+                     else (rule_levels or {}).get(rule_id)) or "warning"
 
-        file = ""
-        line = 0
-        column = 0
-        line_end = 0
-        column_end = 0
-
-        locations = result.get("locations") or []
-        if locations and isinstance(locations[0], dict):
-            phys = locations[0].get("physicalLocation") or {}
-            artifact = phys.get("artifactLocation") or {}
-            file = artifact.get("uri", "")
-            region = phys.get("region") or {}
-            # Per-field coercion: a single try around all four meant
-            # one bad value (e.g. startColumn: null) silently discarded
-            # every later field even when it was parseable.
-            line = _coerce_int(region.get("startLine", 0))
-            column = _coerce_int(region.get("startColumn", 0))
-            line_end = _coerce_int(region.get("endLine", 0))
-            column_end = _coerce_int(region.get("endColumn", 0))
+        locations = result.get("locations")
+        location = locations[0] if isinstance(locations, list) and locations else None
+        phys = _as_dict(_as_dict(location).get("physicalLocation"))
+        artifact = _as_dict(phys.get("artifactLocation"))
+        uri = resolve_uri(artifact) if resolve_uri is not None else artifact.get("uri")
+        file = sarif_uri_path(uri) or ""
+        # Native absolute drive paths are also emitted by Windows tool builds.
+        # UNC/network authorities remain excluded from local source attribution.
+        if not file and isinstance(uri, str):
+            import ntpath
+            from core.sarif.parser import _normalize_artifact_uri
+            drive, tail = ntpath.splitdrive(uri)
+            if (len(drive) == 2 and drive[0].isascii() and drive[0].isalpha()
+                    and drive[1] == ":" and ntpath.isabs(uri)
+                    and not tail.startswith(("//", "\\\\")) and _normalize_artifact_uri(uri) is not None):
+                file = uri
+        region = _as_dict(phys.get("region"))
+        line = _coerce_int(region.get("startLine"))
+        column = _coerce_int(region.get("startColumn"))
+        line_end = _coerce_int(region.get("endLine"))
+        column_end = _coerce_int(region.get("endColumn"))
+        if line and line_end and line_end < line:
+            line_end = column_end = 0
+        if line_end in (0, line) and column and column_end and column_end < column:
+            column_end = 0
 
         return cls(
             file=file,
@@ -220,7 +238,7 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
             errors.append("SARIF requires an object with a runs array")
         return []
 
-    from core.sarif.parser import get_rules, rule_default_level
+    from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver
 
     findings: list[SemgrepFinding] = []
     malformed = 0
@@ -238,11 +256,8 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
                     malformed += 1
                 elif invocation.get("executionSuccessful") is False:
                     failed_invocations += 1
-        rule_levels = {
-            rid: level
-            for rid, rule in get_rules(run).items()
-            if (level := rule_default_level(rule))
-        }
+        rule_resolver = None
+        uri_resolver = None
         results = run.get("results", [])
         if not isinstance(results, list):
             malformed += 1
@@ -252,7 +267,40 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
                 malformed += 1
                 continue
             try:
-                finding = SemgrepFinding.from_sarif_result(result, rule_levels)
+                if rule_resolver is None:
+                    rule_resolver = ResultRuleResolver(run)
+                    uri_resolver = ArtifactUriResolver(run)
+                assert uri_resolver is not None
+                rule = rule_resolver.resolve(result)
+                finding = SemgrepFinding.from_sarif_result(
+                    result, resolved_rule=rule, resolve_uri=uri_resolver.resolve,
+                )
+                if not rule and (("ruleIndex" in result and result["ruleIndex"] != -1)
+                                 or result.get("rule")):
+                    malformed += 1
+                if not (finding.rule_id or finding.message or finding.file):
+                    malformed += 1
+                    continue
+                locations = result.get("locations")
+                if "locations" in result and not isinstance(locations, list):
+                    malformed += 1
+                elif isinstance(locations, list) and locations:
+                    first = locations[0]
+                    physical = first.get("physicalLocation") if isinstance(first, dict) else None
+                    if not isinstance(first, dict) or ("physicalLocation" in first and not isinstance(physical, dict)):
+                        malformed += 1
+                    elif isinstance(physical, dict):
+                        if "artifactLocation" in physical:
+                            artifact = physical["artifactLocation"]
+                            if not isinstance(artifact, dict) or (
+                                any(key in artifact for key in ("uri", "index", "uriBaseId")) and not finding.file
+                            ):
+                                malformed += 1
+                        region = physical.get("region")
+                        if "region" in physical and not isinstance(region, dict):
+                            malformed += 1
+                        elif isinstance(region, dict) and "startLine" in region and not finding.line:
+                            malformed += 1
             except (TypeError, ValueError, AttributeError, IndexError, OverflowError):
                 malformed += 1
                 continue
