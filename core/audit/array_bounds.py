@@ -11,7 +11,8 @@ import logging
 import operator
 import re
 
-from core.smt_solver import BVProfile, ge, lt, z3, z3_available as _z3_available
+from core.smt_solver import BVProfile, DEFAULT_TIMEOUT_MS, ge, lt, z3, z3_available as _z3_available
+from core.smt_solver.session import query_budget
 from core.smt_solver.path_feasibility import PathCondition, check_path_feasibility, check_verb_feasibility, make_var
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
@@ -274,7 +275,10 @@ def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
         return details
     details.update(array_bounds_status="checked", source_access=asdict(access),
                    integer_abi=integer_abi_record(integer_abi), access_kind="read", **source_model_scope())
-    entry, result = _solve_access(access)
+    # The entry and access probes share one default query budget; a
+    # nested caller budget may tighten it, never extend it.
+    with query_budget(DEFAULT_TIMEOUT_MS):
+        entry, result = _solve_access(access)
     if entry is not None:
         details.update(entry_feasible=entry.feasible, reason="entry path is infeasible or unencodable")
         return details

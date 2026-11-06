@@ -154,6 +154,7 @@ from core.smt_solver.call_arguments import find_call_end, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
+from core.smt_solver.session import check_solver, solver_reason_unknown
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +249,13 @@ class PathSMTResult:
     # True: at least one core assertion uses a call term or call axiom.
     # None: unavailable core or unclassified intrinsic assertion.
     refutation_uses_call_terms: bool | None = None
+
+
+    def __post_init__(self):
+        if self.feasible is None:
+            # An undecided or unavailable solve cannot certify a complete
+            # constraint summary, regardless of the requested reduction mode.
+            self.wp_complete = False
 
 
 # ---------------------------------------------------------------------------
@@ -1086,7 +1094,7 @@ def _classify_text_condition(
     if solver is not None:
         with _scoped(solver):
             solver.add(z3.Not(final_expr))
-            if solver.check() == z3.unsat:
+            if check_solver(solver) == z3.unsat:
                 return display, None, None  # tautology
 
     return None, (display, final_expr), None
@@ -1201,7 +1209,7 @@ def _extract_wp(
                     solver.add(pending[j][1])
             solver.add(z3.Not(pending[idx][1]))
             calls += 1
-            verdict = solver.check()
+            verdict = check_solver(solver)
         if verdict == z3.unsat:
             kept[idx] = False  # implied by the rest → redundant, drop it
         elif verdict != z3.sat:
@@ -1419,13 +1427,15 @@ def _solve_pending(
     pending_reasons = [
         Rejection(
             t, solver_reason,
-            f"Z3 reason_unknown: {solver.reason_unknown()}"
+            f"SMT reason_unknown: {solver_reason_unknown(solver)}"
             if hasattr(solver, "reason_unknown") else "",
         )
         for t in pending_texts
     ]
     detail = (
-        f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
+        "shared SMT query budget exhausted"
+        if getattr(solver, "_raptor_budget_exhausted", False) is True
+        else f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
         if solver_reason is RejectionKind.SOLVER_TIMEOUT
         else "conditions outside the decidable bitvector fragment"
     )
@@ -1436,7 +1446,9 @@ def _solve_pending(
         unknown=unknown + pending_texts,
         unknown_reasons=unknown_reasons + pending_reasons,
         model={}, smt_available=True,
-        reasoning=f"Z3 returned unknown ({mode}) — {detail}",
+        reasoning=(f"SMT query budget exhausted ({mode}) — {detail}"
+                   if getattr(solver, "_raptor_budget_exhausted", False) is True
+                   else f"Z3 returned unknown ({mode}) — {detail}"),
         anon_var_map=_anon_map,
         summary_axioms=_axiom_labels,
     )

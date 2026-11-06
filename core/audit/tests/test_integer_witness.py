@@ -85,3 +85,15 @@ def test_audit_and_auxiliary_paths_enforce_validation(monkeypatch, feasible, fie
     assert result.details["model"] == {}
     assert disprove_integer_overflow(hypothesis, source, file_path="record.c", function_name="Read",
                                     integer_abi="ilp32").disproved is None
+
+
+@pytest.mark.parametrize('verdict', [False, None, True])
+def test_reused_result_cannot_retain_stale_positive_witness_evidence(verdict):
+    result = {'feasible': verdict, 'model': {'Value': 1, 'Step': 1},
+              'witness_validated': True, 'mathematical_result': 4294967296,
+              'result_range': {'minimum': 0, 'maximum': 4294967295}}
+    checked = validate_overflow_result(result, OPERATION, ['Value', 'Step'], '+', 'ilp32')
+    assert checked['witness_validated'] is False
+    assert checked['model'] == {}
+    assert 'mathematical_result' not in checked and 'result_range' not in checked
+    assert result['witness_validated'] is True  # caller dictionary is not mutated

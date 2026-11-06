@@ -27,6 +27,8 @@ instead of cloning the logic:
 """
 from __future__ import annotations
 
+from .session import solver_reason_unknown
+
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -385,7 +387,7 @@ def classify_solver_unknown(solver: Any) -> RejectionKind:
     # a stub object is explicit-enough that we shouldn't crash, but
     # narrower TypeError-level mismatches should propagate.
     try:
-        reason = (solver.reason_unknown() or "").lower()
+        reason = (solver_reason_unknown(solver) or "").lower()
     except _REASON_UNKNOWN_RAISES:
         return RejectionKind.SOLVER_UNKNOWN
     if "timeout" in reason or "canceled" in reason or "cancelled" in reason:
