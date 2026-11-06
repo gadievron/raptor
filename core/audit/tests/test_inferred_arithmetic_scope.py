@@ -17,6 +17,8 @@ def c_parser():
 
 
 CASES = [
+    pytest.param("check-overflow-to-oob", "unsigned Read(unsigned count, unsigned elem_size, unsigned index) { if(elem_size == 0) return index; return 0; }",
+                 "overflow of `count` * `elem_size` at `index`", False, id="zero-element-no-overflow"),
     pytest.param("check-oob", "unsigned Read(unsigned idx, unsigned buflen) { if(idx <= buflen) return 1; return 0; }",
                  "`idx` is an index into buffer of size `buflen`", True, id="no-access-sat"),
     pytest.param("check-oob", "unsigned Read(unsigned idx, unsigned buflen) { if(idx < buflen) return 1; return 0; }",

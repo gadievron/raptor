@@ -15,22 +15,25 @@ The canonical CWE-680 pattern:
   for (i = 0; i < count; i++) buf[i] = ...;  // OOB write past wrap
 
 The verb composes ``check_overflow``'s wrap predicate with ``check_oob``'s
-bound-violation predicate into a single check — saves operators from
-running both verbs separately and reconciling the verdicts.
+bound-violation predicate into a single model. Elements must have positive
+size, the loop starts at zero, and the allocation multiplication must overflow.
+Offsets remain modular at the selected width; the comparison concerns the
+element start, not its full extent or pointer arithmetic. Signed profiles
+are abstract modular arithmetic: signed C overflow is undefined. Neither
+SAT nor UNSAT establishes source allocation/access semantics.
 
 ``--profile`` defaults to ``uint32`` (most CWE-680 findings involve
 32-bit unsigned arithmetic). Override to match the C type of
 ``alloc_size`` (the wrapped result).
 
-``--guard`` is repeatable. Pass any visible guards (e.g.
-``--guard 'count > 0'`` to exclude the degenerate count=0 case).
+``--guard`` is repeatable. Pass visible source guards (e.g.
+``--guard 'count <= 1000'``). The zero-based loop domain is intrinsic.
 
 Output: JSON to stdout matching :func:`validate_path`'s shape.
 
-  feasible=true   CWE-680 IS reachable; ``model`` shows a concrete
-                  (count, element_size, index) triple satisfying both
-                  the wrap AND the OOB write
-  feasible=false  guards rule out either the wrap or the OOB
+  feasible=true   model satisfies the domain, overflow, and modular
+                  start-offset predicates
+  feasible=false  no assignment satisfies this model and its guards
   feasible=null   Z3 unavailable / unencodable
 """
 import argparse
