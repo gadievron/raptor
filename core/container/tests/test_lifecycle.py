@@ -24,7 +24,7 @@ def test_remove_containers_filters_by_label_and_rms() -> None:
         n = lc.remove_labeled_containers("k", "v")
     assert n == 2
     assert "--filter" in captured[0] and "label=k=v" in captured[0]
-    assert captured[1] == ["docker", "rm", "-f", "a1", "b2"]
+    assert captured[1] == ["docker", "rm", "-f", "-v", "a1", "b2"]
 
 
 def test_remove_containers_empty_value_is_noop() -> None:

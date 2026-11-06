@@ -14,7 +14,6 @@ docker-gated integration test at the bottom exercises the real
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -424,7 +423,7 @@ def test_staging_prunes_escaping_symlinks_keeps_internal(tmp_path: Path) -> None
         alias = staging / "alias.txt"
         assert alias.is_symlink() and alias.read_text() == "data"
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        cco.cleanup_staging(staging)
 
 
 # -- real-resolver integration (docker-gated) ----------------------------------
@@ -432,14 +431,11 @@ def test_staging_prunes_escaping_symlinks_keeps_internal(tmp_path: Path) -> None
 
 def _compose_available() -> bool:
     try:
-        scratch = cco._resolver_scratch_home()
-        try:
+        with cco._resolver_scratch_home() as scratch:
             probe = subprocess.run(
                 [*cco._compose_invocation(), "version"],
                 capture_output=True, timeout=10, env=cco._resolver_env(scratch),
             )
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
     except (OSError, subprocess.TimeoutExpired, cco.ComposeError):
         return False
     return probe.returncode == 0
@@ -493,7 +489,7 @@ def test_real_resolver_defeats_interpolation_bypass(tmp_path: Path) -> None:
         # Every stack network is internal (no routed egress).
         assert data["networks"]["default"]["internal"] is True
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        cco.cleanup_staging(staging)
 
 
 # -- review-response regressions ----------------------------------------------

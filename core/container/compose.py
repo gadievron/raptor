@@ -56,6 +56,8 @@ import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from contextlib import contextmanager
+from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
 
@@ -65,7 +67,7 @@ from typing import Any
 import yaml
 
 from core.container.proc import docker_child_env, run_cli
-from core.run.scratch import keepalive_register, keepalive_unregister
+from core.run.scratch import keepalive_register, keepalive_unregister, scratch_dir
 from core.source import open_regular_beneath
 
 logger = logging.getLogger(__name__)
@@ -358,17 +360,22 @@ def cleanup_staging(staging: str | Path) -> None:
     best-effort-removes the tree. Callers run it after ``down_stack``;
     the rewrite's own failure paths use it too.
     """
+    interrupted = None
     try:
-        try:
-            keepalive_unregister(staging)
-        except Exception:
-            logger.warning("Cannot unregister compose staging %s", staging, exc_info=True)
-    finally:
-        try:
-            if not rmtree_hardened(staging):
-                logger.warning("Compose staging retained after failed removal: %s", staging)
-        except Exception:
-            logger.warning("Cannot remove compose staging %s", staging, exc_info=True)
+        keepalive_unregister(staging)
+    except BaseException as exc:
+        logger.warning("Cannot unregister compose staging %s", staging, exc_info=True)
+        if not isinstance(exc, Exception):
+            interrupted = exc
+    try:
+        if not rmtree_hardened(staging):
+            logger.warning("Compose staging retained after failed removal: %s", staging)
+    except BaseException as exc:
+        logger.warning("Cannot remove compose staging %s", staging, exc_info=True)
+        if interrupted is None and not isinstance(exc, Exception):
+            interrupted = exc
+    if interrupted is not None:
+        raise interrupted
 
 
 def _prune_escaping_symlinks(staging: Path) -> int:
@@ -731,7 +738,8 @@ _RESOLVER_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 _RESOLVER_TIMEOUT_S = 60.0
 
 
-def _resolver_scratch_home() -> Path:
+@contextmanager
+def _resolver_scratch_home() -> Iterator[Path]:
     """Create the resolver's throwaway HOME — always OUTSIDE staging.
 
     The staging dir is a verbatim ``copytree`` of the (hostile) repo's
@@ -747,15 +755,11 @@ def _resolver_scratch_home() -> Path:
     fake_home; freshness per call is what makes the symlink-refusal
     guard unnecessary here). ``.docker`` is pre-created so config
     discovery lands on an existing empty RAPTOR-owned dir. Callers own
-    cleanup (``shutil.rmtree`` after resolution).
+    cleanup through the lexical scope, including failed setup.
     """
-    scratch = Path(tempfile.mkdtemp(prefix="raptor-resolver-home-"))
-    try:
+    with scratch_dir("raptor-resolver-home-") as scratch:
         (scratch / ".docker").mkdir(mode=0o700)
-        return scratch
-    except BaseException:
-        rmtree_hardened(scratch)
-        raise
+        yield scratch
 
 
 def _resolver_env(scratch_home: Path) -> dict[str, str]:
@@ -911,16 +915,13 @@ def _resolve_effective_model(compose_file: Path) -> dict[str, Any]:
     """
     staging = compose_file.parent
     prefix = _compose_invocation()
-    scratch_home = _resolver_scratch_home()
-    try:
+    with _resolver_scratch_home() as scratch_home:
         raw = _run_resolver(
             [*prefix, "-f", str(compose_file), "config"],
             staging,
             _resolver_env(scratch_home),
             scratch_home=scratch_home,
         )
-    finally:
-        rmtree_hardened(scratch_home)
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:

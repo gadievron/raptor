@@ -218,7 +218,7 @@ def test_export_failure_reclaims_tar_and_partial_tree_and_removes_container(
     assert result.reason == (
         "quota_exceeded" if failure in ("bytes", "entries") else "extract_failed"
     )
-    assert ["docker", "rm", "-f", "container-id"] in calls
+    assert ["docker", "rm", "-f", "-v", "container-id"] in calls
     assert not dest.exists()
     assert scratch(tmp_path) == []
 

@@ -24,7 +24,6 @@ import os
 import stat
 import logging
 import tarfile
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -155,7 +154,7 @@ def extract_rootfs_tar(
         errno.ENOSPC, errno.EDQUOT, errno.EIO, errno.EROFS,
         errno.ENOMEM, errno.EMFILE, errno.ENFILE,
     }
-    with scratch_dir("raptor-rootfs-extract-", dir=dest.parent) as scratch:
+    with scratch_dir("raptor-rootfs-extract-", dir=dest.parent, keepalive=True) as scratch:
         tree = scratch / "rootfs"
         tree.mkdir()
         if previous is not None:
@@ -218,7 +217,7 @@ def export_rootfs(
 
     ``docker create`` pulls the image when absent (bounded by
     ``timeout_seconds``); the throwaway container is removed on every
-    path. The resulting directory is the sacrificial writable upper
+    path, including its anonymous volumes. The resulting directory is the sacrificial writable upper
     layer for ``sandbox(rootfs=...)`` runs — treat it as consumed after
     the environment runs.
 
@@ -251,7 +250,7 @@ def export_rootfs(
         )
     cid = create.stdout.strip()
 
-    tar_path: Path | None = None
+    failed = False
     try:
         inspect = run_cli(
             ["docker", "image", "inspect", image_ref],
@@ -287,72 +286,70 @@ def export_rootfs(
         # unpacked rootfs anyway, so it can hold the tar first.
         staging_dir = Path(dest_dir).parent
         staging_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(prefix="raptor-rootfs-",
-                                         suffix=".tar",
-                                         dir=str(staging_dir),
-                                         delete=False) as fd:
-            tar_path = Path(fd.name)
-        export = run_cli(
-            ["docker", "export", "-o", str(tar_path), cid],
-            timeout=timeout_seconds,
-        )
-        if export.returncode != 0:
-            return ExportOutcome(
-                ok=False,
-                reason="export_failed",
-                reason_class=("transport" if export.timed_out
-                              else classify_docker_stderr(export.stderr)),
-                stderr=(export.stderr or "").strip()[-4000:],
+        with scratch_dir("raptor-rootfs-export-", dir=staging_dir, keepalive=True) as workspace:
+            tar_path = workspace / "image.tar"
+            export = run_cli(
+                ["docker", "export", "-o", str(tar_path), cid],
+                timeout=timeout_seconds,
             )
+            if export.returncode != 0:
+                return ExportOutcome(
+                    ok=False,
+                    reason="export_failed",
+                    reason_class=("transport" if export.timed_out
+                                  else classify_docker_stderr(export.stderr)),
+                    stderr=(export.stderr or "").strip()[-4000:],
+                )
 
-        try:
-            extracted, skipped = extract_rootfs_tar(
-                tar_path, dest_dir,
-                max_total_bytes=max_rootfs_bytes,
-                max_entry_count=max_rootfs_entries,
-            )
-        except RootfsQuotaExceeded as exc:
-            return ExportOutcome(
-                ok=False,
-                reason="quota_exceeded",
-                reason_class="unknown",
-                stderr=str(exc)[:400],
-            )
-        except (tarfile.TarError, OSError) as exc:
-            return ExportOutcome(
-                ok=False,
-                reason="extract_failed",
-                reason_class="unknown",
-                stderr=str(exc)[:400],
-            )
-        extras: dict[str, Any] = {
-            "rootfs_extracted": extracted,
-            "rootfs_skipped": skipped,
-        }
-        if extracted == 0:
-            return ExportOutcome(
-                ok=False,
-                reason="extract_failed",
-                reason_class="unknown",
-                stderr="rootfs extraction produced no files — refusing to "
-                       "run the sandbox tier on an empty tree",
-                extras=extras,
-            )
-        if skipped > extracted * _DEGRADED_SKIP_RATIO:
-            extras["rootfs_degraded"] = True
-            logger.warning(
-                "rootfs export of %s: %d/%d members skipped — tree flagged "
-                "degraded", image_ref, skipped, extracted + skipped,
-            )
-        return ExportOutcome(ok=True, config=config, extras=extras)
+            try:
+                extracted, skipped = extract_rootfs_tar(
+                    tar_path, dest_dir,
+                    max_total_bytes=max_rootfs_bytes,
+                    max_entry_count=max_rootfs_entries,
+                )
+            except RootfsQuotaExceeded as exc:
+                return ExportOutcome(
+                    ok=False,
+                    reason="quota_exceeded",
+                    reason_class="unknown",
+                    stderr=str(exc)[:400],
+                )
+            except (tarfile.TarError, OSError) as exc:
+                return ExportOutcome(
+                    ok=False,
+                    reason="extract_failed",
+                    reason_class="unknown",
+                    stderr=str(exc)[:400],
+                )
+            extras: dict[str, Any] = {
+                "rootfs_extracted": extracted,
+                "rootfs_skipped": skipped,
+            }
+            if extracted == 0:
+                return ExportOutcome(
+                    ok=False,
+                    reason="extract_failed",
+                    reason_class="unknown",
+                    stderr="rootfs extraction produced no files — refusing to "
+                           "run the sandbox tier on an empty tree",
+                    extras=extras,
+                )
+            if skipped > extracted * _DEGRADED_SKIP_RATIO:
+                extras["rootfs_degraded"] = True
+                logger.warning(
+                    "rootfs export of %s: %d/%d members skipped — tree flagged "
+                    "degraded", image_ref, skipped, extracted + skipped,
+                )
+            return ExportOutcome(ok=True, config=config, extras=extras)
+    except BaseException:
+        failed = True
+        raise
     finally:
+        # Host scratch is already reclaimed before a slow/failed daemon
+        # teardown. Always attempt removal without masking a raised failure.
         try:
-            run_cli(["docker", "rm", "-f", cid], timeout=30)
-        finally:
-            # The image tar can be several GiB; daemon cleanup failure must
-            # not prevent independent host-file cleanup.
-            if tar_path is not None:
-                try:
-                    tar_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            run_cli(["docker", "rm", "-f", "-v", cid], timeout=30)
+        except BaseException:
+            if not failed:
+                raise
+            logger.warning("Container teardown failed for %s", cid, exc_info=True)
