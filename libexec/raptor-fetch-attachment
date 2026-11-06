@@ -29,7 +29,6 @@ Exit codes: 0 success, 1 download/validation failure, 2 usage error.
 """
 import errno
 import re
-import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -88,58 +87,10 @@ def _confine_dest(dest_arg: str, report_path: Path) -> Path | None:
     return report_path.resolve().parent / "attachments" / name
 
 
-# Flags for the anchored directory opens below. getattr fallbacks keep
-# the script importable where a flag is missing; the fstat(S_ISDIR)
-# check on the OPENED fd carries the directory guarantee either way.
-_O_DIR_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_DIRECTORY", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
-    | getattr(os, "O_CLOEXEC", 0)
-)
-
-
 def _open_attachments_dir(attachments_dir: Path) -> int:
-    """Open ``attachments_dir`` as an fd via an anchored component walk.
-
-    The base (the resolved bug-report directory — canonical, so a
-    symlink at its final component can only be a post-resolve swap) is
-    opened with O_DIRECTORY|O_NOFOLLOW, then the ``attachments``
-    component is created and opened relative to that fd (``dir_fd``),
-    each fd verified S_ISDIR by fstat — never by name. A symlink at
-    either component refuses (ELOOP) instead of being followed: a
-    by-name probe (``is_symlink()``) races a concurrent swap, an
-    already-opened fd cannot be redirected.
-
-    Returns the directory fd (caller closes). Raises OSError on any
-    refusal.
-
-    Sibling: :mod:`core.source.beneath` is the shared home for the
-    READER-side anchored open (``open_regular_beneath``). This walk
-    stays script-local because it is write-side — it mkdirs the
-    final component mid-walk — and adopts a shared
-    ``open_dir_beneath`` when that flavor earns a second consumer.
-    """
-    base_fd = os.open(str(attachments_dir.parent), _O_DIR_FLAGS)
-    try:
-        if not stat.S_ISDIR(os.fstat(base_fd).st_mode):
-            raise OSError(errno.ENOTDIR, "not a directory",
-                          str(attachments_dir.parent))
-        try:
-            os.mkdir(attachments_dir.name, 0o755, dir_fd=base_fd)
-        except FileExistsError:
-            pass  # whatever exists is vetted by the anchored open below
-        fd = os.open(attachments_dir.name, _O_DIR_FLAGS, dir_fd=base_fd)
-    finally:
-        os.close(base_fd)
-    try:
-        if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise OSError(errno.ENOTDIR, "not a directory",
-                          str(attachments_dir))
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+    """Use the shared no-symlink mkdir/open walk; caller closes the fd."""
+    from core.source.beneath import open_dir_beneath
+    return open_dir_beneath(attachments_dir.parent, Path(attachments_dir.name), create=True, mode=0o755)
 
 
 def _attachment_urls(report: object) -> set:
