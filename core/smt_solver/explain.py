@@ -52,6 +52,8 @@ def track(
     Invalid expression sorts or contexts decline before any assertion is
     added. Later batches may not use active tracking labels as formula
     variables. Pass an existing reverse map to retain display names.
+    The reverse map preserves assertion order: each input appends one fresh
+    marker, even when display names repeat. Existing entries retain order.
     """
     if rev is None:
         rev = {}

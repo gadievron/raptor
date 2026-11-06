@@ -1290,3 +1290,17 @@ width. Its bound compares unsigned result bits even in a signed frame, so
 values with the sign bit set remain possible. Unknown, negative, ambiguous,
 or out-of-width bounds assert no range. These remain callee-model assumptions
 and do not grant source-bound audit proof authority.
+
+Assignment-shaped inputs break call deduplication but do not establish scalar
+SSA identity across a mutation. Each guard and call-summary assertion records
+its mutation-free segment using its native tracking marker. An UNSAT query
+containing mutations refutes only when the actual native core is wholly owned
+by one segment. Cross-segment, missing, or unowned core provenance stays
+inconclusive; encoded conflicts remain available for diagnostics. Intrinsic
+numeric predicates have no established segment across rejected assignments.
+Frame tracking requires a fresh solver, and later assertion changes invalidate
+ownership. No complete constraint summary is claimed for a query with rejected
+mutations.
+This rule adds no solver passes and preserves independently contradictory
+segments. Recovering cross-segment proofs requires a proper scalar value-flow
+model rather than dropping the mutation.

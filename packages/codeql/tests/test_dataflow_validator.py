@@ -772,3 +772,25 @@ class TestSourceContextLineModel:
             str(src), 2, context_lines=1, repo_root=tmp_path,
         )
         assert ">>>    2: int b;" in out
+
+
+@pytest.mark.skipif(not z3_available(), reason="z3-solver not installed")
+@pytest.mark.parametrize("hint", [{}, {"width": 32, "signed": True}], ids=["guessed", "pinned"])
+def test_unmodeled_scalar_mutation_cannot_short_circuit_dataflow_analysis(tmp_path, hint):
+    validator = _validator()
+    conditions = [PathCondition(text, n) for n, text in enumerate(
+        ["Value == 1", "Value = 2", "Value == 2"])]
+    validator._extract_path_conditions = MagicMock(return_value=(conditions, hint))
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    # The SMT solver is real; only incidental prescreen and paid analysis are
+    # replaced. A false refutation here would bypass the supplied analysis.
+    with patch.object(validator, "_injection_prescreen", return_value=None), patch(
+        "core.llm.scorecard.prefilter_decision",
+        return_value=SimpleNamespace(short_circuit=False),
+    ), patch("core.llm.scorecard.record_prefilter_outcome"), patch(
+        "packages.codeql.dataflow_validator.load_methodology", return_value="",
+    ):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is True
+    assert validator.llm.generate_structured.call_count == 1
+    assert validator._extract_path_conditions.call_count == 1
