@@ -10,10 +10,19 @@ pytestmark = pytest.mark.slow  # owned process stdout exercises the production r
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
-    monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
+def owned_state(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+        monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    """Undo body patches before restoring the file-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def log_line(path):

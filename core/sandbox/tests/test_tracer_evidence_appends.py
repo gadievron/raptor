@@ -15,9 +15,18 @@ RECORD = {'type': 'audit_summary', 'dropped_by_category': {}, 'detail': 'snowman
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setattr(tracer, '_evidence_out_fd', None)
+def owned_state(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        monkeypatch.setattr(tracer, '_evidence_out_fd', None)
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    """Undo body patches before restoring the file-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.fixture
