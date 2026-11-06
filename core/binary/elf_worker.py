@@ -10,8 +10,8 @@ import re
 import site
 import subprocess
 import sys
-import tempfile
 
+from core.run.scratch import scratch_dir
 from core.security.log_sanitisation import escape_nonprintable
 from core.source.contained import open_regular
 
@@ -106,7 +106,8 @@ def inspect_elf(binary: str | Path) -> ElfFacts | None:
     if user_site:
         runtime.append(str(Path(user_site).resolve()))
     try:
-        with tempfile.TemporaryDirectory(prefix='raptor-elf-facts-', dir=subprocess_tmpdir()) as scratch:
+        with scratch_dir('raptor-elf-facts-', dir=subprocess_tmpdir(), keepalive=True) as scratch_path:
+            scratch = str(scratch_path)
             options = inspection_options(selected, sys.executable, scratch)
             options['tool_paths'] = list(dict.fromkeys([*options['tool_paths'], *runtime, str(worker)]))
             command = inspection_command([sys.executable, '-I', '-B', str(worker),

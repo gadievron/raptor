@@ -17,10 +17,10 @@ import contextlib
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from core.run.scratch import scratch_dir
 from core.atomic_fs import (
     open_exclusive_artifact,
     open_hardened_append,
@@ -398,11 +398,11 @@ def collect_findings(out_dir: Path,
             and combined.stat().st_size > _SARIF_CHUNK_THRESHOLD):
         oversized.append(combined)
     findings: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="recall-sarif-chunks-") as td:
+    with (scratch_dir("recall-sarif-chunks-") if oversized else contextlib.nullcontext()) as scratch_path:
         for path in oversized:
             if path in sarifs:
                 sarifs.remove(path)
-            sarifs.extend(_chunk_oversized_sarif(path, Path(td)))
+            sarifs.extend(_chunk_oversized_sarif(path, scratch_path))
         for path in sarifs:
             findings.extend(
                 parse_sarif_findings(path, source_root=source_root))

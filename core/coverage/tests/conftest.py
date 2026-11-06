@@ -23,3 +23,11 @@ def _isolated_mac_keys(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
         "XDG_DATA_HOME", str(isolated_test_dir(tmp_path_factory, "xdg-data")),
     )
+
+
+@pytest.fixture(autouse=True)
+def _owned_tool_scratch():
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_scratch_keepalive():
+        yield

@@ -25,3 +25,11 @@ def _isolate_git_proxy_hosts_override(tmp_path, monkeypatch):
         mod, "_OVERRIDE_CONFIG_PATH",
         tmp_path / "git-proxy-hosts-isolated.json",
     )
+
+
+@pytest.fixture(autouse=True)
+def _owned_tool_scratch():
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_scratch_keepalive():
+        yield

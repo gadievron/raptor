@@ -31,3 +31,11 @@ def _reset_llm_egress_state():
 def monkeypatch(_reset_llm_egress_state, monkeypatch):
     """Keep inherited process guards inside the egress owner's lifetime."""
     yield monkeypatch
+
+
+@pytest.fixture(autouse=True)
+def _owned_tool_scratch():
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_scratch_keepalive():
+        yield

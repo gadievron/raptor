@@ -33,10 +33,10 @@ from __future__ import annotations
 import logging
 import re
 import shutil
-import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
+from core.run.scratch import scratch_dir
 from core.config import RaptorConfig
 from core.git.validate import validate_repo_url
 from core.logging import log_security_event as _log_security_event
@@ -1191,7 +1191,8 @@ def ls_remote(
     # Landlock engages and ``fake_home`` has somewhere to materialise.
     # An ephemeral temp dir gives the sandbox a writable scratch
     # area that's discarded as soon as we leave the with-block.
-    with tempfile.TemporaryDirectory(prefix="raptor-ls-remote-") as td:
+    with scratch_dir("raptor-ls-remote-") as scratch_path:
+        td = str(scratch_path)
         # Pre-fix the log line emitted the raw URL. Operators
         # passing tokens via URL userinfo (`https://oauth2:
         # token@github.com/owner/repo.git`) leaked the token to
