@@ -1229,9 +1229,11 @@ def test_workflow_rebalance_preserves_selected_cases(tmp_path, monkeypatch):
     durations = tmp_path / "durations.json"
     durations.write_text(json.dumps({"a.py": 100, "b.py": 1, "c.py": 2}))
     output = tmp_path / "outputs"
-    monkeypatch.setenv("SELECTED_MATRIX", json.dumps([
+    selected = tmp_path / "selected.json"
+    selected.write_text(json.dumps([
         {"batch": 1, "files": "a.py b.py"}, {"batch": 2, "files": "c.py"},
     ]))
+    monkeypatch.setenv("SELECTED_MATRIX_FILE", str(selected))
     monkeypatch.setenv("RAPTOR_TEST_DURATIONS", str(durations))
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     monkeypatch.chdir(repo)
@@ -1296,16 +1298,25 @@ class TestSharedFixtureInventory:
     ('core/pkga/removed.py', 'full'),
     ('core/pkga/mod.py', 'scoped'),
     ('.github/scripts/sca_test_matrix.py', 'scoped'),
-], ids=['harness', 'dependencies', 'deleted-module', 'ordinary-edit', 'sca-planner'])
+    (None, 'full'),
+], ids=['harness', 'dependencies', 'deleted-module', 'ordinary-edit', 'sca-planner', 'manual-full'])
 def test_cli_reports_actual_fallback_mode(mini_repo, tmp_path, monkeypatch, changed, mode):
     import test_scope as dispatcher
     changes = tmp_path / 'changed'
-    changes.write_text(changed + '\n')
+    if changed is not None:
+        changes.write_text(changed + '\n')
     output = tmp_path / 'outputs'
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    monkeypatch.setattr(sys, 'argv', ['test_scope', '--repo', str(mini_repo), '--changed-files', str(changes)])
+    matrix_file = tmp_path / 'matrix.json'
+    argv = ['test_scope', '--repo', str(mini_repo), '--python-matrix-out', str(matrix_file)]
+    if changed is not None:
+        argv.extend(['--changed-files', str(changes)])
+    monkeypatch.setattr(sys, 'argv', argv)
     assert dispatcher.main() == 0
     assert f'scope_mode={mode}\n' in output.read_text()
+    outputs = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert json.loads(matrix_file.read_text()) == json.loads(outputs['python_matrix'])
+    assert outputs['python_matrix_file'] == str(matrix_file)
 
 
 def test_manifest_oracle_follows_runtime_key_inputs_and_ignores_bytecode(tmp_path):
@@ -1316,3 +1327,52 @@ def test_manifest_oracle_follows_runtime_key_inputs_and_ignores_bytecode(tmp_pat
     assert _manifest_cache_key_gaps(tmp_path, cache_helper=helper) == ([], [], ['pyproject.toml', 'uv.lock', 'uv.toml'])
     helper.write_text("VENV_INPUTS = ('pyproject.toml', 'uv.lock', 'requirements/base.txt')\n")
     assert _manifest_cache_key_gaps(tmp_path, cache_helper=helper)[1] == ['requirements/base.txt']
+
+
+
+def test_optional_matrix_file_failure_preserves_dispatch_outputs(tmp_path, capsys):
+    import test_scope as dispatcher
+
+    files = [Path('core/tests/test_one.py')]
+    result = {'python': {'run': True, 'files': files, 'matrix': batch_matrix(files)}}
+    outputs = {'python_matrix_file': 'stale.json'}
+    dispatcher._emit_outputs(result, outputs.__setitem__,
+                             python_matrix_out=tmp_path / 'absent/matrix.json')
+    assert outputs['python'] == 'true'
+    assert outputs['python_matrix_file'] == ''
+    assert outputs['python_files'] == 'core/tests/test_one.py'
+    assert json.loads(outputs['python_matrix']) == result['python']['matrix']
+    assert '::warning::Cannot write optional Python matrix file:' in capsys.readouterr().out
+
+
+def test_large_matrix_rebalance_starts_without_large_environment_value(tmp_path):
+    import os
+    import subprocess
+    import textwrap
+
+    repo = Path(__file__).resolve().parents[2]
+    workflow = (repo / '.github/workflows/tests.yml').read_text()
+    block = workflow.split('      - id: balance\n', 1)[1].split('\n  deps:', 1)[0]
+    assert 'SELECTED_MATRIX:' not in block
+    assert 'continue-on-error: true' in block
+    assert 'python_matrix: ${{ steps.balance.outputs.python_matrix || steps.scope.outputs.python_matrix }}' in workflow
+    assert 'SELECTED_MATRIX_FILE: ${{ steps.scope.outputs.python_matrix_file }}' in block
+    assert "steps.scope.outputs.python_matrix_file != ''" in block
+    assert '--python-matrix-out "$RUNNER_TEMP/python-matrix.json"' in workflow
+    code = textwrap.dedent(block.split("<<'PYTHON'\n", 1)[1].split('          PYTHON', 1)[0])
+    files = [f'core/example/tests/test_case_{i:05d}.py' for i in range(5000)]
+    selected = tmp_path / 'selected.json'
+    selected.write_text(json.dumps([{'batch': 1, 'files': ' '.join(files)}]))
+    assert selected.stat().st_size > 131072
+    durations = tmp_path / 'durations.json'
+    durations.write_text(json.dumps({files[0]: 1.0}))
+    output = tmp_path / 'outputs'
+    env = dict(os.environ, SELECTED_MATRIX_FILE=str(selected),
+               RAPTOR_TEST_DURATIONS=str(durations), GITHUB_OUTPUT=str(output))
+    env.pop('SELECTED_MATRIX', None)
+    result = subprocess.run([sys.executable, '-c', code], cwd=repo, env=env,
+                            capture_output=True, text=True, timeout=30, check=True)
+    assert 'duration-aware LPT' in result.stdout
+    matrix = json.loads(output.read_text().split('=', 1)[1])
+    assert sorted(path for batch in matrix for path in batch['files'].split()) == files
+    assert all(batch['files'] for batch in matrix)

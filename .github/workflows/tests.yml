@@ -211,7 +211,7 @@ jobs:
         run: |
           python3 .github/scripts/test_scope.py \
             ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
-            --repo .
+            --repo . --python-matrix-out "$RUNNER_TEMP/python-matrix.json"
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
 
@@ -265,11 +265,13 @@ jobs:
             "$durations_path" $xmls
           echo "path=$durations_path" >> "$GITHUB_OUTPUT"
 
+      # Carry the selected matrix in a runner-local file: a full selection is
+      # already close to Linux's per-environment-string size limit.
       - id: balance
-        if: steps.scope.outputs.python == 'true' && steps.durations.outputs.path != ''
+        if: steps.scope.outputs.python == 'true' && steps.durations.outputs.path != '' && steps.scope.outputs.python_matrix_file != ''
         continue-on-error: true
         env:
-          SELECTED_MATRIX: ${{ steps.scope.outputs.python_matrix }}
+          SELECTED_MATRIX_FILE: ${{ steps.scope.outputs.python_matrix_file }}
           RAPTOR_TEST_DURATIONS: ${{ steps.durations.outputs.path }}
         run: |
           python3 - <<'PYTHON'
@@ -281,7 +283,7 @@ jobs:
           sys.path.insert(0, ".github/scripts")
           from test_scope import batch_matrix
 
-          selected = json.loads(os.environ["SELECTED_MATRIX"])
+          selected = json.loads(Path(os.environ["SELECTED_MATRIX_FILE"]).read_text(encoding="utf-8"))
           files = [Path(path) for batch in selected for path in batch["files"].split()]
           matrix = batch_matrix(files)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
