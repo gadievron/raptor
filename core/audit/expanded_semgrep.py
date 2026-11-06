@@ -41,7 +41,7 @@ import os
 import re
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,7 @@ from ._util import safe_join
 from .preprocessor_view import (
     _AUGMENT_FILE_CAP,
     _CXX_SUFFIXES,
+    _macro_flags,
     ExpandedView,
     expand_translation_unit,
 )
@@ -101,7 +102,8 @@ class ExpansionBudget:
     """Bounded, cached access to fidelity-3 views.
 
     At most *max_expansions* preprocessor runs are charged; views are
-    cached per ``(target, file)`` so re-examining the same TU is free.
+    cached per target, file and normalized macro flags so re-examining
+    the same preprocessing configuration is free.
     Failed views are cached too — a TU that will not preprocess should
     not be retried on every hypothesis.  Thread-safe (the orchestrator
     sweeps concurrently).
@@ -110,7 +112,7 @@ class ExpansionBudget:
     def __init__(self, max_expansions: int = _AUGMENT_FILE_CAP) -> None:
         self.max_expansions = max_expansions
         self.used = 0
-        self._views: dict[tuple[str, str], ExpandedView] = {}
+        self._views: dict[tuple[str, str, tuple[str, ...]], ExpandedView] = {}
         self._lock = threading.Lock()
 
     def view_for(
@@ -125,21 +127,24 @@ class ExpansionBudget:
 
         Cached entries (ok or degraded) never re-charge the budget.
         """
-        key = (str(target_path), file_path)
+        target_path = Path(target_path).absolute()
+        flags = tuple(_macro_flags(macro_config))
+        key = (str(target_path), file_path, flags)
         with self._lock:
             if key in self._views:
-                return self._views[key]
+                view = self._views[key]
+                return replace(view, errors=list(view.errors))
             if self.used >= self.max_expansions:
                 return None
             self.used += 1
         view = expand_translation_unit(
             target_path=Path(target_path),
             file_path=file_path,
-            macro_config=macro_config,
+            macro_config=flags,
             out_dir=out_dir,
         )
         with self._lock:
-            self._views[key] = view
+            self._views[key] = replace(view, errors=list(view.errors))
         return view
 
 
