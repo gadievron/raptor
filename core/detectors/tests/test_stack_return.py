@@ -121,6 +121,27 @@ def test_missing_clang_limits_only_this_detector(setup):
     assert not state['calls'] and not state['prepared']
 
 
+@pytest.mark.parametrize("cap", [0, 1, 7, 50])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_capped_selection_matches_lexical_order_independently_of_insertion(setup, monkeypatch, cap, reverse):
+    root, state, seed, execute = setup
+    names = [f"candidate-{index:04d}.c" for index in range(500)]
+    # Zigzag insertion also differs from either monotonic order.
+    insertion = names[::2] + names[1::2]
+    if reverse:
+        insertion.reverse()
+    seeds = {name: [seed(name)] for name in insertion}
+    monkeypatch.setattr(detector, "_MAX_TUS", cap)
+    result = execute(seeds, available=False)
+    assert list(result.value.candidates) == names[:cap]
+    assert result.value.limitations[0] == {
+        "tu": "", "reason": f"stack-return candidate cap skipped {len(names) - cap} TU(s)",
+    }
+    assert list(seeds) == insertion
+    assert all(seeds[name][0]["file"] == str(root / name) for name in names)
+    assert not state["calls"] and not state["prepared"]
+
+
 def test_candidate_cap_is_visible_and_never_enlarges_input(setup, monkeypatch):
     _, state, seed, run = setup
     monkeypatch.setattr(detector, '_MAX_TUS', 1)

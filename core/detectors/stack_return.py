@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from heapq import nsmallest
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -46,11 +47,11 @@ class StackReturnAnalysis:
 
 
 def _candidates(state: StackReturnAnalysis) -> StageResult:
-    selected = sorted(state.seeds.items())
-    if len(selected) > _MAX_TUS:
-        skipped = len(selected) - _MAX_TUS
+    selected = nsmallest(_MAX_TUS, state.seeds.items(), key=lambda item: item[0])
+    if len(state.seeds) > _MAX_TUS:
+        skipped = len(state.seeds) - _MAX_TUS
         state.limitations.append({"tu": "", "reason": f"stack-return candidate cap skipped {skipped} TU(s)"})
-    for tu, diagnostics in selected[:_MAX_TUS]:
+    for tu, diagnostics in selected:
         points = set()
         if len(diagnostics) > _MAX_LOCATIONS:
             state.limitations.append({"tu": tu, "reason": "stack-return candidate location budget exhausted"})
