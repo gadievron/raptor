@@ -761,6 +761,7 @@ When GCC and Clang are available, compiler scanning also checks a limited class
 of C aliasing candidates against Clang's parsed types. Direct loads, stores,
 and local pointer aliases can become findings when they access a known local
 scalar through an incompatible builtin scalar type on a straight-line path.
+It follows local pointer reassignments when both object origins are known.
 The report identifies the object and both types under Raptor's strict-aliasing
 compiler model; project build flags are not inferred. Harmless casts alone do
 not qualify. `/audit` uses the same check for matching CWE-843 hypotheses.

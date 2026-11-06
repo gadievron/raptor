@@ -1423,11 +1423,15 @@ def test_native_aliasing_pipeline_separates_proof_from_candidates(tmp_path, sand
         "int direct(float value) { return *(int*)&value; }\n"
         "int indirect(float value) { int *p=(int*)&value; return *p; }\n"
         "int unused(float value) { int *p=(int*)&value; return 0; }\n"
-        "int dead(float value) { if (0) return *(int*)&value; return 0; }\n")
+        "int dead(float value) { if (0) return *(int*)&value; return 0; }\n"
+        "int reassigned(float value) { int other=1; int *p=&other; p=(int*)&value; return *p; }\n"
+        "int saved(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&other; return *q; }\n"
+        "int assigned(float value) { int other=1; int *p=(int*)&value; int *q=&other; q=p; p=&other; return *q; }\n"
+        "int overwritten(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&other; q=p; return *q; }\n")
     result = _cs.scan_target(tmp_path)
     proofs = [f for f in result.findings if f["rule_id"] == "raptor.compiler.incompatible-scalar-access"]
-    assert {f["line"] for f in proofs} == {1, 2}
-    assert {c["line"] for c in result.review_candidates} == {3, 4}
+    assert {f["line"] for f in proofs} == {1, 2, 5, 6, 7}
+    assert {c["line"] for c in result.review_candidates} == {3, 4, 8}
     sarif = _cs.to_sarif(result)
     assert all(r["ruleId"] != "-Wstrict-aliasing" for r in sarif["runs"][0]["results"])
     assert all(f["aliasing_proof"]["object"] == "value" for f in proofs)

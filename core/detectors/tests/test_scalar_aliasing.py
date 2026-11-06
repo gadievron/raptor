@@ -22,6 +22,11 @@ int size_only(float value) { return sizeof(*(int*)&value); }
 int round_trip(float value) { int *p=(int*)&value; float *q=(float*)p; return 0; }
 float round_trip_read(float value) { int *p=(int*)&value; float *q=(float*)p; return *q; }
 int reassigned(float value) { int other=1; int *p=(int*)&value; p=&other; return *p; }
+int reassigned_access(float value) { int other=1; int *p=&other; p=(int*)&value; return *p; }
+int saved_alias(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&other; return *q; }
+int assigned_alias(float value) { int other=1; int *p=(int*)&value; int *q=&other; q=p; p=&other; return *q; }
+int self_assignment(float value) { int *p=(int*)&value; p=p; return *p; }
+int overwritten_alias(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&other; q=p; return *q; }
 void stop(void);
 int interrupted(float value) { int *p=(int*)&value; stop(); return *p; }
 typedef int alias_int __attribute__((may_alias));
@@ -50,7 +55,9 @@ def parsed(tmp_path_factory):
 @pytest.mark.slow
 def test_native_ast_proves_only_supported_actual_accesses(parsed):
     proofs = scalar_access_proofs(parsed, _SOURCE)
-    assert {p["function"] for p in proofs} == {"direct", "indirect", "write_access"}
+    assert {p["function"] for p in proofs} == {
+        "direct", "indirect", "write_access", "reassigned_access", "saved_alias", "assigned_alias", "self_assignment",
+    }
     indirect = next(p for p in proofs if p["function"] == "indirect")
     assert indirect["declared_type"] == "float" and indirect["access_type"] == "int"
     assert indirect["identifiers"] == ["value", "p"]
@@ -203,7 +210,7 @@ def test_sparse_proof_locations_do_not_index_every_source_newline(parsed):
 
     original = scalar_access_proofs(parsed, _SOURCE)
     actual = scalar_access_proofs(shifted, MeasuredSource(padding + _SOURCE))
-    assert len(actual) == len(original) == 3
+    assert original and len(actual) == len(original)
     expected = [dict(proof, **{key: proof[key] + 100_000
                               for key in ("line", "cast_start", "cast_end")})
                 for proof in original]
