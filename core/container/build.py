@@ -8,14 +8,15 @@ packages, rebuild) instead of a dead "build failed".
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.container.containers import is_external_image
 from core.container.failures import classify_docker_stderr
 from core.container.proc import run_cli
+from core.run.scratch import temporary_text
 
 
 def extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
@@ -238,24 +239,12 @@ def build_image(
                                         local_prefixes=local_prefixes):
         cmd.append("--pull")
 
-    tmpfile: Path | None = None
-    try:
+    with ExitStack() as cleanup:
         if dockerfile_text is not None:
-            # encoding pinned: without it the write uses the locale
-            # encoding, and a non-UTF-8 locale turned a Dockerfile
-            # with non-ASCII content into a UnicodeEncodeError that
-            # escaped the failures-are-data contract. tmpfile is
-            # recorded BEFORE the write so the finally-cleanup sees
-            # it even when the write itself fails.
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                prefix="raptor-env-df-",
-                suffix=".Dockerfile",
-                delete=False,
-            ) as fd:
-                tmpfile = Path(fd.name)
-                fd.write(dockerfile_text)
+            tmpfile = cleanup.enter_context(temporary_text(
+                dockerfile_text, prefix="raptor-env-df-", suffix=".Dockerfile",
+                strict_cleanup=False,
+            ))
             cmd.extend(["-f", str(tmpfile)])
         cmd.append(str(ctx))
 
@@ -298,6 +287,3 @@ def build_image(
             reason="build_failed",
             reason_class=failure_class,
         )
-    finally:
-        if tmpfile is not None and tmpfile.exists():
-            tmpfile.unlink()

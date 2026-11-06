@@ -7,7 +7,7 @@ written in Semgrep YAML.
 """
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from core.run.scratch import temporary_text
 
 from packages import semgrep as semgrep_pkg
 
@@ -98,43 +98,28 @@ class SemgrepAdapter(ToolAdapter):
             from core.config import RaptorConfig
             env = RaptorConfig.get_safe_env()
 
-        rule_file: Path | None = None
         try:
-            with NamedTemporaryFile(
-                prefix="semgrep_hv_", suffix=".yaml",
-                mode="w", delete=False,
-            ) as tmp:
-                # Record the path before writing so the finally-unlink
-                # below also covers a failed write — delete=False files
-                # otherwise leak on ENOSPC/EIO.
-                rule_file = Path(tmp.name)
-                tmp.write(rule)
-
-            subprocess_runner = (
-                make_sandbox_runner(target=target) if self._sandbox else None
-            )
-            result = semgrep_pkg.run_rule(
-                target=target,
-                config=str(rule_file),
-                timeout=timeout,
-                env=env,
-                subprocess_runner=subprocess_runner,
-                # sandbox=False on this adapter is the documented
-                # trusted-input escape hatch; without this flag the
-                # runner's own default sandbox would re-engage.
-                unsandboxed=not self._sandbox,
-            )
+            with temporary_text(rule, prefix="semgrep_hv_", suffix=".yaml",
+                                strict_cleanup=False) as rule_file:
+                subprocess_runner = (
+                    make_sandbox_runner(target=target) if self._sandbox else None
+                )
+                result = semgrep_pkg.run_rule(
+                    target=target,
+                    config=str(rule_file),
+                    timeout=timeout,
+                    env=env,
+                    subprocess_runner=subprocess_runner,
+                    # sandbox=False on this adapter is the documented
+                    # trusted-input escape hatch; without this flag the
+                    # runner's own default sandbox would re-engage.
+                    unsandboxed=not self._sandbox,
+                )
         except OSError as e:
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
                 error=f"failed to invoke semgrep: {e}",
             )
-        finally:
-            if rule_file is not None:
-                try:
-                    rule_file.unlink()
-                except OSError:
-                    pass
 
         if not result.ok:
             return ToolEvidence(

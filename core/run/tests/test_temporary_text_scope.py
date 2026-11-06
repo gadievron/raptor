@@ -84,3 +84,31 @@ def test_new_cleanup_failure_propagates(tmp_path, failed_unlink, cleanup_error):
     with pytest.raises(cleanup_error, match="cleanup failure"):
         with scratch.temporary_text("payload", dir=tmp_path, prefix="input-", suffix=".txt"):
             pass
+
+
+def test_best_effort_cleanup_preserves_success(tmp_path, failed_unlink, caplog):
+    with scratch.temporary_text("payload", dir=tmp_path, prefix="input-", suffix=".txt", strict_cleanup=False) as path:
+        result = path.read_text()
+    assert result == "payload"
+    assert any("Temporary text cleanup failed" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
+def test_best_effort_cleanup_does_not_swallow_control_or_programming_errors(tmp_path, failed_unlink, error):
+    failed_unlink[0] = error
+    with pytest.raises(error, match="cleanup failure"):
+        with scratch.temporary_text("payload", dir=tmp_path, prefix="input-", suffix=".txt", strict_cleanup=False):
+            pass
+
+
+@pytest.mark.parametrize("errors", ["strict", "replace"])
+def test_encoding_error_policy_retains_expanded_source_contract(tmp_path, errors):
+    def write():
+        with scratch.temporary_text("prefix\udcffsuffix", dir=tmp_path, prefix="input-", suffix=".c", errors=errors) as path:
+            return path.read_bytes()
+    if errors == "strict":
+        with pytest.raises(UnicodeEncodeError):
+            write()
+    else:
+        assert write() == b"prefix?suffix"
+    assert not list(tmp_path.iterdir())

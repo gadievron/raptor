@@ -335,7 +335,7 @@ def scratch_dir(
 
 
 def write_temp_text(text: str, *, prefix: str, suffix: str,
-                    dir: str | Path | None = None) -> Path:
+                    dir: str | Path | None = None, errors: str = "strict") -> Path:
     """Write a closed UTF-8 temporary file and transfer ownership to the caller.
 
     Remove partial files on write or close failure, including interruption.
@@ -351,7 +351,7 @@ def write_temp_text(text: str, *, prefix: str, suffix: str,
         # a failed close from replacing a failed write.
         stream = tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix=prefix, suffix=suffix,
-            delete=False, dir=dir,
+            delete=False, dir=dir, errors=errors,
         )
         path = Path(stream.name)
         stream.write(text)
@@ -373,13 +373,16 @@ def write_temp_text(text: str, *, prefix: str, suffix: str,
 
 @contextlib.contextmanager
 def temporary_text(text: str, *, prefix: str, suffix: str,
-                   dir: str | Path | None = None) -> Iterator[Path]:
+                   dir: str | Path | None = None, errors: str = "strict",
+                   strict_cleanup: bool = True) -> Iterator[Path]:
     """Own a closed UTF-8 temporary file for a lexical scope.
 
     A cleanup failure propagates on success, but cannot mask an exception
     already raised by the body. The body may rename or remove its file.
+    ``strict_cleanup=False`` logs cleanup OSErrors without replacing a
+    successful result; a new cancellation still propagates.
     """
-    path = write_temp_text(text, prefix=prefix, suffix=suffix, dir=dir)
+    path = write_temp_text(text, prefix=prefix, suffix=suffix, dir=dir, errors=errors)
     failed = False
     try:
         yield path
@@ -389,7 +392,7 @@ def temporary_text(text: str, *, prefix: str, suffix: str,
     finally:
         try:
             path.unlink(missing_ok=True)
-        except BaseException:
-            if not failed:
+        except BaseException as exc:
+            if not failed and (strict_cleanup or not isinstance(exc, OSError)):
                 raise
             logger.warning("Temporary text cleanup failed for %s", path, exc_info=True)

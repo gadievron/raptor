@@ -263,24 +263,32 @@ class TestTempRuleFileCleanupOnWriteFailure:
     write itself fails — otherwise ENOSPC/EIO error paths leak
     semgrep_hv_*.yaml / cocci_hv_*.cocci files (and the fd) forever."""
 
-    def _exploding_factory(self, created):
+    def _exploding_factory(self, created, tmp_path):
         from tempfile import NamedTemporaryFile as real_ntf
 
         def factory(*args, **kwargs):
+            kwargs["dir"] = tmp_path
             tmp = _WriteExplodingTmp(real_ntf(*args, **kwargs))
             created.append(Path(tmp.name))
             return tmp
 
         return factory
 
+    def _tempfile_module(self, created, tmp_path):
+        import tempfile
+        from types import ModuleType
+        proxy = ModuleType("adapter_tempfile")
+        proxy.__dict__.update(vars(tempfile))
+        proxy.NamedTemporaryFile = self._exploding_factory(created, tmp_path)
+        return proxy
+
     def test_semgrep_unlinks_rule_file_when_write_fails(self, tmp_path):
         created: list[Path] = []
         a = SemgrepAdapter(sandbox=False)
         with patch.object(a, "is_available", return_value=True), \
              patch(
-                 "packages.hypothesis_validation.adapters.semgrep."
-                 "NamedTemporaryFile",
-                 side_effect=self._exploding_factory(created),
+                 "core.run.scratch.tempfile",
+                 self._tempfile_module(created, tmp_path),
              ):
             ev = a.run("rules: []", tmp_path)
         assert not ev.success
@@ -292,9 +300,8 @@ class TestTempRuleFileCleanupOnWriteFailure:
         a = CoccinelleAdapter(sandbox=False)
         with patch.object(a, "is_available", return_value=True), \
              patch(
-                 "packages.hypothesis_validation.adapters.coccinelle."
-                 "NamedTemporaryFile",
-                 side_effect=self._exploding_factory(created),
+                 "core.run.scratch.tempfile",
+                 self._tempfile_module(created, tmp_path),
              ):
             ev = a.run("@x@\nexpression E;\n@@\n* foo(E);\n", tmp_path)
         assert not ev.success

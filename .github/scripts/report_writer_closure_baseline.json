@@ -259,9 +259,6 @@
     "core/concepts/study.py::_stamp_related_strategies::unsanitised_llm_value::e": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
-    "core/coverage/collect.py::collect_llvm::unsanitised_llm_value::r_stdout": {
-      "note": "verbatim tool/child-output capture into a run artifact or structured data file — raw by design; rendering to the operator happens in registered writers that sanitise"
-    },
     "core/coverage/store_summary.py::format_file_breakdown::unsanitised_llm_value::path": {
       "note": "coverage summary terminal lanes — filed upstream as the store_summary member; sanitise + register with that fix"
     },
