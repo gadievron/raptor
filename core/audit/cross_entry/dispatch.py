@@ -9,6 +9,8 @@ from __future__ import annotations
 import time
 from collections import defaultdict, deque
 
+from core.source.lines import split_lines
+
 from .index import _binding, declared_name, text, walk
 from .model import Relation
 
@@ -381,24 +383,30 @@ def dispatch_catalogue(index, rows, budget):
     for fid,bindings in sorted(by_target.items()):
         fn = index.functions[fid]
         accesses = [a for a in per_function[fid] if a.operation != "read"]
-        def priority(a):
+        ranked = []
+        for a in accesses:
             derived = any(p+"->" in a.object_origin or p+"." in a.object_origin for p in fn.params)
             derived |= a.object_origin.startswith("parameter:") and a.member_path != "*"
             calls = [c for c in per_calls[fid] if c.start_byte <= a.start_byte < c.end_byte]
             computed = max((sum(k in {"binary_expression","subscript_expression"} for k in c.argument_kinds)
                             for c in calls),default=0)
-            return (not derived,a.operation not in {"indirect_write","read_modify_write"},-computed,a.line,a.id)
+            priority = (not derived,a.operation not in {"indirect_write","read_modify_write"},-computed,a.line,a.id)
+            ranked.append((priority,a,min(calls,key=lambda c:c.end_byte-c.start_byte) if calls else None))
         seen = set()
         candidates = []
-        for a in sorted(accesses,key=priority):
-            calls = [c for c in per_calls[fid] if c.start_byte <= a.start_byte < c.end_byte]
-            if calls:
-                call = min(calls,key=lambda c:c.end_byte-c.start_byte)
-                source = fn.source.encode()[call.start_byte-fn.start_byte:call.end_byte-fn.start_byte].decode(errors="replace")
+        source_bytes = None
+        source_lines = None
+        for _,a,call in sorted(ranked,key=lambda row:row[0]):
+            if call is not None:
+                if source_bytes is None:
+                    source_bytes = fn.source.encode()
+                source = source_bytes[call.start_byte-fn.start_byte:call.end_byte-fn.start_byte].decode(errors="replace")
                 location = call.line
             else:
                 offset = a.line-fn.start
-                source = fn.source.splitlines()[offset] if 0 <= offset < len(fn.source.splitlines()) else ""
+                if source_lines is None:
+                    source_lines = split_lines(fn.source)
+                source = source_lines[offset] if 0 <= offset < len(source_lines) else ""
                 location = a.line
             if not source or (location,source) in seen:
                 continue
@@ -410,7 +418,7 @@ def dispatch_catalogue(index, rows, budget):
             candidates.insert(0,{"function":fid,"evidence_id":row["evidence_id"],**decl,
                                  "installer":row["installer"],"callback_target":row.get("callback_target",fid),
                                  "kind":"callback_assignment"})
-        resource_effects = sum(not priority(a)[0] for a in accesses)
+        resource_effects = sum(not priority[0] for priority,_,_ in ranked)
         path_depth = min((len(r.get("dispatch_path",[None])) for r in bindings),default=1)
         fragments.append((path_depth,resource_effects,fid,candidates))
     emitted = []
