@@ -171,3 +171,65 @@ def test_unsuccessful_execution_preserves_owned_nonzero_exit(tmp_path, returncod
         assert execution.status == "error"
         assert execution.value.record == {"returncode": returncode, "diags": [], "raw": ""}
     assert directories and all(not Path(path).exists() for path in directories)
+
+
+@pytest.mark.parametrize('phase', ['complete', 'failed-compile', 'invoke', 'parse', 'analyze'])
+def test_finished_compiler_state_releases_callbacks_but_keeps_results(tmp_path, monkeypatch, phase):
+    import gc
+    import weakref
+    from core.detectors import compiler
+
+    states = []
+    references = []
+    original = compiler.run_detector
+
+    def capture(definition, state):
+        states.append(state)
+        return original(definition, state)
+    monkeypatch.setattr(compiler, 'run_detector', capture)
+
+    class Payload:
+        pass
+
+    def run_owned():
+        payload = Payload()
+        references.append(weakref.ref(payload))
+
+        def run(*args, **kwargs):
+            assert payload is not None
+            if phase == 'invoke':
+                raise TypeError('owned invocation failure')
+            return SimpleNamespace(returncode=1 if phase == 'failed-compile' else 0, stderr='raw')
+
+        def parse(workdir, stderr):
+            assert payload is not None and workdir.is_dir()
+            if phase == 'parse':
+                raise TypeError('owned parser failure')
+            return [{'message': 'retained'}]
+
+        def analyze(record, workdir):
+            assert payload is not None and workdir.is_dir()
+            if phase == 'analyze':
+                raise TypeError('owned analysis failure')
+            return {'derived': True}
+
+        owned = replace(request(tmp_path, analyze=analyze), parse=parse)
+        try:
+            result = run_compiler_analysis(owned, run)
+        except (TypeError, CompilerInvocationError):
+            assert phase in ('invoke', 'parse', 'analyze')
+            result = None
+        assert owned.parse is parse and owned.analyze is analyze
+        return result
+
+    result = run_owned()
+    state = states[0]
+    assert state.request is None and state.sandbox_run is None and state._stderr == ''
+    assert not state._workdir.exists()
+    if phase in ('complete', 'failed-compile'):
+        assert state.record == {'returncode': 1 if phase == 'failed-compile' else 0,
+                                'diags': [{'message': 'retained'}], 'raw': ''}
+        assert result.status == ('error' if phase == 'failed-compile' else 'complete')
+        assert state.result == ({'derived': True} if phase == 'complete' else None)
+    gc.collect(0)
+    assert references[0]() is None
