@@ -854,3 +854,48 @@ def test_opaque_call_occurrences_do_not_short_circuit_analysis(tmp_path, hint):
     assert result.is_exploitable is True
     assert validator.llm.generate_structured.call_count == 1
     assert validator._extract_path_conditions.call_count == 1
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('hint', [{}, {'width': 32, 'signed': True}, {'width': 32, 'signed': False}],
+                         ids=['guessed', 'signed', 'unsigned'])
+@pytest.mark.parametrize('ordinary_contradiction', [False, True])
+def test_unbound_callee_models_cannot_suppress_findings(tmp_path, hint, ordinary_contradiction):
+    texts = ['Value == 0', 'Value == 1', 'min(0, 4) > 4'] if ordinary_contradiction else ['min(0, 4) > 4']
+    guard = ' && '.join(texts)
+    source = ('int min(int Value, int Other) { return Value + Other + 5; }\n'
+              f'int Read(int Value) {{ if({guard}) return 1; return 0; }}\n')
+    for name in ('a.c', 'b.c'):
+        (tmp_path / name).write_text(source)
+    validator = _validator()
+    validator.read_source_context.return_value = source
+    validator._extract_path_conditions.return_value = ([PathCondition(text, i) for i, text in enumerate(texts)], hint)
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ), patch('core.smt_solver.path_feasibility._summarise_call', side_effect=AssertionError('unbound summary built')):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is (not ordinary_contradiction)
+    assert validator.llm.generate_structured.call_count == (0 if ordinary_contradiction else 1)
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('hint', [{}, {'width': 32, 'signed': True}], ids=['guessed', 'pinned'])
+def test_alternative_path_with_unbound_callee_reaches_analysis(tmp_path, hint):
+    validator = _validator()
+    validator._extract_path_conditions.side_effect = [
+        ([PathCondition('Value == 0', 0), PathCondition('Value == 1', 1)], hint),
+        ([PathCondition('min(0, 4) > 4', 0)], hint),
+    ]
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is True
+    assert result.smt_path_index == 1 and result.smt_paths_checked == 2
+    assert validator.llm.generate_structured.call_count == 1

@@ -76,7 +76,9 @@ A conservative set of libc/POSIX calls additionally gets a *summary
 axiom* asserted on its placeholder (``strlen(...) >= 0`` at signed
 profiles, ``sizeof(...) != 0``, ``abs``-family with the INT_MIN corner,
 ``min``/``max`` as ITE definitions, and literal ``strnlen`` bounds) — see ``_CALL_SUMMARIES``; applied
-axioms are reported in ``PathSMTResult.summary_axioms``.
+axioms are reported in ``PathSMTResult.summary_axioms``. Consumers that
+cannot bind these callee models may set ``use_call_summaries=False``;
+calls then remain opaque results and no name-based axiom is constructed.
 
 Deterministic definition summaries can relate separate results through the
 same modeled arguments, without assuming identity from text. Range-only
@@ -1098,7 +1100,7 @@ class _ConditionBatch:
 
 def _classify_conditions(
     conditions: list[PathCondition], vars_: dict[str, Any], solver: Any,
-    *, profile: BVProfile,
+    *, profile: BVProfile, use_call_summaries: bool = True,
 ) -> _ConditionBatch:
     """Parse a complete guard frame without dropping its background theory.
 
@@ -1107,8 +1109,10 @@ def _classify_conditions(
     without erasing labels or axioms. Every rejection remains visible.
     Each predicate and axiom retains its mutation-free segment so a native
     unsat core can establish an independent contradiction. A None solver
-    disables only optional tautology queries.
+    disables only optional tautology queries. Disabling call summaries
+    prevents constructing callee axioms, while retaining opaque results.
     """
+    require_bool(use_call_summaries, argument="use_call_summaries")
     reserve_anon_names([cond.text for cond in conditions], vars_)
     batch = _ConditionBatch()
     epoch = 0
@@ -1117,7 +1121,7 @@ def _classify_conditions(
         sat_display, pending_pair, rejection = _classify_text_condition(
             cond, vars_, solver, profile=profile,
             anon_map=batch.anon_map,
-            axiom_sink=batch.axioms,
+            axiom_sink=batch.axioms if use_call_summaries else None,
         )
         batch.axiom_epochs.extend([epoch] * (len(batch.axioms) - previous_axioms))
         if sat_display is not None:
@@ -1556,6 +1560,7 @@ def check_path_feasibility(
     timeout_ms: int | None = None,
     prefer_witness: str | tuple[str, str] | None = None,
     reduce_constraints: bool = True,
+    use_call_summaries: bool = True,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -1602,12 +1607,19 @@ def check_path_feasibility(
                     conflicts remain available; summary fields are None/empty
                     and wp_complete=False. This is not a whole-call time limit.
 
+        use_call_summaries: Defaults to True for explicit conditional models.
+                    False leaves each call occurrence opaque and constructs no
+                    name-based callee axioms. Use False when source identities,
+                    signatures, and callee effects have not been established.
+                    Plain guard contradictions remain available for refutation.
+
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
         condition was unparseable.
     """
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
+    require_bool(use_call_summaries, argument="use_call_summaries")
     mode = profile.describe()
 
     if not _z3_available():
@@ -1699,7 +1711,8 @@ def check_path_feasibility(
             _new_solver(timeout_ms) if timeout_ms is not None
             else _new_solver()
         )
-    batch = _classify_conditions(conditions, vars_, tautology_solver, profile=profile)
+    batch = _classify_conditions(conditions, vars_, tautology_solver, profile=profile,
+                                 use_call_summaries=use_call_summaries)
     return _solve_pending(
         batch.pending, solver, batch.satisfied, batch.unknown, batch.rejections,
         profile=profile, anon_map=batch.anon_map,
@@ -1714,6 +1727,7 @@ def _exhibits_robust_contradiction(
     conditions: list[PathCondition],
     profiles: tuple[BVProfile, BVProfile],
     timeout_ms: int | None,
+    *, use_call_summaries: bool = True,
 ) -> bool:
     """Does this unsat-core subset exhibit a contradiction that is
     independent of the signedness guess?
@@ -1742,6 +1756,7 @@ def _exhibits_robust_contradiction(
       counterexample — the leg refuted through profile-specific
       semantics, not a genuine contradiction.
     """
+    require_bool(use_call_summaries, argument="use_call_summaries")
     subset = [
         c for c in conditions
         if (f"NOT ({c.text})" if c.negated else c.text) in candidate
@@ -1759,6 +1774,7 @@ def _exhibits_robust_contradiction(
     return all(
         check_path_feasibility(
             subset, profile=p, timeout_ms=timeout_ms, reduce_constraints=False,
+            use_call_summaries=use_call_summaries,
         ).feasible is False
         for p in profiles
     )
@@ -1771,6 +1787,7 @@ def check_path_feasibility_dual(
     timeout_ms: int | None = None,
     prefer_witness: str | tuple[str, str] | None = None,
     reduce_constraints: bool = True,
+    use_call_summaries: bool = True,
 ) -> PathSMTResult:
     """Signedness-agnostic feasibility check for callers whose profile
     signedness is a GUESS rather than a known fact.
@@ -1817,13 +1834,17 @@ def check_path_feasibility_dual(
 
     Callers that KNOW the signedness (explicit type info, a trusted
     per-path hint) should call :func:`check_path_feasibility` directly
-    with the known profile.
+    with the known profile. ``use_call_summaries`` follows that API's
+    conditional-model policy and is preserved in both legs and every
+    contradiction-subset probe.
     """
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
+    require_bool(use_call_summaries, argument="use_call_summaries")
     primary = check_path_feasibility(
         conditions, profile=profile,
         timeout_ms=timeout_ms, prefer_witness=prefer_witness, reduce_constraints=reduce_constraints,
+        use_call_summaries=use_call_summaries,
     )
     if primary.feasible is not False:
         return primary
@@ -1831,6 +1852,7 @@ def check_path_feasibility_dual(
     sibling = check_path_feasibility(
         conditions, profile=sibling_profile,
         timeout_ms=timeout_ms, prefer_witness=prefer_witness, reduce_constraints=reduce_constraints,
+        use_call_summaries=use_call_summaries,
     )
     if sibling.feasible is False:
         # Both legs unsat is NOT signedness agreement by itself: each
@@ -1875,7 +1897,7 @@ def check_path_feasibility_dual(
         for candidate in candidates:
             if _exhibits_robust_contradiction(
                 candidate, conditions, (profile, sibling_profile),
-                timeout_ms,
+                timeout_ms, use_call_summaries=use_call_summaries,
             ):
                 exhibited = candidate
                 break
