@@ -218,8 +218,8 @@ def test_existence_probe_skipped_under_offline(
     tmp_path: Path, capsys, monkeypatch,
 ) -> None:
     """--offline skips the existence probe (no network available).
-    Operators get Clean for nonexistent packages in offline mode;
-    that's the documented trade-off.
+    A missing advisory cache produces an unavailable verdict while the
+    registry existence probe remains disabled.
     """
     http = StubHttp()
     cache = JsonCache(root=tmp_path)
@@ -237,7 +237,8 @@ def test_existence_probe_skipped_under_offline(
         ["PyPI", "anything-x-y-z", "1.0.0", "--no-transitive", "--offline"],
         http=http, cache=cache,
     )
-    assert rc == 0
+    assert rc == 2
+    assert "verdict unavailable" in capsys.readouterr().out.lower()
     assert called == [], "probe should not run under --offline"
 
 
@@ -397,7 +398,8 @@ def test_offline_mode_skips_network(tmp_path: Path, capsys) -> None:
     cache = JsonCache(root=tmp_path)
     rc = review.main(["npm", "@types/node", "20.10.5", "--offline"],
                      http=http, cache=cache)
-    assert rc == 0
+    assert rc == 2
+    assert "verdict unavailable" in capsys.readouterr().out.lower()
     assert http.posts == []
     assert http.gets == []
 

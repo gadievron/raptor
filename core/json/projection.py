@@ -123,26 +123,9 @@ def project_object(stream, *, max_bytes, projectors=None, observe=None, max_dept
                 raise ValueError("invalid or duplicate JSON object key")
             reader.expect(":")
             if reader.peek() == "[":
-                reader.expect("[")
-                rows = []
                 project = (projectors or {}).get(key)
-                count = 0
-                if reader.peek() != "]":
-                    while True:
-                        value = reader.value(2)
-                        if observe:
-                            observe(key, value)
-                        value = project(value) if project else value
-                        if value is not None or project is None:
-                            rows.append(value)
-                        count += 1
-                        if count > 1_000_000:
-                            raise ValueError("JSON array exceeds row budget")
-                        if reader.peek() == "]":
-                            break
-                        reader.expect(",")
-                reader.expect("]")
-                result[key] = rows
+                callback = (lambda value: observe(key, value)) if observe else None
+                result[key] = list(_array_values(reader, project, callback, depth=2))
             else:
                 value = reader.value(1)
                 if observe:
@@ -155,3 +138,42 @@ def project_object(stream, *, max_bytes, projectors=None, observe=None, max_dept
     if reader.peek():
         raise ValueError("trailing JSON content")
     return result, reader.digest.hexdigest()
+
+
+def _array_values(reader, project=None, observe=None, *, depth):
+    reader.expect("[")
+    count = 0
+    if reader.peek() != "]":
+        while True:
+            value = reader.value(depth)
+            count += 1
+            if count > 1_000_000:
+                raise ValueError("JSON array exceeds row budget")
+            if observe:
+                observe(value)
+            value = project(value) if project else value
+            if value is not None or project is None:
+                yield value
+            if reader.peek() == "]":
+                break
+            reader.expect(",")
+    reader.expect("]")
+
+
+def project_array(stream, *, max_bytes, project=None, max_depth=128):
+    """Return (projected rows, original SHA-256), validating through EOF.
+
+    Decode one top-level row at a time. A projector can compact the row or
+    discard it by returning None; discarded values still receive full checks.
+    The caller owns the binary stream. Byte and nesting budgets match
+    :func:`project_object`.
+    """
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("JSON projection requires a positive byte budget")
+    if type(max_depth) is not int or not 1 <= max_depth <= 128:
+        raise ValueError("JSON depth budget must be between 1 and 128")
+    reader = _Reader(stream, max_bytes, max_depth)
+    rows = list(_array_values(reader, project, depth=1))
+    if reader.peek():
+        raise ValueError("trailing JSON content")
+    return rows, reader.digest.hexdigest()

@@ -363,6 +363,76 @@ checkout and review its proposed changes when applying upgrades, then rebuild
 and scan the resulting SBOM again. `sbom inspect`, `diff`, `why` and `notices`
 work offline and do not perform vulnerability queries.
 
+## Planning upgrades from an SBOM scan
+
+Use `sbom plan` with the inventory and RAPTOR findings from the same scan:
+
+```bash
+raptor-sca ./project --sbom release.cdx.json --out scan
+raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json --out upgrade-plan
+raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json --format json
+```
+
+The plan groups repeated occurrences of the same package identity and retains
+their occurrence IDs. It lists installed versions, recorded advisories, available
+forward fix versions and unresolved gaps. Suppressed findings remain visible
+and do not drive proposals. Unsupported or unversioned packages, unmatched
+findings and scan-health gaps are explicit. Identity matching does not prove
+that supplied findings came from the exact same scan; input fingerprints are
+retained for traceability.
+
+The default uses saved findings only and makes no network requests. Candidate
+versions remain **not checked**. The combined proposal uses the highest usable
+fix recommended by the recorded findings; it is not a claim that the version
+is available, compatible or free of other vulnerabilities. Candidates may cross
+a major version boundary and always require review.
+
+Recheck the installed and candidate versions with the existing advisory client:
+
+```bash
+raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json \
+  --check-candidates --out checked-upgrade-plan
+raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json \
+  --check-candidates --offline --cache-root advisory-cache --format json
+```
+
+Checks show advisories resolved, remaining and introduced at each candidate.
+The smallest checked candidate with no known advisories becomes the proposal.
+Advisory alias IDs use the existing SCA matching logic. Data can come from the
+normal advisory cache; missing cache entries, unavailable records and failed
+lookups remain **unavailable**, rather than being treated as clear. The shared
+`check` and `upgrade` commands also return an unavailable verdict for a cold
+offline cache or missing advisory records. These
+checks do not resolve the full dependency graph, verify registry availability,
+run tests or establish API/build compatibility. Rebuild and rescan the resulting
+inventory after applying changes in the source project or image build.
+
+For distro packages, the plan separates the installed binary version from its
+source-package query and fix version. Source fixes require a corresponding
+available binary build from the distributor; they are not install commands.
+Missing release context prevents candidate checks.
+
+`--max-candidates` defaults to five per package; `--max-queries` defaults to
+1,000 unique installed/candidate coordinates across the plan. Omitted candidates
+and unperformed checks are recorded. Findings are read with the existing
+operator-input byte budget, projecting one row at a time and discarding unused
+source text and descriptions.
+
+`--out` requires a new directory and writes `upgrade-plan.json` plus a complete
+`upgrade-plan.md`. JSON includes all package groups; terminal text shows the
+first 50 actionable or uncertain groups. Inputs and source files are unchanged.
+The JSON format is `raptor-sbom-upgrade-plan`, schema version 1.
+
+| Mode | Exit code | Meaning |
+|---|---:|---|
+| Saved findings | 0 | Plan generated; candidates have not been rechecked |
+| Candidate recheck | 0 | An advisory-clear option exists for each affected package |
+| Candidate recheck | 1 | An affected package has no applicable fix or no checked option clears known advisories |
+| Either | 2 | Invalid input; or requested verification has unavailable evidence, unmatched findings or scan-health gaps |
+
+A successful recheck concerns the queried advisory coordinates only. It does
+not certify the complete SBOM or approve an upgrade automatically.
+
 ## Inspecting SBOM inventories and collected notices
 
 Use `raptor-sca sbom inspect` to examine an existing CycloneDX 1.5 or SPDX 2.3

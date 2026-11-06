@@ -568,6 +568,12 @@
   "artifacts:write_only_artifact::upgrade-impact.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::upgrade-plan.json": {
+   "note": "Deliberate user-facing output: sbom plan exports its versioned read-only upgrade proposals and advisory coverage to external CI/review consumers. It is a final report, not an internal pipeline input."
+  },
+  "artifacts:write_only_artifact::upgrade-plan.md": {
+   "note": "Deliberate user-facing output: sbom plan writes a sanitised Markdown upgrade report for operators and CI artifact viewers; no production reader reparses rendered prose."
+  },
   "artifacts:write_only_artifact::validate-against.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -665,7 +671,7 @@
    "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
   },
   "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
-   "note": "RawIOBase protocol — called by Python IO layer, not by name"
+   "note": "RawIOBase protocol \u2014 called by Python IO layer, not by name"
   },
   "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
    "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
