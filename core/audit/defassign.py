@@ -104,7 +104,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-from core.source import read_text_capped
+from core.source import read_text_capped, strip_c_comments
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +226,8 @@ def _tokenize(text: str) -> list[Token]:
 
 def _strip_comments(text: str) -> str:
     """Remove /* */ and // comments, preserving string/char literals."""
+    if type(text) is str:
+        return strip_c_comments(text, comment_replacement=" ")
     out: list[str] = []
     i = 0
     n = len(text)
