@@ -45,6 +45,10 @@ class Catalogue:
                 sha TEXT,body BLOB,status TEXT,error TEXT,version INTEGER);
             CREATE TABLE IF NOT EXISTS terms(term TEXT,path TEXT,PRIMARY KEY(term,path));
             CREATE INDEX IF NOT EXISTS terms_path ON terms(path);
+            CREATE INDEX IF NOT EXISTS catalogue_pending_files ON files(path)
+                WHERE status='pending';
+            CREATE INDEX IF NOT EXISTS catalogue_pending_directories ON directories(priority DESC,path)
+                WHERE status='pending';
             CREATE TABLE IF NOT EXISTS exclusions(path TEXT PRIMARY KEY,reason TEXT);
         """)
         self.changed: set[str] = set()
