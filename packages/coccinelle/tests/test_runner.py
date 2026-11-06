@@ -2199,7 +2199,7 @@ class TestUndecodableRuleFiles:
         target.write_text("int f(void) { return 0; }\n")
         bad = self._bad_rule(tmp_path)
         with patch.object(runner_mod, "is_available", return_value=True), \
-             patch.object(Path, "read_text",
+             patch.object(runner_mod, "read_text_gated",
                           side_effect=OSError("EIO mid-read")):
             result = run_rule(target, bad)
         assert result.returncode == -1
