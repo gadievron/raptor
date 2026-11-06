@@ -40,15 +40,15 @@ class TestDimensionNamePins:
             promote = rule_id(dim, detection=False)
             assert detect == f"consistency:{dim}-majority"
             assert is_detection_rule_id(detect)
-            assert not is_detection_rule_id(promote)
+            assert is_detection_rule_id(promote) == (dim == "guard-predicate")
 
 
 class TestReceiptMap:
     def test_the_promote_capable_rule_has_a_receipt(self):
         assert "consistency:guard-predicate" in _RECEIPT_MAP
 
-    def test_promote_capable_rule_is_tool_evidence_alone(self):
-        assert is_tool_evidence("consistency:guard-predicate")
+    def test_predicate_only_rule_is_not_tool_evidence_alone(self):
+        assert not is_tool_evidence("consistency:guard-predicate")
 
 
 class TestAggregationFirewall:
