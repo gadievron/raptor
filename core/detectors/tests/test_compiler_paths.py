@@ -133,3 +133,87 @@ def test_bad_primary_uri_is_not_compiler_silence(tmp_path, uri):
     with pytest.raises(CompilerDiagnosticError, match='diagnostic URI'):
         _parse_gcc_sarif(path)
     assert normalize_paths([flow(uri)])[1]
+
+
+@pytest.mark.parametrize('artifact', [
+    {'index': 0}, {'uri': 'space%20name%2520.c', 'uriBaseId': 'ROOT'},
+])
+def test_compiler_primary_locations_resolve_artifact_tables_and_uri_bases(tmp_path, artifact):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    root = tmp_path / 'sources'
+    run = {'originalUriBaseIds': {'ROOT': {'uri': root.as_uri() + '/'}},
+           'artifacts': [{'location': {'uri': 'space%20name%2520.c', 'uriBaseId': 'ROOT'}}],
+           'results': [{'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning',
+                        'message': {'text': 'warning'}, 'locations': [{'physicalLocation': {
+                            'artifactLocation': artifact, 'region': {'startLine': 3}}}]}]}
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [run]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['file'] == str(root / 'space name%20.c')
+    assert diagnostic['id'] == '-Wanalyzer-use-after-free' and diagnostic['line'] == 3
+
+
+def test_compiler_artifact_resolution_is_run_local(tmp_path):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    runs = [{'artifacts': [{'location': {'uri': name}}], 'results': [{
+        'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'warning'},
+        'locations': [{'physicalLocation': {'artifactLocation': {'index': 0},
+                                          'region': {'startLine': 3}}}]}]}
+        for name in ('a.c', 'b.c')]
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': runs}))
+    assert [row['file'] for row in _parse_gcc_sarif(report)] == ['a.c', 'b.c']
+
+
+@pytest.mark.parametrize('artifact, bases', [
+    ({'index': True}, {}), ({'index': -1}, {}), ({'index': 99}, {}),
+    ({'uri': 'a.c', 'uriBaseId': 'loop'}, {'loop': {'uri': 'nested/', 'uriBaseId': 'loop'}}),
+])
+def test_invalid_compiler_artifact_references_keep_warning_without_inventing_location(tmp_path, artifact, bases):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{'originalUriBaseIds': bases, 'results': [{
+        'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'keep warning'},
+        'locations': [{'physicalLocation': {'artifactLocation': artifact,
+                                          'region': {'startLine': 3}}}]}]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['file'] == ''
+    assert diagnostic['message'] == 'keep warning'
+
+
+@pytest.mark.parametrize('base', ['https://example.test/', 'file://remote/source/'])
+def test_indexed_nonlocal_compiler_uri_cannot_become_local(tmp_path, base):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    from core.detectors.compiler import CompilerDiagnosticError
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{'originalUriBaseIds': {'ROOT': {'uri': base}},
+        'artifacts': [{'location': {'uri': 'a.c', 'uriBaseId': 'ROOT'}}], 'results': [{
+        'message': {'text': 'warning'}, 'locations': [{'physicalLocation': {
+            'artifactLocation': {'index': 0}, 'region': {'startLine': 3}}}]}]}]}))
+    with pytest.raises(CompilerDiagnosticError, match='URI'):
+        _parse_gcc_sarif(report)
+
+
+def test_compiler_uri_resolver_is_lazy_and_reused(tmp_path, monkeypatch):
+    from core.audit import compiler_sweep as compiler
+    original = compiler.ArtifactUriResolver
+    builds = []
+
+    class MeasuredResolver(original):
+        def __init__(self, run):
+            builds.append(run)
+            super().__init__(run)
+
+    monkeypatch.setattr(compiler, 'ArtifactUriResolver', MeasuredResolver)
+    report = tmp_path / 'compiler.sarif'
+    run = {'artifacts': [{'location': {'uri': 'a.c'}}], 'results': [{
+        'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'warning'},
+        'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'a.c'},
+                                          'region': {'startLine': 3}}}]} for _ in range(100)]}
+    report.write_text(json.dumps({'runs': [run]}))
+    assert len(compiler._parse_gcc_sarif(report)) == 100 and not builds
+    for row in run['results']:
+        row['locations'][0]['physicalLocation']['artifactLocation'] = {'index': 0}
+    report.write_text(json.dumps({'runs': [run]}))
+    assert {row['file'] for row in compiler._parse_gcc_sarif(report)} == {'a.c'}
+    assert len(builds) == 1
