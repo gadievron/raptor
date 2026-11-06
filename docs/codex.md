@@ -102,6 +102,11 @@ Subagents share their root conversation's project. Switching projects does not
 move an existing run or its output, and ending one conversation does not end
 another's runs. After resuming, check `$project status` before continuing work.
 
+Without an explicit workflow path, resolve the active project's target first,
+then the validated launcher target, then the original caller directory. Read
+launcher data with `libexec/raptor-session-init --codex-context`; resolve a
+relative launch target against its stored caller directory. After `$project none`, a bare `$scan` still uses the launch target, including after resume.
+
 ## Troubleshooting
 
 | Symptom | Check |
