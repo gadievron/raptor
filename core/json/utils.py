@@ -347,6 +347,7 @@ def loads(
     *,
     max_bytes: int | None = None,
     allow_non_finite: bool = False,
+    object_pairs_hook=None,
 ) -> Any:
     """Parse in-memory JSON text with an optional size gate.
 
@@ -354,6 +355,10 @@ def loads(
     sources — subprocess stdout, HTTP bodies, artifact lines — with
     the same backend (orjson when installed; see :func:`_loads` for
     the big-int divergence) and the same non-finite hardening.
+
+    An optional ``object_pairs_hook`` validates or transforms object fields.
+    Supplying it uses the stdlib decoder so the callback runs even when
+    orjson is installed; default backend selection is unchanged.
 
     Strict contract: in-memory sources have no missing-file soft
     path, so every failure raises — ``JsonBudgetExceededError``
@@ -384,6 +389,9 @@ def loads(
     elif data[:1] == "\ufeff":
         data = data[1:]
     parse_constant = None if allow_non_finite else _reject_non_finite
+    if object_pairs_hook is not None:
+        return json.loads(data, object_pairs_hook=object_pairs_hook,
+                          parse_constant=parse_constant)
     return _loads(
         data, parse_constant=parse_constant, allow_non_finite=allow_non_finite,
     )
