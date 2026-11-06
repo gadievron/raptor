@@ -89,6 +89,24 @@ on:
       - '.github/scripts/check_transcript_seam.py'
       - '.github/scripts/transcript_seam_baseline.json'
       - '.github/workflows/replay-determinism.yml'
+      # Execution and gate inputs must exercise this lane before merge too.
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'uv.toml'
+      - '.python-version'
+      - 'pytest.ini'
+      - 'conftest.py'
+      - 'core/testing/__init__.py'
+      - 'core/testing/param_ids.py'
+      - 'core/testing/git_hermeticity.py'
+      - 'core/testing/llm_env.py'
+      - 'core/testing/state_isolation.py'
+      - 'core/testing/module_state.py'
+      - 'core/__init__.py'
+      - 'packages/__init__.py'
+      - '.github/scripts/runtime_universe.py'
+      - '.github/scripts/check_skip_budget.py'
+      - '.github/scripts/skip_budget_baseline.json'
   push:
     branches: [ main ]
     paths:
@@ -110,6 +128,24 @@ on:
       - '.github/scripts/check_transcript_seam.py'
       - '.github/scripts/transcript_seam_baseline.json'
       - '.github/workflows/replay-determinism.yml'
+      # Execution and gate inputs must exercise this lane before merge too.
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'uv.toml'
+      - '.python-version'
+      - 'pytest.ini'
+      - 'conftest.py'
+      - 'core/testing/__init__.py'
+      - 'core/testing/param_ids.py'
+      - 'core/testing/git_hermeticity.py'
+      - 'core/testing/llm_env.py'
+      - 'core/testing/state_isolation.py'
+      - 'core/testing/module_state.py'
+      - 'core/__init__.py'
+      - 'packages/__init__.py'
+      - '.github/scripts/runtime_universe.py'
+      - '.github/scripts/check_skip_budget.py'
+      - '.github/scripts/skip_budget_baseline.json'
   schedule:
     # 05:50 UTC — clear of miswiring-scan (05:30), tests.yml full
     # crons (06:00) and nightly.yml (07:00). Schedule events ignore
@@ -228,7 +264,29 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Discover local replay cases
+        id: cases
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, '.github/evals')
+          from replay_eval import discover_cases
+
+          cases = discover_cases()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"present={str(bool(cases)).lower()}\n")
+          print(f"Found {len(cases)} local replay case(s)")
+          PY
+
+      - name: Install pytest for the absent-case check
+        if: steps.cases.outputs.present == 'false'
+        # Still collect the real lane and enforce its recorded skip budget.
+        # No pipeline imports run when the local-only corpus is absent.
+        run: python -m pip install --disable-pip-version-check "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
+
       - name: Install uv
+        if: steps.cases.outputs.present != 'false'
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
@@ -238,6 +296,7 @@ jobs:
             uv.toml
 
       - name: Install deps
+        if: steps.cases.outputs.present != 'false'
         shell: bash
         run: uv export --locked --no-hashes | uv pip install --system -r -
 
