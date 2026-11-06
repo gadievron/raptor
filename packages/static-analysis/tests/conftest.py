@@ -64,3 +64,15 @@ def stub_semgrep_registry_cache(monkeypatch, tmp_path):
         cache_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
     monkeypatch.setattr(RaptorConfig, "SEMGREP_REGISTRY_CACHE_DIR", cache_dir)
     return cache_dir
+
+
+@pytest.fixture(autouse=True)
+def _owned_scan_scratch():
+    from core.run import tmp_reaper
+    from core.testing.module_state import isolated_module_state
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_module_state(tmp_reaper, {
+        "_RUNTIME_DIR_PREFIXES": set(tmp_reaper._RUNTIME_DIR_PREFIXES),
+    }), isolated_scratch_keepalive():
+        yield

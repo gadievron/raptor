@@ -265,19 +265,15 @@ def test_materialize_skips_axes_without_slots(tmp_path: Path):
     axis = tmp_path / "attrs"
     axis.mkdir()
     (axis / "plain.cocci").write_text("@r@\nidentifier f;\n@@\nf(...)\n")
-    eff, handle = analyze_mod._materialize_rules_dir(axis)
-    assert eff == axis and handle is None
+    with analyze_mod._materialize_rules_dir(axis) as eff:
+        assert eff == axis
 
 
 def test_materialize_renders_slotted_axis():
-    eff, handle = analyze_mod._materialize_rules_dir(_CRYPTO_DIR)
-    try:
-        assert handle is not None
+    with analyze_mod._materialize_rules_dir(_CRYPTO_DIR) as eff:
+        assert eff != _CRYPTO_DIR
         rendered = (eff / "crypto_calls.cocci").read_text()
         assert rendered.count("@script:python") == 7
-    finally:
-        if handle is not None:
-            handle.cleanup()
 
 
 def test_axis_dirs_ignore_data_subdirs():
@@ -301,13 +297,9 @@ def test_materialize_routes_two_space_marker(tmp_path: Path):
         "kinds": {"call": {"prefixes": ["EVP_Digest"], "names": []}},
     }))
     (axis / "r.cocci").write_text("//  @api-packs: packs crypto\n")
-    eff, handle = analyze_mod._materialize_rules_dir(axis)
-    try:
-        assert handle is not None
+    with analyze_mod._materialize_rules_dir(axis) as eff:
+        assert eff != axis
         assert "crypto:call:openssl:" in (eff / "r.cocci").read_text()
-    finally:
-        if handle is not None:
-            handle.cleanup()
 
 
 def test_parser_accepts_pack_declared_api_tags():

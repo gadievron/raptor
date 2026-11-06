@@ -24,10 +24,13 @@ import logging
 import os
 import re
 import threading
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.paths import confine
+from core.run.scratch import scratch_dir
 from core.source import read_text_capped
 from typing import Any
 
@@ -737,15 +740,14 @@ _shipped_rules_dir = _shipped_rules_root
 # =====================================================================
 
 
-def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
+@contextmanager
+def _materialize_rules_dir(axis_dir: Path) -> Iterator[Path]:
     """Render ``@api-packs`` slots for an axis, when any rule carries one.
 
-    Returns ``(effective_dir, tempdir_handle)``. When no rule in
-    ``axis_dir`` has a pack slot the axis dir is returned unchanged
-    (``handle`` is None). Otherwise a TemporaryDirectory is populated
-    with every ``.cocci`` (rendered where slotted, verbatim copies
-    elsewhere) so rule names / execution order are preserved; the
-    caller keeps ``handle`` alive for the spatch run. Render failures
+    Yield the original axis when no rule has a pack slot. Otherwise
+    populate a private scratch directory with every ``.cocci`` (rendered
+    where slotted, verbatim elsewhere) and own it through the spatch run.
+    Partial copies and failed scans are reclaimed on scope exit. Render failures
     degrade to the unrendered rule text (still-valid cocci — the marker
     is a comment) rather than skipping the axis.
     """
@@ -764,7 +766,8 @@ def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
             "api-pack renderer unavailable; axis %s runs unrendered",
             axis_dir, exc_info=True,
         )
-        return axis_dir, None
+        yield axis_dir
+        return
     slotted: dict[Path, str] = {}
     for rule_path in rule_paths:
         try:
@@ -784,20 +787,19 @@ def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
         slotted[rule_path] = rendered if rendered is not None else text
 
     if not slotted:
-        return axis_dir, None
+        yield axis_dir
+        return
 
     import shutil
-    import tempfile
-    handle = tempfile.TemporaryDirectory(prefix="source_intel_rules_")
-    tmp_dir = Path(handle.name)
-    for rule_path in rule_paths:
-        if rule_path in slotted:
-            (tmp_dir / rule_path.name).write_text(
-                slotted[rule_path], encoding="utf-8",
-            )
-        else:
-            shutil.copyfile(rule_path, tmp_dir / rule_path.name)
-    return tmp_dir, handle
+    with scratch_dir("source_intel_rules_") as tmp_dir:
+        for rule_path in rule_paths:
+            if rule_path in slotted:
+                (tmp_dir / rule_path.name).write_text(
+                    slotted[rule_path], encoding="utf-8",
+                )
+            else:
+                shutil.copyfile(rule_path, tmp_dir / rule_path.name)
+        yield tmp_dir
 
 
 def _axis_dirs(rules_root: Path) -> list[Path]:
@@ -1041,16 +1043,14 @@ def analyze(
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
     # trusted-mode opt-in is a future operator flag.
     for axis_dir in rule_dirs:
-        effective_dir, _rules_tmp = _materialize_rules_dir(axis_dir)
+        with _materialize_rules_dir(axis_dir) as effective_dir:
+            on_rule = None
+            if progress is not None:
+                axis_base = rules_started
 
-        on_rule = None
-        if progress is not None:
-            axis_base = rules_started
+                def on_rule(idx, _dir_total, rule_name, _base=axis_base) -> None:
+                    progress(_base + idx, total_rules, rule_name)
 
-            def on_rule(idx, _dir_total, rule_name, _base=axis_base) -> None:
-                progress(_base + idx, total_rules, rule_name)
-
-        try:
             spatch_results = spatch_run_rules(
                 target=target,
                 rules_dir=effective_dir,
@@ -1061,9 +1061,6 @@ def analyze(
                 allow_scripting=True,
                 on_rule=on_rule,
             )
-        finally:
-            if _rules_tmp is not None:
-                _rules_tmp.cleanup()
         rules_started += len(list(axis_dir.glob("*.cocci")))
         for result in spatch_results:
             rules_executed.append(result.rule)
