@@ -2,12 +2,10 @@
 from functools import lru_cache
 import ast
 import copy
-import importlib
 from pathlib import Path
 import shutil
 import sys
 from types import ModuleType
-from unittest.mock import patch
 
 import pytest
 
@@ -80,22 +78,15 @@ def _cases():
     return cases
 
 
-@lru_cache(maxsize=None)
-def _production_module(name):
-    # Library imports must not change the caller's search path.
-    with patch.object(sys, "path", sys.path.copy()):
-        return importlib.import_module(name)
-
-
 def _consumer(module, borrowed):
-    original = _production_module(module)
-    assert isinstance(original, ModuleType)
-    assert isinstance(original.shutil, ModuleType)
-    consumer = ModuleType(original.__name__)
-    vars(consumer).update(vars(original))
+    # Execute the actual patch statement against its only required binding.
+    # Importing production modules here starts incidental tool/SDK setup;
+    # native tests retain the production behavior and discovery return values.
+    consumer = ModuleType(module)
+    consumer.shutil = shutil
     if borrowed:
-        view = ModuleType(original.shutil.__name__)
-        vars(view).update(vars(original.shutil))
+        view = ModuleType(shutil.__name__)
+        vars(view).update(vars(shutil))
         consumer.shutil = view
     return consumer
 
@@ -154,7 +145,7 @@ def test_native_discovery_statement_owns_its_binding(file, index, module, borrow
 
 @pytest.mark.parametrize("borrowed", [False, True], ids=["ordinary", "borrowed"])
 def test_unmodified_lookup_is_a_passing_control(borrowed):
-    consumer = _consumer("core.analysis.binary_oracle", borrowed)
+    consumer = _consumer("_owned_discovery_consumer", borrowed)
     shared_which = shutil.which
     original = consumer.shutil
     inherited = dict(vars(original))
