@@ -22,11 +22,12 @@ from typing import Any
 
 from core.json import load_json
 from core.paths import confine
-from core.source.lines import split_lines
+from core.source.lines import join_lines_prefix, split_lines
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_envelope import neutralize_tag_forgery, wrap_untrusted
 
 from .run_memo import BoundedMemo
+from .source_view import sanitized_view_with_status
 
 logger = logging.getLogger(__name__)
 
@@ -3618,7 +3619,7 @@ def _resolve_types(
         if content is None:
             continue
 
-        for name in list(type_names):
+        for name in type_names:
             if name in seen or len(results) >= max_types:
                 continue
             defn = _extract_type_definition(content, name)
@@ -3748,7 +3749,7 @@ def _extract_type_definition_uncached(
     for i, line in enumerate(lines):
         if line_pattern.search(line):
             end = _find_closing_brace(lines, i)
-            snippet = "\n".join(lines[i:end + 1])
+            snippet = join_lines_prefix(islice(lines, i, end + 1), 801)
             if len(snippet) > 800:
                 snippet = snippet[:800] + "\n  /* ... truncated */"
             return {"line": i + 1, "source": snippet}
@@ -3772,7 +3773,7 @@ def _extract_type_definition_uncached(
     m = multiline_pat.search(content)
     if m:
         start_line = content.count("\n", 0, m.start())
-        matched_text = m.group()
+        matched_text = content[m.start():min(m.end(), m.start() + 801)]
         if len(matched_text) > 800:
             matched_text = matched_text[:800] + "\n  /* ... truncated */"
         return {"line": start_line + 1, "source": matched_text}
@@ -3785,8 +3786,23 @@ def _find_closing_brace(lines: list[str], start: int) -> int:
     depth = 0
     for i in range(start, min(start + 60, len(lines))):
         depth += lines[i].count("{") - lines[i].count("}")
-        if depth <= 0 and i > start:
-            return i
+        if depth <= 0:
+            if i > start:
+                return i
+            # A completed declaration needs no following source line. For
+            # quoted/commented text, prove balance on the lexical view first;
+            # ambiguous or still-open views keep the existing fallback window.
+            if not any(c in lines[i] for c in "\"'/\\"):
+                return i
+            try:
+                view = sanitized_view_with_status(lines[i], language="c")
+                complete = (not view.ambiguous
+                            and view.text.count("{") == view.text.count("}"))
+            except Exception as exc:  # noqa: BLE001 - preserve legacy context on proof failure
+                logger.debug("optional type-span proof failed (%s)", type(exc).__name__)
+                complete = False
+            if complete:
+                return i
     return min(start + 10, len(lines) - 1)
 
 

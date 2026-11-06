@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from heapq import nsmallest
+from itertools import islice
 from pathlib import Path
 import re
 
 from core.source import read_bytes_capped
-from core.source.lines import split_lines
+from core.source.lines import join_lines_prefix, split_lines
 
 
 _MAX_FILES = 20
@@ -85,7 +86,7 @@ def _definitions(tree, data: bytes, text: str) -> dict[str, tuple[dict, list[str
                     break
                 first -= 1
             end = min(last + 1, first + _MAX_TYPE_LINES)
-            excerpt = "\n".join(lines[first:end])
+            excerpt = join_lines_prefix(islice(lines, first, end), _MAX_TYPE_CHARS + 1)
             truncated = end < last + 1 or len(excerpt) > _MAX_TYPE_CHARS
             if truncated:
                 marker = "\n// [type context truncated]"
