@@ -196,6 +196,7 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
         )
     except OSError:
         return False
+    read_failed = False
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -229,8 +230,17 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
         return hmac.compare_digest(content, _nonce_digest(nonce))
     except OSError:
         return False
+    except BaseException:
+        read_failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            # Keep cancellation/body errors primary, but a close-only
+            # failure must still prevent successful metadata I/O.
+            if not read_failed:
+                raise
 
 
 def _presented_nonce_valid(nonce: str) -> bool:
@@ -299,6 +309,7 @@ def _mint_nonce(consents_dir: Path | None = None) -> str:
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
         0o600,
     )
+    write_failed = False
     try:
         remaining = memoryview((_nonce_digest(nonce) + "\n").encode("ascii"))
         while remaining:
@@ -306,8 +317,17 @@ def _mint_nonce(consents_dir: Path | None = None) -> str:
             if written <= 0:
                 raise OSError(errno.EIO, "consent digest write made no progress")
             remaining = remaining[written:]
+    except BaseException:
+        write_failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            # Keep cancellation/body errors primary, but a close-only
+            # failure must still prevent successful metadata I/O.
+            if not write_failed:
+                raise
     return nonce
 
 
