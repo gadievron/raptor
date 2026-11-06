@@ -48,7 +48,7 @@ class TestWidthCoercion:
         from core.smt_solver.csem import truncation_loses_bits
         # 0x7F fits in 8-bit unsigned
         assert _eval_predicate(
-            z3.Not(truncation_loses_bits(z3.BitVecVal(0x7F, 32), 8, to_signed=False))
+            z3.Not(truncation_loses_bits(z3.BitVecVal(0x7F, 32), 8, to_signed=False, from_signed=False))
         )
 
     @_requires_z3
@@ -57,7 +57,7 @@ class TestWidthCoercion:
         from core.smt_solver.csem import truncation_loses_bits
         # 0x1FF doesn't fit in 8-bit unsigned (max 0xFF)
         assert _eval_predicate(
-            truncation_loses_bits(z3.BitVecVal(0x1FF, 32), 8, to_signed=False)
+            truncation_loses_bits(z3.BitVecVal(0x1FF, 32), 8, to_signed=False, from_signed=False)
         )
 
     @_requires_z3
@@ -66,7 +66,7 @@ class TestWidthCoercion:
         from core.smt_solver.csem import truncation_loses_bits
         # 0xFFFFFF7F as int32 = -129; narrow int8 is 0x7F = +127; values differ
         assert _eval_predicate(
-            truncation_loses_bits(z3.BitVecVal(0xFFFFFF7F, 32), 8, to_signed=True)
+            truncation_loses_bits(z3.BitVecVal(0xFFFFFF7F, 32), 8, to_signed=True, from_signed=True)
         )
 
 
