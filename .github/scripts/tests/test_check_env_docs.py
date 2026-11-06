@@ -592,3 +592,73 @@ value = factory([transform(x) for x in items],
         ("INNER_ENV", "RAPTOR_INNER"), ("FINAL_ENV", "RAPTOR_FINAL"),
         ("CLASS_ENV", "RAPTOR_CLASS"), ("MATCH_ENV", "RAPTOR_MATCH"),
     ]
+
+
+@pytest.mark.parametrize("source, kind", [
+    ("import os as o\no.environ['RAPTOR_RETAINED']", "read"),
+    ("from os import environ as e\ne.get('RAPTOR_RETAINED')", "read"),
+    ("from os import getenv as g\ng('RAPTOR_RETAINED')", "read"),
+    ("import os\nos.putenv('RAPTOR_RETAINED', '1')", "write"),
+    ("import os\nos.unsetenv('RAPTOR_RETAINED')", "delete"),
+    ("child_env['RAPTOR_RETAINED'] = '1'", "child-write"),
+    ("env2['RAPTOR_RETAINED'] = '1'", "child-write"),
+    ("env_flag('RAPTOR_RETAINED', False)", "read"),
+    ("_env_int('RAPTOR_RETAINED', 1)", "read"),
+    ("_KNOB_ENV = 'RAPTOR_RETAINED'", "read"),
+    ("monkeypatch.setenv('RAPTOR_RETAINED', '1')", "monkeypatch"),
+    ("import os\nos.ｅｎｖｉｒｏｎ.get('RAPTOR_RETAINED')", "read"),
+    ("ｅｎｖ['RAPTOR_RETAINED'] = '1'", "child-write"),
+    ("import os\nos.getenv('RAPTOR_\\x52ETAINED')", "read"),
+])
+def test_python_prescreen_retains_supported_forms(det, tmp_path, source, kind):
+    root = _tree(tmp_path, {"core/reader.py": source + "\n"})
+    inventory = det.scan_tree(root)
+    assert list(inventory.vars) == ["RAPTOR_RETAINED"]
+    assert _kinds(inventory, "RAPTOR_RETAINED") == [kind]
+
+
+def test_python_prescreen_keeps_unicode_cross_file_declarations(det, tmp_path):
+    root = _tree(tmp_path, {
+        "core/owner.py": "ＫＮＯＢ＿ＥＮＶ = 'RAPTOR_RETAINED'\n",
+        "core/reader.py": (
+            "from core.owner import ＫＮＯＢ＿ＥＮＶ\n"
+            "import os\nos.getenv(ＫＮＯＢ＿ＥＮＶ)\n"
+        ),
+    })
+    inventory = det.scan_tree(root)
+    assert [(o.file, o.kind) for o in inventory.vars["RAPTOR_RETAINED"]] == [
+        ("core/owner.py", "read"), ("core/reader.py", "read"),
+    ]
+
+
+def test_python_prescreen_does_not_filter_bash(det, tmp_path):
+    root = _tree(tmp_path, {"bin/launch": '#!/bin/sh\nprintf "%s" "$PLAIN_SETTING"\n'})
+    inventory = det.scan_tree(root)
+    assert _kinds(inventory, "PLAIN_SETTING") == ["bash-read"]
+
+
+@pytest.mark.parametrize("root_on_path", [False, True])
+@pytest.mark.parametrize("scenario", ["valid", "invalid-json", "collision"])
+def test_broker_scan_preserves_borrowed_import_path(det, tmp_path, monkeypatch, root_on_path, scenario):
+    body = '{"version":1,"brokers":[{"name":"example"}]}'
+    files = {"core/llm/model_brokers/registry.json": body}
+    if scenario == "invalid-json":
+        files["core/llm/model_brokers/registry.json"] = "{broken"
+    if scenario == "collision":
+        files["core/reader.py"] = "import os\nos.getenv('EXAMPLE_API_KEY')\n"
+    root = _tree(tmp_path, files)
+    checker_root = str(_SCRIPT.resolve().parents[2])
+    caller = [entry for entry in sys.path if entry != checker_root]
+    if root_on_path:
+        caller.append(checker_root)
+    original = caller.copy()
+    monkeypatch.setattr(sys, "path", caller)
+    if scenario == "valid":
+        inventory = det.scan_tree(root)
+        assert "EXAMPLE_API_KEY" in inventory.vars
+    else:
+        message = "Invalid broker catalog" if scenario == "invalid-json" else "conflicts with Python-owned"
+        with pytest.raises(ValueError, match=message):
+            det.scan_tree(root)
+    assert sys.path is caller
+    assert caller == original
