@@ -55,7 +55,7 @@ def test_native_indices_distinguish_duplicate_text_in_custom_contexts(backend):
     solver = getattr(z3, backend)(ctx=ctx)
     value = z3.Bool("Value", ctx=ctx)
     frame = track_frames(solver, [([("same", value), ("same", z3.Not(value)), ("same", True)], [0, 0, 1])])
-    assert solver.check() == z3.unsat
+    assert frame.check() == z3.unsat
     assert set(frame.core_indices(solver)) == {0, 1}
     assert frame.single_core_origin(solver) == 0
     assert frame.core_indices(getattr(z3, backend)(ctx=ctx)) is None
