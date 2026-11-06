@@ -88,14 +88,19 @@ class Catalogue:
             signature = dumps_canonical([info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns])
         except OSError:
             signature = "unreadable"
-        old = self.db.execute("SELECT signature,status,version FROM files WHERE path=?",(path,)).fetchone()
+        old = self.db.execute("SELECT signature,status,version,seen FROM files WHERE path=?",(path,)).fetchone()
         generation = int(self._meta("generation"))
         if old is None:
             self.db.execute("INSERT INTO files VALUES (?,?,?,NULL,NULL,'pending','',?)",(path,generation,signature,VERSION))
         elif old["signature"] != signature or old["version"] != VERSION or old["status"] == "blocked":
             self.db.execute("UPDATE files SET signature=?,seen=?,status='pending',error='' WHERE path=?",(signature,generation,path))
             self.changed.add(path)
-        else:
+        elif (
+            type(old["seen"]) is not int or old["seen"] != generation
+            or not self.db.in_transaction
+        ):
+            # Retain the first write's transaction/locking behaviour. Once
+            # inside that transaction, identical generation marks need no write.
             self.db.execute("UPDATE files SET seen=? WHERE path=?",(generation,path))
 
     def ingest(self, sources: dict[str,str], raw_hashes: dict[str,str]):
