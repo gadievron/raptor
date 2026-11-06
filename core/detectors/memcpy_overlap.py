@@ -103,9 +103,15 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
                 # compiler extensions must not hide a later candidate token.
                 origins = {rel, (root / rel).resolve().relative_to(root).as_posix()}
                 code = blank_c_noncode(view.text, allow_digit_separators=True)
-                for lineno, line in enumerate(code.split("\n"), 1):  # line-model: cpp output and its map use literal \n
+                lineno = 1
+                previous = 0
+                for match in _MEMCPY_TOKEN.finditer(code):
+                    # cpp maps count literal newlines. Count disjoint spans
+                    # only at tokens instead of allocating every source line.
+                    lineno += code.count("\n", previous, match.start())
+                    previous = match.start()
                     origin = view.origin_of(lineno)
-                    if origin is not None and origin[0] in origins and _MEMCPY_TOKEN.search(line):
+                    if origin is not None and origin[0] in origins:
                         state.candidates.add(rel)
                         break
                 del code, view
