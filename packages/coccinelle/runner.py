@@ -1870,7 +1870,9 @@ def demux_result_by_file(
     A failed batch (``not result.ok``) propagates the error to EVERY
     member with ``files_examined=[]`` so no consumer can read a member
     of a crashed batch as refuted / examined-clean; callers degrade
-    those files to per-file recompute.
+    those files to per-file recompute. Unassigned matches likewise
+    invalidate every member: guessing an attribution or dropping a hit
+    must never manufacture verified silence.
     """
     root = Path(target_root).resolve()
 
@@ -1887,16 +1889,21 @@ def demux_result_by_file(
     for m in result.matches:
         by_file.setdefault(_rel(m.file), []).append(m)
 
-    failed = not result.ok
+    members = [_rel(str(f)) for f in file_set]
+    errors = list(result.errors)
+    if by_file.keys() - set(members):
+        # Never turn an unassigned authentic hit into verified silence.
+        # Do not guess by basename: distinct source files can share it.
+        errors.append("Coccinelle batch contains matches outside its input file set")
+    failed = not result.ok or bool(errors)
     out: dict[str, SpatchResult] = {}
-    for f in file_set:
-        rel = _rel(str(f))
+    for rel in members:
         out[rel] = SpatchResult(
             rule=result.rule,
             rule_path=result.rule_path,
             matches=list(by_file.get(rel, [])),
             files_examined=[] if failed else [rel],
-            errors=list(result.errors),
+            errors=list(errors),
             elapsed_ms=result.elapsed_ms,
             returncode=result.returncode,
             forged_markers=result.forged_markers,

@@ -369,6 +369,25 @@ class TestPinning:
         for fp in rels:
             assert memo.get(_leg_key(root, "rh", fp)) is None
 
+    def test_unassigned_batch_match_pins_no_clean_verdict(self, tmp_path, monkeypatch):
+        rels = [f"src/f{i}.c" for i in range(5)]
+        root = _tree(tmp_path, rels)
+        rule = tmp_path / "r.cocci"
+        rule.write_text("@r@\nposition p;\n@@\nmalloc@p(...)\n")
+
+        def _unassigned(target, rule, *, file_set=None, **kw):
+            return SpatchResult(
+                rule="r", rule_path=str(rule), returncode=0,
+                matches=[SpatchMatch(file="unassigned.c", line=1, rule="r")],
+            )
+
+        monkeypatch.setattr(cocci_runner, "run_rule", _unassigned)
+        memo = SweepMemo()
+        cfg = _Cfg(memo, _inventory(rels))
+        _dispatch(cfg, root, rule, rels[:TRIGGER_DISTINCT_FILES])
+        for fp in rels:
+            assert memo.get(_leg_key(root, "rh", fp)) is None
+
     def test_warmed_window_not_rerun(self, tmp_path, monkeypatch):
         rels = [f"src/f{i}.c" for i in range(10)]
         root = _tree(tmp_path, rels)
