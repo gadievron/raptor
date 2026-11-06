@@ -517,7 +517,7 @@ class TestWriteAndLoad(unittest.TestCase):
 
 
 class TestTrackReadHook(unittest.TestCase):
-    """Hook tests run against a per-test fake HOME.
+    """Hook tests run against a per-test fake HOME and registry.
 
     The hook resolves the active project via
     ``Path.home()/.raptor/projects/.active`` — a GLOBAL symlink. Under
@@ -525,11 +525,18 @@ class TestTrackReadHook(unittest.TestCase):
     one worker's teardown (or test_skips_without_active_project's
     unlink) raced another worker's mid-test resolution, flaking
     test_appends_to_manifest. Pointing HOME at a private tmpdir makes
-    every test see its own projects dir; the save/restore logic in
+    every test see its own projects dir. Pin RAPTOR_REGISTRY_HOME too,
+    so the inherited harness override cannot redirect the reader; the
+    save/restore logic in
     _setup_project then only ever touches the fake home."""
 
     def setUp(self):
         self._home_tmp = TemporaryDirectory()
+        registry_env = patch.dict(os.environ, {
+            "RAPTOR_REGISTRY_HOME": str(Path(self._home_tmp.name) / ".raptor"),
+        })
+        self.addCleanup(registry_env.stop)
+        registry_env.start()
         self._old_home = os.environ.get("HOME")
         os.environ["HOME"] = self._home_tmp.name
 

@@ -21,6 +21,8 @@ def _run(*args, tmp_home=None):
     env.pop("RAPTOR_CALLER_DIR", None)
     if tmp_home:
         env["HOME"] = tmp_home
+        # Match the registry planted by _setup_project_symlink, including in children.
+        env["RAPTOR_REGISTRY_HOME"] = str(Path(tmp_home) / ".raptor")
     result = subprocess.run(
         [sys.executable, LIFECYCLE] + list(args),
         capture_output=True, text=True, env=env,
