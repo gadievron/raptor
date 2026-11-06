@@ -77,6 +77,8 @@ escape at display time (the engine's standing contract).
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -305,7 +307,7 @@ class _Emitter:
             # Excerpts arrive escaped + bounded from the step renderer
             # — ride unchanged (re-escaping is idempotent by contract).
             region["snippet"] = {"text": step.excerpt}
-        physical: dict = {"artifactLocation": {"uri": self._bound_name(uri)}}
+        physical: dict = {"artifactLocation": {"uri": quote(self._bound_name(uri), safe="/")}}
         if region:
             physical["region"] = region
         location: dict = {
@@ -433,7 +435,7 @@ class _Emitter:
                 if snippet:
                     region["snippet"] = {"text": snippet}
             physical: dict = {
-                "artifactLocation": {"uri": self._bound_name(uri)},
+                "artifactLocation": {"uri": quote(self._bound_name(uri), safe="/")},
             }
             if region:
                 physical["region"] = region
