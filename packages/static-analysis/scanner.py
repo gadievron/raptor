@@ -3877,8 +3877,8 @@ def main() -> None:
         duration = time.time() - start_time
         logger.info("Total scan duration: %.2fs", duration)
 
-        # Tool-execution coverage block — reads coverage-<tool>.json
-        # records the scanners emit; renders an aligned per-tool
+        # Tool-execution coverage block — replays current metrics counts
+        # without reopening historical per-tool records; renders an aligned
         # summary (findings count, rule groups, silent-drop
         # warnings) so the operator sees what RAN with what RESULT
         # before the function-level coverage block below.
@@ -3894,11 +3894,12 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             logger.debug("Tool-coverage render failed (non-fatal): %s", e)
 
-        # Print coverage summary (unified store-backed report; file-level tier
-        # when there's no function inventory, e.g. a bare /scan).
+        # This scan's file-level detail must use current facts as well. A
+        # prior checklist/store in reused --out is historical, not this scan.
         try:
             from core.coverage.store_summary import render_run_coverage
-            cov = render_run_coverage(out_dir)
+            cov = render_run_coverage(out_dir, current_records=current_coverage_records,
+                                      repo_root=repo_path)
             if cov:
                 print()
                 print(cov)

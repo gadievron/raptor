@@ -525,6 +525,12 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+The file-level section at the end of `/scan` is labeled **current scan** and
+uses this invocation's coverage facts. It does not import an older checklist
+or persistent coverage store from a reused output directory. Project coverage
+reports continue to show accumulated history. File and rule previews are
+limited to 20 entries per tool; full details remain in coverage records.
+
 When reusing an output directory, the scan's file total and tool-execution
 summary describe the current invocation. Earlier coverage files remain on disk
 but do not make a disabled or skipped tool appear to have run again. Saved

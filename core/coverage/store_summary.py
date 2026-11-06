@@ -65,7 +65,7 @@ def _str_members(value: Any) -> list[str]:
     other shape) — set-update/sorted()-safe intake for record fields."""
     if not isinstance(value, list):
         return []
-    return [v for v in value if isinstance(v, str)]
+    return [v for v in value if isinstance(v, str) and v]
 
 
 def _workflow_step_files(checklist: dict[str, Any]) -> set[str]:
@@ -105,56 +105,60 @@ def file_level_view(run_dirs: Iterable[Path]) -> dict[str, Any]:
 
     from .record import load_records
 
-    tools: dict[str, dict[str, Any]] = {}
     runs: list[dict[str, Any]] = []
-    for rd in run_dirs:
-        rd = Path(rd)
-        md = load_run_metadata(rd)
-        if md:
-            runs.append({
-                "run": rd.name,
-                "command": md.get("command"),
-                "status": md.get("status"),
-                "timestamp": run_timestamp(md),
-                "target": run_target(md),
-                # The resolved path — the acquisition stamp above only
-                # says HOW the code arrived ({"source": "directory"}…).
-                "target_path": md.get("target_path"),
-            })
-        for rec in load_records(rd):
-            if not isinstance(rec, dict):
-                # load_records may yield one legacy list-of-records
-                # element (an audit-loader contract, spliced flat
-                # there) — this render lane consumes record OBJECTS
-                # only; a list rec crashed every summary render.
-                continue
-            tool = rec.get("tool")
-            if not tool:
-                continue
-            t = tools.setdefault(
-                tool, {"files": set(), "versions": set(), "rules": set(), "newest": None}
-            )
-            # Records are run-dir JSON: keep only string members —
-            # a non-string (or unhashable) element crashed the set
-            # updates and the sorted() views this function feeds.
-            t["files"].update(_str_members(rec.get("files_examined")))
-            if isinstance(rec.get("version"), str):
-                t["versions"].add(rec["version"])
-            t["rules"].update(_str_members(rec.get("rules_applied")))
-            ts = rec.get("timestamp")
-            if isinstance(ts, str) and (t["newest"] is None or ts > t["newest"]):
-                t["newest"] = ts
+
+    def records():
+        for rd in run_dirs:
+            rd = Path(rd)
+            md = load_run_metadata(rd)
+            if md:
+                runs.append({
+                    "run": rd.name,
+                    "command": md.get("command"),
+                    "status": md.get("status"),
+                    "timestamp": run_timestamp(md),
+                    "target": run_target(md),
+                    "target_path": md.get("target_path"),
+                })
+            yield from load_records(rd)
+
+    return {"tools": _file_level_tools(records()), "runs": runs}
+
+
+def _file_level_tools(records: Iterable[Any], *, repo_root: Path | None = None) -> dict[str, Any]:
+    """Fold derived records only; optional target confinement is lexical."""
+    from core.paths import to_repo_relative
+
+    root = Path(repo_root).resolve() if repo_root is not None else None
+    tools: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        tool = rec.get("tool")
+        if not isinstance(tool, str) or not tool:
+            continue
+        t = tools.setdefault(
+            tool, {"files": set(), "versions": set(), "rules": set(), "newest": None}
+        )
+        for file in _str_members(rec.get("files_examined")):
+            normal: str | None = file
+            if root is not None:
+                relative = to_repo_relative(file, root, outside_root="relative")
+                normal = to_repo_relative(relative, root) if relative is not None else None
+            if normal is not None:
+                t["files"].add(normal)
+        version = rec.get("version")
+        if isinstance(version, str) and version:
+            t["versions"].add(version)
+        t["versions"].update(_str_members(rec.get("versions")))
+        t["rules"].update(_str_members(rec.get("rules_applied")))
+        ts = rec.get("timestamp")
+        if isinstance(ts, str) and (t["newest"] is None or ts > t["newest"]):
+            t["newest"] = ts
     return {
-        "tools": {
-            k: {
-                "files": sorted(v["files"]),
-                "versions": sorted(v["versions"]),
-                "rules": sorted(v["rules"]),
-                "newest": v["newest"],
-            }
-            for k, v in sorted(tools.items())
-        },
-        "runs": runs,
+        tool: {"files": sorted(info["files"]), "versions": sorted(info["versions"]),
+               "rules": sorted(info["rules"]), "newest": info["newest"]}
+        for tool, info in sorted(tools.items())
     }
 
 
@@ -435,9 +439,20 @@ def format_file_breakdown(rows: list[dict[str, Any]], max_files: int = 40) -> st
     return "\n".join(lines)
 
 
-def render_run_coverage(run_dir) -> str | None:
+def render_run_coverage(run_dir, *, current_records: Iterable[Any] | None = None,
+                        repo_root: Path | None = None) -> str | None:
     """Single-run convenience wrapper over :func:`render_coverage` (used by
-    /agentic and standalone /scan end-of-run printing). Read-only."""
+    /agentic and standalone /scan end-of-run printing). Read-only.
+
+    Explicit current records select the current scan's file-level view, without
+    reading a prior checklist, store or coverage files in a reused output dir.
+    The default remains the historical inventory/store view.
+    """
+    if current_records is not None:
+        return format_file_level_view({
+            "tools": _file_level_tools(current_records, repo_root=repo_root), "runs": [],
+        }, current_scan=True)
+
     from core.inventory import read_checklist
 
     run = Path(run_dir)
@@ -493,9 +508,11 @@ def format_store_threshold_result(view: dict[str, Any], fail_under: float) -> st
     )
 
 
-def format_file_level_view(view: dict[str, Any], max_files: int = 20) -> str:
+def format_file_level_view(view: dict[str, Any], max_files: int = 20, *,
+                           max_rules: int = 20, current_scan: bool = False) -> str:
     """Render :func:`file_level_view` as an operator-facing section."""
-    lines = ["Coverage (file-level — no function inventory)"]
+    lines = ["Coverage (current scan — file-level)" if current_scan
+             else "Coverage (file-level — no function inventory)"]
     runs = view.get("runs") or []
     if runs:
         lines.append(f"  Runs: {len(runs)}")
@@ -514,7 +531,12 @@ def format_file_level_view(view: dict[str, Any], max_files: int = 20) -> str:
         lines.append("  (no coverage records found)")
     for tool, info in tools.items():
         ver = ", ".join(info["versions"]) or "?"
-        rules = f"  (rules: {', '.join(info['rules'])})" if info["rules"] else ""
+        rule_names = info["rules"][:max_rules]
+        hidden = len(info["rules"]) - len(rule_names)
+        rule_preview = ", ".join(rule_names)
+        if hidden:
+            rule_preview += f" … (+{hidden} more)"
+        rules = f"  (rules: {rule_preview})" if info["rules"] else ""
         lines.append(f"  {tool} {ver}: {len(info['files'])} file(s) examined{rules}")
         lines.extend(f"    {f}" for f in info["files"][:max_files])
         if len(info["files"]) > max_files:

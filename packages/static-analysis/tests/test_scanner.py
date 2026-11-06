@@ -690,6 +690,10 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     # Prior coverage from disabled tools and nested runs must not enter this scan.
     stale_coverage = {'tool': 'coccinelle', 'files_examined': ['old.c'], 'rules_applied': 999}
     (out / 'coverage-coccinelle.json').write_text(json.dumps(stale_coverage))
+    (out / 'checklist.json').write_text(json.dumps({'files': [{
+        'path': 'old.c', 'lines': 5,
+        'items': [{'name': 'old_fn', 'kind': 'function', 'line_start': 1, 'line_end': 5}],
+    }]}))
     (out / 'scan').mkdir()
     (out / 'scan' / 'coverage-sca.json').write_text(json.dumps({
         'tool': 'sca', 'files_examined': ['old-dependency.json'],
@@ -759,6 +763,9 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
         assert '999 rule groups' not in stdout
     else:
         assert 'Coccinelle' not in stdout
+    assert 'Coverage (current scan — file-level)' in stdout
+    assert 'Coverage (persistent store)' not in stdout
+    assert 'old.c' not in stdout and 'old-dependency.json' not in stdout
     assert metrics['total_findings'] == expected_count
     assert metrics['findings_by_tool'] == ({'semgrep': expected_count, 'codeql': 0}
                                            if stage_mode == 'multi' else {'semgrep': expected_count})
