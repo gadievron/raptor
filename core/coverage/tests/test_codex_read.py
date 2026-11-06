@@ -188,13 +188,8 @@ def test_parallel_hook_consumers_append_at_most_once(case):
         return unlink(name, **kwargs)
     with patch.object(environment, 'restore', return_value=None), \
             patch.object(reader.os, 'unlink', competing_unlink):
-        def consume():
-            try:
-                reader.consume(payload)
-            except FileNotFoundError:
-                pass  # lifecycle hook suppresses a concurrent consumer's unlink
         with ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(lambda _: consume(), range(2)))
+            list(pool.map(reader.consume, [payload, payload]))
     assert manifest(case) == [str(case[1])]
 
 
@@ -400,3 +395,30 @@ def test_quoted_paths_reach_real_lifecycle_dispatch(case, monkeypatch, relative,
     lifecycle_hook(json.dumps(payload), monkeypatch)
     assert manifest(case) == [str(source)]
     assert receipts(case) == []
+
+
+@pytest.mark.parametrize('phase', ['read', 'unlink'])
+def test_receipt_disappearing_during_consumption_is_a_noop(case, monkeypatch, phase):
+    _, payload = fire(case)
+    name = receipts(case)[0].name
+    unlink = os.unlink
+    if phase == 'read':
+        read = environment._read
+
+        def competing_read(directory, filename):
+            if filename == name:
+                unlink(filename, dir_fd=directory)
+            return read(directory, filename)
+
+        monkeypatch.setattr(environment, '_read', competing_read)
+    else:
+        def competing_unlink(filename, **kwargs):
+            if filename == name:
+                unlink(filename, **kwargs)
+                raise FileNotFoundError('receipt claimed by another hook')
+            return unlink(filename, **kwargs)
+
+        monkeypatch.setattr(reader.os, 'unlink', competing_unlink)
+    reader.consume(payload)
+    assert receipts(case) == []
+    assert manifest(case) == []

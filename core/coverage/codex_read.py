@@ -135,19 +135,31 @@ def consume(payload):
         if len(names) > 128:
             return
         for name in names:
+            valid = False
+            claimed = False
             try:
                 value = loads_bounded(environment._read(directory, name), max_bytes=_MAX_RECEIPT_BYTES)
-                if (isinstance(value, dict)
+                valid = (isinstance(value, dict)
                         and set(value) == {'generation', 'argv', 'content', 'path', 'run', 'target'}
                         and value['generation'] == outcome._generation(context)
                         and value['argv'] == outcome._digest(expected)
                         and isinstance(payload.get('tool_response'), str)
                         and value['content'] == sha256_string(payload['tool_response'])
                         and all(isinstance(value[k], str) for k in ('path', 'run', 'target'))
-                        and os.path.isabs(value['path']) and os.path.isabs(value['run'])):
-                    accepted.append(value)
+                        and os.path.isabs(value['path']) and os.path.isabs(value['run']))
+            except FileNotFoundError:
+                pass  # Another hook consumed the listed receipt before our read.
             finally:
-                os.unlink(name, dir_fd=directory)
+                try:
+                    os.unlink(name, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                else:
+                    claimed = True
+            # Successful removal is the single-use claim. A consumer that
+            # loses this race must not attribute even a previously valid read.
+            if claimed and valid:
+                accepted.append(value)
     if len(names) != 1 or len(accepted) != 1:
         return
     value = accepted[0]
