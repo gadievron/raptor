@@ -11,6 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.sage import rowmac
+from core.testing.module_state import isolated_module_state
+
 
 
 class TestKeyPathResolution(unittest.TestCase):
@@ -44,6 +46,7 @@ class RowMacKeyTmpDirCase(unittest.TestCase):
     """Base: point the key path at a per-test temp directory."""
 
     def setUp(self):
+        self.enterContext(isolated_module_state(rowmac, {"_warned_paths": set()}))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.key_path = Path(self.tmp.name) / "sage-state" / "rowmac.key"
@@ -246,7 +249,6 @@ class TestShortOrEmptyKeyRefused(RowMacKeyTmpDirCase):
 
     def setUp(self):
         super().setUp()
-        rowmac._warned_paths.clear()
         self.key_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def _torn_key(self, data: bytes) -> None:

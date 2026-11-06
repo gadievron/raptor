@@ -23,7 +23,6 @@ from core.inventory import checklist_frame_mac as _frame_mac
 def _isolated_frame_key(tmp_path: Path,
                         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-    _frame_mac._warned_unstamped.clear()
-    _frame_mac._warned_relocated.clear()
-    _frame_mac._warned_key_paths.clear()
-    _frame_mac._warned_absent_key.clear()
+    for name in ("_warned_unstamped", "_warned_relocated",
+                 "_warned_key_paths", "_warned_absent_key"):
+        monkeypatch.setattr(_frame_mac, name, set())

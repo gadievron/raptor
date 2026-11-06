@@ -30,13 +30,16 @@ from core.audit.disasm_xcheck import (
     classify_trigger,
     run_disasm_xcheck,
 )
+from core.testing.module_state import isolated_module_state
+
 
 
 @pytest.fixture(autouse=True)
 def _fresh_channel_state():
-    dx._reset_for_tests()
-    yield
-    dx._reset_for_tests()
+    with isolated_module_state(dx, {
+            "_SPAWN_COUNTS": type(dx._SPAWN_COUNTS)(),
+            "_WINDOW_MEMO": dx.BoundedMemo(64)}, lock=dx._SPAWN_LOCK):
+        yield
 
 
 # ---------------------------------------------------------------------------

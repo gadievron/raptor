@@ -22,6 +22,7 @@ from core.project.trust import (
     resolve_dynamic_validation_detail,
     resolve_trust_flag,
 )
+from core.testing.module_state import isolated_module_state
 
 
 def _ns(**kw):
@@ -31,13 +32,13 @@ def _ns(**kw):
     return argparse.Namespace(**base)
 
 
+
 class TrustProjectFixture(unittest.TestCase):
     """Temp projects dir with one active project."""
 
     def setUp(self):
         from core.project import trust
-        trust._gate_pin_memo.clear()
-        self.addCleanup(trust._gate_pin_memo.clear)
+        self.enterContext(isolated_module_state(trust, {"_gate_pin_memo": {}}))
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
@@ -361,8 +362,7 @@ class TestOneTargetRuleFollowsPin(unittest.TestCase):
         from core.project import sessions, trust
         from core.run import pin
 
-        trust._gate_pin_memo.clear()
-        self.addCleanup(trust._gate_pin_memo.clear)
+        self.enterContext(isolated_module_state(trust, {"_gate_pin_memo": {}}))
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)

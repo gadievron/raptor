@@ -31,12 +31,16 @@ from core.audit.context import (
     assemble_context,
     format_context_for_prompt,
 )
+import pytest
+
+from core.testing.module_state import isolated_module_state
 
 
 def _make_oversized(path):
     """Create a sparse file just past the read cap (no real IO cost)."""
     path.touch()
     os.truncate(path, _MAX_SOURCE_FILE_BYTES + 1)
+
 
 
 class TestReadSource:
@@ -95,11 +99,11 @@ class TestReadTargetText:
 
 
 class TestKernelMarkerSniff:
-    def setup_method(self):
-        ctx_mod._kernel_file_cache.clear()
-
-    def teardown_method(self):
-        ctx_mod._kernel_file_cache.clear()
+    @pytest.fixture(autouse=True)
+    def _owned_kernel_cache(self):
+        with isolated_module_state(ctx_mod, {
+                "_kernel_file_cache": ctx_mod.BoundedMemo(2048)}):
+            yield
 
     def _ctx(self, tmp_path, fp):
         return {"file": fp, "target_path": str(tmp_path)}
