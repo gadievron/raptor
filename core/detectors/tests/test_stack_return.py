@@ -188,3 +188,65 @@ def test_stack_deadline_keeps_completed_corroboration_and_skips_remaining_tu(set
     assert set(result.value.diagnostics) == {'a.c'}
     assert len(state['prepared']) == len(state['calls']) == 1 and state['timeouts'] == [5]
     assert any('skipped 1' in item['reason'] for item in result.value.limitations)
+
+
+@pytest.mark.parametrize("kind", ["stack-return", "memcpy-overlap"])
+@pytest.mark.parametrize("status", ["complete", "partial", "skipped", "error", "exception"])
+def test_completed_supplementary_detectors_release_execution_inputs(tmp_path, monkeypatch, kind, status):
+    import gc
+    import weakref
+    from core.detectors import memcpy_overlap
+    from core.detectors.pipeline import Detector, Stage, StageResult
+    from core.detectors.setup import AnalysisSetup
+
+    module = detector if kind == "stack-return" else memcpy_overlap
+    states = []
+    references = []
+
+    def finish(state):
+        states.append(state)
+        state.diagnostics["a.c"] = [{"message": "retained"}]
+        state.limitations.append({"tu": "a.c", "reason": "retained"})
+        if status == "exception":
+            raise RuntimeError("stage failed")
+        return StageResult(status)
+
+    monkeypatch.setattr(module, "DETECTOR", Detector("lifetime", "1", (Stage("finish", finish),)))
+
+    class Payload:
+        def __call__(self, *args, **kwargs):
+            pytest.fail("lifetime test must not invoke tools or prepare source")
+
+    def run_owned():
+        payload = Payload()
+        setup = AnalysisSetup()
+        memo = setup.include_dirs_memo
+        references.extend([weakref.ref(payload), weakref.ref(setup)])
+        seeds = {"a.c": [{"unused": payload}]}
+        try:
+            if kind == "stack-return":
+                result = module.run_stack_return(tmp_path, seeds, request_for=payload,
+                    sandbox_run=payload, locate=payload, prepare_view=payload)
+            else:
+                result = module.run_memcpy_overlap(tmp_path, ("a.c",), request_for=payload,
+                    sandbox_run=payload, setup=setup, include_dirs_memo=memo)
+        except RuntimeError:
+            assert status == "exception"
+            result = None
+        assert seeds["a.c"][0]["unused"] is payload
+        assert setup.include_dirs_memo is memo
+        return result
+
+    result = run_owned()
+    state = states[0]
+    assert state.request_for is None and state.sandbox_run is None
+    if kind == "stack-return":
+        assert state.seeds == {} and state.prepare_view is None and state.locate is None
+    else:
+        assert state.files == () and state.setup is None and state.include_dirs_memo is None
+    assert state.diagnostics == {"a.c": [{"message": "retained"}]}
+    assert state.limitations == [{"tu": "a.c", "reason": "retained"}]
+    if result is not None:
+        assert result.status == status and result.value is state
+    gc.collect(0)
+    assert all(reference() is None for reference in references)
