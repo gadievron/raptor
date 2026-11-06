@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 import errno
 import os
+import signal
 import subprocess
 import sys
 
@@ -157,16 +158,24 @@ def test_tier_reader_preserves_reused_writer_descriptor(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="owned SIGTERM readiness child")
-def test_ready_pipe_success_transfers_child_ownership(tmp_path, monkeypatch):
+@pytest.mark.parametrize("blocked_sigterm", [False, True])
+def test_ready_pipe_success_transfers_child_ownership(tmp_path, monkeypatch, blocked_sigterm):
     from packages.joern.tests import test_netns_forwarder_boot as module
 
     children = []
-    code = r"import os,signal,sys,time; signal.signal(signal.SIGTERM,lambda *args:sys.exit(143)); os.write(int(sys.argv[1]),b'supervision_tier=group\n'); time.sleep(60)"
+    code = r"import os,signal,sys,time; signal.signal(signal.SIGTERM,lambda *args:sys.exit(143)); signal.pthread_sigmask(signal.SIG_UNBLOCK,{signal.SIGTERM}); os.write(int(sys.argv[1]),b'supervision_tier=group\n'); time.sleep(60)"
 
     def spawn(directory, marker, *, ready_fd):
-        process = subprocess.Popen(
-            [sys.executable, "-I", "-c", code, str(ready_fd)], pass_fds=(ready_fd,)
+        # Exercise inherited masks without changing the caller's baseline.
+        previous = signal.pthread_sigmask(
+            signal.SIG_BLOCK, {signal.SIGTERM} if blocked_sigterm else (),
         )
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-I", "-c", code, str(ready_fd)], pass_fds=(ready_fd,)
+            )
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         children.append(process)
         return process, str(tmp_path / "absent.sock")
 
