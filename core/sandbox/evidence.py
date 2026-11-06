@@ -132,8 +132,10 @@ def ensure_audit_dirfd(run_dir) -> int:
     with run-dir write access could otherwise swap an intermediate
     component between our validation and the caller's open. Callers
     open evidence files RELATIVE to this fd (``dir_fd=``) so every
-    open lands in the directory that was actually validated. Caller
-    owns the fd and must close it.
+    open lands in the directory that was actually validated. Existing
+    directories must be owned by this user and not group/other-writable;
+    read/execute permission bits are preserved. Caller owns the fd and
+    must close it.
     """
     d = audit_dir_path(run_dir)
     try:
@@ -159,6 +161,12 @@ def ensure_audit_dirfd(run_dir) -> int:
                 f"evidence dir {d} is not a directory "
                 f"(symlink or file planted?) — refusing to use it"
             )
+        if st.st_uid != os.getuid() or st.st_mode & 0o022:
+            raise OSError(
+                f"evidence dir {d} failed ownership/permissions validation "
+                f"(mode={oct(st.st_mode)}, uid={st.st_uid}) "
+                f"— refusing to use it"
+            )
     except BaseException:
         with contextlib.suppress(OSError):
             os.close(fd)
@@ -179,6 +187,12 @@ def ensure_audit_dir(run_dir) -> Path:
     fd = ensure_audit_dirfd(run_dir)
     os.close(fd)
     return audit_dir_path(run_dir)
+
+
+def _safe_evidence_file_metadata(st: os.stat_result) -> bool:
+    """The same file-safety floor applies at append-open and verification."""
+    return (_stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
+            and st.st_nlink == 1 and not (st.st_mode & 0o022))
 
 
 class EvidenceFile:
@@ -245,13 +259,7 @@ class EvidenceFile:
                 fd = os.open(filename, flags | os.O_NONBLOCK,
                              dir_fd=dirfd)
                 st = os.fstat(fd)
-                ok = (
-                    _stat.S_ISREG(st.st_mode)
-                    and st.st_uid == os.getuid()
-                    and st.st_nlink == 1
-                    and not (st.st_mode & 0o022)
-                )
-                if not ok:
+                if not _safe_evidence_file_metadata(st):
                     raise OSError(
                         f"existing evidence file {path} failed validation "
                         f"(mode={oct(st.st_mode)}, uid={st.st_uid}, "
@@ -325,7 +333,7 @@ class EvidenceFile:
         return self.write_line(line)
 
     def verify(self) -> bool:
-        """Check identity and size against known append progress.
+        """Check identity, safety metadata and known append progress.
 
         The opening size plus this handle's writes is a persistent floor;
         the shared offset also covers raw descriptor inheritors' writes.
@@ -366,13 +374,25 @@ class EvidenceFile:
             # Read the offset before size: concurrent raw-fd appenders may
             # grow the file, but cannot manufacture a false shrink result.
             written_end = os.lseek(self.fd, 0, os.SEEK_CUR)
-            size = os.fstat(self.fd).st_size
+            held = os.fstat(self.fd)
+            size = held.st_size
         except OSError:
             logger.warning(
                 "SANDBOX EVIDENCE TAMPER SUSPECTED: cannot verify the "
                 "held evidence descriptor for %s", self.path, exc_info=True,
             )
             return False
+        # Validate both snapshots: a safe pathname stat cannot overrule
+        # metadata that becomes unsafe before inspecting the held object.
+        for location, snapshot in (("path", st), ("descriptor", held)):
+            if not _safe_evidence_file_metadata(snapshot):
+                logger.warning(
+                    "SANDBOX EVIDENCE TAMPER SUSPECTED: unsafe evidence "
+                    "metadata for %s (%s: mode=%o uid=%s nlink=%s)",
+                    self.path, location, snapshot.st_mode,
+                    snapshot.st_uid, snapshot.st_nlink,
+                )
+                return False
         minimum_size = max(written_end, self._minimum_size)
         if size < minimum_size:
             logger.warning(
