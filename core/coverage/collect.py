@@ -25,7 +25,6 @@ import os
 import re
 import struct
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -37,7 +36,7 @@ _TIMEOUT = 300
 
 
 import logging
-from core.run.scratch import temporary_text
+from core.run.scratch import temporary_text, scratch_dir
 from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -177,7 +176,8 @@ def collect_gcov(build_dir, env: dict[str, str] | None = None) -> dict[str, set[
     env = dict(env) if env else safe_subprocess_env()
     out: dict[str, set[int]] = {}
     for f in gcda:
-        with tempfile.TemporaryDirectory(prefix="raptor-gcov-") as td:
+        with scratch_dir("raptor-gcov-") as scratch_path:
+            td = str(scratch_path)
             out_path = os.path.join(td, "stdout.txt")
             run_env = dict(env)
             run_env["RAPTOR_GCOV_OUT"] = out_path

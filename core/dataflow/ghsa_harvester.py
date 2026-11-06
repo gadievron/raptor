@@ -29,11 +29,11 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.run.scratch import scratch_dir
 from core.json.bounded import load_json_bounded
 
 if TYPE_CHECKING:
@@ -185,7 +185,8 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> str | No
     env; ``preserve_proxy`` because the fetch dials the REMOTE
     repo_url — git honours proxy env, and on mandatory-egress-proxy
     hosts there is no direct route."""
-    with tempfile.TemporaryDirectory(prefix="ghsa-resolve-") as td:
+    with scratch_dir("ghsa-resolve-") as scratch_path:
+        td = str(scratch_path)
         td_p = Path(td)
         from core.git.clone import (
             get_safe_git_env,

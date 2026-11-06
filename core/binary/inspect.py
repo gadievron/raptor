@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,6 +85,7 @@ def inspect_binary(
             raise ValueError(msg)
     # Lazy import — keep this module independently importable in unit
     # tests that stub the sandbox (same convention as binary_oracle).
+    from core.run.scratch import scratch_dir
     from core.sandbox import run as _sandbox_run
     try:
         # The resolved path is used in argv too, not just for the
@@ -98,7 +98,8 @@ def inspect_binary(
     try:
         from core.binary._inspection_policy import inspection_command, inspection_options
         from core.security.env_sanitisation import subprocess_tmpdir
-        with tempfile.TemporaryDirectory(prefix="raptor-bininspect-", dir=subprocess_tmpdir()) as scratch:
+        with scratch_dir("raptor-bininspect-", dir=subprocess_tmpdir(), keepalive=True) as scratch_path:
+            scratch = str(scratch_path)
             proc = _sandbox_run(
                 inspection_command([tool, *args, str(resolved), *operands], scratch),
                 **inspection_options(resolved, tool, scratch),
