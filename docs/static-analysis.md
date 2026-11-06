@@ -139,7 +139,10 @@ runtime gates; the executable query must declare its requirements.
 
 Skipped Coccinelle rules appear in their per-rule error records. Semgrep keeps
 native incompatibility notices in its JSON output and exposes them as
-`skipped_rules` in its package results. Custom CodeQL results include
+`skipped_rules` in its package results. `/scan` counts incompatible-rule notices
+in `semgrep_skipped_rules` and reports partial execution even when a notice has
+no source filename. Compatible rules and their findings remain available.
+Custom CodeQL results include
 `skipped_rules`, also retained in the workflow report. Other compatible rules
 continue to produce findings. If every selected CodeQL query is incompatible,
 the query result is unsuccessful rather than an empty successful scan.
