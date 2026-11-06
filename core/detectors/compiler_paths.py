@@ -202,12 +202,21 @@ class PathBudget:
         self.remaining = max_bytes
 
     def retain(self, destination: dict[str, Any], paths: list[dict[str, Any]], notes: list[str]) -> None:
-        def size(value):
+        cost = 0
+
+        def fits(value):
+            nonlocal cost
+            cost += sys.getsizeof(value)
+            if cost > self.remaining:
+                return False
             children = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
-            return sys.getsizeof(value) + sum(size(child) for child in children)
-        cost = size(paths) if paths else 0
+            return all(fits(child) for child in children)
+
+        # Stop sizing a rejected path at the first known overflow. Successful
+        # admission retains the same conservative accounting as a full walk.
+        admitted = fits(paths) if paths else cost <= self.remaining
         destination.pop("code_flows", None)
-        if cost > self.remaining:
+        if not admitted:
             paths = []
             notes = [*notes, "compiler path retention budget reached; paths omitted"]
         else:

@@ -431,3 +431,52 @@ def test_inline_properties_cannot_stand_in_for_unresolved_cached_hop():
     event['index'] = -1  # SARIF's explicit inline sentinel, with no cache reference.
     paths, notes = normalize_paths([{'threadFlows': [{'locations': [event]}]}])
     assert paths and not notes
+
+
+@pytest.mark.parametrize("remaining", [0, 128, 512])
+def test_path_budget_stops_sizing_after_known_overflow(remaining):
+    class Unvisited:
+        def __sizeof__(self):
+            pytest.fail("a rejected path must not size its remaining payload")
+
+    paths = [flow(message="x" * 4096)]
+    paths[0]["properties"] = {"unused": Unvisited()}
+    budget = PathBudget(remaining)
+    diagnostic = {"message": "retained warning", "code_flows": [flow()]}
+    budget.retain(diagnostic, paths, ["existing note"])
+    assert budget.remaining == remaining
+    assert diagnostic["message"] == "retained warning"
+    assert "code_flows" not in diagnostic
+    assert diagnostic["compiler_path_notes"] == [
+        "existing note", "compiler path retention budget reached; paths omitted",
+    ]
+
+
+@pytest.mark.parametrize("headroom", [-1, 0, 1])
+def test_path_budget_boundary_and_rejection_leave_capacity_for_later_paths(headroom):
+    import sys
+
+    paths, _ = normalize_paths([flow()])
+    pending = [paths]
+    cost = 0
+    while pending:
+        value = pending.pop()
+        cost += sys.getsizeof(value)
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    budget = PathBudget(cost + headroom)
+    rejected = {"message": "large warning"}
+    budget.retain(rejected, [flow(message="x" * 10_000)], [])
+    assert "code_flows" not in rejected
+    assert budget.remaining == cost + headroom
+    diagnostic = {"message": "small warning"}
+    budget.retain(diagnostic, paths, [])
+    if headroom < 0:
+        assert "code_flows" not in diagnostic and diagnostic["compiler_path_notes"]
+        assert budget.remaining == cost - 1
+    else:
+        assert diagnostic["code_flows"] is paths
+        assert budget.remaining == headroom
+        assert "compiler_path_notes" not in diagnostic
