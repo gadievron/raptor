@@ -294,6 +294,9 @@ def index_dispatch(index, trees, types, contexts, resolve, limits):
                 edges += 1
 
 
+_DISPATCH_SOURCE_BUFFER_MIN_BYTES = 4096
+
+
 def expand_dispatch_paths(index, roots, limits):
     """Follow calls after a conditional dispatch without making them direct
     consumer edges. Keep one concrete source path per root and destination.
@@ -304,11 +307,16 @@ def expand_dispatch_paths(index, roots, limits):
     rows = []
     deferred = []
     started = time.monotonic()
+    prepared_source: tuple[str, bytes] | None = None
+    buffer_source = False
 
-    def direct_step(call,target):
+    def direct_step(call,target,source_bytes=None):
         fn = index.functions[call.caller]
         evidence = f"callback-helper-call:{fn.file}:{call.start_byte}"
-        source = fn.source.encode()[call.start_byte-fn.start_byte:call.end_byte-fn.start_byte].decode(errors="replace")
+        if source_bytes is None:
+            source = fn.source.encode()[call.start_byte-fn.start_byte:call.end_byte-fn.start_byte].decode(errors="replace")
+        else:
+            source = source_bytes[call.start_byte-fn.start_byte:call.end_byte-fn.start_byte].decode(errors="replace")
         index.declarations[evidence] = {"file":fn.file,"line":call.line,"source":source}
         return {"caller":call.caller,"target":target,"kind":"direct_call",
                 "evidence_id":evidence,"parameter_bindings":dict(zip(index.functions[target].params,call.arguments))}
@@ -339,6 +347,9 @@ def expand_dispatch_paths(index, roots, limits):
     # Multi-source BFS gives all immediate implementations a turn before
     # exploring deep helpers of any one implementation.
     while todo:
+        # Keep at most the current row's native source buffer, not the graph.
+        prepared_source = None
+        buffer_source = False
         root_id,row = todo.popleft()
         if time.monotonic()-started > limits.graph_seconds:
             deferred.extend({"reason":"dispatch_path_budget","target":r["target"],"root":r["dispatch_root"]}
@@ -349,11 +360,29 @@ def expand_dispatch_paths(index, roots, limits):
             if any(c.targets or c.dispatch_bindings for c in outgoing):
                 deferred.append({"reason":"dispatch_path_depth","target":row["target"],"root":row["dispatch_root"]})
             continue
+        if outgoing and (len(outgoing) > 1 or
+                         (type(outgoing[0].targets) is list and len(outgoing[0].targets) > 1)):
+            caller_fn = index.functions.get(row["target"])
+            first_byte = getattr(caller_fn, "start_byte", None)
+            last_byte = getattr(caller_fn, "end_byte", None)
+            buffer_source = (type(first_byte) is int and type(last_byte) is int
+                             and last_byte-first_byte >= _DISPATCH_SOURCE_BUFFER_MIN_BYTES)
         for call in outgoing:
             for target in call.targets:
                 if (root_id,target) in seen:
                     continue
-                step = direct_step(call,target)
+                if buffer_source:
+                    text = index.functions[call.caller].source
+                    if type(text) is str:
+                        if prepared_source is None or prepared_source[0] is not text:
+                            prepared_source = None
+                            prepared_source = text, text.encode()
+                        step = direct_step(call,target,prepared_source[1])
+                    else:
+                        prepared_source = None
+                        step = direct_step(call,target)
+                else:
+                    step = direct_step(call,target)
                 enqueue(root_id,{**row,"target":target,"dispatch_path":row["dispatch_path"]+[step]})
             for binding in call.dispatch_bindings:
                 step = {"caller":call.caller,"target":binding["target"],"kind":"dispatch_candidate",
