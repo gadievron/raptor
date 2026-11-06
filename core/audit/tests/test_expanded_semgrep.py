@@ -559,7 +559,7 @@ def test_corpus_preprocess_failure_counted(tmp_path, monkeypatch):
     corpus = build_expanded_corpus(target, tmp_path / "scratch")
     assert corpus.failed == 1
     assert corpus.expanded == 0
-    assert "failed to preprocess" in corpus.summary_line()
+    assert "failed preparation" in corpus.summary_line()
 
 
 def test_findings_to_sarif_marker_and_shape():
@@ -747,3 +747,51 @@ def test_expansion_cache_preserves_order_of_macro_overrides(tmp_path, monkeypatc
     assert first.text == '-DVALUE -UVALUE'
     assert second.text == '-UVALUE -DVALUE'
     assert calls == [('-DVALUE', '-UVALUE'), ('-UVALUE', '-DVALUE')]
+
+
+def test_corpus_uses_same_iterable_macro_configuration_for_every_tu(tmp_path, monkeypatch):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    for name in ('a.c', 'b.c'):
+        (target / name).write_text('BIG_MACRO(value);\n')
+    seen = []
+
+    def prepare(**kwargs):
+        flags = tuple(kwargs['macro_config'])
+        seen.append(flags)
+        return pv.ExpandedView(ok=True, file_path=kwargs['file_path'], text=' '.join(flags))
+
+    monkeypatch.setattr(es, 'expand_translation_unit', prepare)
+    corpus = build_expanded_corpus(target, tmp_path / 'scratch',
+                                   macro_config=iter(['-DVALUE=2', '-UOTHER']))
+    assert corpus.expanded == 2 and corpus.failed == 0
+    assert seen == [('-DVALUE=2', '-UOTHER')] * 2
+    assert (corpus.root / 'a.c').read_text() == (corpus.root / 'b.c').read_text() == '-DVALUE=2 -UOTHER'
+
+
+@pytest.mark.parametrize('failure', ['unreadable', 'oversized', 'unconfined'])
+def test_corpus_input_failures_are_counted_without_losing_good_tus(tmp_path, monkeypatch, failure):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    for name in ('bad.c', 'good.c'):
+        (target / name).write_text('BIG_MACRO(value);\n')
+    original_read = es.read_text_capped
+    original_join = es.safe_join
+
+    def read(path, **kwargs):
+        if Path(path).name == 'bad.c':
+            return None if failure == 'unreadable' else ('partial', True)
+        return original_read(path, **kwargs)
+
+    def join(root, rel):
+        return None if rel == 'bad.c' and failure == 'unconfined' else original_join(root, rel)
+
+    monkeypatch.setattr(es, 'read_text_capped', read)
+    monkeypatch.setattr(es, 'safe_join', join)
+    monkeypatch.setattr(es, 'expand_translation_unit', lambda **kw:
+        pv.ExpandedView(ok=True, file_path=kw['file_path'], text='expanded'))
+    corpus = build_expanded_corpus(target, tmp_path / 'scratch', max_tus=1)
+    assert corpus.failed == 1 and corpus.expanded == 1
+    assert set(corpus.tus) == {'good.c'}
+    assert corpus.skipped_budget == 0
+    assert '1 failed preparation' in corpus.summary_line()
