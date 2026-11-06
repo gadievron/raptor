@@ -338,7 +338,7 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
             examined = []
         has_files = False
         for item in examined:
-            if isinstance(item, str) and item:
+            if isinstance(item, str) and item and "\x00" not in item:
                 scanned.add(item)
                 has_files = True
             else:
@@ -385,7 +385,8 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
                 damaged = True
                 continue
             file = exclusion.get("path")
-            if not isinstance(file, str) or not file:
+            if not isinstance(file, str) or not file or "\x00" in file:
+                damaged = True
                 continue
             reason = exclusion.get("reason")
             reason = reason if isinstance(reason, str) and reason else "unspecified"

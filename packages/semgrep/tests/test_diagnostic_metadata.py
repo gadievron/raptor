@@ -90,3 +90,62 @@ def test_runner_retains_findings_but_cannot_claim_success_with_damaged_diagnosti
     assert result.errors and not result.ok
     assert [(finding.rule_id, finding.file) for finding in result.findings] == [("keep", "good.py")]
     assert result.files_examined == [str(source)]
+
+
+@pytest.mark.parametrize('field', ['scanned', 'skipped'])
+@pytest.mark.parametrize('invalid', [None, False, 7, {}, [], '', 'bad\x00.py'])
+def test_invalid_path_rows_are_incomplete_in_both_consumers(tmp_path, field, invalid):
+    paths = {'scanned': ['good.py'], 'skipped': [{'path': 'excluded.py', 'reason': 'ignore'}]}
+    paths[field].append({'path': invalid} if field == 'skipped' else invalid)
+    text = json.dumps({'paths': paths, 'errors': []})
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert parsed['errors'] and coverage.input_errors == 1
+    assert parsed['files_examined'] == coverage.record['files_examined'] == ['good.py']
+    assert coverage.skipped_paths == {'ignore': 1}
+
+
+@pytest.mark.parametrize('skipped', [None, False, {}, 'bad.py', [None], [7], ['bad.py']])
+def test_malformed_skipped_collection_is_not_silent_complete_metadata(tmp_path, skipped):
+    text = json.dumps({'paths': {'scanned': ['good.py'], 'skipped': skipped}, 'errors': []})
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert parsed['errors'] and coverage.input_errors == 1
+    assert parsed['files_examined'] == coverage.record['files_examined'] == ['good.py']
+
+
+@pytest.mark.parametrize('name', ['space name.py', 'line\nbreak.py', 'snow-λ.py', 'literal%20.py'])
+def test_real_filesystem_names_and_optional_skip_fields_remain_supported(tmp_path, name):
+    text = json.dumps({'paths': {'scanned': [name], 'skipped': [{'path': name}]}, 'errors': []})
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert not parsed['errors'] and coverage.input_errors == 0
+    assert parsed['files_examined'] == coverage.record['files_examined'] == [name]
+    assert coverage.skipped_paths == {'unspecified': 1}
+
+
+def test_malformed_skips_preserve_runner_findings(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "scope_isolation_available", lambda: True)
+    source = tmp_path / 'good.py'
+    source.write_text('foo()\n')
+    rule = tmp_path / 'rule.yaml'
+    rule.write_text('rules: []\n')
+    sarif = {'runs': [{'results': [{'ruleId': 'keep', 'message': {'text': 'hit'},
+        'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'good.py'},
+                       'region': {'startLine': 1}}}]}]}]}
+
+    def execute(command, **kwargs):
+        output = Path(command[command.index('--json-output') + 1])
+        output.write_text(json.dumps({'paths': {'scanned': [str(source)], 'skipped': {}}, 'errors': []}))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(sarif), stderr='')
+
+    result = runner.run_rule(source, str(rule), subprocess_runner=execute)
+    assert result.returncode == 0 and result.errors and not result.ok
+    assert [(finding.rule_id, finding.file) for finding in result.findings] == [('keep', 'good.py')]
+    assert result.files_examined == [str(source)]
