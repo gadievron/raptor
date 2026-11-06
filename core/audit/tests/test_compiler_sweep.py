@@ -4136,3 +4136,24 @@ def test_aliasing_local_assignment_requires_definite_initialization(tmp_path, sa
         assert result.details['aliasing_proofs'][0]['object'] == 'value'
     else:
         assert result.details['candidate_only']
+
+
+@pytest.mark.slow
+@needs_gcc
+@pytest.mark.parametrize('operator', ['~', '!'])
+@pytest.mark.parametrize('access', [False, True])
+def test_aliasing_unary_values_require_actual_incompatible_access(tmp_path, sandbox_spy, operator, access):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    operand = '*(int*)&value' if access else '(int)value'
+    (target / 'a.c').write_text('int f(float value) { return ' + operator + operand + '; }\n')
+    result = _guarded_compiler_sweep(
+        target_path=target, file_path='a.c', function_name='f', line_start=1, line_end=1,
+        cwe='CWE-843', hypothesis='incompatible access',
+    )
+    expected = 'confirmed' if access and HAVE_CLANG else 'inconclusive'
+    assert result.outcome == expected
+    if expected == 'confirmed':
+        assert result.details['aliasing_proofs'][0]['object'] == 'value'
+    else:
+        assert not result.details.get('aliasing_proofs')

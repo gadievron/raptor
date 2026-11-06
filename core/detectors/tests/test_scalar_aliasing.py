@@ -47,6 +47,13 @@ int incompatible_initial_store(void) { int value; *(float*)&value=1; return 0; }
 int unused_indirect_initializer(void) { float value; int *q=(int*)&value; float *p=&value; *p=1; return 0; }
 int read_during_indirect_initializer(void) { float value; float *p=&value; *p=*p; return *(int*)&value; }
 int other_indirect_initializer(void) { float value; float other; float *p=&other; *p=1; return *(int*)&value; }
+int character_initializer(void) { int value='x'; return *(float*)&value; }
+int complemented_access(float value) { return ~*(int*)&value; }
+int negated_access(float value) { return !*(int*)&value; }
+int character_only(void) { int value='x'; return value; }
+int complement_only(int value) { return ~value; }
+int negate_only(float value) { return !value; }
+int unused_character_initializer(void) { int value='x'; float *p=(float*)&value; return 0; }
 void stop(void);
 int interrupted(float value) { int *p=(int*)&value; stop(); return *p; }
 typedef int alias_int __attribute__((may_alias));
@@ -81,6 +88,7 @@ def test_native_ast_proves_only_supported_actual_accesses(parsed):
         "float_initializer", "float_to_integer", "float_widening",
         "assigned_initializer", "alias_before_initializer",
         "indirect_initializer", "incompatible_initial_store",
+        "character_initializer", "complemented_access", "negated_access",
     }
     indirect = next(p for p in proofs if p["function"] == "indirect")
     assert indirect["declared_type"] == "float" and indirect["access_type"] == "int"
