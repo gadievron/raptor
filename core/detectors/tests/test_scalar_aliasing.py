@@ -65,6 +65,50 @@ int branches(float value, int take) { if(take) return *(int*)&value; return 0; }
 """
 
 
+def _value_operation_cases():
+    cases = []
+
+    def add(name, body, positive, returns="int"):
+        cases.append((name, returns, body, positive))
+
+    for index, operator in enumerate(("&", "|", "^", "==", "!=", "<", "<=", ">", ">=")):
+        for access in (False, True):
+            operand = "*(int*)&value" if access else "(int)value"
+            add(f"value_binary_{index}_{int(access)}", f"return ({operand}) {operator} 1;", access)
+    for index, operator in enumerate(("+", "-", "*")):
+        for access in (False, True):
+            operand = "*(unsigned int*)&value" if access else "(unsigned int)value"
+            add(f"value_unsigned_{index}_{int(access)}", f"return ({operand}) {operator} 1u;", access, "unsigned int")
+    for index, operator in enumerate(("&=", "|=", "^=")):
+        add(f"value_compound_access_{index}", f"int *p=(int*)&value; *p {operator} 1; return 0;", True)
+        add(f"value_compound_local_{index}", f"int local=1; local {operator} 1; return *(int*)&value;", True)
+        add(f"value_compound_unused_{index}", f"int *p=(int*)&value; int local=1; local {operator} 1; return 0;", False)
+        add(f"value_compound_uninitialized_{index}", f"int local; local {operator} 1; return *(int*)&value;", False)
+    for name, body in (
+        ("and_false", "return 0 && *(int*)&value;"),
+        ("and_true", "return 1 && *(int*)&value;"),
+        ("or_true", "return 1 || *(int*)&value;"),
+        ("or_false", "return 0 || *(int*)&value;"),
+        ("conditional", "return 0 ? *(int*)&value : 0;"),
+        ("signed_add", "return (*(int*)&value) + 1;"),
+        ("shift", "return (*(int*)&value) << 1;"),
+        ("divide", "return (*(int*)&value) / 0;"),
+        ("unsigned_divide", "return (*(unsigned int*)&value) / 1u;"),
+        ("nested_update", "int local=1; local ^= (local ^= 1); return *(int*)&value;"),
+        ("increment", "int local=1; local++; return *(int*)&value;"),
+        ("pointer_compare", "int *p=(int*)&value; return p == 0;"),
+    ):
+        add("value_unsupported_" + name, body, False)
+    return tuple(cases)
+
+
+_VALUE_CASES = _value_operation_cases()
+_SOURCE += b"\n" + b"\n".join(
+    f"{returns} {name}(float value) {{ {body} }}".encode()
+    for name, returns, body, _ in _VALUE_CASES
+) + b"\n"
+
+
 # Native tool startup belongs to the slow tier; retain one AST per worker
 # even when randomized test ordering revisits this module.
 @pytest.fixture(scope="session")
@@ -89,7 +133,7 @@ def test_native_ast_proves_only_supported_actual_accesses(parsed):
         "assigned_initializer", "alias_before_initializer",
         "indirect_initializer", "incompatible_initial_store",
         "character_initializer", "complemented_access", "negated_access",
-    }
+    } | {name for name, _, _, positive in _VALUE_CASES if positive}
     indirect = next(p for p in proofs if p["function"] == "indirect")
     assert indirect["declared_type"] == "float" and indirect["access_type"] == "int"
     assert indirect["identifiers"] == ["value", "p"]
@@ -292,3 +336,15 @@ def test_ast_admission_counts_pending_siblings_at_node_budget_boundary(monkeypat
             scalar_access_proofs(ast, b"abc")
     else:
         assert scalar_access_proofs(ast, b"abc") == []
+
+
+@pytest.fixture(scope="session")
+def native_value_proof_functions(parsed):
+    return frozenset(proof["function"] for proof in scalar_access_proofs(parsed, _SOURCE))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", _VALUE_CASES, ids=lambda case: case[0])
+def test_native_scalar_value_operation_matrix(native_value_proof_functions, case):
+    name, _, _, positive = case
+    assert (name in native_value_proof_functions) is positive

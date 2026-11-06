@@ -4157,3 +4157,35 @@ def test_aliasing_unary_values_require_actual_incompatible_access(tmp_path, sand
         assert result.details['aliasing_proofs'][0]['object'] == 'value'
     else:
         assert not result.details.get('aliasing_proofs')
+
+
+@pytest.mark.slow
+@needs_gcc
+@pytest.mark.parametrize('body,positive', [
+    pytest.param('return (*(int*)&value) & 1;', True, id='bitwise-read'),
+    pytest.param('return ((int)value) & 1;', False, id='bitwise-value-only'),
+    pytest.param('return (*(int*)&value) >= 1;', True, id='comparison-read'),
+    pytest.param('return value >= 1;', False, id='comparison-value-only'),
+    pytest.param('return (*(unsigned int*)&value) + 1u;', True, id='unsigned-arithmetic-read'),
+    pytest.param('return ((unsigned int)value) + 1u;', False, id='unsigned-arithmetic-value-only'),
+    pytest.param('int *p=(int*)&value; *p ^= 1; return 0;', True, id='compound-read-modify-write'),
+    pytest.param('int local=1; local ^= 1; return 0;', False, id='compound-value-only'),
+    pytest.param('int local; local ^= 1; return *(int*)&value;', False, id='uninitialized-compound'),
+    pytest.param('return 0 && *(int*)&value;', False, id='short-circuit-and'),
+    pytest.param('return 1 || *(int*)&value;', False, id='short-circuit-or'),
+    pytest.param('int local=1; local ^= (local ^= 1); return *(int*)&value;', False, id='nested-side-effect'),
+])
+def test_aliasing_scalar_value_batch_requires_supported_evaluated_access(tmp_path, sandbox_spy, body, positive):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    (target / 'a.c').write_text('int f(float value) { ' + body + ' }\n')
+    result = _guarded_compiler_sweep(
+        target_path=target, file_path='a.c', function_name='f', line_start=1, line_end=1,
+        cwe='CWE-843', hypothesis='incompatible access',
+    )
+    expected = 'confirmed' if positive and HAVE_CLANG else 'inconclusive'
+    assert result.outcome == expected
+    if expected == 'confirmed':
+        assert result.details['aliasing_proofs'][0]['object'] == 'value'
+    else:
+        assert not result.details.get('aliasing_proofs')

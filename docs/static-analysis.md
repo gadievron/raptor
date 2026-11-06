@@ -768,11 +768,15 @@ Scalar locals declared without an initializer are supported after a direct
 assignment or a compatible store through a known local pointer. Reads before
 initialization remain outside this check; incompatible stores can qualify
 without reading the object's previous value.
+Bitwise operations, numeric comparisons and unsigned `+`, `-`, `*` arithmetic
+also preserve this tracking. Standalone `&=`, `|=` and `^=` updates require an
+initialized scalar object.
 The report identifies the object and both types under Raptor's strict-aliasing
 compiler model; project build flags are not inferred. Harmless casts alone do
 not qualify. `/audit` uses the same check for matching CWE-843 hypotheses.
 
-Calls, conditional paths, unknown pointer origins, typedefs, compiler-specific
+Calls, conditional or short-circuit paths, signed binary arithmetic, division,
+shifts, nested updates, unknown pointer origins, typedefs, compiler-specific
 aliasing exceptions, and C++ remain outside this check. Their warnings stay in
 the review report. Missing tools, unsupported Clang output, timeouts, and
 analysis limits also preserve the candidates; silence never proves them safe.
