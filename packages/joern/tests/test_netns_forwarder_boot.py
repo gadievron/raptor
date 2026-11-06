@@ -254,15 +254,22 @@ def test_terminal_signal_in_prespawn_window_exits_before_spawn(
     try:
         held = gate / "held"
         deadline = time.monotonic() + 15
-        while not held.exists():
+        while True:
+            try:
+                observed_pid = held.read_text(encoding="ascii")
+            except FileNotFoundError:
+                observed_pid = ""
+            if observed_pid:
+                # The parked process is the supervisor itself (non-pidns
+                # boots never fork), exactly the child we own and may signal.
+                assert observed_pid == str(proc.pid)
+                break
+            # Creation precedes the buffered PID write. An empty marker is
+            # not readiness: keep waiting under the same bounded deadline.
             assert time.monotonic() < deadline, (
-                "pre-spawn gate never engaged: the boot offers no "
-                "handlers-installed/child-None hold point"
+                "pre-spawn gate never engaged: no complete supervisor PID"
             )
             time.sleep(0.01)
-        # The parked process is the supervisor itself (non-pidns boots
-        # never fork), i.e. exactly the pid we own and may signal.
-        assert held.read_text(encoding="ascii") == str(proc.pid)
         proc.send_signal(signum)  # our own verified, unreaped child
         # kill(2) queued the signal before returning, and the parked
         # gate loop cannot observe the release below without first
@@ -279,6 +286,34 @@ def test_terminal_signal_in_prespawn_window_exits_before_spawn(
     finally:
         _reap(proc)
         _sweep_stub_stragglers(stub_marker)
+
+
+def test_prespawn_handshake_waits_for_pid_after_marker_creation(tmp_path, monkeypatch):
+    """Creation is visible before the writer flushes its PID text."""
+    from types import SimpleNamespace
+
+    held = tmp_path / "gate" / "held"
+    signals = []
+
+    def spawn(*args, **kwargs):
+        held.write_text("", encoding="ascii")
+        return SimpleNamespace(
+            pid=12345, send_signal=signals.append,
+            wait=lambda **kwargs: 143, poll=lambda: 143,
+        ), str(tmp_path / "absent.sock")
+
+    def finish_write(_delay):
+        assert not signals, "signal sent before the PID was published"
+        held.write_text("12345", encoding="ascii")
+
+    monkeypatch.setitem(globals(), "_spawn_supervisor", spawn)
+    monkeypatch.setitem(globals(), "_sweep_stub_stragglers", lambda *args: None)
+    monkeypatch.setattr(time, "sleep", finish_write)
+    test_terminal_signal_in_prespawn_window_exits_before_spawn(
+        str(tmp_path), str(tmp_path / "absent-child"), tmp_path, signal.SIGTERM, 143,
+    )
+    assert signals == [signal.SIGTERM]
+    assert (tmp_path / "gate" / "release").read_text() == "go"
 
 
 # Slow by construction, not by accident: the subject under test IS the
