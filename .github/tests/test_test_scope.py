@@ -3,6 +3,7 @@ test tier dispatch."""
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -377,7 +378,7 @@ class TestCiLintTriggerClosure:
 
 
 def _manifest_cache_key_gaps(
-    workflows_dir: Path,
+    workflows_dir: Path, cache_helper: Path | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """(unclaimed root keys, directory-level manifest keys, root keys)
     from the hashFiles() cache-key expressions in *workflows_dir*.
@@ -396,7 +397,17 @@ def _manifest_cache_key_gaps(
             r"hashFiles\(([^)]*)\)", wf.read_text(encoding="utf-8")
         ):
             args.update(re.findall(r"'([^']+)'", call))
-    root_level = sorted(a for a in args if "/" not in a)
+    if cache_helper is not None:
+        tree = ast.parse(cache_helper.read_text())
+        declarations = [node for node in tree.body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == 'VENV_INPUTS'
+                                for target in node.targets)]
+        assert len(declarations) == 1, 'cache input declaration needs review'
+        inputs = ast.literal_eval(declarations[0].value)
+        assert inputs and all(isinstance(name, str) for name in inputs)
+        args.update(inputs)
+    # Bytecode source hashes are not dependency manifests.
+    root_level = sorted(a for a in args if "/" not in a and not a.endswith(('.py', '.pyi', '.ipynb')))
     unclaimed = [
         a for a in root_level
         if not is_dependency_manifest(a.replace("*", "x"))
@@ -405,7 +416,7 @@ def _manifest_cache_key_gaps(
         a for a in args
         if "/" in a and any(
             seg.startswith("requirements")
-            or seg in {"pyproject.toml", "uv.lock"}
+            or seg in {"pyproject.toml", "uv.lock", "uv.toml"}
             for seg in Path(a).parts
         )
     )
@@ -697,6 +708,7 @@ class TestDispatchFailsOpen:
         "requirements-dev.txt",
         "pyproject.toml",
         "uv.lock",
+        "uv.toml",
     ])
     def test_dependency_manifest_forces_full_dispatch(self, mini_repo, manifest):
         # Every heavy tier installs from the root manifests (venv jobs
@@ -728,7 +740,8 @@ class TestDispatchFailsOpen:
         # would silently dispatch only the fast tier again). Either
         # direction of drift fails loud with the remedy named.
         workflows = Path(__file__).resolve().parents[1] / "workflows"
-        unclaimed, moved, root_level = _manifest_cache_key_gaps(workflows)
+        unclaimed, moved, root_level = _manifest_cache_key_gaps(
+            workflows, cache_helper=workflows.parent / "scripts/ci_cache_key.py")
         assert root_level, "hashFiles enumeration broke (no root-level keys)"
         assert not unclaimed, (
             f"workflow cache keys reference root manifest(s) "
@@ -1290,3 +1303,13 @@ def test_cli_reports_actual_fallback_mode(mini_repo, tmp_path, monkeypatch, chan
     monkeypatch.setattr(sys, 'argv', ['test_scope', '--repo', str(mini_repo), '--changed-files', str(changes)])
     assert dispatcher.main() == 0
     assert f'scope_mode={mode}\n' in output.read_text()
+
+
+def test_manifest_oracle_follows_runtime_key_inputs_and_ignores_bytecode(tmp_path):
+    workflow = tmp_path / 'cache.yml'
+    workflow.write_text("key: ${{ hashFiles('*.py', 'core/**/*.py') }}\n")
+    helper = tmp_path / 'key.py'
+    helper.write_text("VENV_INPUTS = ('pyproject.toml', 'uv.lock', 'uv.toml')\n")
+    assert _manifest_cache_key_gaps(tmp_path, cache_helper=helper) == ([], [], ['pyproject.toml', 'uv.lock', 'uv.toml'])
+    helper.write_text("VENV_INPUTS = ('pyproject.toml', 'uv.lock', 'requirements/base.txt')\n")
+    assert _manifest_cache_key_gaps(tmp_path, cache_helper=helper)[1] == ['requirements/base.txt']

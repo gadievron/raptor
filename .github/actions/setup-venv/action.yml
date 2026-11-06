@@ -4,26 +4,13 @@ description: >
   retries for reported restore failures and a locked rebuild when
   no cache is usable, then re-point the python symlinks at the current
   setup-python interpreter. Requires the calling job to have run
-  actions/setup-python and to expose PYTHON_VERSION and VENV_PATH in
+  actions/setup-python and to expose VENV_PATH in
   its environment (both are workflow-level env in every caller).
 
-  actions/cache@v6.1.x does not retry 429s from the cache backend
-  (see v5.0.2 changelog: "429s returned from the cache service
-  will not be retried"); under matrix-parallel restore load some
-  jobs intermittently see "Failed to restore cache entry" even
-  when the cache exists.  Three layers of mitigation, fastest-to-
-  slowest:
-    1. Stagger -- random 0-7s sleep spreads concurrent restores
-       across time so the backend serialises reads instead of
-       rate-limiting them.  Common path: this prevents the 429
-       and attempt 1 succeeds.
-    2. Retry reported restore failures after 30s. Normal misses
-       do not back off: default caches try their prefix fallback
-       immediately; self-saving flavoured caches rebuild directly
-       so a changed lockfile cannot leave them permanently stale.
-    3. Rebuild -- install uv + ``uv pip install`` whenever neither
-       attempt successfully restored a key. Cache-library warnings
-       reported as misses also take this fallback.
+  Exact keys include the host OS/image, architecture, interpreter build/ABI,
+  workspace location, project/lock/config files and selected export extras.
+  Old-lock prefix hits are never executable environments. Reported restore
+  failures retry the same exact key after backoff; misses rebuild locked deps.
 
 inputs:
   cache-key-prefix:
@@ -46,16 +33,32 @@ inputs:
       Save the venv back to the cache after a rebuild ("true"/"false").
       Callers whose key no other job saves (flavoured venvs) set this
       so the rebuild cost is paid once per uv.lock change, not nightly.
-      Also disables the attempt-2 prefix fallback: with no other job
-      saving the exact key, a prefix hit would satisfy every future
-      run and the rebuild+save path would never fire again after a
-      uv.lock change -- the venv would be permanently stale.
+      Every profile uses exact-key restoration and rebuilds on a miss.
     required: false
     default: 'false'
+
+outputs:
+  cache-key:
+    description: Exact identity used by this restore/build
+    value: ${{ steps.venv-key.outputs.key }}
+  platform-key:
+    description: Host image and architecture identity for native tool caches
+    value: ${{ steps.venv-key.outputs.platform_key }}
+  week:
+    description: UTC weekly refresh bucket for mutable native package caches
+    value: ${{ steps.venv-key.outputs.week }}
 
 runs:
   using: composite
   steps:
+    - name: Compute exact venv identity
+      id: venv-key
+      shell: bash
+      env:
+        VENV_CACHE_PREFIX: ${{ inputs.cache-key-prefix }}
+        VENV_CACHE_EXPORT_ARGS: ${{ inputs.uv-export-extra-args }}
+      run: python3 .github/scripts/ci_cache_key.py
+
     - name: Stagger cache restore (avoid 429 thundering herd)
       shell: bash
       run: sleep $((RANDOM % 8))
@@ -66,7 +69,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
       with:
         path: ${{ env.VENV_PATH }}
-        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+        key: ${{ steps.venv-key.outputs.key }}
         fail-on-cache-miss: false
 
     - name: Backoff before retry
@@ -74,43 +77,39 @@ runs:
       shell: bash
       run: sleep 30
 
-    - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+    - name: Restore venv from cache (attempt 2, exact key)
       id: cache-2
-      if: >-
-        steps.cache-1.outcome == 'failure' ||
-        (steps.cache-1.outputs.cache-matched-key == '' && inputs.save-on-rebuild != 'true')
+      if: steps.cache-1.outcome == 'failure'
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
       with:
         path: ${{ env.VENV_PATH }}
-        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-        # Prefix fallback only when another job saves the exact key for
-        # the current uv.lock (the default-venv prefix, saved by the
-        # deps job): there the stale hit is a one-run bridge. A
-        # self-saving flavoured venv (save-on-rebuild) has no such
-        # saver -- a prefix hit here would mask every future exact-key
-        # miss, the rebuild+save path would never fire, and the venv
-        # would stay stale forever after a uv.lock change. For those,
-        # attempt 2 is an exact-key retry only (the 429/backoff case);
-        # a real key change falls through to the rebuild backstop.
-        restore-keys: ${{ inputs.save-on-rebuild != 'true' && format('{0}-{1}-py{2}-', inputs.cache-key-prefix, runner.os, env.PYTHON_VERSION) || '' }}
+        key: ${{ steps.venv-key.outputs.key }}
 
     - name: Install uv (rebuild fallback when no cache was restored)
       if: >-
-        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-matched-key != '') ||
-              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-matched-key != '')) }}
+        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-hit == 'true') ||
+              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-hit == 'true')) }}
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      with:
+        # An outer setup-uv owns an exported UV_CACHE_DIR. Do not restore/save
+        # that directory a second time under another action instance's state.
+        enable-cache: ${{ env.UV_CACHE_DIR == '' }}
+        cache-dependency-glob: |
+          uv.lock
+          pyproject.toml
+          uv.toml
 
     - name: Rebuild venv (rebuild fallback when no cache was restored)
       id: rebuild
       if: >-
-        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-matched-key != '') ||
-              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-matched-key != '')) }}
+        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-hit == 'true') ||
+              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-hit == 'true')) }}
       shell: bash
       env:
         UV_EXPORT_EXTRA_ARGS: ${{ inputs.uv-export-extra-args }}
       run: |
-        uv venv $VENV_PATH
+        uv venv --clear --python "$(command -v python3)" "$VENV_PATH"
         source $VENV_PATH/bin/activate
         uv export --locked --no-hashes $UV_EXPORT_EXTRA_ARGS | uv pip install -r -
 
@@ -126,7 +125,7 @@ runs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
       with:
         path: ${{ env.VENV_PATH }}
-        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+        key: ${{ steps.venv-key.outputs.key }}
 
     - name: Restore venv permissions and fix symlinks
       shell: bash

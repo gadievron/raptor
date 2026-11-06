@@ -1,0 +1,4 @@
+# Native wrapper parser tools; also an input to the setup-uv build cache key.
+pwntools==4.15.0
+ROPgadget==7.7
+capstone==5.0.6

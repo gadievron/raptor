@@ -88,6 +88,7 @@ def _simulate(save, first, second=None, rebuild="success"):
             assert result is not None, f"Unexpected restore attempt: {step_id}"
             outcome, matched = result
             context[f"steps.{step_id}.outputs.cache-matched-key"] = matched
+            context[f"steps.{step_id}.outputs.cache-hit"] = str(matched == "exact").lower()
         else:
             outcome = rebuild if step_id == "rebuild" else "success"
         if step_id:
@@ -101,12 +102,12 @@ def _simulate(save, first, second=None, rebuild="success"):
     (True, ("success", "exact"), None, False, False, False),
     (False, ("success", "exact"), None, False, False, False),
     (True, ("success", ""), None, False, True, True),
-    (False, ("success", ""), ("success", "prefix"), False, False, False),
-    (False, ("success", ""), ("success", ""), False, True, False),
+    (False, ("success", ""), None, False, True, False),
+
     (True, ("failure", ""), ("success", "exact"), True, False, False),
     (True, ("failure", ""), ("success", ""), True, True, True),
     (True, ("failure", ""), ("failure", ""), True, True, True),
-    (False, ("failure", ""), ("success", "prefix"), True, False, False),
+    (False, ("failure", ""), ("success", "prefix"), True, True, False),
     (False, ("failure", ""), ("failure", ""), True, True, False),
     # Even a partially populated output is not evidence of a usable restore.
     (True, ("failure", "partial"), ("failure", "partial"), True, True, True),
@@ -135,9 +136,15 @@ def test_failed_rebuild_is_not_saved_or_used():
     assert "Restore venv permissions and fix symlinks" not in selected
 
 
-@pytest.mark.parametrize("save,expected", [(True, ""), (False, "venv-Linux-py3.14-")])
-def test_self_saved_caches_cannot_restore_stale_prefixes(save, expected):
-    second = next(step for step in _steps() if _field(step, "id") == "cache-2")
-    context = {"inputs.save-on-rebuild": str(save).lower(), "inputs.cache-key-prefix": "venv",
-               "runner.os": "Linux", "env.PYTHON_VERSION": "3.14"}
-    assert _expression(_field(second, "restore-keys", indent=8), context) == expected
+def test_no_executable_environment_can_restore_an_old_lock_prefix():
+    for step in _steps():
+        assert _field(step, "restore-keys", indent=8) == ""
+    keys = [_field(step, "key", indent=8) for step in _steps() if _field(step, "key", indent=8)]
+    assert len(keys) == 3
+    assert set(keys) == {"${{ steps.venv-key.outputs.key }}"}
+
+
+@pytest.mark.parametrize('existing,expected', [('', True), ('/owned/uv-cache', False)])
+def test_rebuild_does_not_add_a_second_owner_for_an_existing_uv_cache(existing, expected):
+    step = next(step for step in _steps() if step[0].startswith('Install uv (rebuild'))
+    assert _expression(_field(step, 'enable-cache', indent=8), {'env.UV_CACHE_DIR': existing}) is expected

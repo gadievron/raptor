@@ -232,6 +232,29 @@ merge result or the test selection for a later push. Changed-file scoping
 still limits the work; main pushes and explicit reruns execute the checks
 selected for their event.
 
+## Cache identities and fallback behavior
+
+Caches accelerate setup; a failed restore must leave the checks runnable.
+Assembled virtualenvs use exact keys only. Misses rebuild with the selected
+interpreter and locked dependencies; restore errors retry that exact key before
+rebuilding. Old-lock prefix hits are never accepted as executable environments.
+The first run after this key migration rebuilds the affected caches.
+
+| Cache family | Identity and validation |
+|---|---|
+| Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe and selected extras; producers and consumers share `ci_cache_key.py` |
+| uv downloads/builds | setup-uv supplies platform/architecture/Python identity and explicit keys cover lock, project and uv config; nested setup respects an existing cache owner; parser jobs also hash their installation requirements, separating them from base-only jobs; macOS retains source-built wheels |
+| Python bytecode | Exact venv identity plus core/package/root Python source hashes; checked-hash imports validate restored files; misses, prefix hits and restore errors recompile |
+| Native APT packages | Host image/architecture and toolchain generation, refreshed weekly; partial restores are discarded and only successful installs are saved |
+| CodeQL CLI | Platform/architecture plus the version and archive checksum from `codeql-cli.json`; Java/C++ share that archive and the pinned library revision; download checksums remain mandatory |
+| CodeQL overlay databases | Managed by the pinned CodeQL action with language/configuration/tool-version identities and per-run suffixes; these are distinct from the CLI archive cache |
+| Corpus sparse checkouts | Label content hash plus per-repository/pin directories; Git HEAD is checked against the requested pin; partial restores are discarded and prefix hits only seed source fetching |
+| Published images | The dependency-image fast path checks project/lock hashes, and present uv config forces exact dependency synchronization. DockerHub uses COPY/build-input fingerprints, including ignore files and checkout attributes. GHCR content tags are documented moving source anchors with weekly refreshes, rather than immutable digests. No persistent BuildKit cache is configured |
+| Local impact graph | Source contents, interpreter and graph-building rules; preserved mtimes cannot keep stale graph edges alive |
+
+Cache-service failures do not bypass tests, pin validation or integrity checks.
+Requirements and venv recipe/key changes retain the consuming test dispatch.
+
 ## Runner Sizing
 
 The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and the shuffled iterations in [`nightly_shuffled.yml`](../.github/workflows/nightly_shuffled.yml) pick their runner from the repository variable `RAPTOR_FAST_RUNNER` via `runs-on: ${{ vars.RAPTOR_FAST_RUNNER || 'ubuntu-latest' }}`. Setting the variable (Settings → Secrets and variables → Actions → Variables) to a larger hosted-runner label upsizes those jobs without a workflow change; unset or empty, the expression falls back to `ubuntu-latest`. Every other job keeps its own explicit label.
@@ -269,8 +292,13 @@ fallback sources to the job summary. Contract-only selections skip optional pars
 installation, retaining Linux confinement prerequisites. Native selections retain base platform tools, adding radare2 only
 for its family and Ruby only for the gadget-parser family. Python parser
 dependencies serve both gadget-parser and ELF-worker families; full selections
-retain every required tool. Parser setup
-steps have eight-minute limits within the existing thirty-minute acceptance job.
+retain every required tool. Parser dependencies come from
+[their pinned requirements](../.github/scripts/requirements-sandbox-wrappers.txt),
+which enters the uv cache key only for parser families. Contract-only jobs retain
+the shared lockfile cache. macOS parser jobs prune downloadable wheels before
+saving, retaining source-built wheels for subsequent runs; cache misses still
+perform the complete install. Requirements changes retain full wrapper acceptance.
+Parser setup steps have eight-minute limits within the existing thirty-minute acceptance job.
 Native acceptance runs at most two families concurrently on each existing runner,
 with separate homes, scratch directories, registries and reports. A failed family
 stops queued families; active families finish and clean up. Contract cases remain

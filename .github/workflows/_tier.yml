@@ -85,12 +85,15 @@ jobs:
         # The hash check short-circuits the common path.
         shell: bash
         run: |
-          if [ -f /etc/raptor-ci-deps.hash ] && \
+          # uv.toml is not part of the baked image stamp. Its presence
+          # requires a fresh export even when project/lock hashes match.
+          if [ ! -f uv.toml ] && [ -f /etc/raptor-ci-deps.hash ] && \
              sha256sum -c /etc/raptor-ci-deps.hash --status; then
             echo "Image deps match checkout — skipping reconcile"
           else
             echo "Hash mismatch or missing — reconciling via uv"
-            uv export --locked --no-hashes | uv pip install --system -r -
+            uv export --locked --no-hashes --output-file "$RUNNER_TEMP/tier-requirements.txt"
+            uv pip sync --system "$RUNNER_TEMP/tier-requirements.txt"
           fi
       - name: Run tests
         env:
@@ -172,13 +175,18 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            uv.toml
       - name: Install deps
         # --system installs into the setup-python interpreter so the test
         # step's `python` resolves the deps without venv activation,
         # matching the image path's "system Python, no venv" model.
         shell: bash
-        run: uv export --locked --no-hashes | uv pip install --system -r -
+        run: |
+          uv export --locked --no-hashes --output-file "$RUNNER_TEMP/tier-requirements.txt"
+          uv pip sync --system "$RUNNER_TEMP/tier-requirements.txt"
       - name: Run tests
         env:
           TEST_PATH: ${{ inputs.test_path }}

@@ -61,7 +61,17 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
-          cache-dependency-glob: uv.lock
+          # Parser jobs must not hit a base-only immutable uv cache. Keep
+          # contract-only cells on the shared lockfile cache; parser cells
+          # additionally fingerprint their actual installation requirements.
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            uv.toml
+            ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '.github/scripts/requirements-sandbox-wrappers.txt' || '' }}
+          # macOS ARM builds Unicorn from source. Retain built wheels without
+          # uploading the much larger set of downloadable binary wheels.
+          prune-cache: ${{ runner.os == 'macOS' && (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) }}
       - uses: ./.github/actions/enable-userns
         if: runner.os == 'Linux'
       - uses: ./.github/actions/setup-venv
@@ -112,7 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv pip install --python "$VENV_PATH/bin/python" pwntools==4.15.0 ROPgadget==7.7 capstone==5.0.6
+          uv pip install --python "$VENV_PATH/bin/python" -r .github/scripts/requirements-sandbox-wrappers.txt
           test -x "$VENV_PATH/bin/ROPgadget"
           echo "$GITHUB_WORKSPACE/$VENV_PATH/bin" >> "$GITHUB_PATH"
       - name: Install Ruby parser dependencies

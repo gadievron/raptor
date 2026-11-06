@@ -312,20 +312,31 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            uv.toml
+
+      - name: Compute exact venv identity
+        id: venv-key
+        env:
+          VENV_CACHE_PREFIX: venv
+          VENV_CACHE_EXPORT_ARGS: ''
+        run: python3 .github/scripts/ci_cache_key.py
 
       - name: Restore venv from cache
         id: venv-cache
+        continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+          key: ${{ steps.venv-key.outputs.key }}
 
       - name: Create venv and install deps
-        if: steps.venv-cache.outputs.cache-hit != 'true'
+        if: steps.venv-cache.outcome != 'success' || steps.venv-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          uv venv $VENV_PATH
+          uv venv --clear --python "$(command -v python3)" "$VENV_PATH"
           source $VENV_PATH/bin/activate
           uv export --locked --no-hashes | uv pip install -r -
 
@@ -334,11 +345,11 @@ jobs:
 
       - name: Save venv to cache
         continue-on-error: true
-        if: steps.venv-cache.outputs.cache-hit != 'true'
+        if: steps.venv-cache.outcome != 'success' || steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+          key: ${{ steps.venv-key.outputs.key }}
 
   # Fast tier: everything under core/ and packages/ except the heavyweight
   # subdirs that get their own jobs (sandbox, exploit_feasibility, sca, and
@@ -383,6 +394,7 @@ jobs:
       # Corpus pin validation requires native parsers. Share nightly's
       # locked grammar profile, isolated from the base venv cache.
       - name: Restore or rebuild venv (with grammars)
+        id: fast_venv
         uses: ./.github/actions/setup-venv
         with:
           cache-key-prefix: venv-grammars
@@ -401,6 +413,7 @@ jobs:
 
       - name: Cache Python bytecode
         id: pycache
+        continue-on-error: true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           # __pycache__ contents are deterministic per (Python version,
@@ -419,13 +432,14 @@ jobs:
           path: |
             core/**/__pycache__
             packages/**/__pycache__
-          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py') }}
+            __pycache__
+          key: pycache-v2-${{ steps.fast_venv.outputs.cache-key }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', '*.py') }}
           restore-keys: |
-            pycache-${{ env.PYTHON_VERSION }}-
+            pycache-v2-${{ steps.fast_venv.outputs.cache-key }}-
 
       - name: Compile Python sources
         # Skipped on an exact cache hit — see the cache step comment.
-        if: steps.pycache.outputs.cache-hit != 'true'
+        if: steps.pycache.outcome != 'success' || steps.pycache.outputs.cache-hit != 'true'
         run: |
           source $VENV_PATH/bin/activate
           # checked-hash: import validates by content, so the cached
@@ -687,30 +701,41 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            uv.toml
+
+      - name: Compute exact venv identity
+        id: venv-key
+        env:
+          VENV_CACHE_PREFIX: venv
+          VENV_CACHE_EXPORT_ARGS: ''
+        run: python3 .github/scripts/ci_cache_key.py
 
       - name: Restore venv from cache
         id: venv-cache
+        continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+          key: ${{ steps.venv-key.outputs.key }}
 
       - name: Create venv and install deps
-        if: steps.venv-cache.outputs.cache-hit != 'true'
+        if: steps.venv-cache.outcome != 'success' || steps.venv-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          uv venv $VENV_PATH
+          uv venv --clear --python "$(command -v python3)" "$VENV_PATH"
           source $VENV_PATH/bin/activate
           uv export --locked --no-hashes | uv pip install -r -
 
       - name: Save venv to cache
         continue-on-error: true
-        if: steps.venv-cache.outputs.cache-hit != 'true'
+        if: steps.venv-cache.outcome != 'success' || steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+          key: ${{ steps.venv-key.outputs.key }}
 
       - name: Run sandbox tests (macOS)
         id: sandbox

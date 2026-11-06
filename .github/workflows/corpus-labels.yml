@@ -103,6 +103,8 @@ jobs:
       # change (new repo, new ref, new file) misses to a fresh key while
       # restore-keys still seed it with the previous fetches.
       - name: Cache pinned-source sparse checkouts
+        id: source_cache
+        continue-on-error: true
         if: steps.changed.outputs.files != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
@@ -110,6 +112,10 @@ jobs:
           key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
           restore-keys: |
             corpus-lint-
+
+      - name: Discard incomplete sparse cache restore
+        if: steps.source_cache.outcome == 'failure'
+        run: rm -rf -- "$LINT_CACHE"
 
       - name: Pin-lint changed labels
         if: steps.changed.outputs.files != ''
@@ -151,12 +157,18 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pinned-source sparse checkouts
+        id: source_cache
+        continue-on-error: true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.LINT_CACHE }}
           key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
           restore-keys: |
             corpus-lint-
+
+      - name: Discard incomplete sparse cache restore
+        if: steps.source_cache.outcome == 'failure'
+        run: rm -rf -- "$LINT_CACHE"
 
       - name: Pin-lint all labels
         # shell: bash for pipefail — see the pin-lint-pr step above.

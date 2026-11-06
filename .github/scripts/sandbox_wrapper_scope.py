@@ -25,7 +25,7 @@ GLOBAL_INPUTS = {'tuning.json', 'conftest.py', 'pytest.ini', 'pyproject.toml', '
                  '.github/sandbox-wrapper-tests.json', '.github/workflows/sandbox-wrappers.yml',
                  '.github/scripts/run_sandbox_wrapper_tests.py', '.github/scripts/sandbox_wrapper_tests.py',
                  '.github/scripts/sandbox_wrapper_scope.py', '.github/scripts/ci_change_scope.py',
-                 '.github/scripts/codeql_scope.py'}
+                 '.github/scripts/codeql_scope.py', '.github/scripts/requirements-sandbox-wrappers.txt'}
 GLOBAL_DIRS = ('core/sandbox/', 'bin/', 'libexec/', 'test/', '.github/actions/setup-venv/', '.github/actions/enable-userns/')
 PLATFORMS = {'linux': 'ubuntu-24.04', 'darwin': 'macos-latest'}
 
