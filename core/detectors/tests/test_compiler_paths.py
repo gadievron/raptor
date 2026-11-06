@@ -289,3 +289,71 @@ def test_primary_and_event_locations_share_one_compiler_uri_resolver(tmp_path, m
     # The separate retained-path budget may omit later paths; the first one
     # must survive and all resolutions still use the same run-owned cache.
     assert diagnostics[0]['code_flows']
+
+
+def test_compiler_cached_hops_combine_with_inline_events_and_artifact_indexes(tmp_path):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    cached = flow()['threadFlows'][0]['locations'][0]
+    cached['location']['physicalLocation']['artifactLocation'] = {'index': 0}
+    inline = flow(line=5)['threadFlows'][0]['locations'][0]
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'artifacts': [{'location': {'uri': 'cached%20name.c'}}],
+        'threadFlowLocations': [cached], 'results': [{
+            'ruleId': '-Wanalyzer-use-after-free', 'message': {'text': 'warning'},
+            'codeFlows': [{'threadFlows': [{'locations': [{'index': 0}, inline, {'index': 0}]}]}],
+        }]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    events = diagnostic['code_flows'][0]['threadFlows'][0]['locations']
+    assert [event['location']['physicalLocation']['artifactLocation']['uri'] for event in events] == [
+        'cached%20name.c', 'a.c', 'cached%20name.c']
+    assert [event['executionOrder'] for event in events] == [1, 2, 3]
+    assert [event['nestingLevel'] for event in events] == [2, 2, 2]
+    assert not diagnostic.get('compiler_path_notes')
+
+
+@pytest.mark.parametrize('reference, cache', [
+    ({'index': False}, 'valid'), ({'index': True}, 'valid'),
+    ({'index': 9}, 'valid'), ({'index': 0, 'nestingLevel': 1}, 'valid'),
+    ({'index': 0}, None), ({'index': 0}, [None]),
+    ({'index': 0}, [{'index': 1}]),
+])
+def test_bad_cached_hop_drops_whole_path_and_preserves_compiler_warning(tmp_path, reference, cache):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    inline = flow()['threadFlows'][0]['locations'][0]
+    if cache == 'valid':
+        cache = [inline, copy.deepcopy(inline)]
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{'threadFlowLocations': cache, 'results': [{
+        'ruleId': '-Wanalyzer-use-after-free', 'message': {'text': 'keep warning'},
+        'codeFlows': [{'threadFlows': [{'locations': [inline, reference, inline]}]}],
+    }]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['message'] == 'keep warning'
+    assert not diagnostic.get('code_flows') and diagnostic['compiler_path_notes']
+
+
+def test_compiler_cached_hops_are_run_local(tmp_path):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    runs = []
+    for name in ('first.c', 'second.c'):
+        event = flow(name)['threadFlows'][0]['locations'][0]
+        runs.append({'threadFlowLocations': [event], 'results': [{
+            'message': {'text': 'warning'},
+            'codeFlows': [{'threadFlows': [{'locations': [{'index': 0}]}]}],
+        }]})
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': runs}))
+    diagnostics = _parse_gcc_sarif(report)
+    assert [row['code_flows'][0]['threadFlows'][0]['locations'][0]['location']['physicalLocation'][
+        'artifactLocation']['uri'] for row in diagnostics] == ['first.c', 'second.c']
+
+
+def test_inline_properties_cannot_stand_in_for_unresolved_cached_hop():
+    event = flow()['threadFlows'][0]['locations'][0]
+    event['index'] = 0
+    paths, notes = normalize_paths([{'threadFlows': [{'locations': [event]}]}])
+    assert not paths and notes
+    event['index'] = -1  # SARIF's explicit inline sentinel, with no cache reference.
+    paths, notes = normalize_paths([{'threadFlows': [{'locations': [event]}]}])
+    assert paths and not notes
