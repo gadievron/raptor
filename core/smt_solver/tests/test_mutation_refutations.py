@@ -152,7 +152,7 @@ def test_iterator_frames_and_duplicate_text_preserve_actual_native_owners(second
     frames = iter([(iter([("same display", value == 1)]), iter([0])),
                    (iter([("same display", value == 2)]), iter([second_origin]))])
     tracked = track_frames(solver, frames)
-    assert solver.check() == z3.unsat
+    assert tracked.check() == z3.unsat
     assert len(tracked.labels) == 2
     assert tracked.single_core_origin(solver) == expected
 
@@ -179,7 +179,7 @@ def test_native_labels_reserve_boolean_names_from_later_frames():
     source = z3.Bool("_raptor_track!0", ctx=context)
     tracked = track_frames(solver, [([("earlier", z3.BoolVal(True, ctx=context))], [0]),
                                    ([("later positive", source), ("later negative", z3.Not(source))], [1, 1])])
-    assert solver.check() == z3.unsat
+    assert tracked.check() == z3.unsat
     assert "_raptor_track!0" not in tracked.labels
     assert tracked.single_core_origin(solver) == 1
 
@@ -204,7 +204,7 @@ def test_changing_assertions_invalidates_native_ownership(reset):
     solver = z3.Solver()
     value = z3.BitVec("Value", 8)
     tracked = track_frames(solver, [([("one", value == 1), ("two", value == 2)], [0, 0])])
-    assert solver.check() == z3.unsat and tracked.single_core_origin(solver) == 0
+    assert tracked.check() == z3.unsat and tracked.single_core_origin(solver) == 0
     if reset:
         first, second = tracked.labels
         solver.reset()

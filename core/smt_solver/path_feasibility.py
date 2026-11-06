@@ -1326,7 +1326,7 @@ def _solve_pending(
         )
 
     tracked = track_frames(solver, ((pending, pending_epochs), (_axioms, axiom_epochs)))
-    result = solver.check()
+    result = tracked.check()
 
     if result == z3.sat:
         model_dict = _format_witness(solver.model(), signed=profile.signed)
