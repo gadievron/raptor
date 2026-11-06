@@ -260,7 +260,7 @@ def _parse_assessments(text: str, report: dict) -> tuple:
 
 def verify_deep_report(deep: dict | None, run_dir: Path) -> str:
     """Provenance state of a loaded sandbox-triage-deep.json:
-    ``verified`` / ``legacy`` (no token) / ``tampered``.
+    ``verified`` / ``legacy`` (mac field absent) / ``tampered``.
 
     Mirrors ``triage.verify_triage_report``: the run binding is
     recomputed from the directory the report was READ from, so a deep
@@ -271,7 +271,7 @@ def verify_deep_report(deep: dict | None, run_dir: Path) -> str:
     if not isinstance(deep, dict):
         return "tampered"
     token = deep.get("mac")
-    if not token:
+    if "mac" not in deep:
         return "legacy"
     fields = telemetry_mac.triage_deep_fields(
         _report_sha256(deep),

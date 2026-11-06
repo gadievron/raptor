@@ -152,6 +152,8 @@ def _parse_ts(ts) -> float:
 # stamps is this install's parent process: content that fails is
 # content something else wrote into the run dir, and the one thing
 # with both the motive and the write access is the target.
+# Pre-provenance writers omit the mac field. A present false-valued
+# token is failed provenance, not an old artifact eligible for legacy opt-in.
 _INTEGRITY_VERIFIED = "verified"
 _INTEGRITY_LEGACY = "legacy"
 _INTEGRITY_TAMPERED = "tampered"
@@ -170,7 +172,7 @@ def _report_sha256(report: dict) -> str:
 
 def verify_triage_report(report: dict | None, run_dir: Path) -> str:
     """Provenance state of a loaded sandbox-triage.json for downstream
-    consumers: 'verified' / 'legacy' (no token) / 'tampered'.
+    consumers: 'verified' / 'legacy' (mac field absent) / 'tampered'.
 
     ``run_dir`` is the directory the report was READ from — the run
     binding is recomputed from it, so a report replayed from another
@@ -179,7 +181,7 @@ def verify_triage_report(report: dict | None, run_dir: Path) -> str:
     if not isinstance(report, dict):
         return _INTEGRITY_TAMPERED
     token = report.get("mac")
-    if not token:
+    if "mac" not in report:
         return _INTEGRITY_LEGACY
     fields = telemetry_mac.triage_report_fields(
         _report_sha256(report),
@@ -395,7 +397,7 @@ def _verify_summary(
                       or evidence_write_failure
                       or bool(planted_object))
     token = summary.get("mac")
-    if not token:
+    if "mac" not in summary:
         if not allow_legacy:
             return None, _INTEGRITY_TAMPERED
         if writer_flagged:
@@ -436,7 +438,7 @@ def _verify_audit_degraded(
     if marker is None:
         return None, _INTEGRITY_VERIFIED
     token = marker.get("mac")
-    if not token:
+    if "mac" not in marker:
         if not allow_legacy:
             return None, _INTEGRITY_TAMPERED
         return marker, _INTEGRITY_LEGACY
