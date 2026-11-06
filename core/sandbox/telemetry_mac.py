@@ -74,6 +74,7 @@ from pathlib import Path
 
 from core.logging import get_logger
 from core.sandbox.evidence import _unique_evidence_object
+from core.security.log_sanitisation import sanitise_for_terminal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -130,14 +131,18 @@ def _key_path() -> Path:
 def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:
     key = str(path)
     if key in _warned_paths:
-        logger.debug("telemetry_mac: suspect key %s (%s)", path, reason)
+        logger.debug(
+            "telemetry_mac: suspect key %s (%s)",
+            sanitise_for_terminal(key), sanitise_for_terminal(reason),
+        )
         return
     _warned_paths.add(key)
     logger.warning(
         "telemetry_mac: refusing key %s — %s. Telemetry provenance "
         "tokens will not mint or verify (triage demotes to legacy/"
         "unverified handling) until this is fixed: %s",
-        path, reason, remedy,
+        sanitise_for_terminal(key), sanitise_for_terminal(reason),
+        sanitise_for_terminal(remedy),
     )
 
 
@@ -287,7 +292,7 @@ def _record_tamper_event(reason: str, quarantined_to: str) -> None:
         # write failure must not block the re-key.
         logger.warning(
             "telemetry_mac: could not append the key tamper marker "
-            "(%s)", tamper_marker_path())
+            "(%s)", sanitise_for_terminal(str(tamper_marker_path())))
 
 
 def tamper_events() -> list[dict]:
@@ -359,7 +364,8 @@ def _quarantine_tampered_key(path: Path, reason: str) -> bool:
         "the old key will FAIL verification (triage reads that as "
         "tampering, which is the honest verdict here). Investigate "
         "what reached %s.",
-        reason, dest, path,
+        sanitise_for_terminal(reason), sanitise_for_terminal(str(dest)),
+        sanitise_for_terminal(str(path)),
     )
     _record_tamper_event(reason, dest.name)
     return True
@@ -479,18 +485,25 @@ def _load_or_create_key() -> bytes | None:
                     path.unlink()
             except FileNotFoundError:
                 pass
-            except OSError:
-                logger.warning("telemetry_mac: incomplete key cleanup failed",
-                               exc_info=True)
+            except OSError as exc:
+                # Raw tracebacks can render native paths and error controls.
+                logger.warning(
+                    "telemetry_mac: incomplete key cleanup failed: %s: %s",
+                    sanitise_for_terminal(type(exc).__name__, max_len=64),
+                    sanitise_for_terminal(str(exc)),
+                )
             raise
         finally:
             try:
                 os.close(fd)
-            except OSError:
+            except OSError as exc:
                 if not write_failed:
                     raise
-                logger.warning("telemetry_mac: key descriptor cleanup failed",
-                               exc_info=True)
+                logger.warning(
+                    "telemetry_mac: key descriptor cleanup failed: %s: %s",
+                    sanitise_for_terminal(type(exc).__name__, max_len=64),
+                    sanitise_for_terminal(str(exc)),
+                )
         # Creation is not publication: the pathname, bytes or permissions
         # may have changed during write/close. Reuse the same bounded,
         # no-follow validation as an existing key before returning material
@@ -499,7 +512,7 @@ def _load_or_create_key() -> bytes | None:
         if _read_existing_key(path) != key:
             logger.warning(
                 "telemetry_mac: newly created key failed publication "
-                "verification under %s", path,
+                "verification under %s", sanitise_for_terminal(str(path)),
             )
             return None
         return key
