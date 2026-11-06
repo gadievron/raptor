@@ -242,25 +242,30 @@ def scan(
     # Inventory is built ONCE per run when at least one ecosystem
     # tier has work to do; subsequent tiers reuse it via the
     # ``inventory`` kwarg.
-    _inventory_build_failed.discard(str(target))
-
     if osv_results:
         # ``_shared_inventory`` returns None ONLY when the build
-        # failed (failure is memoised per target). Each tier is
+        # failed (failure is memoised within this scan). Each tier is
         # gated on a non-None inventory: passing None through would
         # trigger every tier's own tempdir rebuild fallback — up to
         # 8 redundant ~21s builds (istio-scale) of a builder that
         # just failed, with 8 warning stacks. The per-tier fallback
         # stays for direct callers.
         shared_inventory = None
+        inventory_attempted = False
+
+        def get_inventory():
+            nonlocal shared_inventory, inventory_attempted
+            if not inventory_attempted:
+                inventory_attempted = True
+                shared_inventory = _shared_inventory(target)
+            return shared_inventory
 
         from .python_function_level import (
             build_pypi_symbol_map,
             refine_pypi_verdicts,
         )
         pypi_symbols = build_pypi_symbol_map(osv_results)
-        if pypi_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if pypi_symbols and get_inventory() is not None:
             refine_pypi_verdicts(
                 deps_list, out,
                 target=target,
@@ -273,8 +278,7 @@ def scan(
             refine_npm_verdicts,
         )
         npm_symbols = build_npm_symbol_map(osv_results)
-        if npm_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if npm_symbols and get_inventory() is not None:
             refine_npm_verdicts(
                 deps_list, out,
                 target=target,
@@ -287,8 +291,7 @@ def scan(
             refine_go_verdicts,
         )
         go_symbols = build_go_symbol_map(osv_results)
-        if go_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if go_symbols and get_inventory() is not None:
             refine_go_verdicts(
                 deps_list, out,
                 target=target,
@@ -301,8 +304,7 @@ def scan(
             refine_maven_verdicts,
         )
         maven_symbols = build_maven_symbol_map(osv_results)
-        if maven_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if maven_symbols and get_inventory() is not None:
             refine_maven_verdicts(
                 deps_list, out,
                 target=target,
@@ -315,8 +317,7 @@ def scan(
             refine_cargo_verdicts,
         )
         cargo_symbols = build_cargo_symbol_map(osv_results)
-        if cargo_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if cargo_symbols and get_inventory() is not None:
             refine_cargo_verdicts(
                 deps_list, out,
                 target=target,
@@ -329,8 +330,7 @@ def scan(
             refine_rubygems_verdicts,
         )
         rubygems_symbols = build_rubygems_symbol_map(osv_results)
-        if rubygems_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if rubygems_symbols and get_inventory() is not None:
             refine_rubygems_verdicts(
                 deps_list, out,
                 target=target,
@@ -343,8 +343,7 @@ def scan(
             refine_nuget_verdicts,
         )
         nuget_symbols = build_nuget_symbol_map(osv_results)
-        if nuget_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if nuget_symbols and get_inventory() is not None:
             refine_nuget_verdicts(
                 deps_list, out,
                 target=target,
@@ -357,8 +356,7 @@ def scan(
             refine_packagist_verdicts,
         )
         packagist_symbols = build_packagist_symbol_map(osv_results)
-        if packagist_symbols and (shared_inventory := _shared_inventory(
-                target, shared_inventory)) is not None:
+        if packagist_symbols and get_inventory() is not None:
             refine_packagist_verdicts(
                 deps_list, out,
                 target=target,
@@ -369,13 +367,10 @@ def scan(
     return out
 
 
-_inventory_build_failed: set[str] = set()
-
-
-def _shared_inventory(target: Path, current: Any | None) -> Any:
+def _shared_inventory(target: Path) -> Any:
     """Build the inventory once and share across function-level
-    tiers. ``current`` is the value cached so far (None on first
-    call). Returns the cached or freshly-built inventory.
+    tiers. The caller owns per-scan success/failure memoisation, so
+    concurrent scans and later retries never share failed-build state.
 
     Uses a STABLE per-target cache dir under ``~/.raptor/cache/sca/
     inventory/<target-hash>/`` rather than a tempdir. ``build_inventory``
@@ -392,11 +387,6 @@ def _shared_inventory(target: Path, current: Any | None) -> Any:
     inventory subdir; ``checklist.json`` regenerates from scratch
     on a missing file).
     """
-    target_key = str(target)
-    if target_key in _inventory_build_failed:
-        return None
-    if current is not None:
-        return current
     try:
         from core.inventory.builder import build_inventory
         cache_dir = _inventory_cache_dir(target)
@@ -408,7 +398,6 @@ def _shared_inventory(target: Path, current: Any | None) -> Any:
             "function-level tiers will skip",
             exc_info=True,
         )
-        _inventory_build_failed.add(target_key)
         return None
 
 
