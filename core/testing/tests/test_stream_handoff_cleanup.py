@@ -175,7 +175,9 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
                         fail()
                     return patcher.setattr(target, name, value)
 
-                fixture_patcher = SimpleNamespace(setattr=setattr_fixture)
+                fixture_patcher = SimpleNamespace(
+                    setattr=setattr_fixture, setitem=patcher.setitem,
+                )
                 if kind in ("gate", "cleanup"):
                     function = module.gate if kind == "gate" else module.warmup_setup
                     fixture = function.__wrapped__(tmp_path, fixture_patcher)
