@@ -143,6 +143,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from collections.abc import Sequence
 
 from core.logging import get_logger as _get_logger
 from core.smt_solver import (
@@ -161,11 +162,11 @@ from core.smt_solver import (
     parse_literal_value as _parse_literal_value,
     propagate as _propagate,
     scoped as _scoped,
-    track as _track,
     z3,
     z3_available as _z3_available,
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
+from core.smt_solver.assertion_frames import track_frames
 from core.smt_solver.call_arguments import split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
@@ -1221,6 +1222,8 @@ class _ConditionBatch:
     rejections: list[Rejection] = field(default_factory=list)
     anon_map: dict[str, str] = field(default_factory=dict)
     axioms: list[tuple[str, Any]] = field(default_factory=list)
+    pending_epochs: list[int] = field(default_factory=list)
+    axiom_epochs: list[int] = field(default_factory=list)
 
 
 def _classify_conditions(
@@ -1233,17 +1236,22 @@ def _classify_conditions(
     existing SSA-style identity only within each mutation-free window. An
     assignment-shaped rejection ends that window without erasing labels or
     axioms already collected. Every rejection remains visible to the caller.
-    A None solver disables only optional tautology queries.
+    Each predicate and axiom retains its mutation-free segment so a native
+    unsat core can establish an independent contradiction. A None solver
+    disables only optional tautology queries.
     """
     reserve_anon_names([cond.text for cond in conditions], vars_)
     batch = _ConditionBatch()
     dedup_window: dict[str, str] = {}
+    epoch = 0
     for cond in conditions:
+        previous_axioms = len(batch.axioms)
         sat_display, pending_pair, rejection = _classify_text_condition(
             cond, vars_, solver, profile=profile,
             anon_map=batch.anon_map, dedup_window=dedup_window,
             axiom_sink=batch.axioms,
         )
+        batch.axiom_epochs.extend([epoch] * (len(batch.axioms) - previous_axioms))
         if sat_display is not None:
             batch.satisfied.append(sat_display)
         elif rejection is not None:
@@ -1251,9 +1259,11 @@ def _classify_conditions(
             batch.rejections.append(rejection)
             if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
                 dedup_window.clear()
+                epoch += 1
         else:
             assert pending_pair is not None
             batch.pending.append(pending_pair)
+            batch.pending_epochs.append(epoch)
     return batch
 
 
@@ -1349,6 +1359,8 @@ def _solve_pending(
     axioms: list[tuple[str, Any]] | None = None,
     wp_timeout_ms: int | None = None,
     reduce_constraints: bool = True,
+    pending_epochs: Sequence[int | None] | None = None,
+    axiom_epochs: Sequence[int | None] | None = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -1356,7 +1368,9 @@ def _solve_pending(
     :func:`check_verb_feasibility`.  Caller has already classified
     each input as tautology/pending/unknown; this function turns the
     pending list into a sat/unsat/unknown verdict and packages the
-    result.
+    result. Optional epoch metadata records each assertion's ownership for
+    mutation-aware core checks; unowned predicates cannot establish an
+    independent contradiction across rejected scalar updates.
 
     When ``prefer_witness`` is set, ``solver`` is expected to be a
     ``z3.Optimize`` instance (the caller is responsible for the
@@ -1425,11 +1439,7 @@ def _solve_pending(
             summary_axioms=_axiom_labels,
         )
 
-    label_map = _track(solver, pending)
-    if _axioms:
-        # Chain onto the same label map so an axiom participating in an
-        # unsat core surfaces by its human-readable "summary: ..." label.
-        _track(solver, _axioms, label_map)
+    tracked = track_frames(solver, ((pending, pending_epochs), (_axioms, axiom_epochs)))
     result = solver.check()
 
     if result == z3.sat:
@@ -1469,14 +1479,34 @@ def _solve_pending(
         )
 
     if result == z3.unsat:
-        conflicts = _core_names(solver, label_map)
+        conflicts = _core_names(solver, tracked.labels)
         conflict_set = conflicts or [t for t, _ in pending]
-        reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
+        # Rejecting a mutation does not make scalar identities SSA-correct.
+        # A contradiction may compare pre- and post-assignment values as one
+        # symbol. Only a native core owned by one mutation-free segment can
+        # establish a refutation independently of the unmodeled transition.
+        has_mutation = any(
+            reason.kind == RejectionKind.ASSIGNMENT_SHAPED
+            for reason in unknown_reasons
+        )
+        core_epoch = tracked.single_core_origin(solver) if has_mutation else None
+        unmodeled_mutation = has_mutation and core_epoch is None
+        if unmodeled_mutation:
+            reasoning = (
+                f"indeterminate ({mode}): encoded constraints are unsatisfiable, "
+                "but assignment-shaped input has unmodeled scalar value flow; "
+                "refusing the refutation"
+            )
+        else:
+            reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
+            if has_mutation:
+                reasoning += f"; native core confined to mutation-free segment {core_epoch}"
         if conflicts:
-            reasoning += f"; conflict: {' ⊥ '.join(conflicts[:3])}"
+            label = "encoded conflict" if unmodeled_mutation else "conflict"
+            reasoning += f"; {label}: {' ⊥ '.join(conflicts[:3])}"
         return PathSMTResult(
-            wp_complete=reduce_constraints,
-            feasible=False,
+            wp_complete=reduce_constraints and not has_mutation,
+            feasible=None if unmodeled_mutation else False,
             satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
             unknown_reasons=unknown_reasons,
             model={}, smt_available=True,
@@ -1607,7 +1637,8 @@ def check_verb_feasibility(
         list(intrinsic) + batch.pending, solver,
         batch.satisfied, batch.unknown, batch.rejections,
         profile=profile, anon_map=batch.anon_map, axioms=batch.axioms,
-        reduce_constraints=reduce_constraints,
+        pending_epochs=[None] * len(intrinsic) + batch.pending_epochs,
+        axiom_epochs=batch.axiom_epochs, reduce_constraints=reduce_constraints,
     )
 
 
@@ -1765,6 +1796,7 @@ def check_path_feasibility(
         profile=profile, anon_map=batch.anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
         axioms=batch.axioms, wp_timeout_ms=timeout_ms, reduce_constraints=reduce_constraints,
+        pending_epochs=batch.pending_epochs, axiom_epochs=batch.axiom_epochs,
     )
 
 
