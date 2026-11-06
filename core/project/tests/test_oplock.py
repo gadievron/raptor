@@ -25,7 +25,6 @@ from unittest.mock import patch
 import pytest
 
 from core.project import oplock
-from core.project.cli import main
 from core.project.oplock import (
     OpLockContention,
     describe_holder,
@@ -33,7 +32,19 @@ from core.project.oplock import (
     project_op_lock,
     read_holder,
 )
-from core.project.project import ProjectManager
+
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_patch_targets(monkeypatch):
+    """Keep OS patch decorators and contexts on consumer-owned views."""
+    import core.project.oplock as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "os", "getpid", consumer_0.os.getpid,
+    )
+
 
 pytestmark = pytest.mark.skipif(
     not oplock._HAS_FCNTL, reason="flock semantics require fcntl"
@@ -65,7 +76,11 @@ class _Holder:
 
     def __enter__(self):
         self.proc.start()
-        assert self.acquired.wait(timeout=10), "holder never acquired"
+        try:
+            assert self.acquired.wait(timeout=10), "holder never acquired"
+        except BaseException:
+            self.__exit__(*sys.exc_info())
+            raise
         return self
 
     def __exit__(self, *exc):
@@ -166,6 +181,10 @@ class OpLockCliTest(unittest.TestCase):
     """CLI wiring: mutating subcommands contend; read-only ones never."""
 
     def setUp(self):
+        from core.project.cli import main
+        from core.project.project import ProjectManager
+
+        self._main = main
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
@@ -185,7 +204,7 @@ class OpLockCliTest(unittest.TestCase):
                 contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(err):
             try:
-                main()
+                self._main()
             except SystemExit as e:
                 code = e.code if isinstance(e.code, int) else 1
         return code, out.getvalue(), err.getvalue()

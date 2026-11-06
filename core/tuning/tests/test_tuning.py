@@ -19,6 +19,19 @@ from core.tuning import (
     _detect_threads,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_patch_targets(monkeypatch):
+    """Keep OS patch decorators and contexts on consumer-owned views."""
+    import core.tuning as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "os", "getpid", consumer_0.os.getpid,
+    )
+
 
 class TestLoadTuning(unittest.TestCase):
 

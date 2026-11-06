@@ -18,6 +18,16 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
+def _isolate_os_patch_targets(monkeypatch):
+    """Keep OS patch decorators and contexts on consumer-owned views."""
+    import packages.codeql.database_manager as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "os", "getpid", consumer_0.os.getpid,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_shutil_patch_targets(monkeypatch):
     """Keep shutil patch decorators and contexts on consumer-owned views."""
     import packages.codeql.database_manager as consumer_0
