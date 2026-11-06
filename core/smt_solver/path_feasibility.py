@@ -1796,9 +1796,9 @@ def check_path_feasibility_dual(
     ``ret < 0`` — the ubiquitous C signed error check — is UNSAT as
     ``ULT(ret, 0)`` under an unsigned profile, so a heuristic-unsigned
     caller would refute (and thereby suppress) any path carrying one.
-    ``bounds_feasibility.check_bounds_infeasible`` already applies the
-    both-profiles-must-agree rule for its overflow receipts; this is
-    the same rule generalised for path-condition consumers.
+    A refutation must survive the signedness ambiguity within this
+    path's modeled conditions; flat guards from unrelated source sites
+    cannot establish that an operation is unreachable.
 
     Semantics:
 

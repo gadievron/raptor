@@ -2780,10 +2780,13 @@ def _origin_run_body(entry, origin_cache: dict | None = None) -> str:
         return ""
 
 
-def _retired_prose_clean(
+def _retired_gate_verdict(
     entry, hydrate_fn=None, origin_cache: dict | None = None,
 ) -> str | None:
-    """Reason a clean was minted by a retired prose gate, or ``None``."""
+    """Refuse outcomes carrying a retired gate's leading pipeline stamp."""
+    verdict = getattr(entry, "verdict", None)
+    if verdict not in {"clean", "suspicious", "dormant"}:
+        return None
     body = getattr(entry, "body", "") or ""
     if not body and getattr(entry, "body_offload", None):
         hydrated = hydrate_fn(entry) if hydrate_fn is not None else None
@@ -2796,7 +2799,10 @@ def _retired_prose_clean(
         if end < 0:
             break
         lead = lead[end + 1:].lstrip()
-    if lead.startswith(_RETIRED_PROSE_CLEAN_BODY_PREFIXES):
+    from .overflow_demotion import RETIRED_BOUNDS_DEMOTION_PREFIX
+    if lead.startswith(RETIRED_BOUNDS_DEMOTION_PREFIX):
+        return "unbound bounds demotion requires fresh review"
+    if verdict == "clean" and lead.startswith(_RETIRED_PROSE_CLEAN_BODY_PREFIXES):
         return (
             "prose-minted clean (retired rationale-consistency gate) "
             "— re-review once"
@@ -2810,9 +2816,9 @@ def _silence_derived_clean(
     """Why a clean entry may not be imported at $0 on its basis, or
     ``None``.
 
-    First, in every era: a clean minted by a RETIRED prose gate
-    (``_RETIRED_PROSE_CLEAN_BODY_PREFIXES``) is refused once whatever
-    its basis — those rows were journaled ``verdict``.
+    First, in every era: a clean minted by a retired prose gate or
+    site-unbound bounds gate is refused once whatever its basis —
+    those rows could be journaled ``verdict``.
 
     Stamped rows answer from the structured ``clean_basis``: the
     silence-derived bases and ``unknown`` are refused
@@ -2841,7 +2847,7 @@ def _silence_derived_clean(
     """
     if getattr(entry, "verdict", None) != "clean":
         return None
-    retired = _retired_prose_clean(entry, hydrate_fn, origin_cache)
+    retired = _retired_gate_verdict(entry, hydrate_fn, origin_cache)
     if retired is not None:
         # Before the basis check: these rows were journaled with the
         # collector's default ``verdict`` basis.
@@ -2897,6 +2903,8 @@ def _reuse_ineligibility(
     * verdict — ``error`` entries never reach here (filtered by the
       fold); everything else (clean/dormant/finding/suspicious) is a
       real verdict and eligible in principle.
+    * retired gate — marked bounds demotions require a fresh review,
+      including suspicious/dormant rows and reused or offloaded bodies.
     * ``context_reduced`` — the prior verdict came from the reduced-
       context timeout retry: lower-confidence by design, so it is
       re-reviewed rather than imported.
@@ -2942,6 +2950,10 @@ def _reuse_ineligibility(
     receipts = getattr(entry, "evidence_tools", None) or []
     if any("smt:check-overflow:literal-call" in receipt for receipt in receipts if isinstance(receipt, str)):
         return "literal caller proof requires full source revalidation"
+    if getattr(entry, "verdict", None) in {"suspicious", "dormant"}:
+        retired = _retired_gate_verdict(entry, hydrate_fn, origin_cache)
+        if retired is not None:
+            return retired
     if getattr(entry, "verdict", None) == "clean":
         from .smt_evidence import is_diagnostic_smt_rule
         # Reclassifying a producer must also invalidate old clean verdicts
@@ -3016,6 +3028,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("unbound bounds demotion"):
+        return "unbound_bounds_demotion"
     if reason.startswith("literal caller proof"):
         return "literal_caller"
     if reason.startswith("predicate consistency"):
