@@ -1618,13 +1618,19 @@ def mode_describe(args: list) -> int:
         "--json", action="store_true",
         help="Emit machine-readable JSON instead of the text block",
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     try:
         parsed = parser.parse_args(args)
+        report_options = options_from_args(parsed, parser)
+        explicit_report = bool(parsed.report_format or parsed.report_output or parsed.no_report)
+        if explicit_report and report_options.enabled and report_options.output is None:
+            parser.error("Describe reports require --report-output")
     except SystemExit as e:
         return int(e.code or 0)
 
     from packages.describe.cli import describe_main
-    return describe_main(parsed.target, parsed.json)
+    return describe_main(parsed.target, parsed.json, report_options=report_options) if explicit_report else describe_main(parsed.target, parsed.json)
 
 
 def mode_doctor(args: list) -> int:

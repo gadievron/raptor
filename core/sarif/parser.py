@@ -829,7 +829,7 @@ def count_results(sarif_data: Any) -> int:
     return total
 
 
-def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
+def load_sarif(sarif_path: Path, *, metadata: dict | None = None) -> dict[str, Any] | None:
     """
     Load a SARIF file with safety guards.
 
@@ -942,6 +942,8 @@ def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
         logger.error("SARIF: root must be an object in %s", sarif_path)
         return None
 
+    if metadata is not None:
+        metadata.update({"sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)})
     return data
 
 
@@ -1522,6 +1524,13 @@ def parse_sarif_findings(
     if not data:
         return []
 
+    return parse_sarif_document(data, source_root)
+
+
+def parse_sarif_document(data: dict[str, Any], source_root: Path | None = None, *,
+                         include_occurrences: bool = False) -> list[dict[str, Any]]:
+    """Use the same normalizer on already guarded bytes; never reopen inputs."""
+
     findings: list[dict[str, Any]] = []
     compiler_path_budget = PathBudget()
 
@@ -1566,7 +1575,7 @@ def parse_sarif_findings(
                 return None
             return uri
 
-        for result in results:
+        for result_idx, result in enumerate(results):
             if not isinstance(result, dict):
                 logger.warning(
                     "SARIF parser: skipping non-object result in run %d",
@@ -1699,6 +1708,7 @@ def parse_sarif_findings(
             findings.append(
                 {
                     "finding_id": finding_id,
+                    **({"sarif_run_index": run_idx, "sarif_result_index": result_idx} if include_occurrences else {}),
                     **({"rule_scope": rule_scope} if rule_scope else {}),
                     "rule_id": rule_id,
                     "message": message_text,

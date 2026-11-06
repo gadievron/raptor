@@ -712,6 +712,9 @@ def main() -> None:
     p_report = sub.add_parser("report", help="Generate merged report across all runs",
                               usage="raptor project report [<name>]", **_F)
     p_report.add_argument("name", nargs="?", help="Project name")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p_report)
+    p_report.add_argument("--baseline", type=Path, help="Explicit report-context.json baseline for an observation delta")
 
     # annotations-diff
     p_anndiff = sub.add_parser(
@@ -785,6 +788,9 @@ def main() -> None:
     p_help.add_argument("topic", nargs="?", help="Subcommand name")
 
     args = parser.parse_args()
+    if args.subcommand == "report":
+        from core.reporting.options import options_from_args
+        options_from_args(args, parser)
 
     if not args.subcommand:
         parser.print_help()
@@ -1739,7 +1745,8 @@ def main() -> None:
                 print(f"Project '{name}' not found.")
                 return
             from .report import generate_project_report
-            stats = generate_project_report(p)
+            from core.reporting.options import options_from_args
+            stats = generate_project_report(p, report_options=options_from_args(args), baseline=args.baseline, stream=sys.stdout)
             print(f"Report generated: {stats.get('report_dir', p.output_path / '_report')}")
             if stats.get("findings_dir"):
                 print(f"  Findings directory: {stats['findings_dir']}")
@@ -1748,6 +1755,8 @@ def main() -> None:
                 print(f"  Annotations: {stats['annotations']}")
             if stats.get("provenance_markdown"):
                 print(f"  Provenance: {stats['provenance_markdown']}")
+            if stats.get("reporting_errors"):
+                sys.exit(1)
 
         elif args.subcommand == "export":
             from .export import export_project

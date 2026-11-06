@@ -281,7 +281,9 @@ def test_writes_are_atomic_and_locked() -> None:
     _check_writes_are_atomic(_module_ast())
     source = REPORT_PATH.read_text(encoding="utf-8")
     assert "save_json(" in source
-    assert "write_text_atomically(" in source
+    assert "complete_reporting(" in source
+    writer = (REPO_ROOT / "core/reporting/writer.py").read_text(encoding="utf-8")
+    assert "write_bytes_atomically(" in writer and "with _lock(" in writer
     assert "artifact_lock(" in source
 
 

@@ -659,6 +659,8 @@ def start_lifecycle(command: str, target: Path,
     # fabricated CLAUDECODE) is the honest marker for a non-CC transport.
     safe_env.setdefault("_RAPTOR_TRUSTED", "1")
     argv = [str(_LIFECYCLE), "start", command, "--target", str(target)]
+    if parent_run_dir is not None:
+        argv += ["--parent-run", str(parent_run_dir)]
     # Thread the parent's project explicitly: a sibling lifecycle run
     # (the /understand pre-pass, the /validate post-pass, the gap-audit
     # chain) must land in the SAME project as the run that spawned it —

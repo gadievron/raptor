@@ -74,7 +74,13 @@ def main() -> int:
     how.add_argument("--stdout", action="store_true",
                      help="Print the markdown report to stdout "
                           "instead of writing files.")
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(ap)
     parsed = ap.parse_args()
+    report_options = options_from_args(parsed, ap)
+    explicit_report = bool(parsed.report_format or parsed.report_output or parsed.no_report)
+    if explicit_report and (parsed.json or parsed.stdout):
+        ap.error("Report file options cannot be combined with --json or --stdout")
 
     if not parsed.ledger_dir.is_dir():
         # Operator-typed, but tab-completed hostile names are still
@@ -99,12 +105,17 @@ def main() -> int:
             print(render_markdown(report))
             return RC_OK
         report = build_report(parsed.ledger_dir)
-        json_path, md_path = write_report(parsed.ledger_dir, report)
+        reporting = []
+        json_path, md_path = write_report(parsed.ledger_dir, report, report_options=report_options if explicit_report else None,
+                                          reporting_sink=reporting)
         for line in render_summary_lines(report):
             print(line)
         print(f"wrote {_sft(str(json_path), max_len=300)}")
-        print(f"wrote {_sft(str(md_path), max_len=300)}")
-        return RC_OK
+        for result in reporting:
+            if result.publication:
+                for path in result.publication.outputs.values():
+                    print(f"wrote {_sft(str(path), max_len=300)}")
+        return 1 if any(r.errors for r in reporting) else RC_OK
     except FileNotFoundError:
         print(f"error: no engagement ledger under "
               f"{_sft(str(parsed.ledger_dir), max_len=300)}",

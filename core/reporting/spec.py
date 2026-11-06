@@ -1,7 +1,10 @@
 """Report specification — domain-agnostic report structure."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .document import Block
 
 
 @dataclass
@@ -9,6 +12,8 @@ class ReportSection:
     """A named section with pre-rendered content."""
     title: str
     content: str
+    blocks: list["Block"] | None = None
+    source_data: Any = None
 
 
 @dataclass
@@ -29,3 +34,4 @@ class ReportSpec:
     detail_sections: list[ReportSection] = field(default_factory=list)
     sections: list[ReportSection] = field(default_factory=list)
     output_files: list[str] = field(default_factory=list)
+    source_data: Any = None

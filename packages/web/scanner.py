@@ -182,11 +182,14 @@ class WebScanner:
         oob_grace: float = 10.0,
         browser: bool = False,
         allow_unsandboxed_chromium: bool = False,
+        report_options=None,
     ) -> None:
         import time
 
         self.base_url = base_url.rstrip("/")
         self.llm = llm
+        from core.reporting.options import ReportOptions
+        self.report_options = (report_options or ReportOptions()).validate()
         self.out_dir = out_dir or Path("out") / f"web_scan_{int(time.time())}"
         self.out_dir.parent.mkdir(parents=True, exist_ok=True)
         safe_run_mkdir(self.out_dir)
@@ -370,6 +373,7 @@ class WebScanner:
         if verification_summary is not None:
             report["verification"] = verification_summary
             self._save_artifact(self.out_dir / "web_scan_report.json", report)
+        self._capture_reporting(report)
         return report
 
     def _phase_preflight(self) -> bool:
@@ -3089,12 +3093,29 @@ class WebScanner:
         )
 
     def _empty_result(self, reason: str) -> dict[str, Any]:
-        return {
+        result = {
             "target": self.base_url, "findings": [], "total_findings": 0,
             "total_vulnerabilities": 0, "auth_context": "unauthenticated",
             "discovery": {}, "crawl": {}, "findings_by_severity": {},
             "phases_completed": self._phases_completed, "error": reason,
         }
+        self._capture_reporting(result)
+        return result
+
+    def _capture_reporting(self, report: dict) -> None:
+        from core.reporting.results import NativeResult, complete_native_result
+        from core.reporting.document import StageEnvelope
+        # Apply the same boundary as the existing web JSON writer. New reports
+        # must not bypass credential/URL redaction in canonical web artifacts.
+        payload = _redact_json_artifact(report)
+        failed = bool(payload.get("error") or payload.get("check_failures") or payload.get("checks_degraded"))
+        complete_native_result(NativeResult(
+            "web", self.base_url, self.out_dir.name, payload,
+            findings=payload.get("findings", []), state="partial" if failed else "completed",
+            stages=[StageEnvelope(str(p), "completed") for p in payload.get("phases_completed", [])],
+            diagnostics=["Web checks failed, degraded, or did not complete; inspect recorded check outcomes."] if failed else [],
+            artifacts=[{"path": str(self.out_dir / name)} for name in ("web_scan_report.json", "web_findings.json", "findings.json")],
+        ), self.out_dir, stem="web-report", options=getattr(self, "report_options", None))
 
     def _redact(self, value: str) -> str:
         from core.security.redaction import redact_secrets
@@ -3566,6 +3587,8 @@ Examples:
         "--nuclei-max-runtime", type=int, default=600,
         help="Maximum sandboxed nuclei runtime in seconds (default: 600)",
     )
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     return parser
 
 
@@ -3636,6 +3659,8 @@ def main():
     args = parser.parse_args()
     if args.allow_unsandboxed_chromium and not args.browser:
         parser.error("--allow-unsandboxed-chromium requires --browser")
+    from core.reporting.options import options_from_args
+    report_options = options_from_args(args, parser)
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)
@@ -3785,6 +3810,7 @@ def main():
         oob_grace=args.oob_grace,
         browser=bool(args.browser),
         allow_unsandboxed_chromium=bool(args.allow_unsandboxed_chromium),
+        report_options=report_options,
     )
 
     try:
@@ -3827,7 +3853,8 @@ def main():
         logger.warning("Scan interrupted by user")
         return 130
     except Exception as e:
-        print(f"\n✗ Scan failed: {e}", file=sys.stderr)
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(f"\n✗ Scan failed: {sanitise_for_terminal(str(e), max_len=500)}", file=sys.stderr)
         logger.exception("Scan failed")
         return 1
     finally:

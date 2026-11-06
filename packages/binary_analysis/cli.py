@@ -241,6 +241,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     report_p = sub.add_parser("report", help="Print the investigation report, or the map report when no investigation exists")
     report_p.add_argument("run_dir", help="Binary map output directory")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(report_p)
 
     handoff_p = sub.add_parser("handoff", help="Print the validation handoff JSON")
     handoff_p.add_argument("run_dir", help="Binary map output directory")
@@ -1246,8 +1248,28 @@ def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> in
     return 0
 
 
-def _print_report(run_dir: str) -> int:
+def _print_report(run_dir: str, *, report_options=None) -> int:
     base = Path(run_dir).expanduser().resolve()
+    if report_options is not None:
+        from core.reporting.results import NativeResult, complete_native_result
+        sources = [base / name for name in (
+            "binary-investigation.json", "binary-manifest.json", "binary-context-map.json",
+            "binary-evidence.json", "binary-checklist.json", "binary-validation-handoff.json",
+        ) if (base / name).is_file()]
+        if not sources:
+            print("raptor-binary: no captured binary JSON available for export", file=sys.stderr)
+            return 1
+        try:
+            payload = {p.name: load_json(p, strict=True, max_bytes=32 * 1024 * 1024) for p in sources}
+            result = complete_native_result(
+                NativeResult("binary", str(base), base.name, payload,
+                             artifacts=[{"uri": str(p)} for p in sources]),
+                base, stem="binary-report", options=report_options, stream=sys.stdout,
+            )
+            return 1 if result.errors else 0
+        except (ValueError, OSError) as exc:
+            print(f"raptor-binary: {sanitise_for_terminal(str(exc))}", file=sys.stderr)
+            return 1
     investigation = base / "binary-investigation-report.md"
     if investigation.is_file():
         return _print_file(run_dir, investigation.name)
@@ -1295,6 +1317,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "graph":
         return _run_graph(args)
     if args.command == "report":
+        from core.reporting.options import options_from_args
+        options = options_from_args(args, parser)
+        if args.report_format or args.report_output or args.no_report:
+            return _print_report(args.run_dir, report_options=options)
         return _print_report(args.run_dir)
     if args.command == "handoff":
         return _print_file(args.run_dir, "binary-validation-handoff.json", json_output=args.json)

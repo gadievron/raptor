@@ -1447,6 +1447,8 @@ class ParentPinThreadingTests(unittest.TestCase):
             parent = self._parent(tmp, {"project": "p1",
                                         "project_source": "argv"})
             argv = self._start(parent_run_dir=parent)
+            self.assertIn("--parent-run", argv)
+            self.assertEqual(argv[argv.index("--parent-run") + 1], str(parent))
             self.assertIn("--project", argv)
             self.assertEqual(argv[argv.index("--project") + 1], "p1")
 

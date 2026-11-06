@@ -1163,7 +1163,10 @@ class TestWriters:
         # nothing ELSE (no orphaned tempfiles) may remain.
         assert names == {LEDGER_FILENAME, REPORT_JSON_FILENAME,
                          REPORT_MD_FILENAME,
-                         f"{REPORT_JSON_FILENAME}.lock"}
+                         f"{REPORT_JSON_FILENAME}.lock", ".reporting",
+                         "summary.json", "summary.md", "report-context.json",
+                         "report-document.json", "reporting-manifest.json",
+                         "engagement-summary.json"}
 
 
 # ── launcher CLI ─────────────────────────────────────────────────────

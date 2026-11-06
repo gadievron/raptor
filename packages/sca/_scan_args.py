@@ -82,6 +82,8 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     (``cli.py`` + ``libexec/raptor-sca-run``) get the same epilog
     in their ``--help`` output without code duplication.
     """
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     if not parser.epilog:
         parser.epilog = _SCAN_HELP_EPILOG
         # Default argparse formatter swallows newlines in the
@@ -364,6 +366,18 @@ def resolve_repo_trust(args: argparse.Namespace) -> bool:
     return resolved
 
 
+def resolve_report_options(args: argparse.Namespace):
+    """Resolve format aliases before any output directory or trust mutation."""
+    from dataclasses import replace
+    from core.reporting.options import options_from_args as parse_reporting
+    options = parse_reporting(args)
+    if getattr(args, "html", False):
+        if not options.enabled:
+            raise ValueError("--html conflicts with --no-report")
+        options = replace(options, formats=tuple(dict.fromkeys([*options.formats, "html"]))).validate()
+    return options
+
+
 def options_from_args(args: argparse.Namespace) -> RunOptions:
     """Build :class:`RunOptions` from a parsed Namespace.
 
@@ -379,6 +393,7 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
     marker banner, AND the propagation of the resolved value to
     the process-wide ``cc_trust`` / ``codeql_trust`` overrides.
     """
+    report_options = resolve_report_options(args)
     resolve_repo_trust(args)
     return RunOptions(
         offline=args.offline,
@@ -409,4 +424,5 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         enable_progress=not args.no_progress,
         sbom_input=Path(args.sbom).resolve() if args.sbom else None,
         trust_repo=bool(getattr(args, "trust_repo", False)),
+        report_options=report_options,
     )

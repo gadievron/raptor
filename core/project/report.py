@@ -656,7 +656,32 @@ def render_annotations_markdown(records: list[dict[str, Any]],
     return "\n".join(lines) + "\n"
 
 
-def generate_project_report(project) -> dict[str, Any]:
+def generate_project_report(project, *, report_options=None, baseline=None, stream=None) -> dict[str, Any]:
+    if report_options is not None:
+        report_options = report_options.validate()
+    from core.atomic_fs.fs_lock import artifact_lock
+    with artifact_lock(project.output_path / "_report" / "project-report", subject="project report selection"):
+        return _generate_project_report(project, report_options=report_options, baseline=baseline, stream=stream)
+
+
+def _write_project_delta(baseline_context, context, report_dir, report_options):
+    if baseline_context is None:
+        return []
+    from core.reporting.delta import build_delta
+    from dataclasses import replace
+    from core.reporting.service import complete_reporting
+    delta_context, delta_document = build_delta(baseline_context, context)
+    delta_options = report_options
+    if report_options and report_options.output:
+        destination = report_options.output
+        destination = (destination.with_name(destination.stem + "-delta" + destination.suffix)
+                       if destination.suffix and not destination.is_dir() else destination / "delta")
+        delta_options = replace(report_options, output=destination)
+    result = complete_reporting(delta_context, report_dir / "delta", stem="project-delta", options=delta_options, document=delta_document)
+    return result.errors
+
+
+def _generate_project_report(project, *, report_options=None, baseline=None, stream=None) -> dict[str, Any]:
     """Generate a merged report across all runs in _report/ directory.
 
     Non-destructive — runs preserved.
@@ -667,10 +692,79 @@ def generate_project_report(project) -> dict[str, Any]:
 
     report_dir = project.output_path / "_report"
     report_dir.mkdir(parents=True, exist_ok=True)
+    from core.json import load_json
+    from core.reporting.document import ReportContext
+    previous_generation = load_json(report_dir / "reporting-manifest.json") or {}
+    previous_generation = previous_generation if isinstance(previous_generation, dict) else {}
+    expected_generation = previous_generation.get("generation", "")
+    # Capture an explicit baseline before any compatibility mirror is replaced.
+    from core.reporting.writer import load_context
+    baseline_context = load_context(Path(baseline)) if baseline is not None else None
 
-    run_dirs = project.get_run_dirs(sweep=True)
+    from core.run.metadata import load_run_metadata
+    from core.project.findings_utils import findings_from_report_context, load_findings_from_dir, run_is_imported
+    from core.reporting.writer import load_committed_report
+    discovered = project.get_run_dirs(sweep=True)
+    run_dirs = []
+    frozen_metadata = {}
+    frozen_contexts = {}
+    frozen_records = {}
+    frozen_origins = {}
+    selection_diagnostics = []
+    seen_snapshots = set()
+    for directory in discovered:
+        metadata = load_run_metadata(directory)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if metadata.get("status") == "running":
+            selection_diagnostics.append(f"{directory.name}: active run omitted from the final project view")
+            continue
+        run_dirs.append(directory)
+        frozen_metadata[str(directory)] = metadata
+        frozen_origins[str(directory)] = run_is_imported(directory)
+        if (directory / "reporting-manifest.json").exists():
+            try:
+                frozen_contexts[str(directory)], _, _ = load_committed_report(directory)
+            except (OSError, ValueError, TypeError):
+                selection_diagnostics.append(f"{directory.name}: committed reporting snapshot unavailable or inconsistent")
+        captured = frozen_contexts.get(str(directory))
+        from core.run.report_identity import valid_identity
+        owner = metadata.get("reporting_identity")
+        if (captured is not None and valid_identity(owner)
+                and (captured.pass_id or captured.kind in {"scan", "codeql", "validate", "agentic"})
+                and ((captured.run_id, captured.pass_id, captured.attempt_id) != tuple(owner[k] for k in ("run_id", "pass_id", "attempt_id"))
+                     or metadata.get("command") != captured.kind)):
+            frozen_contexts.pop(str(directory))
+            captured = None
+            selection_diagnostics.append(f"{directory.name}: committed report belongs to an earlier execution; current domain findings used with unknown reporting lineage")
+        frozen_records[str(directory)] = (findings_from_report_context(captured) if captured is not None
+                                          else load_findings_from_dir(directory, discover_report=False))
+        if captured is not None and not frozen_origins[str(directory)]:
+            from core.reporting.document import digest
+            identity = (captured.snapshot_id, digest(frozen_records[str(directory)]))
+            if identity in seen_snapshots:
+                run_dirs.pop()
+                for frozen in (frozen_metadata, frozen_origins, frozen_contexts, frozen_records):
+                    frozen.pop(str(directory), None)
+                selection_diagnostics.append(f"{directory.name}: duplicate captured observations omitted; no additive coverage claimed")
+                continue
+            seen_snapshots.add(identity)
     if not run_dirs:
-        return {"findings": 0, "runs": 0, "annotations": 0}
+        from core.reporting.document import ReportContext
+        from core.reporting.service import complete_reporting
+        empty = ReportContext("project", project.name, target=str(project.output_path),
+                              state="partial" if selection_diagnostics else "completed", diagnostics=selection_diagnostics,
+                              artifacts=[{"path": str(report_dir / "findings.json")}],
+                              extensions={"raptor.project": {"name": project.name, "selection": [],
+                                                              "merge_policy": "project-origin-status-recency/v1"}})
+        save_json(report_dir / "findings.json", {"findings": [], "sca_findings": []})
+        export_findings_directory([], project.output_path, project_name=project.name)
+        result = complete_reporting(empty, report_dir, stem="project-report", options=report_options, stream=stream,
+                                    expected_generation=expected_generation)
+        result.errors.extend(_write_project_delta(baseline_context, empty, report_dir, report_options))
+        stats: dict[str, Any] = {"findings": 0, "runs": 0, "annotations": 0}
+        if result.errors:
+            stats["reporting_errors"] = result.errors
+        return stats
 
     # Merge findings — code findings + SCA dependency findings (the
     # latter discovered from each run's sca/ subdir; surfaced in their
@@ -679,7 +773,36 @@ def generate_project_report(project) -> dict[str, Any]:
     # later-overrides-earlier order, so pass oldest-first or the
     # oldest run wins every tie (inverting the latest-wins contract).
     oldest_first = list(reversed(run_dirs))
-    merged = merge_findings(oldest_first)
+    # Physical runs remain the discovery/annotation/SCA boundary. Explicit local
+    # predecessors are additional frozen observations, never new physical runs.
+    observation_dirs = []
+    historical_dirs = []
+    selected_snapshots = {context.snapshot_id for context in frozen_contexts.values()}
+    from core.project.report_lineage import local_history
+    for directory in oldest_first:
+        captured = frozen_contexts.get(str(directory))
+        if captured is not None and not frozen_origins[str(directory)]:
+            history, notes = local_history(directory, captured)
+            selection_diagnostics.extend(notes)
+            for historical_dir, predecessor in history:
+                if predecessor.snapshot_id in selected_snapshots:
+                    continue
+                selected_snapshots.add(predecessor.snapshot_id)
+                key = str(historical_dir)
+                frozen_contexts[key] = predecessor
+                frozen_records[key] = findings_from_report_context(predecessor)
+                frozen_origins[key] = False
+                frozen_metadata[key] = {"command": predecessor.kind,
+                                        "reporting_identity": predecessor.extensions.get("raptor.lifecycle"),
+                                        "historical_snapshot": True}
+                historical_dirs.append(historical_dir)
+                observation_dirs.append(historical_dir)
+        observation_dirs.append(directory)
+    decisions = {}
+    from core.project.report_lineage import grouping_keys
+    group_keys, lineage_diagnostics = grouping_keys(frozen_records, frozen_contexts, frozen_origins)
+    selection_diagnostics.extend(lineage_diagnostics)
+    merged = merge_findings(observation_dirs, records_by_run=frozen_records, origins_by_run=frozen_origins, decisions=decisions, grouping_keys=group_keys)
     sca_findings = merge_sca_findings(oldest_first)
     save_json(
         report_dir / "findings.json",
@@ -698,7 +821,8 @@ def generate_project_report(project) -> dict[str, Any]:
             queued_count,
             write_queue,
         )
-        readj_records = detect_project_contradictions(oldest_first)
+        readj_records = detect_project_contradictions(oldest_first, records_by_run=frozen_records,
+                                                     origins_by_run=frozen_origins, metadata_by_run=frozen_metadata)
         write_queue(report_dir, readj_records)
         readjudication_queued = queued_count(readj_records)
     except Exception:  # noqa: BLE001 — additive trail, never report-fatal
@@ -714,7 +838,9 @@ def generate_project_report(project) -> dict[str, Any]:
     )
 
     # Aggregate annotations across runs + project-level overrides.
-    annotations = gather_project_annotations(project)
+    from types import SimpleNamespace
+    frozen_selection = SimpleNamespace(output_path=project.output_path, get_run_dirs=lambda **kwargs: run_dirs)
+    annotations = gather_project_annotations(frozen_selection)
     save_json(report_dir / "annotations.json", {"annotations": annotations})
     annotations_md = render_annotations_markdown(annotations, project.name)
     annotations_md_path = report_dir / "annotations.md"
@@ -727,7 +853,7 @@ def generate_project_report(project) -> dict[str, Any]:
     from core.run.provenance import format_manifest_block
     prov_lines = [f"# Provenance — {project.name}", ""]
     for d in run_dirs:
-        raw_meta = load_run_metadata(d)
+        raw_meta = frozen_metadata[str(d)]
         meta = raw_meta if isinstance(raw_meta, dict) else {}
         # timestamp is child-writable like `command`, and a run-dir
         # name is operator/child-chosen on --out runs — both land in
@@ -747,11 +873,72 @@ def generate_project_report(project) -> dict[str, Any]:
     provenance_md_path = report_dir / "provenance.md"
     provenance_md_path.write_text("\n".join(prov_lines), encoding="utf-8")
 
+    # Project owns aggregation, precedence, and annotations. Reporting consumes
+    # that frozen view; it never re-merges findings or upgrades imported claims.
+    from core.json import load_json
+    from core.project.findings_utils import run_is_imported
+    from core.reporting.adapters import native_findings
+    from core.reporting.document import Block, ReportContext, StageEnvelope, digest
+    from core.reporting.service import complete_reporting
+    selected = []
+    stages = []
+    diagnostics = list(selection_diagnostics)
+    for directory in [*run_dirs, *historical_dirs]:
+        snapshot = None
+        if str(directory) in frozen_contexts:
+            committed_context = frozen_contexts[str(directory)]
+            snapshot = {**committed_context.to_dict(), "snapshot_id": committed_context.snapshot_id}
+            snapshot["state"] = committed_context.completion_state
+        meta = frozen_metadata[str(directory)]
+        meta = meta if isinstance(meta, dict) else {}
+        selection = {"run_id": directory.name, "metadata": meta, "imported": frozen_origins[str(directory)],
+                     "historical": directory in historical_dirs,
+                     "lifecycle": snapshot.get("extensions", {}).get("raptor.lifecycle") if isinstance(snapshot, dict) else None,
+                     "finding_input_digest": digest(frozen_records[str(directory)]),
+                     "snapshot_id": snapshot.get("snapshot_id") if isinstance(snapshot, dict) else None}
+        selected.append(selection)
+        if not isinstance(snapshot, dict):
+            diagnostics.append(f"{directory.name}: legacy run; structured stage context unavailable")
+        stages.append(StageEnvelope(directory.name, snapshot.get("state", "unknown") if isinstance(snapshot, dict) else "unknown"))
+    normalized = native_findings(merged, run_id=project.name, producer="project")
+    for raw, finding in zip(merged, normalized):
+        # Full project-domain grouping key, not a raw tool fingerprint. Matching
+        # across revisions is still a project policy, not proof of identity.
+        from core.project.merge import _finding_key
+        finding["occurrence_ref"] = "project:" + digest({"project": project.name, "key": decisions[_finding_key(raw)].get("group_key", list(_finding_key(raw)))})
+        finding["merge_decision"] = decisions[_finding_key(raw)]
+        finding["verdict_origin"] = "project/" + decisions[_finding_key(raw)]["origin"]
+    context = ReportContext(
+        "project", project.name, target=str(project.output_path), state="unknown",
+        findings=normalized, stages=stages, diagnostics=diagnostics,
+        artifacts=[{"path": str(report_dir / name)} for name in ("findings.json", "annotations.json", "annotations.md", "provenance.md")],
+        parents=[s["snapshot_id"] for s in selected if s["snapshot_id"]],
+        extensions={"raptor.project": {"name": project.name, "selection": selected,
+                                      "merge_policy": "project-origin-status-recency/v1",
+                                      "grouping_policy": "recorded-input-or-continuation-and-existing-project-key/v1",
+                                      "annotations": annotations, "annotation_digest": digest(annotations),
+                                      "readjudication": readj_records},
+                    "raptor.sca_findings": sca_findings,
+                    "raptor.scope": {"mode": "project-view", "project": project.name, "root": str(project.output_path)}},
+    )
+    from core.reporting.results import result_blocks
+    blocks = [Block("table", title="Selected runs", columns=["Run", "Imported", "Snapshot"],
+                    rows=[[s["run_id"], s["imported"], s["snapshot_id"] or "legacy / unavailable"] for s in selected]),
+              *result_blocks(annotations, title="Annotations"),
+              *result_blocks(selected, title="Provenance and selection"),
+              *result_blocks(readj_records, title="Re-adjudication queue")]
+    if sca_findings:
+        blocks.append(Block("code", title="Dependency findings", language="json", text=json.dumps(sca_findings, ensure_ascii=True, indent=2)))
+    publication = complete_reporting(context, report_dir, stem="project-report", options=report_options, blocks=blocks, stream=stream,
+                                      expected_generation=expected_generation)
+    publication.errors.extend(_write_project_delta(baseline_context, context, report_dir, report_options))
+
     return {
         "findings": len(merged),
         "sca_findings": len(sca_findings),
         "readjudication_queued": readjudication_queued,
         "runs": len(run_dirs),
+        "historical_snapshots": len(historical_dirs),
         "annotations": len(annotations),
         "report_dir": str(report_dir),
         "findings_dir": findings_export["findings_dir"],
@@ -759,4 +946,7 @@ def generate_project_report(project) -> dict[str, Any]:
         "finding_buckets": findings_export["counts"],
         "annotations_markdown": str(annotations_md_path),
         "provenance_markdown": str(provenance_md_path),
+        "report_snapshot_id": context.snapshot_id,
+        "reporting_diagnostics": publication.diagnostics,
+        "reporting_errors": publication.errors,
     }

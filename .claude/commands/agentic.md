@@ -171,11 +171,13 @@ and full mode findings include `is_exploitable`, `reasoning`, `exploit_code`, an
 `patch_code` fields. Prep-only findings include `code`, `surrounding_context`,
 `dataflow`, and `feasibility` for review.
 
-**After the pipeline completes**, read `agentic-report.md` from the output directory
-and add a 1-2 sentence summary paragraph after the `# RAPTOR Agentic Security Report`
-header — e.g., "Scanned 26 findings across 10 C files. 8 are exploitable buffer overflows
-and command injections; 2 were ruled out as false positives." Use only facts from the
-report data. The report should stand on its own without this paragraph.
+**After the pipeline completes**, read `summary.md` from the output directory
+and display that mechanically generated summary in the conversation. Preserve
+counts, recorded verdict distinctions, and limitations. The Python pipeline
+produces the full report independently; do not edit it to insert an LLM-written
+summary. Optional interpretation belongs in the conversation and must remain
+separate from the mechanical results. If summary persistence failed, display
+the pipeline's printed results and reporting warning instead of just a file path.
 
 ## Post-run fork (interactive sessions only)
 

@@ -236,6 +236,8 @@ def _build_parser() -> argparse.ArgumentParser:
              "truncated run",
     )
 
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     return parser
 
 
@@ -389,6 +391,8 @@ def _interrupted_exit(ctx: dict) -> int:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    from core.reporting.options import options_from_args
+    report_options = options_from_args(args, parser)
     # Interruption context: _main_body stamps its resolved state here
     # (out_dir, repo_path, config) so the handler can write an honest
     # interrupted report for whatever had been decided by the time the
@@ -397,12 +401,53 @@ def main() -> int:
     ctx: dict = {}
     sigterm_token = _sigterm_as_interrupt()
     try:
-        return _main_body(parser, args, ctx)
+        rc = _main_body(parser, args, ctx)
     except KeyboardInterrupt:
         print("\n\nInterrupted", file=sys.stderr)
-        return _interrupted_exit(ctx)
+        rc = _interrupted_exit(ctx)
     finally:
         _restore_sigterm(sigterm_token)
+    if ctx.get("out_dir"):
+        from core.reporting.adapters import read_json_artifact
+        from core.reporting.results import NativeResult, complete_native_result
+        out_dir = Path(ctx["out_dir"])
+        payload = read_json_artifact(out_dir, out_dir / "raptor_openant_report.json")
+        if isinstance(payload, dict):
+            raw = read_json_artifact(out_dir, out_dir / "openant_findings.json")
+            findings = raw.get("findings") if isinstance(raw, dict) else raw
+            scan = (payload.get("phases") or {}).get("openant_scan", {})
+            translated_count = scan.get("translated_findings")
+            recovered = []
+            if (isinstance(findings, list) and scan.get("completed") is True
+                    and type(translated_count) is int and 0 <= translated_count <= len(findings)):
+                recovered = findings[translated_count:]
+                findings = findings[:translated_count]
+            else:
+                findings = None
+            total = len(findings) if findings is not None else None
+            selected = _report_selection(findings, args.max_findings) if findings is not None else None
+            notes = []
+            if selected is not None and len(selected) < total:
+                notes.append(f"Report truncated: showing the top {len(selected)} of {total} findings by severity; full findings remain in openant_findings.json")
+            if scan.get("recovered_checkpoint_verdicts"):
+                notes.append("Recovered checkpoint verdicts are hint-tier observations, separate from the scanner findings.")
+            from core.reporting.document import Block
+            groups = []
+            for level, label in (("error", "High"), ("warning", "Medium"), ("note", "Low/Informational")):
+                group = [f for f in selected or [] if f.get("level") == level]
+                if group:
+                    groups.append(Block("table", title=f"{label} ({len(group)})", columns=["Finding", "Location"],
+                                        rows=[[f.get("finding_id"), f.get("file")] for f in group]))
+            complete_native_result(NativeResult(
+                "openant", str(ctx.get("repo_path", "")), out_dir.name,
+                {"workflow": payload, "findings": selected, "Recovered checkpoint verdicts (hint tier)": recovered}, findings=selected,
+                state="completed" if scan.get("completed") is True else "partial",
+                diagnostics=notes, metrics={"Recorded findings": total, "Outcome": payload.get("outcome", "scanned")},
+                metadata={"Findings": total if total is not None else "not scanned"}, blocks=groups,
+                triage=True,
+                artifacts=[{"path": str(out_dir / name)} for name in ("raptor_openant_report.json", "openant_findings.json")],
+            ), out_dir, stem="openant-report", options=report_options)
+    return rc
 
 
 def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,

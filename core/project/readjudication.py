@@ -557,6 +557,7 @@ def _run_completed(run_dir: Path) -> bool:
 
 def detect_project_contradictions(
     run_dirs: Sequence[Path],
+    *, records_by_run=None, origins_by_run=None, metadata_by_run=None,
 ) -> list[dict[str, Any]]:
     """Project-level detection over per-run findings.
 
@@ -579,13 +580,16 @@ def detect_project_contradictions(
     final_labels: set[str] = set()
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
-        findings = load_findings_from_dir(run_dir)
+        key = str(run_dir)
+        findings = records_by_run.get(key, []) if records_by_run is not None else load_findings_from_dir(run_dir)
         if not findings:
             continue
         label = run_dir.name
-        if run_is_imported(run_dir):
+        imported = origins_by_run.get(key, False) if origins_by_run is not None else run_is_imported(run_dir)
+        if imported:
             label += " (imported)"
-        if _run_completed(run_dir):
+        completed = metadata_by_run.get(key, {}).get("status") == "completed" if metadata_by_run is not None else _run_completed(run_dir)
+        if completed:
             final_labels.add(label)
         sources.append((label, findings))
     return detect_contradictions(

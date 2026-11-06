@@ -470,7 +470,12 @@ Examples:
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(ap)
     args = ap.parse_args()
+    report_options = options_from_args(args, ap)
+    if (args.export_seed_corpus or args.prepare_corpus) and (args.report_format or args.report_output or args.no_report):
+        ap.error("Report options apply to fuzzing results; corpus preparation writes its own manifest")
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)
@@ -1012,6 +1017,11 @@ Examples:
             try:
                 from core.json import save_json as _save_json
                 _save_json(out_dir / "fuzzing_report.json", zero_report)
+                from core.reporting.results import NativeResult, complete_native_result
+                complete_native_result(NativeResult("fuzz", str(binary_path), out_dir.name, zero_report,
+                                                    state="completed", metrics={"Crashes observed": 0},
+                                                    artifacts=[{"path": str(out_dir / "fuzzing_report.json")}, {"path": str(binary_path)}]),
+                                       out_dir, stem="fuzzing-report", options=report_options)
             except OSError:
                 # Best effort: don't mask the operator's already-printed
                 # advice with a write error. zero_report is a literal
@@ -1061,7 +1071,8 @@ Examples:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
         logger.error("Fuzzing failed: %s", e)
-        print(f"\n✗ Fuzzing failed: {e}", file=sys.stderr)
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(f"\n✗ Fuzzing failed: {sanitise_for_terminal(str(e), max_len=500)}", file=sys.stderr)
         sys.exit(1)
 
     # ========================================================================
@@ -1397,7 +1408,8 @@ Examples:
 
     except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
         logger.error("Crash analysis failed: %s", e)
-        print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(f"\n✗ Analysis failed: {sanitise_for_terminal(str(e), max_len=500)}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
@@ -1495,6 +1507,12 @@ Examples:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
+    from core.reporting.results import NativeResult, complete_native_result
+    complete_native_result(NativeResult("fuzz", str(binary_path), out_dir.name, report, state="completed",
+                                        metrics={"Crashes observed": num_crashes, "Crashes analysed": analysed,
+                                                 "Recorded exploitable outcomes": exploitable, "Duration seconds": args.duration},
+                                        artifacts=[{"path": str(report_file)}, {"path": str(binary_path)}]),
+                           out_dir, stem="fuzzing-report", options=report_options)
     try:
         from core.understand_graph import ingest_fuzz_evidence
         ingest_fuzz_evidence(out_dir, str(binary_path), result=report)

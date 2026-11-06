@@ -154,6 +154,8 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
         out_dir=Path(args.out) if args.out else None,
         codeql_cli=args.codeql_cli
     )
+    from core.reporting.options import options_from_args
+    agent.report_options = options_from_args(args)
     # Pin bootstrap: freeze this process's ambient project resolution
     # to the run's recorded pin (no-op when --project already set the
     # override) — a mid-session /project switch must not move trust
@@ -532,7 +534,10 @@ Examples:
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args()
+    options_from_args(args, parser)
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)

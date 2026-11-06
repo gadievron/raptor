@@ -45,8 +45,7 @@ and the unit battery):
   (``core.security.report_writer_audit._REPORT_WRITER_FILES``).
   Every value that originates in target bytes (paths, DT_NEEDED
   names, survivor file/function names, residual messages quoting
-  member names) renders through :func:`core.security.markdown_render.
-  md_inline` in the markdown report and
+  member names) renders through the shared renderer in Markdown/HTML/XML and
   :func:`core.security.log_sanitisation.sanitise_for_terminal` in the
   terminal summary. The JSON document stores raw values with a
   ``derived_from_target`` manifest — escape-at-render applies to
@@ -55,9 +54,9 @@ and the unit battery):
   Title Case in the human-readable rendering; never ALL_CAPS, no
   red/green indicators.
 - **Atomic writes.** The JSON report leaves through ``save_json``
-  under :func:`core.atomic_fs.fs_lock.artifact_lock`; the markdown leaves
-  through :func:`core.atomic_fs.write_text_atomically` under the same
-  lock. Nothing is written into the target tree.
+  under :func:`core.atomic_fs.fs_lock.artifact_lock`; portable reports
+  leave through the shared reporting writer under the same domain lock
+  and its publication lock. Nothing is written into the target tree.
 
 Outputs, both under the engagement output directory:
 
@@ -73,7 +72,6 @@ from pathlib import Path
 from typing import Any
 
 from core.artifacts.provenance import stamp_provenance
-from core.atomic_fs import write_text_atomically
 from core.coverage.journal import VALID_VERDICTS
 from core.engagement.chain_elf import (
     SURVIVORS_FILENAME,
@@ -92,7 +90,6 @@ from core.engagement.ledger import (
 from core.atomic_fs.fs_lock import artifact_lock
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal
-from core.security.markdown_render import md_inline
 
 REPORT_SCHEMA = "engagement-report/1"
 REPORT_JSON_FILENAME = "engagement-report.json"
@@ -135,29 +132,12 @@ def _title(state: Any) -> str:
 
     Depth labels (``T0``..``T3``) and tier tokens pass through
     ``title()`` unharmed; multi-word snake states gain spaces.
-    NEVER a render seam on its own — foreign values go through
-    :func:`_title_md` so the escape happens AFTER the case change
+    NEVER a render seam on its own — renderers escape foreign values
+    AFTER the case change
     (escaping first would let ``str.title()`` case-mangle the
     ``\\xHH`` escape markers themselves).
     """
     return str(state).replace("_", " ").title()
-
-
-def _title_md(value: Any) -> str:
-    """Title Case a foreign status/kind for a markdown slot: case
-    change first, ``md_inline`` escape second."""
-    return md_inline(_title(value))
-
-
-def _journal_label_md(label: Any) -> str:
-    """A journal verdict LABEL for a markdown slot. Labels come from
-    journal rows and chain verdict records — foreign bytes until
-    proven vocabulary. Known labels render Title Case; anything else
-    renders escaped verbatim, never title-cased raw (a forged label
-    must not get the vocabulary's trusted rendering)."""
-    if isinstance(label, str) and label in VALID_VERDICTS:
-        return _title(label)
-    return md_inline(label)
 
 
 def _int_counts(counts: Any) -> dict[str, int]:
@@ -721,10 +701,6 @@ def build_report(output_dir: Path | str) -> dict[str, Any]:
 
 # ── Markdown rendering (Title Case; every foreign value escaped) ─────
 
-def _md_row(cells: list[str]) -> str:
-    return "| " + " | ".join(cells) + " |"
-
-
 def _degradation_cell(reasons: list[dict[str, Any]]) -> str:
     if not reasons:
         return "none"
@@ -735,261 +711,118 @@ def _degradation_cell(reasons: list[dict[str, Any]]) -> str:
     return label
 
 
-def render_markdown(report: dict[str, Any]) -> str:
-    """The operator rendering. Statuses Title Case; every value that
-    can carry target bytes goes through ``md_inline``."""
-    lines: list[str] = []
-    lines.append("# Engagement Report")
-    lines.append("")
-    lines.append(f"- Target: `{md_inline(report.get('target_root'))}`")
-    lines.append(f"- Generated: {md_inline(report.get('generated_at'))}")
-    counts = report.get("counts") or {}
-    # The ledger's counts block is a FOREIGN dict — a hand-edited
-    # ledger can carry strings where ints belong, so every value
-    # renders escaped, exactly like the keys.
-    lines.append(f"- Ledger rows: {md_inline(counts.get('rows', 0))}")
-    by_class = counts.get("by_class") \
-        if isinstance(counts.get("by_class"), dict) else {}
+def build_engagement_document(report: dict[str, Any], *, run_id: str = "", artifacts=None):
+    """Pure portable presentation of already assessed engagement evidence."""
+    from core.reporting.document import Block, Inline, ReportContext, ReportDocument, json_value
+    from core.reporting.summary import build_operator_summary
+    report = json_value(report)
+    artifacts = artifacts or []
+    context = ReportContext("engagement", run_id, target=str(report.get("target_root") or ""),
+                            generated_at=str(report.get("generated_at") or ""), artifacts=artifacts,
+                            extensions={"raptor.engagement": report, "raptor.findings_available": False,
+                                        "raptor.metrics": report.get("counts") or {}})
+    counts, policy = report.get("counts") or {}, report.get("policy") or {}
+    blocks = [Block("paragraph", text=f"Ledger rows: {counts.get('rows', 0)}")]
+    by_class = counts.get("by_class") if isinstance(counts.get("by_class"), dict) else {}
     if by_class:
-        parts = ", ".join(
-            f"{md_inline(cls)} {md_inline(by_class[cls])}"
-            for cls in sorted(by_class, key=str))
-        lines.append(f"- By class: {parts}")
-    policy = report.get("policy") or {}
-    parked_line = ("Parked" if policy.get("engagement_parked")
-                   else "Not Parked")
-    lines.append(
-        f"- Engagement policy: {parked_line}, "
-        f"{policy.get('amendment_count', 0)} amendment(s)")
+        blocks.append(Block("paragraph", text="By class: " + ", ".join(f"{k} {v}" for k, v in sorted(by_class.items(), key=lambda pair: str(pair[0])))))
+    parked = "Parked" if policy.get("engagement_parked") else "Not Parked"
+    blocks.append(Block("paragraph", text=f"Engagement policy: {parked}, {policy.get('amendment_count', 0)} amendment(s)"))
     totals = report.get("attestation_totals") or {}
     if totals:
-        parts = ", ".join(
-            f"{_title(k)} {totals[k]}" for k in sorted(totals))
-        lines.append(f"- Attestation: {parts}")
-    lines.append("")
-
-    # M8 fixed-schema verdict table.
-    lines.append("## Verdict Table")
-    lines.append("")
-    lines.append(_md_row([
-        "Artifact", "Class", "Policy Depth", "Reached Depth",
-        "Degradation Reason",
-        "Format Capability Tier (At Run Time)", "Attestation",
-    ]))
-    lines.append(_md_row(["---"] * 7))
+        blocks.append(Block("paragraph", text="Attestation: " + ", ".join(f"{_title(k)} {v}" for k, v in sorted(totals.items()))))
+    def elision(count, noun="more"):
+        return Block("paragraph", inline=[Inline("text", f"… {count} {noun} in "), Inline("code", REPORT_JSON_FILENAME), Inline("text", ".")])
     table = report.get("verdict_table") or []
+    verdict_rows = []
     for entry in table[:_MAX_TABLE_ROWS_MD]:
-        tier_cell = md_inline(
-            entry.get("format_capability_tier_at_run_time"))
+        tier = str(entry.get("format_capability_tier_at_run_time"))
         if entry.get("tier_diverged_from_current"):
-            # SF-4 provenance label: the record's claimed tier no
-            # longer matches the ledger row's CURRENT format tier.
-            # Both shown, verdict unchanged — recorded facts stay
-            # recorded, the disagreement stays visible.
-            tier_cell += (
-                " (record; current "
-                f"{md_inline(entry.get('format_capability_tier_current'))})")
-        lines.append(_md_row([
-            md_inline(entry.get("artifact_id")),
-            md_inline(entry.get("class")),
-            md_inline(entry.get("policy_depth")),
-            md_inline(entry.get("reached_depth")),
-            md_inline(_degradation_cell(
-                entry.get("degradation_reasons") or [])),
-            tier_cell,
-            _title(entry.get("attestation")),
-        ]))
+            tier += f" (record; current {entry.get('format_capability_tier_current')})"
+        verdict_rows.append([entry.get("artifact_id"), entry.get("class"), entry.get("policy_depth"), entry.get("reached_depth"),
+                             _degradation_cell(entry.get("degradation_reasons") or []), tier, _title(entry.get("attestation"))])
+    verdict_children = [Block("table", columns=["Artifact", "Class", "Policy Depth", "Reached Depth", "Degradation Reason", "Format Capability Tier (At Run Time)", "Attestation"], rows=verdict_rows)]
     if len(table) > _MAX_TABLE_ROWS_MD:
-        lines.append("")
-        lines.append(
-            f"… {len(table) - _MAX_TABLE_ROWS_MD} more row(s) in "
-            f"`{REPORT_JSON_FILENAME}`.")
-    lines.append("")
-
-    wordings = [e for e in table
-                if e.get("attestation") != ATTESTING]
+        verdict_children.append(elision(len(table) - _MAX_TABLE_ROWS_MD, "more row(s)"))
+    wordings = [e for e in table if e.get("attestation") != ATTESTING]
     if wordings:
-        lines.append("### Attestation Wording")
-        lines.append("")
-        for entry in wordings[:_MAX_WORDING_MD]:
-            lines.append(
-                f"- `{md_inline(entry.get('artifact_id'))}` — "
-                f"{md_inline(entry.get('wording'), max_chars=400)}")
+        wording_blocks = [Block("paragraph", text=f"{e.get('artifact_id')} — {e.get('wording')}") for e in wordings[:_MAX_WORDING_MD]]
         if len(wordings) > _MAX_WORDING_MD:
-            lines.append(
-                f"- … {len(wordings) - _MAX_WORDING_MD} more in "
-                f"`{REPORT_JSON_FILENAME}`.")
-        lines.append("")
-
-    # Coverage synthesis.
-    lines.append("## Coverage Synthesis")
-    lines.append("")
+            wording_blocks.append(elision(len(wordings) - _MAX_WORDING_MD))
+        verdict_children.append(Block("section", title="Attestation Wording", children=wording_blocks))
+    blocks.append(Block("section", title="Verdict Table", children=verdict_children))
     coverage = report.get("coverage") or {}
-    lines.append(md_inline(coverage.get("earned_note"), max_chars=400))
-    lines.append("")
+    coverage_blocks = [Block("paragraph", text=str(coverage.get("earned_note") or "earned coverage = review-journal verdict rows; read-coverage is an advisory stratum and never counts as earned"))]
+    def journal_counts(values):
+        return ", ".join(f"{_title(k) if k in VALID_VERDICTS else k} {v}" for k, v in sorted(values.items()))
     earned = coverage.get("earned_journal_rows_total") or {}
-    if earned:
-        # Journal verdict labels are FOREIGN until proven vocabulary
-        # (append_entry does not validate them) — unknown labels
-        # render escaped, never title-cased raw.
-        parts = ", ".join(
-            f"{_journal_label_md(k)} {earned[k]}" for k in sorted(earned))
-        lines.append(f"- Earned journal verdict rows: {parts}")
-    else:
-        lines.append("- Earned journal verdict rows: none recorded")
-    at_verdict = coverage.get("at_verdict_time_rows_total") or {}
-    if at_verdict != earned and at_verdict:
-        parts = ", ".join(
-            f"{_journal_label_md(k)} {at_verdict[k]}"
-            for k in sorted(at_verdict))
-        lines.append(
-            f"- Rows recorded at verdict time: {parts} — the live "
-            "journal differs; the divergence is per-artifact below")
-    lines.append("")
-    per_artifact = coverage.get("per_artifact") or []
-    if per_artifact:
-        lines.append(_md_row([
-            "Artifact", "Journal Rows", "Checklist Items",
-            "Reviewed (Analysed Depth)", "No-Lane Residual",
-            "Advisory Llm Extent (Incl. Reads)",
-        ]))
-        lines.append(_md_row(["---"] * 6))
-        for c in per_artifact[:_MAX_TABLE_ROWS_MD]:
-            rows_n = sum((c.get("journal_verdict_rows") or {}).values())
-            complete = "" if c.get("journal_load_complete") \
-                else " (partial load)"
-            if c.get("journal_rows_absent_since_verdict"):
-                complete += " (rows absent since verdict)"
-            elif c.get("journal_composition_diverged_since_verdict"):
-                # Rows APPEARED since the verdict (or labels shifted
-                # without any vanishing) — still a knowable
-                # disagreement between the record and the live
-                # journal, rendered, verdict unchanged.
-                complete += " (composition diverged since verdict)"
-            overlay = c.get("overlay") or {}
-            if overlay.get("consumed"):
-                cells = [
-                    str(overlay.get("checklist_items", 0)),
-                    str(overlay.get("reviewed_analysed_depth", 0)),
-                    str(overlay.get("no_lane_residual", 0)),
-                    str(overlay.get(
-                        "advisory_llm_extent_including_reads", 0)),
-                ]
-            else:
-                reason = _title_md(overlay.get("reason")
-                                   or "unavailable")
-                cells = ["—", "—", reason, "—"]
-            lines.append(_md_row(
-                [md_inline(c.get("artifact_id")),
-                 f"{rows_n}{complete}"] + cells))
-        lines.append("")
-        lines.append(
-            "Advisory columns are labeled strata only — they never "
-            "count as earned coverage (N17).")
-        lines.append("")
-
-    # Survivors.
+    coverage_blocks.append(Block("paragraph", text="Earned journal verdict rows: " + (journal_counts(earned) if earned else "none recorded")))
+    recorded = coverage.get("at_verdict_time_rows_total") or {}
+    if recorded and recorded != earned:
+        coverage_blocks.append(Block("paragraph", text="Rows recorded at verdict time: " + journal_counts(recorded) + " — the live journal differs; the divergence is per-artifact below"))
+    coverage_rows = []
+    for entry in (coverage.get("per_artifact") or [])[:_MAX_TABLE_ROWS_MD]:
+        count = sum((entry.get("journal_verdict_rows") or {}).values())
+        status = "" if entry.get("journal_load_complete") else " (partial load)"
+        if entry.get("journal_rows_absent_since_verdict"):
+            status += " (rows absent since verdict)"
+        elif entry.get("journal_composition_diverged_since_verdict"):
+            status += " (composition diverged since verdict)"
+        overlay = entry.get("overlay") or {}
+        cells = [overlay.get(k, 0) for k in ("checklist_items", "reviewed_analysed_depth", "no_lane_residual", "advisory_llm_extent_including_reads")] if overlay.get("consumed") else ["—", "—", _title(overlay.get("reason") or "unavailable"), "—"]
+        coverage_rows.append([entry.get("artifact_id"), f"{count}{status}", *cells])
+    if coverage_rows:
+        coverage_blocks.extend([Block("table", columns=["Artifact", "Journal Rows", "Checklist Items", "Reviewed (Analysed Depth)", "No-Lane Residual", "Advisory Llm Extent (Incl. Reads)"], rows=coverage_rows),
+                                Block("paragraph", text="Advisory columns are labeled strata only — they never count as earned coverage (N17).")])
+    blocks.append(Block("section", title="Coverage Synthesis", children=coverage_blocks))
     survivors = report.get("survivors") or {}
-    lines.append("## Findings And Survivors")
-    lines.append("")
-    total = survivors.get("total", 0)
-    lines.append(f"- Finding-grade survivors: {total}")
-    lines.append(f"- {md_inline(survivors.get('note'), max_chars=400)}")
-    listed = survivors.get("listed") or []
-    for item in listed[:_MAX_SURVIVORS_MD]:
-        lines.append(
-            f"  - `{md_inline(item.get('artifact_id'))}` "
-            f"`{md_inline(item.get('file'))}`:"
-            f"`{md_inline(item.get('function'))}` "
-            f"({md_inline(item.get('run'))})")
-    if total > min(len(listed), _MAX_SURVIVORS_MD):
-        shown = min(len(listed), _MAX_SURVIVORS_MD)
-        lines.append(f"  - … {total - shown} more in "
-                     f"`{REPORT_JSON_FILENAME}`.")
-    for deg in survivors.get("degraded") or []:
-        lines.append(
-            f"- Handoff degraded for "
-            f"`{md_inline(deg.get('artifact_id'))}`: "
-            f"{_title_md(deg.get('reason') or 'unloadable')} — the "
-            "survivor count above excludes this chain's handoff")
-    lines.append("")
-
-    # Verified outcomes.
+    total, listed = survivors.get("total", 0), survivors.get("listed") or []
+    survivor_blocks = [Block("paragraph", text=f"Finding-grade survivors: {total}"), Block("paragraph", text=str(survivors.get("note") or ""))]
+    if listed:
+        survivor_blocks.append(Block("table", columns=["Artifact", "File", "Function", "Run"],
+                                     rows=[[e.get("artifact_id"), e.get("file"), e.get("function"), e.get("run")] for e in listed[:_MAX_SURVIVORS_MD]]))
+    shown = min(len(listed), _MAX_SURVIVORS_MD)
+    if total > shown:
+        survivor_blocks.append(elision(total - shown))
+    for degradation in survivors.get("degraded") or []:
+        survivor_blocks.append(Block("paragraph", text=f"Handoff degraded for {degradation.get('artifact_id')}: {_title(degradation.get('reason') or 'unloadable')} — the survivor count above excludes this chain's handoff"))
+    blocks.append(Block("section", title="Findings And Survivors", children=survivor_blocks))
     outcomes = report.get("verified_outcomes") or {}
-    lines.append("## Verified Outcomes")
-    lines.append("")
+    outcome_blocks = [Block("paragraph", text=f"Oracle-verified outcomes visible to this run: {outcomes.get('count', 0)}")] if outcomes.get("consumed") else [Block("paragraph", text="Not consumed: " + _title(outcomes.get("reason") or "unavailable"))]
     if outcomes.get("consumed"):
-        lines.append(
-            f"- Oracle-verified outcomes visible to this run: "
-            f"{outcomes.get('count', 0)}")
-        by_key = outcomes.get("by_oracle_status") or {}
-        for key in sorted(by_key):
-            lines.append(f"  - {_title_md(key)}: {by_key[key]}")
-    else:
-        lines.append(
-            f"- Not consumed: "
-            f"{_title_md(outcomes.get('reason') or 'unavailable')}")
-    lines.append("")
-
-    # Residual map.
-    residual_map = report.get("residual_map") or {}
-    lines.append("## Residual Map")
-    lines.append("")
-    lines.append(
-        f"- Ledger residuals: "
-        f"{residual_map.get('ledger_residuals_total', 0)}")
-    for res in (residual_map.get("ledger_residuals")
-                or [])[:_MAX_RESIDUALS_MD]:
-        lines.append(
-            f"  - {_title_md(res.get('kind'))}: "
-            f"{md_inline(res.get('message'), max_chars=400)}")
-    shown = min(len(residual_map.get("ledger_residuals") or []),
-                _MAX_RESIDUALS_MD)
-    if residual_map.get("ledger_residuals_total", 0) > shown:
-        more = residual_map["ledger_residuals_total"] - shown
-        lines.append(f"  - … {more} more in `{REPORT_JSON_FILENAME}`.")
-    lines.append(
-        f"- Identity collisions: "
-        f"{residual_map.get('identity_collisions', 0)}")
-    parked = residual_map.get("parked_artifacts") or []
-    lines.append(f"- Parked artifacts: {len(parked)}")
-    for aid in parked[:_MAX_RESIDUALS_MD]:
-        lines.append(f"  - `{md_inline(aid)}`")
-    scored = residual_map.get("scored_low_unverified") or []
-    verified = residual_map.get("verified_low_exposure") or []
-    lines.append(
-        f"- Scored Low (unverified — never analysed at depth): "
-        f"{len(scored)}")
-    lines.append(
-        f"- Verified Low Exposure (full mechanical exposure pass "
-        f"ran): {len(verified)}")
-    amendments = residual_map.get("policy_amendments") or []
+        outcome_blocks.extend(Block("paragraph", text=f"{_title(k)}: {v}") for k, v in sorted((outcomes.get("by_oracle_status") or {}).items()))
+    blocks.append(Block("section", title="Verified Outcomes", children=outcome_blocks))
+    residual = report.get("residual_map") or {}
+    residual_rows = residual.get("ledger_residuals") or []
+    residual_blocks = [Block("paragraph", text=f"Ledger residuals: {residual.get('ledger_residuals_total', 0)}")]
+    residual_blocks.extend(Block("paragraph", text=f"{_title(e.get('kind'))}: {e.get('message')}") for e in residual_rows[:_MAX_RESIDUALS_MD])
+    shown = min(len(residual_rows), _MAX_RESIDUALS_MD)
+    if residual.get("ledger_residuals_total", 0) > shown:
+        residual_blocks.append(elision(residual["ledger_residuals_total"] - shown))
+    parked_artifacts = residual.get("parked_artifacts") or []
+    residual_blocks.extend([Block("paragraph", text=f"Identity collisions: {residual.get('identity_collisions', 0)}"), Block("paragraph", text=f"Parked artifacts: {len(parked_artifacts)}")])
+    residual_blocks.extend(Block("paragraph", text=str(a)) for a in parked_artifacts[:_MAX_RESIDUALS_MD])
+    residual_blocks.extend([Block("paragraph", text=f"Scored Low (unverified — never analysed at depth): {len(residual.get('scored_low_unverified') or [])}"),
+                            Block("paragraph", text=f"Verified Low Exposure (full mechanical exposure pass ran): {len(residual.get('verified_low_exposure') or [])}")])
+    amendments = residual.get("policy_amendments") or []
     if amendments:
-        lines.append(
-            f"- Policy amendments (last "
-            f"{min(len(amendments), _MAX_AMENDMENTS_MD)}):")
-        for a in amendments[-_MAX_AMENDMENTS_MD:]:
-            lines.append(
-                f"  - {md_inline(a.get('at'))} "
-                f"{_title_md(a.get('kind'))}")
-    lines.append("")
+        residual_blocks.append(Block("paragraph", text=f"Policy amendments (last {min(len(amendments), _MAX_AMENDMENTS_MD)}):"))
+        residual_blocks.extend(Block("paragraph", text=f"{a.get('at')} {_title(a.get('kind'))}") for a in amendments[-_MAX_AMENDMENTS_MD:])
+    blocks.extend([Block("section", title="Residual Map", children=residual_blocks), Block("list", title="Next Steps", items=[
+        "Validate survivors: run /validate on the target with the recorded survivor list.",
+        "Re-render visual maps: libexec/raptor-render-diagrams <out-dir>.",
+        "Cross-run project view: libexec/raptor-project-manager report (and correlate).",
+        "Coverage residual drill-down: libexec/raptor-coverage-summary <dir> --residual.",
+    ])])
+    return context, ReportDocument("Engagement Report", "engagement", context.snapshot_id,
+                                   metadata={"Target": context.target, "Generated": context.generated_at}, blocks=blocks,
+                                   extensions={"raptor.summary": build_operator_summary(context).to_dict(), "raptor.artifacts": artifacts})
 
-    lines.append("## Next Steps")
-    lines.append("")
-    lines.append(
-        "- Validate survivors: run /validate on the target with the "
-        "recorded survivor list.")
-    lines.append(
-        "- Re-render visual maps: `libexec/raptor-render-diagrams "
-        "<out-dir>`.")
-    lines.append(
-        "- Cross-run project view: `libexec/raptor-project-manager "
-        "report` (and `correlate`).")
-    lines.append(
-        "- Coverage residual drill-down: `libexec/raptor-coverage-"
-        "summary <dir> --residual`.")
-    lines.append("")
-    return "\n".join(lines)
+
+def render_markdown(report: dict[str, Any]) -> str:
+    """Compatibility renderer over the portable engagement document."""
+    from core.reporting.renderers import render_document
+    return render_document(build_engagement_document(report)[1]).content.decode("utf-8")
 
 
 # ── Terminal summary (bounded, escaped) ──────────────────────────────
@@ -1024,19 +857,35 @@ def render_summary_lines(report: dict[str, Any]) -> list[str]:
 def write_report(
     output_dir: Path | str,
     report: dict[str, Any] | None = None,
+    *, report_options=None, reporting_sink=None,
 ) -> tuple[Path, Path]:
     """Atomically write both report artifacts (building the document
     first unless a prebuilt one is passed); returns
     ``(json_path, md_path)``."""
     out = Path(output_dir)
+    if report_options is not None:
+        report_options = report_options.validate()
     if report is None:
         report = build_report(out)
-    markdown = render_markdown(report)
+    from dataclasses import replace
+    from core.reporting.options import ReportOptions
+    from core.reporting.service import capture_failure_summary, complete_reporting
+    options = (report_options or ReportOptions(formats=("markdown", "json"))).validate()
+    options = replace(options, filenames=tuple({"json": "engagement-summary.json", **dict(options.filenames)}.items())).validate()
     json_path = out / REPORT_JSON_FILENAME
     md_path = out / REPORT_MD_FILENAME
+    artifacts = [{"path": str(json_path)}, {"path": str(out / "ledger.json")}]
     with artifact_lock(json_path, subject="engagement report"):
         save_json(json_path, report)
-        write_text_atomically(md_path, markdown)
+        try:
+            context, document = build_engagement_document(report, run_id=out.name, artifacts=artifacts)
+        except (ValueError, TypeError, OSError) as exc:
+            reporting = capture_failure_summary("engagement", out.name, str(report.get("target_root") or ""), out,
+                                                 cause=exc, artifacts=artifacts, stem="engagement-report")
+        else:
+            reporting = complete_reporting(context, out, document=document, stem="engagement-report", options=options)
+    if reporting_sink is not None:
+        reporting_sink.append(reporting)
     return json_path, md_path
 
 
@@ -1049,6 +898,7 @@ __all__ = [
     "REPORT_MD_FILENAME",
     "REPORT_SCHEMA",
     "build_report",
+    "build_engagement_document",
     "render_markdown",
     "render_summary_lines",
     "write_report",

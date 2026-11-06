@@ -187,8 +187,10 @@ def _graph_path_for_directory(out_dir: Path, target: str | None) -> Path | None:
     return graph_path if graph_path.exists() else None
 
 
-def render_directory(out_dir: Path, target: str | None = None) -> str:
+def render_directory(out_dir: Path, target: str | None = None, *, artifact_loader=None,
+                     allow_graph_fallback: bool = True) -> str:
     out_dir = Path(out_dir)
+    load_artifact = artifact_loader or _load_json
     sections: list[str] = []
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -221,13 +223,13 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     # render_directory() before the per-section try/except degradation
     # every other block gets.
     if findings_path.exists():
-        fdata = _load_json(findings_path)
+        fdata = load_artifact(findings_path)
         if fdata and isinstance(fdata, dict):
             f_list = fdata.get("findings")
             if isinstance(f_list, list):
                 summary_findings = [r for r in f_list if isinstance(r, dict)]
     elif orch_path_early.exists():
-        odata = _load_json(orch_path_early)
+        odata = load_artifact(orch_path_early)
         if odata and isinstance(odata, dict):
             results = odata.get("results")
             if isinstance(results, list):
@@ -259,7 +261,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         if not fpath.exists():
             continue
         try:
-            data = _load_json(fpath)
+            data = load_artifact(fpath)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -311,7 +313,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         except Exception as exc:  # noqa: BLE001
             sections.append(_section(title, f"> Could not render `{fname}`: {_err(exc)}"))
 
-    if not context_map_rendered:
+    if not context_map_rendered and allow_graph_fallback:
         try:
             from core.understand_graph import build_context_map
             # The persistent graph serves whichever snapshot matches
@@ -350,7 +352,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     eo_path = out_dir / "edge-obligations.json"
     if eo_path.exists():
         try:
-            data = _load_json(eo_path)
+            data = load_artifact(eo_path)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -371,7 +373,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         trace_sections: list[str] = []
         for tf in trace_files:
             try:
-                data = _load_json(tf)
+                data = load_artifact(tf)
                 if data is None:
                     msg = "failed to parse JSON"
                     raise ValueError(msg)
@@ -408,15 +410,15 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     tree_path = out_dir / "attack-tree.json"
     if tree_path.exists():
         try:
-            data = _load_json(tree_path)
+            data = load_artifact(tree_path)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
 
             # Load companion files for cross-referencing
-            ap_data = _load_optional_list(out_dir / "attack-paths.json")
-            disproven_data = _load_disproven(out_dir / "disproven.json")
-            hyp_data = _load_optional_list(out_dir / "hypotheses.json")
+            ap_data = _load_optional_list(out_dir / "attack-paths.json", loader=load_artifact)
+            disproven_data = _load_disproven(out_dir / "disproven.json", loader=load_artifact)
+            hyp_data = _load_optional_list(out_dir / "hypotheses.json", loader=load_artifact)
 
             enriched = any([ap_data, disproven_data, hyp_data])
             note = " _(enriched with proximity scores and disproven reasons)_" if enriched else ""
@@ -438,7 +440,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     hyp_path = out_dir / "hypotheses.json"
     if hyp_path.exists():
         try:
-            raw = _load_json(hyp_path)
+            raw = load_artifact(hyp_path)
             if raw is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -455,7 +457,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     graph_paths_path = out_dir / "graph-priority-paths.json"
     if graph_paths_path.exists():
         try:
-            data = _load_json(graph_paths_path)
+            data = load_artifact(graph_paths_path)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -485,7 +487,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     paths_path = out_dir / "attack-paths.json"
     if paths_path.exists():
         try:
-            data = _load_json(paths_path)
+            data = load_artifact(paths_path)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -504,7 +506,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         if not diff_path.exists():
             continue
         try:
-            data = _load_json(diff_path)
+            data = load_artifact(diff_path)
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
@@ -522,7 +524,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     return "\n".join(sections)
 
 
-def _load_optional_list(path: Path) -> list | None:
+def _load_optional_list(path: Path, *, loader=None) -> list | None:
     """Load a JSON file that contains a list, either bare or in a dict envelope.
 
     Handles bare lists ([...]) and dict envelopes. Envelopes are
@@ -533,16 +535,16 @@ def _load_optional_list(path: Path) -> list | None:
     Returns None if the file is missing, unreadable, or no list can
     be found.
     """
-    data = _load_json(path)
+    data = (loader or _load_json)(path)
     if data is None:
         return None
     return unwrap_list(data, keys=("paths", "attack_paths", "hypotheses"))
 
 
-def _load_disproven(path: Path) -> list | None:
+def _load_disproven(path: Path, *, loader=None) -> list | None:
     """Load disproven.json — unwraps the {'disproven': [...]} envelope
     through the shared discipline (single-list fallback included)."""
-    data = _load_json(path)
+    data = (loader or _load_json)(path)
     if data is None:
         return None
     return unwrap_list(data, keys=("disproven",))
