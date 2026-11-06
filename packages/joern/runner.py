@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.atomic_fs import rmtree_hardened
+from core.run.scratch import keepalive_register, keepalive_unregister
 
 from core.analysis._joern_lines import (
     FLOW_RECORD_CHUNK_CHARS,
@@ -735,6 +736,48 @@ def _build_cpg_admitted(
     frontend_args: FrontendArgs | None = None,
     exclude_dirs=(),
 ) -> JoernCPG:
+    """Transfer successful private builds; reclaim all failed preparations."""
+    owned = None
+    identity = None
+    if output_dir is None:
+        from .client import runtime_base
+        owned = Path(tempfile.mkdtemp(prefix="raptor-joern-cpg-", dir=runtime_base())).absolute()
+        output_dir = owned
+    transferred = False
+    cpg = None
+    try:
+        if owned is not None:
+            info = owned.lstat()
+            identity = (info.st_dev, info.st_ino)
+            keepalive_register(owned)
+        cpg = _build_cpg_into(
+            target, languages=languages, output_dir=output_dir, timeout=timeout,
+            subprocess_runner=subprocess_runner, on_progress=on_progress,
+            heap_mb=heap_mb, frontend_args=frontend_args, exclude_dirs=exclude_dirs,
+        )
+        if owned is not None:
+            cpg.owned_dir, cpg.owned_dir_identity = owned, identity
+            transferred = not cpg.build_failed and cpg.exists()
+        return cpg
+    finally:
+        if owned is not None and not transferred:
+            if _cleanup_owned_cpg_root(owned, identity, preserve_error=sys.exc_info()[0] is not None):
+                if cpg is not None:
+                    cpg.owned_dir_identity = None
+
+
+def _build_cpg_into(
+    target: Path,
+    *,
+    languages: set[str] | None = None,
+    output_dir: Path | None = None,
+    timeout: int = 600,
+    subprocess_runner=None,
+    on_progress: Callable | None = None,
+    heap_mb: int | None = None,
+    frontend_args: FrontendArgs | None = None,
+    exclude_dirs=(),
+) -> JoernCPG:
     """:func:`build_cpg`'s body, running under an already-admitted
     heap grant (``heap_mb`` here is the GRANTED -Xmx)."""
     target = Path(target).resolve()
@@ -742,16 +785,6 @@ def _build_cpg_admitted(
         msg = f"target must be a directory: {target}"
         raise ValueError(msg)
 
-    if output_dir is None:
-        # Reaper-visible scratch: register the prefix so a dir
-        # orphaned by a crashed run (build succeeded, caller never
-        # reached cleanup_cpg) is reclaimed by a later run's sweep in
-        # the same process family, instead of accumulating under
-        # /tmp forever.
-        from core.run import tmp_reaper
-        tmp_reaper.register_dir_prefix("raptor-joern-cpg-")
-        from .client import runtime_base
-        output_dir = Path(tempfile.mkdtemp(prefix="raptor-joern-cpg-", dir=runtime_base()))
     output_dir.mkdir(parents=True, exist_ok=True)
     # Absolute from here on: output_dir feeds joern-parse argv
     # (--output, -J-Djava.io.tmpdir) AND is the cwd pin for the bare
@@ -1155,119 +1188,122 @@ def _run_query_admitted(
     # after the run. The cache remains a read-only input.
     try:
         from .client import runtime_base
-        query_dir = Path(tempfile.mkdtemp(prefix="raptor-query-", dir=runtime_base()))
+        query_dir = Path(tempfile.mkdtemp(prefix="raptor-query-", dir=runtime_base())).absolute()
     except OSError as e:
         return JoernResult(
             query=query, errors=[f"cannot create query scratch dir: {e}"])
 
-    from .artifacts import FrozenGraph
+    identity = None
     try:
-        frozen = FrozenGraph.copy(cpg.path, directory=query_dir, expected=cpg.content_digest)
-    except (OSError, ValueError) as error:
-        rmtree_hardened(query_dir)
-        return JoernResult(query=query, errors=[f"cannot pin query graph: {error}"])
-
-    # joern's CLI flag surface drifts across releases: `--script-content`
-    # does not exist in 4.x, and `--import` there means "compile .sc onto
-    # the classpath", not "load this CPG".  The stable interface across
-    # versions is `--script` plus the importCpg predef, so wrap every
-    # query in a temporary script that loads the CPG itself.
-    wrapper = (
-        f'importCpg("{_escape_scala_string(str(frozen.path))}")\n'
-        f"{script_body}\n"
-    )
-    wrapper_path = query_dir / "query.sc"
-    try:
-        wrapper_path.write_text(wrapper)
-    except OSError as e:
-        rmtree_hardened(query_dir)
-        return JoernResult(query=query, errors=[f"cannot write query script: {e}"])
-
-    # Point the driver JVM's java.io.tmpdir at the per-query dir (a
-    # writable surface inside the sandbox grant, removed below).
-    # The environment shim below also reaches nested frontend JVMs,
-    # which do not inherit the driver's command-line system properties.
-    cmd = [
-        joern,
-        f"-J-Xmx{heap_mb}m",
-        f"-J-Djava.io.tmpdir={query_dir}",
-        "--script", str(wrapper_path),
-    ]
-    cmd = _jvm_scratch_command(cmd, query_dir)
-
-    runner = subprocess_runner or _default_sandbox_runner()
-
-    start = time.monotonic()
-    try:
+        info = query_dir.lstat()
+        identity = (info.st_dev, info.st_ino)
+        keepalive_register(query_dir)
+        from .artifacts import FrozenGraph
         try:
-            # Only per-query scratch is writable. The cached graph is
-            # separately declared as a read-only tool input.
-            proc = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                pass_fds=reservation_fds(),
-                readable_paths=reservation_paths(),
-                target=str(cpg.target),
-                output=str(query_dir),
-                cwd=str(query_dir),
-                block_network=True,
-                tool_paths=joern_tool_paths(),
-                # This single wall covers importCpg + the query solve,
-                # both multi-threaded JVM work: keep RLIMIT_CPU (which
-                # sums across threads) above wall x CPUs so the wall
-                # stays the binding limit.
-                limits=sandbox_cpu_limits(timeout),
+            frozen = FrozenGraph.copy(cpg.path, directory=query_dir, expected=cpg.content_digest)
+        except (OSError, ValueError) as error:
+            return JoernResult(query=query, errors=[f"cannot pin query graph: {error}"])
+
+        # joern's CLI flag surface drifts across releases: `--script-content`
+        # does not exist in 4.x, and `--import` there means "compile .sc onto
+        # the classpath", not "load this CPG".  The stable interface across
+        # versions is `--script` plus the importCpg predef, so wrap every
+        # query in a temporary script that loads the CPG itself.
+        wrapper = (
+            f'importCpg("{_escape_scala_string(str(frozen.path))}")\n'
+            f"{script_body}\n"
+        )
+        wrapper_path = query_dir / "query.sc"
+        try:
+            wrapper_path.write_text(wrapper)
+        except OSError as e:
+            return JoernResult(query=query, errors=[f"cannot write query script: {e}"])
+
+        # Point the driver JVM's java.io.tmpdir at the per-query dir (a
+        # writable surface inside the sandbox grant, removed below).
+        # The environment shim below also reaches nested frontend JVMs,
+        # which do not inherit the driver's command-line system properties.
+        cmd = [
+            joern,
+            f"-J-Xmx{heap_mb}m",
+            f"-J-Djava.io.tmpdir={query_dir}",
+            "--script", str(wrapper_path),
+        ]
+        cmd = _jvm_scratch_command(cmd, query_dir)
+
+        runner = subprocess_runner or _default_sandbox_runner()
+
+        start = time.monotonic()
+        try:
+            try:
+                # Only per-query scratch is writable. The cached graph is
+                # separately declared as a read-only tool input.
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    pass_fds=reservation_fds(),
+                    readable_paths=reservation_paths(),
+                    target=str(cpg.target),
+                    output=str(query_dir),
+                    cwd=str(query_dir),
+                    block_network=True,
+                    tool_paths=joern_tool_paths(),
+                    # This single wall covers importCpg + the query solve,
+                    # both multi-threaded JVM work: keep RLIMIT_CPU (which
+                    # sums across threads) above wall x CPUs so the wall
+                    # stays the binding limit.
+                    limits=sandbox_cpu_limits(timeout),
+                )
+            except TypeError as exc:
+                if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
+                    return JoernResult(query=query, errors=[f"sandbox rejected query: {exc}"])
+                # Runner without the sandbox kwargs (injected stubs,
+                # bare subprocess.run). Still pass an explicit cwd:
+                # importCpg copies the CPG into a `workspace/` under the
+                # process cwd — without this the copies landed in
+                # whatever directory the CALLER happened to run from
+                # (observed: a workspace/ full of CPG copies in the
+                # repo root).
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    pass_fds=reservation_fds(),
+                    cwd=str(query_dir),
+                )
+        except subprocess.TimeoutExpired:
+            return JoernResult(
+                query=query,
+                errors=[f"query timed out after {timeout}s"],
             )
-        except TypeError as exc:
-            if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
-                return JoernResult(query=query, errors=[f"sandbox rejected query: {exc}"])
-            # Runner without the sandbox kwargs (injected stubs,
-            # bare subprocess.run). Still pass an explicit cwd:
-            # importCpg copies the CPG into a `workspace/` under the
-            # process cwd — without this the copies landed in
-            # whatever directory the CALLER happened to run from
-            # (observed: a workspace/ full of CPG copies in the
-            # repo root).
-            proc = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                pass_fds=reservation_fds(),
-                cwd=str(query_dir),
-            )
-    except subprocess.TimeoutExpired:
+        except OSError as e:
+            return JoernResult(query=query, errors=[str(e)])
+        elapsed = int((time.monotonic() - start) * 1000)
+
+        flows, errors = _parse_output(proc.stdout or "")
+        from .server import _has_scala_error
+        if _has_scala_error((proc.stdout or "") + "\n" + (proc.stderr or "")):
+            errors.append("Joern query reported a Scala compilation or runtime error")
+        if proc.stderr:
+            stderr_errors = _parse_errors(proc.stderr)
+            errors.extend(stderr_errors)
+
+        if proc.returncode != 0 and not errors:
+            errors.append(f"joern exited with code {proc.returncode}")
+
         return JoernResult(
             query=query,
-            errors=[f"query timed out after {timeout}s"],
+            flows=flows,
+            raw_output=proc.stdout or "",
+            errors=errors,
+            elapsed_ms=elapsed,
         )
-    except OSError as e:
-        return JoernResult(query=query, errors=[str(e)])
+
     finally:
-        rmtree_hardened(query_dir)
-
-    elapsed = int((time.monotonic() - start) * 1000)
-
-    flows, errors = _parse_output(proc.stdout or "")
-    from .server import _has_scala_error
-    if _has_scala_error((proc.stdout or "") + "\n" + (proc.stderr or "")):
-        errors.append("Joern query reported a Scala compilation or runtime error")
-    if proc.stderr:
-        stderr_errors = _parse_errors(proc.stderr)
-        errors.extend(stderr_errors)
-
-    if proc.returncode != 0 and not errors:
-        errors.append(f"joern exited with code {proc.returncode}")
-
-    return JoernResult(
-        query=query,
-        flows=flows,
-        raw_output=proc.stdout or "",
-        errors=errors,
-        elapsed_ms=elapsed,
-    )
+        _cleanup_owned_cpg_root(query_dir, identity, preserve_error=sys.exc_info()[0] is not None)
 
 
 def run_taint_query_result(
@@ -2264,9 +2300,14 @@ def build_cpg_cached(
         # promote atomically. Readers (load_cached_cpg holds no lock)
         # never observe a half-written cpg.bin in the slot.
         build_dir = Path(tempfile.mkdtemp(
-            prefix=_CPG_BUILD_DIR_PREFIX, dir=cache_dir))
+            prefix=_CPG_BUILD_DIR_PREFIX, dir=cache_dir)).absolute()
         keep = False
+        identity = None
+        cpg = None
         try:
+            info = build_dir.lstat()
+            identity = (info.st_dev, info.st_ino)
+            keepalive_register(build_dir)
             cpg = build_cpg(
                 target,
                 languages=languages,
@@ -2279,6 +2320,8 @@ def build_cpg_cached(
                 frontend_args=frontend_args,
                 exclude_dirs=combined_excludes,
             )
+
+            cpg.owned_dir, cpg.owned_dir_identity = build_dir, identity
 
             # Cache admission gates. A manifest is a promise that
             # cpg.bin is a complete graph for content_hash, so the
@@ -2341,11 +2384,49 @@ def build_cpg_cached(
             )
         finally:
             if not keep:
-                rmtree_hardened(build_dir)
+                if _cleanup_owned_cpg_root(build_dir, identity, preserve_error=sys.exc_info()[0] is not None):
+                    if cpg is not None:
+                        cpg.owned_dir_identity = None
+
+
+def _cleanup_owned_cpg_root(path: Path, identity: tuple[int, int] | None, *, preserve_error=False) -> bool:
+    """Best-effort teardown of an allocation, with original-error precedence."""
+    interrupted = None
+    try:
+        keepalive_unregister(path)
+    except BaseException as exc:
+        logger.warning("Joern scratch keepalive teardown failed for %s", path, exc_info=True)
+        if not isinstance(exc, Exception):
+            interrupted = exc
+    try:
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            return True
+        if (identity is None or not stat.S_ISDIR(current.st_mode)
+                or (current.st_dev, current.st_ino) != identity):
+            logger.warning("Joern scratch root changed before cleanup: %s", path)
+            return False
+        if not rmtree_hardened(path):
+            logger.warning("Joern scratch retained after failed removal: %s", path)
+            return False
+        return True
+    except BaseException as exc:
+        logger.warning("Joern scratch removal failed for %s", path, exc_info=True)
+        if not isinstance(exc, Exception) and interrupted is None:
+            interrupted = exc
+        return False
+    finally:
+        if interrupted is not None and not preserve_error:
+            raise interrupted
 
 
 def cleanup_cpg(cpg: JoernCPG) -> None:
-    """Remove the CPG binary from disk, plus the ``workspace/`` copy
+    """Reclaim an owned scratch tree, or selectively remove legacy outputs.
+
+    Explicit ownership receipts cover JVM scratch even when cpg.bin was
+    removed or never produced. Cached graphs carry no ownership receipt.
+    Legacy handles remove the CPG binary and the ``workspace/`` copy
     ``importCpg`` leaves next to it.
 
     ``run_query`` executed joern with cwd = the CPG's directory, and
@@ -2361,6 +2442,14 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
     CPG lives in a shared cache slot, a sibling session's query can
     be live in its own scratch dir at this instant — an unconditional
     sweep would delete the cwd/tmpdir out from under it mid-query."""
+    if cpg.owned_dir is not None:
+        if cpg.path.parent.absolute() != cpg.owned_dir.absolute():
+            logger.warning("Joern graph escaped its owned scratch root: %s", cpg.path)
+            return
+        if _cleanup_owned_cpg_root(cpg.owned_dir, cpg.owned_dir_identity,
+                                   preserve_error=sys.exc_info()[0] is not None):
+            cpg.owned_dir_identity = None
+        return
     try:
         cpg.path.unlink(missing_ok=True)
         parent = cpg.path.parent

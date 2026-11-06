@@ -96,8 +96,11 @@ class FrozenGraph:
             destination.chmod(0o400)
             return cls(destination, value)
         except BaseException:
-            if not rmtree_hardened(root):
-                logger.warning("incomplete frozen graph cleanup at %r", root)
+            try:
+                if not rmtree_hardened(root):
+                    logger.warning("incomplete frozen graph cleanup at %r", root)
+            except BaseException:
+                logger.warning("frozen graph cleanup failed at %r", root, exc_info=True)
             raise
 
     def close(self) -> bool:

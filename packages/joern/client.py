@@ -104,8 +104,7 @@ class GraphClient(JoernServer):
                 return False
             return self.bind_graph(graph, timeout=timeout)
         finally:
-            if graph.exists():
-                cleanup_cpg(graph)
+            cleanup_cpg(graph)
 
     def stop(self):
         return self._close_lease(wait=True)

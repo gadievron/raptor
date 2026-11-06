@@ -38,6 +38,11 @@ class JoernCPG:
     # Expected bytes from the cache publication receipt. Workers copy and
     # verify these bytes before import, rather than retaining a mutable slot.
     content_digest: str | None = None
+    # Only automatically allocated trees transfer teardown ownership. Cache
+    # hits and caller-selected output directories never acquire this receipt.
+    owned_dir: Path | None = field(default=None, repr=False, compare=False)
+    # Clear after removal: a later retry must not adopt a reused pathname.
+    owned_dir_identity: tuple[int, int] | None = field(default=None, repr=False, compare=False)
 
     def exists(self) -> bool:
         return self.path.exists()

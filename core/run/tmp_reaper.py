@@ -130,6 +130,9 @@ _DIR_PREFIXES = (
     # rmtree'd on the runner's exit path, so hard-killed Joern builds
     # leak one per invocation — observed accumulating by the hundreds.
     "raptor-joern-cpg-",
+    # Private one-shot query graphs/workspaces, kept alive until the
+    # query runner releases them; reclaim copies stranded by SIGKILL.
+    "raptor-query-",
     # cve-diff working dirs (packages/cve_diff cli TemporaryDirectory
     # and the bench harness's cve-diff-bench- mkdtemp — both match
     # this prefix); cleaned on exit, leaked on SIGKILL/OOM.

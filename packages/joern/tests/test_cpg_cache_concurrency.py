@@ -122,10 +122,13 @@ class TestBuildIsPrivateThenPromoted:
 
         result = build_cpg_cached(
             target, cache, subprocess_runner=garbage_runner)
-        assert not result.build_failed
-        assert result.path.exists()
-        assert result.path.parent.name.startswith(_CPG_BUILD_DIR_PREFIX)
-        assert not (_slot(cache, target) / "manifest.json").exists()
+        try:
+            assert not result.build_failed
+            assert result.path.exists()
+            assert result.path.parent.name.startswith(_CPG_BUILD_DIR_PREFIX)
+            assert not (_slot(cache, target) / "manifest.json").exists()
+        finally:
+            runner_mod.cleanup_cpg(result)
 
 
 class TestSlotLockSerialises:

@@ -1295,9 +1295,12 @@ class TestFailedBuildCacheGate:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         cpg = build_cpg_cached(target, cache, subprocess_runner=runner)
-        assert cpg.exists()  # this run may still use the build
-        slot = cpg_cache_slot_name((), target=target)
-        assert not (cache / slot / "manifest.json").exists()
+        try:
+            assert cpg.exists()  # this run may still use the build
+            slot = cpg_cache_slot_name((), target=target)
+            assert not (cache / slot / "manifest.json").exists()
+        finally:
+            cleanup_cpg(cpg)
 
     def test_valid_build_still_manifested(self, tmp_path):
         # Two-direction: a build whose tail manifest parses is cached.
