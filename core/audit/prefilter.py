@@ -953,13 +953,8 @@ def _is_trivially_clean(
     callees_list = callees or []
     if callees_list:
         callee_names = {c.get("name", "") for c in callees_list}
-        if callee_names & (
-            _DANGEROUS_C_APIS | _DANGEROUS_GO_CALLEES
-            | _DANGEROUS_RUST_CALLEES | _DANGEROUS_PHP_CALLEES
-            | _DANGEROUS_JAVA_CALLEES | _DANGEROUS_JS_CALLEES
-            | _DANGEROUS_LUA_CALLEES | _DANGEROUS_PERL_CALLEES
-            | _DANGEROUS_PY_APIS | extra_dangerous
-        ):
+        if (not callee_names.isdisjoint(_WRAPPER_DANGEROUS_CALLEES)
+                or not callee_names.isdisjoint(extra_dangerous)):
             return False
 
     if result.sloc > 15:
