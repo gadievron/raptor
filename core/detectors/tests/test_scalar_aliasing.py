@@ -222,3 +222,34 @@ def test_no_proofs_require_no_source_line_scan():
             pytest.fail("no-proof input needs no line numbers")
 
     assert scalar_access_proofs({"inner": []}, UnscannedSource(b"\n" * 100_000)) == []
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_wide_ast_is_refused_before_children_are_queued(monkeypatch, nested):
+    from core.detectors import scalar_aliasing as detector
+
+    class UnqueuedChildren(list):
+        def __iter__(self):
+            pytest.fail("over-budget children must not be materialized in the pending stack")
+
+    children = UnqueuedChildren([{}] * 8)
+    ast = {"inner": children}
+    if nested:
+        ast = {"inner": [{}, ast]}  # A sibling is already pending.
+    monkeypatch.setattr(detector, "_MAX_NODES", 8)
+    with pytest.raises(detector._Unsupported, match="AST shape/cap"):
+        scalar_access_proofs(ast, b"abc")
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_ast_admission_counts_pending_siblings_at_node_budget_boundary(monkeypatch, extra):
+    from core.detectors import scalar_aliasing as detector
+
+    # Root, one pending sibling, a branch and its children all consume nodes.
+    ast = {"inner": [{}, {"inner": [{}] * (5 + extra)}]}
+    monkeypatch.setattr(detector, "_MAX_NODES", 8)
+    if extra > 0:
+        with pytest.raises(detector._Unsupported, match="AST shape/cap"):
+            scalar_access_proofs(ast, b"abc")
+    else:
+        assert scalar_access_proofs(ast, b"abc") == []

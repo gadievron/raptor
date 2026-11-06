@@ -219,6 +219,10 @@ def scalar_access_proofs(ast: Any, source: bytes) -> list[dict[str, Any]]:
         children = node.get("inner", [])
         if not isinstance(children, list):
             raise _Unsupported("AST children")
+        # Every queued child will consume a node. Refuse a known overflow
+        # before allocating one pending tuple per child of a wide AST node.
+        if count + len(pending) + len(children) > _MAX_NODES:
+            raise _Unsupported("AST shape/cap")
         if node.get("kind") == "FunctionDecl":
             functions.append(node)
         pending.extend((child, depth + 1) for child in children)
