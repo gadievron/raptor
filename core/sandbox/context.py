@@ -4561,7 +4561,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         if (not RaptorConfig.is_dangerous_env_name(k)
                             or _safe_git.get(k) == v)
                     }
-                    logger.info(
+                    # Inherited temp roots are routinely replaced by private
+                    # scratch below; keep that per-child cleanup out of INFO.
+                    # Other stripped controls retain their existing visibility.
+                    _log_strip = (logger.debug if set(_stripped) <= {"TMPDIR", "TEMP", "TMP"}
+                                  else logger.info)
+                    _log_strip(
                         "Sandbox: strict_env=True — stripped DANGEROUS_ENV_VARS from caller env: %s", sorted(_stripped)
                     )
 
