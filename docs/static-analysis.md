@@ -525,6 +525,12 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+CodeQL summaries retain usable findings when neighboring result or dataflow
+metadata is malformed, and warn when some metadata could not be counted.
+When a finding omits severity, its own query's default is used. Query
+inventory counts include extension packs and count reported rules rather
+than proving each query executed.
+
 Coccinelle output is handled one match at a time. Invalid optional coordinates
 remain unknown without discarding a match with a usable source path, and
 malformed rows do not discard neighboring findings. Unusable result rows

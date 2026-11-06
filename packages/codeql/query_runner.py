@@ -13,8 +13,9 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 # `os.environ["RAPTOR_DIR"]` (no fallback) is the canonical project
 # root marker — see CLAUDE.md "Python path safety"; a KeyError surfaces
@@ -32,6 +33,8 @@ from packages.codeql.temp_env import temporary_command
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
+
+_SARIF_DATA_UNSET = object()
 
 # Tightened from `[\w/.-]+\S*` which accepted any path-like
 # blob (path-traversal `../../etc/passwd`, multi-segment
@@ -1653,88 +1656,100 @@ class QueryRunner:
         )
 
     def get_sarif_summary(self, sarif_path: Path,
-                          *, sarif_data: dict | None = None) -> dict:
+                          *, sarif_data: object = _SARIF_DATA_UNSET) -> dict:
+        """Summarize usable rows without discarding neighboring valid data.
+
+        Omit ``sarif_data`` to load through the shared bounded reader. An
+        explicit dict reuses a prior decode; explicit None records a failed
+        prior load and never reopens that input. Query counts describe unique
+        named descriptors per tool component, not proof of query execution.
         """
-        Extract summary information from SARIF file.
+        from core.sarif.parser import (
+            ResultRuleResolver, _as_dict, _result_rule_id, load_sarif, rule_default_level,
+        )
 
-        `sarif_data` (optional) is a pre-parsed SARIF dict. When the
-        caller has already loaded the file (e.g. agent.print_summary
-        loading it once and sharing across summary + example
-        extraction), pass it here to avoid the redundant parse.
-        Defaults to None → load the file ourselves (preserves the
-        standalone-call API).
-
-        Returns:
-            Dict with summary statistics
-        """
-        try:
-            if sarif_data is None:
-                from core.sarif.parser import load_sarif
-                sarif_data = load_sarif(sarif_path)
-            if not sarif_data:
-                return {}
-
-            summary = {
-                "total_findings": 0,
-                "by_severity": {"error": 0, "warning": 0, "note": 0},
-                "by_rule": {},
-                "queries_executed": 0,
-                "dataflow_paths": 0,
-                "total_dataflow_steps": 0,
-            }
-
-            for run in sarif_data.get("runs", []):
-                # Count findings by severity
-                for result in run.get("results", []):
-                    summary["total_findings"] += 1  # type: ignore[operator]
-
-                    # Coerce to str — SARIF spec says `level` is a
-                    # string enum, but malformed emitters
-                    # occasionally produce ints (numeric severity)
-                    # or None. Pre-fix `summary["by_severity"][level]`
-                    # used the value as a dict key, so a dict-typed
-                    # tag (some custom queries return rich objects)
-                    # raised TypeError. None merged into one bucket
-                    # with the literal string "None" — confusing
-                    # later report consumers. Coerce defensively.
-                    raw_level = result.get("level", "warning")
-                    level = str(raw_level) if raw_level is not None else "warning"
-                    summary["by_severity"][level] = summary["by_severity"].get(level, 0) + 1  # type: ignore[index, attr-defined]
-
-                    # Count by rule
-                    rule_id = result.get("ruleId", "unknown")
-                    summary["by_rule"][rule_id] = summary["by_rule"].get(rule_id, 0) + 1  # type: ignore[index, attr-defined]
-
-                    # Count dataflow paths. Pre-fix `+= 1` per
-                    # result conflated "findings WITH dataflow"
-                    # with "number of actual dataflow paths" —
-                    # a single finding often has multiple
-                    # codeFlows (alternative paths reaching the
-                    # same sink), each of which is a distinct
-                    # exploitable path. Operators reading the
-                    # summary saw "dataflow_paths: 12" and
-                    # assumed 12 distinct paths to triage; in
-                    # reality there could be 12 findings with
-                    # 30+ paths between them. Count one per
-                    # codeFlow so the metric matches the name.
-                    code_flows = result.get("codeFlows", [])
-                    summary["dataflow_paths"] += len(code_flows)  # type: ignore[operator]
-                    for flow in code_flows:
-                        for thread_flow in flow.get("threadFlows", []):
-                            locations = thread_flow.get("locations", [])
-                            summary["total_dataflow_steps"] += len(locations)  # type: ignore[operator]
-
-                # Count queries
-                tool = run.get("tool", {})
-                driver = tool.get("driver", {})
-                rules = driver.get("rules", [])
-                summary["queries_executed"] += len(rules)  # type: ignore[operator]
-
-            return summary
-
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to generate SARIF summary: %s", e)
+        if sarif_data is _SARIF_DATA_UNSET:
+            sarif_data = load_sarif(sarif_path)
+        if not isinstance(sarif_data, dict):
             return {}
+        if not isinstance(sarif_data.get("runs"), list):
+            logger.warning("CodeQL SARIF summary unavailable: report has no runs array")
+            return {}
+
+        summary: dict[str, Any] = {
+            "total_findings": 0,
+            "by_severity": {"error": 0, "warning": 0, "note": 0},
+            "by_rule": {},
+            "queries_executed": 0,
+            "dataflow_paths": 0,
+            "total_dataflow_steps": 0,
+            "sarif_input_errors": 0,
+        }
+
+        def rows(container, key):
+            value = container.get(key, [])
+            if not isinstance(value, list):
+                summary["sarif_input_errors"] += 1
+                return
+            for row in value:
+                if isinstance(row, dict):
+                    yield row
+                else:
+                    summary["sarif_input_errors"] += 1
+
+        for run in rows(sarif_data, "runs"):
+            resolver = None
+            for result in rows(run, "results"):
+                summary["total_findings"] += 1
+                level, rule_id = result.get("level"), result.get("ruleId")
+                needs_level = not isinstance(level, str) or not level
+                needs_id = not isinstance(rule_id, str) or not rule_id
+                rule = {}
+                if needs_level or needs_id:
+                    if resolver is None:
+                        resolver = ResultRuleResolver(run)
+                    rule = resolver.resolve(result)
+                    if not rule and ("ruleIndex" in result or "rule" in result):
+                        summary["sarif_input_errors"] += 1
+                for key in ("level", "ruleId"):
+                    value = result.get(key)
+                    if value is not None and not isinstance(value, str):
+                        summary["sarif_input_errors"] += 1
+                if needs_level:
+                    level = rule_default_level(rule) or "warning"
+                if needs_id:
+                    rule_id = _result_rule_id(result, rule) or "unknown"
+                summary["by_severity"][level] = summary["by_severity"].get(level, 0) + 1
+                summary["by_rule"][rule_id] = summary["by_rule"].get(rule_id, 0) + 1
+                for flow in rows(result, "codeFlows"):
+                    summary["dataflow_paths"] += 1
+                    for thread in rows(flow, "threadFlows"):
+                        for _ in rows(thread, "locations"):
+                            summary["total_dataflow_steps"] += 1
+
+            raw_tool = run.get("tool", {})
+            if not isinstance(raw_tool, dict):
+                summary["sarif_input_errors"] += 1
+            tool = _as_dict(raw_tool)
+            driver = tool.get("driver", {})
+            components = chain((driver,), rows(tool, "extensions"))
+            for component in components:
+                if not isinstance(component, dict):
+                    summary["sarif_input_errors"] += 1
+                    continue
+                names = set()
+                for descriptor in rows(component, "rules"):
+                    name = descriptor.get("id")
+                    if isinstance(name, str) and name:
+                        names.add(name)
+                    else:
+                        summary["sarif_input_errors"] += 1
+                summary["queries_executed"] += len(names)
+
+        if summary["sarif_input_errors"]:
+            logger.warning("CodeQL SARIF summary retained usable data with %s malformed metadata item(s)",
+                           summary["sarif_input_errors"])
+        return summary
 
 
 def iris_overlap_summary(out_dir: Path, languages) -> dict:
