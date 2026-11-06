@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sandbox.summary import record_denial
+from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
     - crashed: True iff the process did not exit normally (killed by a
       crash signal, OR died with non-zero exit while a sanitizer fired).
       Sanitizer reports with rc==0 (halt_on_error=0) set `sanitizer` but
-      leave `crashed` unset.
+      leave `crashed` False.
     - sanitizer: "asan"|"ubsan"|"msan"|"tsan" when stderr contains a
       sanitizer report (independent of `crashed`).
     - resource_exceeded: True if killed by resource limit (SIGXCPU, SIGXFSZ)
@@ -171,7 +172,7 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
         if sig_num in {s.value for s in crash_signals}:
             info["crashed"] = True
             evidence_items.append(f"Process crashed with {sig_name}")
-            logger.info("Sandbox: %s killed by %s (crash)", cmd_display, sig_name)
+            logger.info("Sandbox: %s killed by %s (crash)", sanitise_for_terminal(cmd_display), sig_name)
         elif sig_num in {s.value for s in resource_signals}:
             info["resource_exceeded"] = True
             if hasattr(signal, "SIGXCPU") and sig_num == signal.SIGXCPU:
@@ -180,17 +181,17 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
                 evidence_items.append(f"Process killed by {sig_name} — file size limit exceeded")
             else:
                 evidence_items.append(f"Process killed by {sig_name} — resource limit exceeded")
-            logger.warning("Sandbox: %s killed by %s (resource limit)", cmd_display, sig_name)
+            logger.warning("Sandbox: %s killed by %s (resource limit)", sanitise_for_terminal(cmd_display), sig_name)
         elif sig_num in {s.value for s in seccomp_signals}:
             info["seccomp_killed"] = True
             evidence_items.append(
                 "Process killed by SIGSYS — seccomp blocked a syscall "
                 "(likely 32-bit-compat int 0x80 or an explicit KILL rule)"
             )
-            logger.info("Sandbox: %s killed by SIGSYS (seccomp)", cmd_display)
+            logger.info("Sandbox: %s killed by SIGSYS (seccomp)", sanitise_for_terminal(cmd_display))
         else:
             evidence_items.append(f"Process killed by {sig_name}")
-            logger.debug("Sandbox: %s killed by %s", cmd_display, sig_name)
+            logger.debug("Sandbox: %s killed by %s", sanitise_for_terminal(cmd_display), sig_name)
 
     # Check stderr for sanitizer reports (ASAN, UBSAN, MSAN, TSAN).
     # `crashed` strictly means "process did not exit normally" — we only set
@@ -242,25 +243,25 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
             evidence_items.append(f"AddressSanitizer: {bug_type}")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info("Sandbox: %s — ASAN detected %s", cmd_display, bug_type)
+            logger.info("Sandbox: %s — ASAN detected %s", sanitise_for_terminal(cmd_display), sanitise_for_terminal(bug_type))
         elif "UndefinedBehaviorSanitizer" in stderr_text:
             info["sanitizer"] = "ubsan"
             evidence_items.append("UndefinedBehaviorSanitizer triggered")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info("Sandbox: %s — UBSAN triggered", cmd_display)
+            logger.info("Sandbox: %s — UBSAN triggered", sanitise_for_terminal(cmd_display))
         elif "MemorySanitizer" in stderr_text:
             info["sanitizer"] = "msan"
             evidence_items.append("MemorySanitizer: use of uninitialised memory")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info("Sandbox: %s — MSAN triggered", cmd_display)
+            logger.info("Sandbox: %s — MSAN triggered", sanitise_for_terminal(cmd_display))
         elif "ThreadSanitizer" in stderr_text:
             info["sanitizer"] = "tsan"
             evidence_items.append("ThreadSanitizer: data race detected")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info("Sandbox: %s — TSAN triggered", cmd_display)
+            logger.info("Sandbox: %s — TSAN triggered", sanitise_for_terminal(cmd_display))
 
     # Evidence tiering: every sanitizer detection above is a bare
     # stderr substring match — target code (or anything that shares the
@@ -406,18 +407,18 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
                 # language servers, self-spawned test servers) fail to
                 # reach their own listener. Name the exact knob.
                 logger.info(
-                    "Sandbox: TCP connect denied during: %s (rc=%s) — degraded-mode Landlock deny is active (no namespace backend on this host) and it covers loopback as well. Daemon-IPC tools are auto-nudged to no-daemon mode where possible; if this workload genuinely needs loopback TCP, pass degraded_net_deny=False (accepts open egress on this host).", cmd_display, returncode
+                    "Sandbox: TCP connect denied during: %s (rc=%s) — degraded-mode Landlock deny is active (no namespace backend on this host) and it covers loopback as well. Daemon-IPC tools are auto-nudged to no-daemon mode where possible; if this workload genuinely needs loopback TCP, pass degraded_net_deny=False (accepts open egress on this host).", sanitise_for_terminal(cmd_display), returncode
                 )
             else:
                 logger.info(
-                    "Sandbox: outbound network blocked during: %s (rc=%s)", cmd_display, returncode
+                    "Sandbox: outbound network blocked during: %s (rc=%s)", sanitise_for_terminal(cmd_display), returncode
                 )
             blocked_evidence.append("Attempted outbound network connection (blocked by sandbox)")
             record_denial(cmd_display, returncode, "network")
         elif category == "write":
-            path_note = f" to {attempted_path}" if attempted_path else ""
+            path_note = f" to {sanitise_for_terminal(attempted_path)}" if attempted_path else ""
             logger.info(
-                "Sandbox: write outside allowed paths denied%s during: %s (rc=%s)", path_note, cmd_display, returncode
+                "Sandbox: write outside allowed paths denied%s during: %s (rc=%s)", path_note, sanitise_for_terminal(cmd_display), returncode
             )
             if attempted_path:
                 blocked_evidence.append(f"Attempted write to {attempted_path} (blocked by sandbox)")
@@ -427,7 +428,7 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
                 record_denial(cmd_display, returncode, "write")
         elif category == "udp":
             logger.info(
-                "Sandbox: UDP/loopback socket use denied during: %s (rc=%s) — the active network policy denies it (Linux: the egress-proxy fallback tier's seccomp SOCK_DGRAM block on netns-incapable hosts; macOS: seatbelt's blanket network deny). JVM build tools (gradle) need a loopback UDP socket at startup and cannot run under this policy. On Linux netns-capable hosts the default proxy tier contains UDP topologically and they work; on macOS, JVM builds must run outside block_network.", cmd_display, returncode
+                "Sandbox: UDP/loopback socket use denied during: %s (rc=%s) — the active network policy denies it (Linux: the egress-proxy fallback tier's seccomp SOCK_DGRAM block on netns-incapable hosts; macOS: seatbelt's blanket network deny). JVM build tools (gradle) need a loopback UDP socket at startup and cannot run under this policy. On Linux netns-capable hosts the default proxy tier contains UDP topologically and they work; on macOS, JVM builds must run outside block_network.", sanitise_for_terminal(cmd_display), returncode
             )
             blocked_evidence.append(
                 "UDP/loopback socket use denied by the sandbox network "
@@ -443,7 +444,7 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
             if seccomp_profile == "full":
                 suggestion = "--sandbox debug (GDB/LLDB), --sandbox rr (rr replay), or " + suggestion
             logger.info(
-                "Sandbox: 'Operation not permitted' seen in stderr during %s (rc=%s) — this may be seccomp blocking a syscall (profile=%r). If the tool genuinely needs the syscall, try %s.", cmd_display, returncode, seccomp_profile, suggestion
+                "Sandbox: 'Operation not permitted' seen in stderr during %s (rc=%s) — this may be seccomp blocking a syscall (profile=%r). If the tool genuinely needs the syscall, try %s.", sanitise_for_terminal(cmd_display), returncode, seccomp_profile, suggestion
             )
             blocked_evidence.append(
                 f"Syscall denied by seccomp (profile={seccomp_profile!r}) — "
