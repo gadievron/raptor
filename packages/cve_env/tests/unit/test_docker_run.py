@@ -8,13 +8,15 @@ CVE-2018-7600.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from cve_env.tools.docker_run import RunError, _normalize_ports
 
+from core.container.proc import RunOutcome
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.poll_clock import install_poll_clock
 
 
 @pytest.fixture(autouse=True)
@@ -68,11 +70,11 @@ def test_run_error_carries_reason_and_image_ref() -> None:
 # Locally-built images (source_build output, bare names) skip the flag.
 
 
-def _find_docker_run_cmd(mock_run: Any) -> list[str]:
-    """Helper: among all subprocess.run calls, find the `docker run -d ...`
+def _find_docker_run_cmd(mock_cli: Any) -> list[str]:
+    """Helper: among all CLI calls, find the `docker run -d ...`
     invocation. docker_run() also shells out for logs/inspect; we want the
     main run command specifically."""
-    for call in mock_run.call_args_list:
+    for call in mock_cli.call_args_list:
         cmd = call[0][0]
         if (
             isinstance(cmd, list)
@@ -82,40 +84,43 @@ def _find_docker_run_cmd(mock_run: Any) -> list[str]:
         ):
             return cmd
     raise AssertionError(
-        f"no `docker run ...` call found in mock_run; calls: {mock_run.call_args_list}"
+        f"no `docker run ...` call found in mock_cli; calls: {mock_cli.call_args_list}"
     )
+
+
+def _successful_launch_cli(cmd, **kwargs):
+    stdout = ('{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"49000"}]}'
+              if cmd[:2] == ["docker", "inspect"] else "abc123def456\n")
+    return RunOutcome(returncode=0, stdout=stdout, stderr="", timed_out=False)
 
 
 @pytest.fixture(autouse=True)
-def _no_retry_backoff(monkeypatch):
-    """With subprocess mocked, the production wait constants are pure
-    sleep: launch_container's retry backoff (5s per failing attempt)
-    and the host-port inspect poll (10s to timeout, since the mock
-    never publishes a port). The logic under test is unchanged on a
-    compressed clock."""
-    import core.container.containers as containers
-    monkeypatch.setattr(containers, "_RETRY_BACKOFF_S", 0)
-    real_read_port = containers.read_allocated_host_port
+def _owned_launch_state(monkeypatch):
+    """Reset tests must not clear a caller's failure/session registries."""
+    import cve_env.tools.docker_run as consumer
 
-    def _fast_read_port(container_id, *, container_port, timeout_s=10.0):
-        return real_read_port(
-            container_id, container_port=container_port, timeout_s=0.2,
-        )
-
-    monkeypatch.setattr(
-        containers, "read_allocated_host_port", _fast_read_port,
-    )
+    for name in consumer._RESET_GLOBALS:
+        monkeypatch.setattr(consumer, name, set())
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> None:
+@pytest.fixture(autouse=True)
+def _virtual_launch_waits(monkeypatch):
+    """Exercise real retry/poll budgets without real sleeps or shorter caps."""
+    import core.container.containers as consumer
+
+    return install_poll_clock(monkeypatch, consumer)
+
+
+@patch("core.container.containers.run_cli")
+def test_docker_run_appends_pull_always_for_external_image(mock_cli: Any) -> None:
     """External image (vulhub/openssl) → --pull always in argv."""
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
-    mock_run.return_value = MagicMock(returncode=0, stdout="abc123def456\n", stderr="")
-    docker_run(image="vulhub/openssl:1.0.1g", container_port=80)
-    cmd = _find_docker_run_cmd(mock_run)
+    mock_cli.side_effect = _successful_launch_cli
+    result = docker_run(image="vulhub/openssl:1.0.1g", container_port=80)
+    assert result.ok
+    cmd = _find_docker_run_cmd(mock_cli)
     assert "--pull" in cmd, f"missing --pull in argv: {cmd}"
     pull_idx = cmd.index("--pull")
     assert cmd[pull_idx + 1] == "always", f"--pull value not 'always': {cmd}"
@@ -123,28 +128,46 @@ def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> Non
     assert pull_idx < image_idx, f"--pull must come before image: {cmd}"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_run_skips_pull_always_for_local_image(mock_run: Any) -> None:
+@patch("core.container.containers.run_cli")
+def test_docker_run_skips_pull_always_for_local_image(mock_cli: Any) -> None:
     """Locally-built image (cve-X:build) → no --pull flag (no upstream)."""
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
-    mock_run.return_value = MagicMock(returncode=0, stdout="abc123def456\n", stderr="")
-    docker_run(image="cve-2015-10010-openresolve:build", container_port=80)
-    cmd = _find_docker_run_cmd(mock_run)
+    mock_cli.side_effect = _successful_launch_cli
+    result = docker_run(image="cve-2015-10010-openresolve:build", container_port=80)
+    assert result.ok
+    cmd = _find_docker_run_cmd(mock_cli)
     assert "--pull" not in cmd, f"--pull should not appear for local image: {cmd}"
+
+
+@patch("core.container.containers.run_cli")
+def test_missing_port_reports_failure_after_full_poll_budget(mock_cli, _virtual_launch_waits):
+    from cve_env.tools import docker_run as consumer
+
+    mock_cli.return_value = RunOutcome(
+        returncode=0, stdout="abc123def456\n", stderr="", timed_out=False,
+    )
+    result = consumer.docker_run(image="nginx:1.25", container_port=80)
+    assert not result.ok
+    assert result.reason == "no_host_port"
+    assert _virtual_launch_waits.seconds >= 10.0
+    inspections = [call for call in mock_cli.call_args_list
+                   if call.args[0][:2] == ["docker", "inspect"]]
+    assert len(inspections) > 1
+    assert not consumer.session_container_ids()
 
 
 # -- sticky-retry guard ---------------------------------------------------
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_run_blocks_duplicate_failing_attempt(mock_run: Any) -> None:
+@patch("core.container.containers.run_cli")
+def test_docker_run_blocks_duplicate_failing_attempt(mock_cli: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
     # First call fails (e.g., arch mismatch).
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1, stdout="", stderr="platform mismatch"
     )
     r1 = docker_run(image="foo@sha256:a", container_port=80, platform="linux/arm64")
@@ -152,15 +175,15 @@ def test_docker_run_blocks_duplicate_failing_attempt(mock_run: Any) -> None:
     assert r1.reason == "docker_run_failed"
 
     # Second call with the SAME (image, platform) must be blocked without shelling out.
-    mock_run.reset_mock()
+    mock_cli.reset_mock()
     r2 = docker_run(image="foo@sha256:a", container_port=80, platform="linux/arm64")
     assert r2.ok is False
     assert r2.reason == "duplicate_failing_attempt"
-    mock_run.assert_not_called()
+    mock_cli.assert_not_called()
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_run_allows_different_platform_after_failure(mock_run: Any) -> None:
+@patch("core.container.containers.run_cli")
+def test_docker_run_allows_different_platform_after_failure(mock_cli: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
@@ -168,31 +191,31 @@ def test_docker_run_allows_different_platform_after_failure(mock_run: Any) -> No
     # auto-retry-on-transient logic doesn't fire and the test can assert a
     # single subprocess call on a permanent failure.
     permanent_stderr = "Error response from daemon: manifest unknown"
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=permanent_stderr)
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr=permanent_stderr)
     docker_run(image="foo@sha256:a", container_port=80, platform="linux/arm64")
 
     # Different platform arg -> not blocked. Still fails but via real docker, not the guard.
-    mock_run.reset_mock()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=permanent_stderr)
+    mock_cli.reset_mock()
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr=permanent_stderr)
     r = docker_run(image="foo@sha256:a", container_port=80, platform="linux/amd64")
     assert r.reason == "docker_run_failed"
-    mock_run.assert_called_once()
+    mock_cli.assert_called_once()
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_run_allows_different_image_after_failure(mock_run: Any) -> None:
+@patch("core.container.containers.run_cli")
+def test_docker_run_allows_different_image_after_failure(mock_cli: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
     permanent_stderr = "manifest for foo not found: manifest unknown"
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=permanent_stderr)
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr=permanent_stderr)
     docker_run(image="foo@sha256:a", container_port=80, platform="linux/arm64")
 
-    mock_run.reset_mock()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=permanent_stderr)
+    mock_cli.reset_mock()
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr=permanent_stderr)
     r = docker_run(image="bar@sha256:b", container_port=80, platform="linux/arm64")
     assert r.reason == "docker_run_failed"
-    mock_run.assert_called_once()
+    mock_cli.assert_called_once()
 
 
 def test_reset_failed_attempts_clears_guard() -> None:
@@ -238,14 +261,14 @@ def test_docker_run_next_step_hint_for_arch_mismatch_via_stderr() -> None:
     assert "arch" in h.lower() or "platform" in h.lower()
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.containers.run_cli")
 def test_docker_run_failure_payload_includes_next_step_hint(
-    mock_run: Any,
+    mock_cli: Any,
 ) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
     reset_failed_attempts()
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1, stdout="", stderr="manifest unknown"
     )
     r = docker_run(
