@@ -1098,3 +1098,32 @@ the confined JSON boundary without executing the supplied C/C++ code.
 Caller reachability remains separate. In particular, the existing generic
 `bounded` caller contract carries no numeric interval and cannot establish
 that a particular array or arithmetic counterexample reaches the callee.
+
+### Literal caller-entry obligations
+
+With an explicit integer ABI, the caller gate can mechanically check a
+complete literal argument tuple against a source array-read or overflow
+obligation. Every callee guard and parameter storage domain must hold for
+the same tuple. An unsafe index alone is insufficient when another argument
+prevents the read. Literal arithmetic uses exact integer evaluation rather
+than an additional symbolic search.
+Candidate discovery stays inside the same source snapshot; this proof does
+not require a project-wide caller scan or an inventory call graph.
+
+The initial supported frame is a same-file wrapper with no parameters,
+whose body directly returns one call with literal arguments. The source
+unit must contain plain function definitions and comments. Includes,
+macros, prototypes, overloads, conditional calls, preceding work, symbolic
+arguments, and unsupported conversions remain unresolved. Literals must
+have unambiguous target-int semantics and retain their value on parameter
+conversion; the checker does not guess narrowing or unsigned wrap.
+
+The existing confined worker binds the result to the complete source,
+callee, hypothesis, ABI, language, and call locations. The parent also
+checks positive tuples independently before permitting promotion. The
+`caller-entry-source-model` artifact records the callee obligation, actual
+arguments, cited wrapper, and scope assumptions on both promotions and
+holds. It assumes entry to that wrapper; application-entry reachability is
+not established. Safe or excluded tuples never clear the function or rule
+out external callers. A `sizeof` argument without a numeric relation stays
+inconclusive under the generic bounded-contract channel.

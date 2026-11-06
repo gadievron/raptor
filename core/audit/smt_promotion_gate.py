@@ -10,6 +10,12 @@ this gate re-derives the receipt's own precondition — the parameter
 the verb actually solved over — and adjudicates it at the in-repo
 call sites through the api_boundary channel.
 
+For source array/overflow obligations with an explicit target ABI, a
+separate confined checker evaluates complete literal call tuples. Its
+evidence is conditional on entry to an unconditional same-file wrapper;
+it does not establish application-entry reachability. Generic bounded
+contracts lack a numeric relation and cannot prove sizeof arguments safe.
+
 Decision semantics (promotion-only — nothing here demotes below
 suspicious, and the receipt itself is never weakened):
 
@@ -38,7 +44,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .api_boundary import (
@@ -76,6 +82,7 @@ class CallerGateDecision:
     # confirmed | refuted | inconclusive | unbindable | error
     channel_outcome: str = ""
     error_class: str = ""  # exception class name on channel_outcome=error
+    details: dict = field(default_factory=dict)
 
 
 def _appears_bare(operand: str, text: str) -> bool:
@@ -197,6 +204,7 @@ def evaluate_caller_gate(
     source: str = "",
     def_span: tuple[int, int] | None = None,
     inventory: dict | None = None,
+    integer_abi=None,
 ) -> CallerGateDecision:
     """Adjudicate one clean-refuted SMT receipt's precondition at the
     reviewed function's in-repo call sites.  See module docstring for
@@ -213,6 +221,7 @@ def evaluate_caller_gate(
             source=source,
             def_span=def_span,
             inventory=inventory,
+            integer_abi=integer_abi,
         )
     except Exception as e:
         logger.warning(
@@ -239,6 +248,7 @@ def _evaluate_caller_gate(
     source: str = "",
     def_span: tuple[int, int] | None = None,
     inventory: dict | None = None,
+    integer_abi=None,
 ) -> CallerGateDecision:
     target_path = Path(target_path)
     # ``file_path`` arrives from receipt records (LLM-writable): the
@@ -252,6 +262,11 @@ def _evaluate_caller_gate(
     from core.source import read_contained
 
     defining_source = read_contained(target_path, file_path) or ""
+    from .literal_call_gate import evaluate_literal_caller_gate
+    numeric = evaluate_literal_caller_gate(file_path, function_name, verb.removeprefix("smt:"), mechanism,
+                                          defining_source=defining_source, source=source, integer_abi=integer_abi)
+    if numeric is not None:
+        return numeric
     param_names = (
         parse_param_names(defining_source, function_name)
         if defining_source else []

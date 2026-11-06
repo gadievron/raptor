@@ -133,10 +133,7 @@ class TestEvaluateCallerGate:
         assert decision.channel_outcome == "unbindable"
         assert "binds no caller-checkable precondition" in decision.reason
 
-    def test_sizeof_bounded_sites_uphold(self, tmp_path):
-        # sizeof-valued arguments earn the structural uphold — the
-        # channel-refuted branch, distinct from constant-pinned
-        # inconclusive below.
+    def test_sizeof_without_a_numeric_bound_is_inconclusive(self, tmp_path):
         target = self._target(tmp_path, {
             "lib.c": _CALLEE,
             "use.c": (
@@ -150,8 +147,8 @@ class TestEvaluateCallerGate:
             source=_CALLEE, def_span=(1, 4),
         )
         assert decision.action == "hold"
-        assert decision.channel_outcome == "refuted"
-        assert "all 1 call site(s) uphold the precondition" in decision.reason
+        assert decision.channel_outcome == "inconclusive"
+        assert "uphold the precondition" not in decision.reason
 
     def test_constant_pinned_sites_decline_not_uphold(self, tmp_path):
         # A pinned literal is decidable in neither direction without
@@ -401,7 +398,7 @@ class TestCleanRefutedCallerGate:
             result.tier_counters["refuted_sweep"], "caller_gate_held", 0,
         ) == 1
 
-    def test_sizeof_bounded_callers_uphold_prose(self, tmp_path, monkeypatch):
+    def test_sizeof_without_numeric_bounds_does_not_claim_upholding(self, tmp_path, monkeypatch):
         result, _ = self._run(tmp_path, monkeypatch, {
             "lib.c": _CALLEE,
             "use.c": (
@@ -411,7 +408,7 @@ class TestCleanRefutedCallerGate:
         }, _MECHANISM, "check-overflow")
         outcome = result.outcomes[0]
         assert outcome.status == "suspicious"
-        assert "all 1 call site(s) uphold the precondition" in outcome.body
+        assert "uphold the precondition" not in outcome.body
 
     def test_dominating_fatal_assert_holds(self, tmp_path, monkeypatch):
         # The assert lives in the callee; the caller passes a plain

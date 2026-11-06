@@ -1365,6 +1365,9 @@ def _z3_dispatch_json(request: dict) -> Any:
     """
     tag = request.get("tag")
     args = request.get("args") or {}
+    if tag == "literal_call":
+        from .literal_call import check_literal_calls
+        return check_literal_calls(**args)
     if tag == "guard_sufficiency":
         constraints = [BoundsConstraint(**c) for c in args["constraints"]]
         result = _z3_dispatch(

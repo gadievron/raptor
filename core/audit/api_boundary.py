@@ -1158,8 +1158,8 @@ def _check_site(
         # upholding (the pinned value may itself exceed the bound the
         # flagged arithmetic assumes).  Literals stay "undecided"
         # with a constant-specific receipt, and the kind never
-        # returns "unguarded" — the aggregate can refute
-        # (sizeof-bounded sites) or decline, never confirm.
+        # returns "unguarded". Without an actual numeric relation it can
+        # neither establish a violation nor prove that sizeof upholds it.
         if _API_INTEGER_LITERAL_RE.fullmatch(stripped):
             check.evidence = (
                 f"operand {BOUNDED_CONST_EVIDENCE_MARKER} {stripped} "
@@ -1169,10 +1169,9 @@ def _check_site(
         # Tested on the raw argument: the cast-stripper reads a
         # parenthesised type operand ("sizeof(int)") as a cast.
         if _API_SIZEOF_CALL_RE.match(arg):
-            check.verdict = "guarded"
             check.evidence = (
-                "sizeof-valued argument — bounded by an in-repo "
-                "object/type size"
+                "sizeof-valued argument — no numeric bound available "
+                "to compare with the object/type size"
             )
             return check
         if base:

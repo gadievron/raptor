@@ -30087,6 +30087,7 @@ def _smt_caller_gate_decision(
                 if outcome.line and line_end else None
             ),
             inventory=getattr(config, "inventory", None),
+            integer_abi=getattr(config, "integer_abi", None),
         )
     except Exception as e:
         logger.warning(
@@ -30160,6 +30161,8 @@ def _hold_smt_promotion(
     held.tools_skipped = outcome.tools_skipped
     held.semantic_confidence = outcome.semantic_confidence
     held.function_qualified = getattr(outcome, "function_qualified", "")
+    if held.review_result is None and gate.details:
+        held.review_result = {}
     if held.review_result is not None:
         held.review_result["evidence_tool"] = stamp
         held.review_result["smt_caller_gate"] = {
@@ -30169,6 +30172,7 @@ def _hold_smt_promotion(
             "site_count": gate.site_count,
             "channel_outcome": gate.channel_outcome,
             "error_class": gate.error_class,
+            **({"details": gate.details} if gate.details else {}),
         }
     result.outcomes[i] = held
     if prior_status == "clean":
@@ -30315,6 +30319,11 @@ def _promote_clean_refuted(
                     pass
             if not smt_verb:
                 smt_verb = _hypothesis_to_smt_verb(mechanism)
+            elif (smt_verb == "check-oob" and str(cwe).upper().removeprefix("CWE-") == "125"
+                  and _hypothesis_to_smt_verb(mechanism) == "check-array-bounds"):
+                # A CWE family chooses a diagnostic numeric model; an atomic
+                # source access can bind a stronger, exact read obligation.
+                smt_verb = "check-array-bounds"
 
             from core.audit.sweep import get_smt_verb_role
             if smt_verb and get_smt_verb_role(smt_verb) == "detection":
@@ -30408,6 +30417,8 @@ def _promote_clean_refuted(
                     # an earlier hypothesis' hold record surviving on
                     # a status=finding outcome would contradict the
                     # verdict for every consumer of review_result.
+                    if promoted_outcome.review_result is None and gate is not None and gate.details:
+                        promoted_outcome.review_result = {}
                     if isinstance(promoted_outcome.review_result, dict):
                         if gate is not None:
                             promoted_outcome.review_result[
@@ -30419,6 +30430,7 @@ def _promote_clean_refuted(
                                 "site_count": gate.site_count,
                                 "channel_outcome": gate.channel_outcome,
                                 "error_class": gate.error_class,
+                                **({"details": gate.details} if gate.details else {}),
                             }
                         else:
                             promoted_outcome.review_result.pop(
