@@ -25,6 +25,20 @@ import sys as _sys
 
 import pytest as _pytest
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import core.sandbox.probes as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (pid-ns fresh procfs remount)",

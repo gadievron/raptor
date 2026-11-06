@@ -28,6 +28,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import raptor_agentic as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "Popen", consumer_0.subprocess.Popen,
+    )
+
 
 # parents[3] climbs:
 #   [0] packages/fuzzing/tests/  (this file's directory)

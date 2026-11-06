@@ -22,6 +22,21 @@ from packages.joern.server import (
 )
 from packages.joern.tunables import JoernTunables
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import packages.joern.server as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "Popen", consumer_0.subprocess.Popen,
+    )
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
 
 @pytest.fixture(autouse=True)
 def _heap_ledger_in_tmp(tmp_path: Path,

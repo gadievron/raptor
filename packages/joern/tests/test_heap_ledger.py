@@ -26,6 +26,18 @@ from packages.joern.heap_ledger import (
     reserve_heap_mb,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import packages.joern.server as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "Popen", consumer_0.subprocess.Popen,
+    )
+
 
 def _rows(path: Path) -> list[dict]:
     return json.loads(path.read_text())["rows"]
