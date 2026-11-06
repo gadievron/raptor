@@ -18,6 +18,22 @@ from packages.frida.active import (
     observe_target,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_probe_patches(monkeypatch):
+    """Keep host discovery and process mocks on consumer-owned bindings."""
+    import packages.frida.active as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "subprocess", "run", consumer.subprocess.run,
+    )
+    patch_module_attribute(
+        monkeypatch, consumer, "subprocess", "Popen", consumer.subprocess.Popen,
+    )
+
 
 # ── _extract_output_dir ───────────────────────────────────────────────
 
@@ -138,7 +154,7 @@ class TestObserveTarget:
         with patch("packages.frida.available", return_value=True), \
              patch("packages.frida.active._mint_nonce",
                    return_value=NONCE), \
-             patch("subprocess.run", return_value=fake_result) as mock_run:
+             patch('packages.frida.active.subprocess.run', return_value=fake_result) as mock_run:
             result = observe_target(str(binary), template="api-trace",
                                     duration_sec=10)
 
@@ -165,7 +181,7 @@ class TestObserveTarget:
         fake_result.stdout = ""
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = observe_target(str(binary))
         assert result is None
 
@@ -175,7 +191,7 @@ class TestObserveTarget:
         binary.write_bytes(b"\x7fELF")
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.run",
+             patch('packages.frida.active.subprocess.run',
                    side_effect=subprocess.TimeoutExpired("cmd", 60)):
             result = observe_target(str(binary), duration_sec=10)
         assert result is None
@@ -196,7 +212,7 @@ class TestObserveTarget:
         fake_result.stderr = ""
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.run", return_value=fake_result) as mock_run:
+             patch('packages.frida.active.subprocess.run', return_value=fake_result) as mock_run:
             result = observe_target(str(binary), out_dir=out_dir)
 
         assert result == out_dir
@@ -223,7 +239,7 @@ class TestObserveTarget:
         fake_result.stderr = f"OUTPUT_DIR={evil}\n"
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = observe_target(str(binary))
         assert result is None
 
@@ -238,7 +254,7 @@ class TestObserveTarget:
         fake_result.stderr = ""
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.run", return_value=fake_result) as mock_run:
+             patch('packages.frida.active.subprocess.run', return_value=fake_result) as mock_run:
             observe_target(str(binary), duration_sec=-5)
 
         call_args = mock_run.call_args[0][0]
@@ -306,7 +322,7 @@ class TestObservePaired:
             return fake_proc
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
+             patch('packages.frida.active.subprocess.Popen', side_effect=fake_popen) as mock_popen:
             result = observe_paired(
                 ["./myserver", "--port", "8080"],
                 template="api-trace",
@@ -359,7 +375,7 @@ class TestObservePaired:
         fake_proc.pid = 12345
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.Popen", return_value=fake_proc):
+             patch('packages.frida.active.subprocess.Popen', return_value=fake_proc):
             observe_paired(
                 ["./very-long-binary-name-exceeding-15"],
                 out_dir=run_dir,
@@ -385,7 +401,7 @@ class TestObservePaired:
         fake_proc.pid = 12345
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.Popen", return_value=fake_proc):
+             patch('packages.frida.active.subprocess.Popen', return_value=fake_proc):
             result = observe_paired(
                 ["./server"],
                 out_dir=tmp_path / "out",
@@ -408,7 +424,7 @@ class TestObservePaired:
         fake_proc.pid = 12345
 
         with patch("packages.frida.available", return_value=True), \
-             patch("subprocess.Popen", return_value=fake_proc), \
+             patch('packages.frida.active.subprocess.Popen', return_value=fake_proc), \
              patch("os.getpgid", return_value=12345), \
              patch("os.killpg"):
             result = observe_paired(["./server"], out_dir=tmp_path / "out")
@@ -465,7 +481,7 @@ class TestAutoObserve:
         with patch("packages.frida.available", return_value=True), \
              patch("packages.frida.active._mint_nonce",
                    return_value=NONCE), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = auto_observe(
                 target_path=target,
                 search_dirs=[tmp_path],
@@ -490,7 +506,7 @@ class TestAutoObserve:
         with patch("packages.frida.available", return_value=True), \
              patch("packages.frida.active._mint_nonce",
                    return_value=NONCE), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = auto_observe(
                 target_path=target,
                 search_dirs=[tmp_path],
@@ -517,7 +533,7 @@ class TestAutoObserve:
         with patch("packages.frida.available", return_value=True), \
              patch("packages.frida.active._mint_nonce",
                    return_value=NONCE), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = auto_observe(
                 target_path=target,
                 search_dirs=[tmp_path],
@@ -547,7 +563,7 @@ class TestAutoObserve:
         with patch("packages.frida.available", return_value=True), \
              patch("packages.frida.active._mint_nonce",
                    return_value=NONCE), \
-             patch("subprocess.run", return_value=fake_result):
+             patch('packages.frida.active.subprocess.run', return_value=fake_result):
             result = auto_observe(
                 target_path=target,
                 search_dirs=[tmp_path],
