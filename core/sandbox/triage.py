@@ -49,6 +49,7 @@ from core.sandbox.escalation_signatures import (
     DEFAULT_HOST_RECON_THRESHOLD,
     ESCAPE_PRIMITIVE_SYSCALLS,
     hostile_arg_label,
+    valid_syscall_args,
     is_credential_path,
 )
 from core.sandbox.profiles import host_recon_threshold_for_profile
@@ -383,7 +384,9 @@ def _verify_summary(
             or any(row.get(field) is not None
                    and not isinstance(row[field], str)
                    for row in denials
-                   for field in ("type", "syscall", "profile", "path"))):
+                   for field in ("type", "syscall", "profile", "path"))
+            or any(not valid_syscall_args(row.get("syscall"), row.get("args"))
+                   for row in denials)):
         return None, _INTEGRITY_TAMPERED
     inode_mismatch = bool(summary.get("inode_mismatch"))
     planted_object = str(summary.get("planted_object") or "")

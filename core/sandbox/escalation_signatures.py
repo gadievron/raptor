@@ -131,15 +131,41 @@ HOSTILE_IOCTL_CMDS = frozenset({
 })
 
 
+def valid_syscall_args(syscall_name: str | None, args) -> bool:
+    """Validate diagnostic argument metadata without coercing JSON numbers.
+
+    Numeric strings are a supported legacy register representation. Only
+    the first two slots of socket/ioctl records are interpreted; other
+    argument metadata remains opaque. Missing and truncated sequences
+    retain their historical handling.
+    """
+    if args is None:
+        return True
+    if not isinstance(args, (list, tuple)):
+        return False
+    if syscall_name not in ("socket", "ioctl"):
+        return True
+    for value in args[:2]:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return False
+        if isinstance(value, str):
+            try:
+                int(value)
+            except ValueError:
+                return False
+    return True
+
+
 def decode_syscall_args(syscall_name: str, args) -> dict:
     """Decode the seccomp-filtered argument(s) of a socket()/ioctl()
     record into named fields. Returns {} for other syscalls, missing
-    args, or non-int values (a forged/truncated record must not
+    args, or invalid register values (a forged/truncated record must not
     raise out of a tracer or triage hot path)."""
     # Only positional register sequences are meaningful. JSON objects and
     # strings also have lengths, but indexing them can raise or manufacture
     # arguments from unrelated fields/characters.
-    if not isinstance(args, (list, tuple)):
+    if (not isinstance(args, (list, tuple))
+            or not valid_syscall_args(syscall_name, args)):
         return {}
     try:
         # Tracer args are raw 64-bit registers, but the kernel reads
