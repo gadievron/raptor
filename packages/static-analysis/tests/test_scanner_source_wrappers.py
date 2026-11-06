@@ -8,9 +8,12 @@ semgrep binary or tree-sitter required.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 # parents[3]: tests/ → static-analysis/ → packages/ → repo root
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -53,13 +56,10 @@ def _wire_stage(monkeypatch, run_result):
     )
 
 
-def test_errored_run_with_no_findings_refuses_clean_sarif(
+def test_errored_run_with_no_findings_retains_diagnostic_sarif(
     tmp_path, monkeypatch, capsys,
 ):
-    """All-failed-looks-clean sibling shape: a semgrep run that
-    errored without findings must not leave a zero-finding
-    source-wrappers.sarif on disk (indistinguishable from a clean
-    run for the SARIF merge and later readers)."""
+    """Zero findings retain explicit failure and mechanical wrapper names."""
     repo = tmp_path / "repo"
     repo.mkdir()
     out_dir = tmp_path / "out"
@@ -69,12 +69,12 @@ def test_errored_run_with_no_findings_refuses_clean_sarif(
     )
 
     sarifs, wrappers = _scanner.run_source_wrapper_stage(repo, out_dir)
-    assert sarifs == []
-    assert wrappers == []
-    assert not (out_dir / "source-wrappers.sarif").exists()
-    err = capsys.readouterr().err
-    assert "FAILED" in err
-    assert "no SARIF" in err
+    assert sarifs == [str(out_dir / "source-wrappers.sarif")]
+    assert wrappers == ["getTheParameter"]
+    run = json.loads(Path(sarifs[0]).read_text())["runs"][0]
+    assert run["results"] == []
+    assert run["invocations"][0]["executionSuccessful"] is False
+    assert "incomplete" in capsys.readouterr().err
 
 
 def test_clean_zero_finding_run_still_writes_sarif(
@@ -93,3 +93,51 @@ def test_clean_zero_finding_run_still_writes_sarif(
     assert sarifs == [str(out_dir / "source-wrappers.sarif")]
     assert (out_dir / "source-wrappers.sarif").exists()
     assert wrappers == ["getTheParameter"]
+
+
+@pytest.mark.parametrize('damage', [
+    {'errors': ['another file failed']},
+    {'files_failed': [{'path': 'other.java', 'reason': 'parse error'}]},
+    {'skipped_rules': ['incompatible']},
+    {'returncode': 2},
+])
+def test_source_wrapper_partial_hits_retain_execution_diagnostics(tmp_path, monkeypatch, damage):
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    out = tmp_path / 'out'
+    out.mkdir()
+    _wire_stage(monkeypatch, SemgrepResult(
+        findings=[SemgrepFinding('App.java', 1, rule_id='wrapper.xss')], **damage,
+    ))
+    paths, names = _scanner.run_source_wrapper_stage(repo, out)
+    metrics = generate_scan_metrics(paths)
+    assert metrics['total_findings'] == 1
+    assert names == ['getTheParameter']
+    assert scan_execution_status(metrics) == 'partial'
+
+
+@pytest.mark.parametrize('failure', ['missing-tool', 'exception'])
+def test_source_wrapper_failed_invocations_produce_diagnostic_report(tmp_path, monkeypatch, failure):
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    out = tmp_path / 'out'
+    out.mkdir()
+    _wire_stage(monkeypatch, FakeSemgrepResult())
+    if failure == 'missing-tool':
+        monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: False)
+    else:
+        def crash(*a, **kw):
+            raise RuntimeError('tool unavailable')
+        monkeypatch.setattr('packages.semgrep.runner.run_rule', crash)
+    paths, _ = _scanner.run_source_wrapper_stage(repo, out)
+    metrics = generate_scan_metrics(paths)
+    assert metrics['total_findings'] == 0
+    assert metrics['tool_execution_failures'] == {'raptor-source-wrappers': 1}
+    assert scan_execution_status(metrics) == 'partial'

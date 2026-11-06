@@ -357,18 +357,19 @@ recovered from that file remain useful, but an empty result does not establish
 that the file is clean. Check the reported exclusions and analysis errors when
 assessing scan coverage, especially for C code with compiler extensions.
 The final JSON and `scan_metrics.json` record execution as `ok`, `partial`
-or `error`. Known pack failures, unavailable registry packs, merge failures
+or `error`. Known pack failures, unavailable registry packs, merge failures,
 recorded analysis gaps, and requested CodeQL runs without a report prevent
-an `ok` status. Recovered findings remain
-available. Partial scans retain the existing exit-code policy; check the
+an `ok` status. Recovered findings remain available. Partial scans retain the existing exit-code policy; check the
 execution status when automation requires all requested analysis to finish.
 SARIF invocation failures, error notifications and declared coverage
 limitations also make execution partial, including Coccinelle rule failures
 and compiler limitations. Their counts appear under
 `tool_execution_failures`, `tool_coverage_limitations` and `sarif_input_errors`
 in the saved metrics. Informational compiler review candidates are not
-coverage failures. An `ok` execution status does not establish full coverage
-or safe code.
+coverage failures. Expanded-source, graduated-rule and source-wrapper stages
+retain failed or partial invocations in SARIF even when they find nothing;
+those diagnostics also reach the saved execution status. An `ok` execution
+status does not establish full coverage or safe code.
 
 A successful tool exit alone does not establish a successful scan: missing
 or malformed SARIF output is reported as a failure. If part of a report is
