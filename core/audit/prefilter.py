@@ -4051,22 +4051,35 @@ def _check_c_missing_bounds(
             if not index_var.isdigit():
                 params_with_index_access.add((index_var, i))
 
+    if not params_with_index_access:
+        return
+
+    # Bounds evidence is function-wide, not specific to an access line.
+    # Keep the original set iteration for hit order and memoise only the decision.
+    checks: dict[str, bool] = {}
+    code_lines: list[str] | None = None
     for var, access_line in params_with_index_access:
-        check_re = (
-            rf'\b{re.escape(var)}\s*(?:[<>]=?)\s*\w+|'
-            rf'\b\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
-            rf'if\s*\(.{{0,1000}}{re.escape(var)}'
-        )
-        # baseline guard, verbatim (main): any raw line of the window
-        base_check = any(re.search(check_re, line) for line in lines)
-        has_check = False
-        # an ambiguous view cannot vouch for a check: keep the hit; and
-        # the view never sees a check the baseline does not (monotone)
-        if base_check and views.vouch:
-            for line in views.code.splitlines():  # line-model: any-line search, line identity unused
-                if re.search(check_re, line):
-                    has_check = True
-                    break
+        if var not in checks:
+            check_re = (
+                rf'\b{re.escape(var)}\s*(?:[<>]=?)\s*\w+|'
+                rf'\b\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
+                rf'if\s*\(.{{0,1000}}{re.escape(var)}'
+            )
+            # baseline guard, verbatim (main): any raw line of the window
+            base_check = any(re.search(check_re, line) for line in lines)
+            has_check = False
+            # an ambiguous view cannot vouch for a check: keep the hit; and
+            # the view never sees a check the baseline does not (monotone)
+            if base_check and views.vouch:
+                if code_lines is None:
+                    code_lines = views.code.splitlines()
+                for line in code_lines:  # line-model: any-line search, line identity unused
+                    if re.search(check_re, line):
+                        has_check = True
+                        break
+
+            checks[var] = has_check
+        has_check = checks[var]
 
         if not has_check:
             result.hits.append(PrefilterHit(
@@ -4117,7 +4130,7 @@ def _check_c_use_after_free(
             freed_vars[var] = i
             continue
 
-        for var, free_line in list(freed_vars.items()):
+        for var, free_line in freed_vars.items():
             if re.search(rf'\b{re.escape(var)}\s*->', stripped) or re.search(rf'\*\s*{re.escape(var)}\b', stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="use-after-free",
@@ -4170,7 +4183,7 @@ def _check_c_toctou(
             check_path_var = check_match.group(2)
             continue
 
-        if check_line and check_path_var:
+        if check_line is not None and check_path_var:
             use_match = re.search(
                 r'\b(open|fopen|creat|unlink|rename|chmod|chown)\s*\(\s*'
                 + re.escape(check_path_var),
