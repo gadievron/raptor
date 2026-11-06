@@ -31,6 +31,19 @@ from cve_env.tools.source_build import (
     source_build_payload,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_container_run_patches(monkeypatch):
+    """Keep the container runner's subprocess mocks local to its binding."""
+    import core.container.proc as container_proc
+
+    patch_module_attribute(
+        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
+    )
+
+
 # -- normalize_github_url --------------------------------------------------
 
 def test_normalize_github_url_passthrough() -> None:

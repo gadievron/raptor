@@ -17,6 +17,16 @@ from cve_env.tools.run_in_container import run_in_container
 
 
 @pytest.fixture(autouse=True)
+def _isolate_container_run_patches(monkeypatch):
+    """Keep the container runner's subprocess mocks local to its binding."""
+    import core.container.proc as container_proc
+
+    patch_module_attribute(
+        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _bypass_ownership_check(monkeypatch) -> Generator[None, None, None]:
     """Assume an owned container and keep native subprocess mocks local."""
     import core.container.proc as consumer
