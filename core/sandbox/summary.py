@@ -81,7 +81,7 @@ from . import evidence as _evidence
 from .evidence import _unique_evidence_object
 from .escalation_signatures import (
     ESCAPE_PRIMITIVE_SYSCALLS, HOSTILE_IOCTL_CMDS, HOSTILE_SOCKET_ARGS,
-    hostile_arg_label,
+    hostile_arg_label, valid_syscall_args,
 )
 
 logger = logging.getLogger(__name__)
@@ -1273,10 +1273,12 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         # missing fields and unknown string types for legacy/future writers.
         if (not isinstance(record, dict)
                 or ("type" in record and not isinstance(record["type"], str))
-                or (record.get("syscall") is not None
-                    and not isinstance(record["syscall"], str))
+                or any(record.get(field) is not None
+                       and not isinstance(record[field], str)
+                       for field in ("syscall", "profile", "path"))
                 or (record.get("args") is not None
-                    and not isinstance(record["args"], list))):
+                    and not isinstance(record["args"], list))
+                or not valid_syscall_args(record.get("syscall"), record.get("args"))):
             corrupt_lines += 1
             continue
         records.append(record)
