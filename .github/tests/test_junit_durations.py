@@ -178,3 +178,81 @@ def test_invalid_durations_do_not_poison_valid_measurements(mini_repo, tmp_path,
     assert per_file == {'core/pkga/tests/test_mod.py': 1.5}
     assert per_nodeid == {'core/pkga/tests/test_mod.py::test_good': 1.5}
     assert dropped == 1
+
+
+@pytest.mark.parametrize('root_name', ['.github', '.hidden'])
+def test_hidden_root_classname_stays_repo_relative(mini_repo, root_name):
+    path = mini_repo / root_name / 'tests/test_hidden.py'
+    path.parent.mkdir(parents=True)
+    path.write_text('')
+    assert resolve_classname(f'{root_name}.tests.test_hidden.Outer.Inner', mini_repo) == (
+        f'{root_name}/tests/test_hidden.py', ['Outer', 'Inner'])
+
+
+def test_absolute_classname_does_not_resolve_outside_repo(mini_repo, tmp_path):
+    outside = tmp_path / 'outside.py'
+    outside.write_text('')
+    probes = []
+    class Repo:
+        def __truediv__(self, candidate):
+            probes.append(candidate)
+            return mini_repo / candidate
+    assert resolve_classname(str(outside.with_suffix('')), Repo()) is None
+    assert probes == []
+
+
+@pytest.mark.parametrize('nodeids', [False, True], ids=['file-totals', 'nodeids'])
+def test_cli_keeps_hidden_script_timings_and_collection_skips(mini_repo, tmp_path, nodeids):
+    path = mini_repo / '.github/scripts/tests/test_helper.py'
+    path.parent.mkdir(parents=True)
+    path.write_text('')
+    xml = _write_junit(tmp_path / 'run.xml', [
+        ('.github.scripts.tests.test_helper.Outer.Inner', 'test_value[a.b]', '2.5'),
+        ('', '.github.scripts.tests.test_helper', '0'),
+        ('core.pkga.tests.test_mod', 'test_other', '1'),
+    ])
+    out = tmp_path / 'durations.json'
+    args = ['--repo', str(mini_repo), '--prefix', '.github', str(out), str(xml)]
+    if nodeids:
+        args.insert(0, '--nodeids')
+    assert main(args) == 0
+    expected_key = '.github/scripts/tests/test_helper.py'
+    if nodeids:
+        expected_key += '::Outer::Inner::test_value[a.b]'
+    assert json.loads(out.read_text()) == {expected_key: 2.5}
+
+
+def test_repeated_classnames_and_misses_resolve_once(mini_repo, tmp_path, monkeypatch):
+    from collections import Counter
+
+    import junit_durations as converter
+
+    calls = Counter()
+    original = converter.resolve_classname
+    def resolve(dotted, repo):
+        calls[dotted] += 1
+        return original(dotted, repo)
+    monkeypatch.setattr(converter, 'resolve_classname', resolve)
+    known = 'core.pkga.tests.test_mod.TestC'
+    missing = 'core.missing.tests.test_gone'
+    module = 'core.pkga.tests.test_mod'
+    rows = ([(known, f'test_{i}', '1') for i in range(10)]
+            + [(missing, f'test_{i}', '1') for i in range(5)]
+            + [('', module, '0')] * 2)
+    xml = _write_junit(tmp_path / 'run.xml', rows)
+    per_file, per_nodeid, dropped = collect_run(xml, mini_repo)
+    assert per_file == {'core/pkga/tests/test_mod.py': 10.0}
+    assert len(per_nodeid) == 10
+    assert dropped == 5
+    assert calls == {known: 1, missing: 1, module: 1}
+
+
+def test_resolution_cache_does_not_survive_report_collection(mini_repo, tmp_path):
+    xml = _write_junit(tmp_path / 'run.xml', [('core.pkga.tests.test_new', 'test_new', '1')])
+    assert collect_run(xml, mini_repo) == ({}, {}, 1)
+    path = mini_repo / 'core/pkga/tests/test_new.py'
+    path.write_text('')
+    assert collect_run(xml, mini_repo) == (
+        {'core/pkga/tests/test_new.py': 1.0}, {'core/pkga/tests/test_new.py::test_new': 1.0}, 0)
+    path.unlink()
+    assert collect_run(xml, mini_repo) == ({}, {}, 1)
