@@ -72,6 +72,47 @@ def test_process_failure_keeps_its_reason_when_metadata_is_absent(tmp_path, monk
     assert any('code 7' in error and 'invalid rule' in error for error in result.errors)
 
 
+@pytest.mark.parametrize("channel", ["toolExecutionNotifications", "toolConfigurationNotifications"])
+@pytest.mark.parametrize("notification,expected_ok", [
+    ({"level": "error"}, False),
+    ({"level": "warning"}, True),
+    ({"level": "note", "properties": {"coverage_limitation": "query_budget"}}, False),
+    ({"level": "note", "properties": {"coverage_limitation": "review_candidates"}}, True),
+    (None, False),
+])
+def test_sarif_invocation_diagnostics_reach_runner(tmp_path, monkeypatch, channel, notification, expected_ok):
+    source = tmp_path / "good.py"
+    source.write_text("foo()\n")
+    rule = tmp_path / "rule.yml"
+    rule.write_text("rules: []\n")
+    monkeypatch.setattr(runner, "is_available", lambda: True)
+    monkeypatch.setattr(runner, "scope_isolation_available", lambda: True)
+    sarif = {"runs": [{"invocations": [{"executionSuccessful": True, channel: [notification]}],
+        "results": [{"ruleId": "keep", "message": {"text": "retained"}}]}]}
+
+    def execute(command, **kwargs):
+        Path(command[command.index("--json-output") + 1]).write_text("{}")
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(sarif), stderr="")
+
+    result = runner.run_rule(source, str(rule), subprocess_runner=execute)
+    assert result.ok is expected_ok
+    assert [finding.rule_id for finding in result.findings] == ["keep"]
+    assert bool(result.errors) is not expected_ok
+
+
+@pytest.mark.parametrize("invocation", [
+    {"executionSuccessful": "true"},
+    {"toolExecutionNotifications": {}},
+    {"toolConfigurationNotifications": None},
+])
+def test_sarif_damaged_invocation_is_not_successful(invocation):
+    errors = []
+    findings = models.parse_sarif_data({"runs": [{"invocations": [invocation],
+        "results": [{"ruleId": "keep"}]}]}, errors=errors)
+    assert [finding.rule_id for finding in findings] == ["keep"]
+    assert errors
+
+
 def both_consumers(tmp_path, entry):
     payload = {"paths": {"scanned": ["good.py"]}, "errors": [entry], "version": "1.177.0"}
     text = json.dumps(payload)

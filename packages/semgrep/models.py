@@ -241,24 +241,24 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
             errors.append("SARIF requires an object with a runs array")
         return []
 
-    from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver
+    from core.sarif.parser import (
+        ArtifactUriResolver,
+        ResultRuleResolver,
+        get_run_execution_diagnostics,
+    )
 
     findings: list[SemgrepFinding] = []
     malformed = 0
     failed_invocations = 0
+    coverage_limitations = 0
     for run in data["runs"]:
         if not isinstance(run, dict):
             malformed += 1
             continue
-        invocations = run.get("invocations", [])
-        if not isinstance(invocations, list):
-            malformed += 1
-        else:
-            for invocation in invocations:
-                if not isinstance(invocation, dict):
-                    malformed += 1
-                elif invocation.get("executionSuccessful") is False:
-                    failed_invocations += 1
+        diagnostics = get_run_execution_diagnostics(run)
+        malformed += diagnostics["sarif_input_errors"]
+        failed_invocations += diagnostics["tool_execution_failures"]
+        coverage_limitations += diagnostics["tool_coverage_limitations"]
         rule_resolver = None
         uri_resolver = None
         results = run.get("results", [])
@@ -315,6 +315,8 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
             errors.append(f"SARIF contains {malformed} malformed entry/entries")
         if failed_invocations:
             errors.append(f"SARIF reports {failed_invocations} unsuccessful invocation(s)")
+        if coverage_limitations:
+            errors.append(f"SARIF reports {coverage_limitations} coverage limitation(s)")
     return findings
 
 
