@@ -425,6 +425,124 @@ class _StaticSearches:
         return re.compile(r'snprintf\s*\([^,]{1,4000},\s*sizeof\s*\([^)]{1,4000}\)\s*,'
             r'\s*"[^"]{0,1000}%s[^"]{0,1000}"').search
 
+    @cached_property
+    def c_free_call(self) -> _Search:
+        return re.compile(r'\bfree\s*\(').search
+
+    @cached_property
+    def c_free_variable(self) -> _Search:
+        return re.compile(r'\bfree\s*\(\s*(\w+)\s*\)').search
+
+    @cached_property
+    def c_path_check(self) -> _Search:
+        return re.compile(r'\b(access|stat|lstat)\s*\(\s*(\w+)').search
+
+    @cached_property
+    def lua_debug(self) -> _Search:
+        return re.compile(r'\bdebug\.(?:getinfo|sethook|getlocal|setlocal|'
+            r'getupvalue|setupvalue|getregistry)\s*\(').search
+
+    @cached_property
+    def lua_format_input(self) -> _Search:
+        return re.compile(r'%s.{0,200}user|%s.{0,200}input|%s.{0,200}req', re.IGNORECASE).search
+
+    @cached_property
+    def lua_io_open(self) -> _Search:
+        return re.compile(r'\bio\.open\s*\(').search
+
+    @cached_property
+    def lua_io_popen(self) -> _Search:
+        return re.compile(r'\bio\.popen\s*\(').search
+
+    @cached_property
+    def lua_load(self) -> _Search:
+        return re.compile(r'\b(?:loadstring|load)\s*\(').search
+
+    @cached_property
+    def lua_loadfile(self) -> _Search:
+        return re.compile(r'\b(?:dofile|loadfile)\s*\(').search
+
+    @cached_property
+    def lua_metamethod(self) -> _Search:
+        return re.compile(r'__index|__newindex|__call|__gc').search
+
+    @cached_property
+    def lua_os_execute(self) -> _Search:
+        return re.compile(r'\bos\.execute\s*\(').search
+
+    @cached_property
+    def lua_raw_access(self) -> _Search:
+        return re.compile(r'\b(?:rawset|rawget)\s*\(').search
+
+    @cached_property
+    def lua_setfenv(self) -> _Search:
+        return re.compile(r'\bsetfenv\s*\(').search
+
+    @cached_property
+    def lua_setmetatable(self) -> _Search:
+        return re.compile(r'\bsetmetatable\s*\(').search
+
+    @cached_property
+    def lua_string_format(self) -> _Search:
+        return re.compile(r'\bstring\.format\s*\(').search
+
+    @cached_property
+    def perl_backtick(self) -> _Search:
+        return re.compile(r'`[^`]*\$').search
+
+    @cached_property
+    def perl_chmod(self) -> _Search:
+        return re.compile(r'\bchmod\s*(?:\(\s*)?0?777|\bchmod\b.{0,1000}\$').search
+
+    @cached_property
+    def perl_command(self) -> _Search:
+        return re.compile(r'\b(?:system|exec)\s*(?:\(\s*)?["\$]').search
+
+    @cached_property
+    def perl_escape_html(self) -> _Search:
+        return re.compile(r'encode_entities|escapeHTML|CGI::escape').search
+
+    @cached_property
+    def perl_eval(self) -> _Search:
+        return re.compile(r'\beval\s*(?:\(\s*)?["\$]').search
+
+    @cached_property
+    def perl_input(self) -> _Search:
+        return re.compile(r'param\s*\(|<STDIN>|\$ENV\{|\$cgi->').search
+
+    @cached_property
+    def perl_open(self) -> _Search:
+        return re.compile(r'\bopen\s*(?:\(\s*)?\w+\s*,\s*["\$]').search
+
+    @cached_property
+    def perl_pipe(self) -> _Search:
+        return re.compile(r'\||\>').search
+
+    @cached_property
+    def perl_placeholder(self) -> _Search:
+        return re.compile(r'\?|placeholder', re.IGNORECASE).search
+
+    @cached_property
+    def perl_print_input(self) -> _Search:
+        return re.compile(r'\bprint\b.{0,1000}\$(?:query|param|input|cgi)', re.IGNORECASE).search
+
+    @cached_property
+    def perl_regex_eval(self) -> _Search:
+        return re.compile(r'=~\s*s/(?:\\.|[^/\\\n$])*\$(?:\\.|[^/\\\n])*'
+            r'/(?:\\.|[^/\\\n])*/e').search
+
+    @cached_property
+    def perl_require(self) -> _Search:
+        return re.compile(r'\brequire\s+["\$]').search
+
+    @cached_property
+    def perl_sql(self) -> _Search:
+        return re.compile(r'\bDBI\b.{0,200}\bdo\s*\(|\bprepare\s*\(.{0,200}\$').search
+
+    @cached_property
+    def perl_sql_input(self) -> _Search:
+        return re.compile(r'"\s*\.\s*\$|\$\w+').search
+
 
 _STATIC_SEARCHES = _StaticSearches()
 
@@ -3983,7 +4101,7 @@ def _check_c_use_after_free(
     for i, line in enumerate(lines, start=line_start):
         stripped = line.strip()
 
-        free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', stripped)
+        free_match = _STATIC_SEARCHES.c_free_variable(stripped)
         if free_match:
             var = free_match.group(1)
             if var in freed_vars:
@@ -4021,9 +4139,9 @@ def _check_c_use_after_free(
             clear_re = rf'\b{re.escape(var)}\s*(?<![!<>+\-*/&|^%=])=(?!=)\s*'
             if views.vouch and re.search(
                 clear_re, code_line,
-            ) and not re.search(r'\bfree\s*\(', code_line) and re.search(
+            ) and not _STATIC_SEARCHES.c_free_call(code_line) and re.search(
                 clear_re, stripped,
-            ) and not re.search(r'\bfree\s*\(', stripped):  # baseline guard, verbatim (main)
+            ) and not _STATIC_SEARCHES.c_free_call(stripped):  # baseline guard, verbatim (main)
                 del freed_vars[var]
 
 
@@ -4046,9 +4164,7 @@ def _check_c_toctou(
     for i, line in enumerate(lines, start=line_start):
         stripped = line.strip()
 
-        check_match = re.search(
-            r'\b(access|stat|lstat)\s*\(\s*(\w+)', stripped,
-        )
+        check_match = _STATIC_SEARCHES.c_path_check(stripped)
         if check_match:
             check_line = i
             check_path_var = check_match.group(2)
@@ -5780,12 +5896,12 @@ def _check_lua_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_LUA_CALLEES)
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(r'\b(?:loadstring|load)\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_load(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-loadstring",
                 message="loadstring/load — code injection risk",
@@ -5793,7 +5909,7 @@ def _check_lua_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\b(?:dofile|loadfile)\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_loadfile(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-file-exec",
                 message="dofile/loadfile — arbitrary file execution",
@@ -5801,7 +5917,7 @@ def _check_lua_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bos\.execute\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_os_execute(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-os-execute",
                 message="os.execute — command injection risk",
@@ -5809,7 +5925,7 @@ def _check_lua_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bio\.popen\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_io_popen(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-io-popen",
                 message="io.popen — command injection risk",
@@ -5817,7 +5933,7 @@ def _check_lua_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bio\.open\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_io_open(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-io-open",
                 message="io.open — file access, check path sanitisation",
@@ -5825,7 +5941,7 @@ def _check_lua_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bsetfenv\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_setfenv(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-setfenv",
                 message=(
@@ -5836,9 +5952,7 @@ def _check_lua_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bsetmetatable\s*\(', stripped) and re.search(
-            r'__index|__newindex|__call|__gc', source,
-        ):
+        if _STATIC_SEARCHES.lua_setmetatable(stripped) and _STATIC_SEARCHES.lua_metamethod(source):
                 result.hits.append(PrefilterHit(
                     rule_id="lua-metatable-abuse",
                     message=(
@@ -5849,7 +5963,7 @@ def _check_lua_patterns(
                     severity="warning",
                 ))
 
-        if re.search(r'\b(?:rawset|rawget)\s*\(', stripped):
+        if _STATIC_SEARCHES.lua_raw_access(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-raw-access",
                 message="rawset/rawget — bypasses metatable protections",
@@ -5857,11 +5971,7 @@ def _check_lua_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bdebug\.(?:getinfo|sethook|getlocal|setlocal|'
-            r'getupvalue|setupvalue|getregistry)\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.lua_debug(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="lua-debug-library",
                 message=(
@@ -5872,10 +5982,7 @@ def _check_lua_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bstring\.format\s*\(', stripped) and re.search(
-            r'%s.{0,200}user|%s.{0,200}input|%s.{0,200}req',
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.lua_string_format(stripped) and _STATIC_SEARCHES.lua_format_input(stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="lua-format-injection",
                     message="string.format with user input — format string risk",
@@ -5897,17 +6004,14 @@ def _check_perl_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_PERL_CALLEES)
-    result.has_array_access = bool(re.search(r'\$\w+\s*\[', source))
-    result.has_user_input = bool(re.search(
-        r'param\s*\(|<STDIN>|\$ENV\{|\$cgi->',
-        source,
-    ))
+    result.has_array_access = bool(_STATIC_SEARCHES.php_array_access(source))
+    result.has_user_input = bool(_STATIC_SEARCHES.perl_input(source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
         # gated optional paren (the \(?\s* pair was quadratic)
-        if re.search(r'\beval\s*(?:\(\s*)?["\$]', stripped):
+        if _STATIC_SEARCHES.perl_eval(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-eval",
                 message="eval with variable — code injection risk",
@@ -5915,7 +6019,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\b(?:system|exec)\s*(?:\(\s*)?["\$]', stripped):
+        if _STATIC_SEARCHES.perl_command(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-command-exec",
                 message="system/exec — command injection risk",
@@ -5923,7 +6027,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(r'`[^`]*\$', stripped):
+        if _STATIC_SEARCHES.perl_backtick(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-backtick-injection",
                 message="backtick with variable — command injection",
@@ -5931,9 +6035,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bopen\s*(?:\(\s*)?\w+\s*,\s*["\$]', stripped,
-        ) and re.search(r'\||\>', stripped):
+        if _STATIC_SEARCHES.perl_open(stripped) and _STATIC_SEARCHES.perl_pipe(stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="perl-open-pipe",
                     message=(
@@ -5944,12 +6046,7 @@ def _check_perl_patterns(
                     severity="error",
                 ))
 
-        if re.search(
-            r'\bDBI\b.{0,200}\bdo\s*\(|\bprepare\s*\(.{0,200}\$',
-            stripped,
-        ) and re.search(r'"\s*\.\s*\$|\$\w+', stripped) and not re.search(
-            r'\?|placeholder', stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.perl_sql(stripped) and _STATIC_SEARCHES.perl_sql_input(stripped) and not _STATIC_SEARCHES.perl_placeholder(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-sql-injection",
                 message=(
@@ -5960,10 +6057,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bprint\b.{0,1000}\$(?:query|param|input|cgi)',
-            stripped, re.IGNORECASE,
-        ) and not re.search(r'encode_entities|escapeHTML|CGI::escape', source):
+        if _STATIC_SEARCHES.perl_print_input(stripped) and not _STATIC_SEARCHES.perl_escape_html(source):
                 result.hits.append(PrefilterHit(
                     rule_id="perl-xss",
                     message="printing user input without escaping — XSS risk",
@@ -5971,7 +6065,7 @@ def _check_perl_patterns(
                     severity="warning",
                 ))
 
-        if re.search(
+        if _STATIC_SEARCHES.perl_regex_eval(
             # The pattern body BEFORE the interpolation excludes bare '$':
             # it stops at the first unescaped '$' deterministically —
             # with '$' inside the class, a '$'-storm line made every
@@ -5979,9 +6073,7 @@ def _check_perl_patterns(
             # dollars still ride the escape branch; a match exists for
             # exactly the same lines (first-$ vs any-$ anchoring), and
             # the consumer is a boolean hit.
-            r'=~\s*s/(?:\\.|[^/\\\n$])*\$(?:\\.|[^/\\\n])*'
-            r'/(?:\\.|[^/\\\n])*/e',
-            stripped,
+            stripped
         ):
             result.hits.append(PrefilterHit(
                 rule_id="perl-regex-eval",
@@ -5990,7 +6082,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\brequire\s+["\$]', stripped):
+        if _STATIC_SEARCHES.perl_require(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-require-variable",
                 message="require with variable — arbitrary module loading",
@@ -5998,10 +6090,7 @@ def _check_perl_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bchmod\s*(?:\(\s*)?0?777|\bchmod\b.{0,1000}\$',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.perl_chmod(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-chmod-unsafe",
                 message="chmod with unsafe permissions or variable",
