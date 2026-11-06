@@ -147,3 +147,61 @@ def test_compiler_sarif_indexes_rules_once_only_when_needed(tmp_path, monkeypatc
         row['ruleIndex'] = 0
     report.write_text(json.dumps({'runs': [run]}))
     assert len(compiler._parse_gcc_sarif(report)) == 100 and len(builds) == 1
+
+
+@pytest.mark.parametrize('index', [False, True, -2, 99, '0', 0.0])
+def test_inline_cwe_id_does_not_bypass_invalid_taxon_index(index):
+    run = {'taxonomies': [{'name': 'CWE', 'taxa': [{'id': '126'}, {'id': '126'}]}]}
+    reference = {'id': '126', 'index': index, 'toolComponent': {'index': 0}}
+    assert compiler_reported_cwe({'taxa': [reference]}, run) is None
+
+
+@pytest.mark.parametrize('reference, taxonomy', [
+    ({'id': '787', 'index': 0}, {'name': 'CWE', 'taxa': [{'id': '126'}]}),
+    ({'id': '126', 'index': 0, 'guid': 'wrong'},
+     {'name': 'CWE', 'taxa': [{'id': '126', 'guid': 'right'}]}),
+    ({'id': '126', 'index': 0}, {'name': 'CWE', 'taxa': [{'id': '126', 'index': 1}]}),
+])
+def test_conflicting_taxon_metadata_cannot_override_family(reference, taxonomy):
+    reference['toolComponent'] = {'index': 0}
+    reported = compiler_reported_cwe({'taxa': [reference]}, {'taxonomies': [taxonomy]})
+    assert reported is None
+    assert diagnostic_cwe('-Wanalyzer-out-of-bounds', reported=reported) == 'CWE-119'
+
+
+@pytest.mark.parametrize('run', [None, {}, {'taxonomies': []}])
+def test_taxonomy_reference_requires_context_even_with_inline_cwe_name(run):
+    reference = {'id': '126', 'toolComponent': {'name': 'CWE', 'index': 0}}
+    assert compiler_reported_cwe({'taxa': [reference]}, run) is None
+
+
+def test_taxonomy_guid_must_agree_with_indexed_component():
+    run = {'taxonomies': [{'name': 'CWE', 'guid': 'right', 'taxa': [{'id': '126'}]}]}
+    reference = {'id': '126', 'toolComponent': {'name': 'CWE', 'guid': 'wrong', 'index': 0}}
+    assert compiler_reported_cwe({'taxa': [reference]}, run) is None
+    reference['toolComponent']['guid'] = 'right'
+    assert compiler_reported_cwe({'taxa': [reference]}, run) == 'CWE-126'
+
+
+@pytest.mark.parametrize('index', [None, -1, 0])
+def test_matching_and_inline_taxa_remain_supported(index):
+    run = {'taxonomies': [{'name': 'CWE', 'taxa': [{'id': '126', 'guid': 'same'}]}]}
+    reference = {'id': '126', 'toolComponent': {'name': 'CWE', 'index': 0}}
+    if index is not None:
+        reference['index'] = index
+    if index == 0:
+        reference['guid'] = 'same'
+    assert compiler_reported_cwe({'taxa': [reference]}, run) == 'CWE-126'
+
+
+def test_bad_sarif_cwe_reference_keeps_diagnostic_and_valid_native_metadata(tmp_path):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    reference = {'id': '787', 'index': 0, 'toolComponent': {'index': 0}}
+    run = {'taxonomies': [{'name': 'CWE', 'taxa': [{'id': '126'}]}], 'results': [{
+        'ruleId': '-Wanalyzer-out-of-bounds', 'message': {'text': 'keep diagnostic'}, 'taxa': [reference]}]}
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [run]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['id'] == '-Wanalyzer-out-of-bounds' and diagnostic['message'] == 'keep diagnostic'
+    assert 'cwe' not in diagnostic
+    assert compiler_reported_cwe({'metadata': {'cwe': 126}, 'taxa': [reference]}, run) == 'CWE-126'

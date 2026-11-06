@@ -797,5 +797,8 @@ A checker name alone does not establish a specific weakness.
 If the subtype remains ambiguous, the finding is retained with a broad family
 or no CWE tag. Findings merged at one location with conflicting classifications
 keep the observed CWE values in their metadata without selecting one by order.
+Inconsistent or unresolved indexed taxonomy references cannot override the
+diagnostic family classification. The warning remains available even when its reported
+CWE metadata cannot be verified.
 Per-result tags take precedence over rule-level defaults during SARIF import.
 These tags describe the reported mechanism; they do not prove path feasibility.
