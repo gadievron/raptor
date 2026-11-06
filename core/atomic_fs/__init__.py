@@ -34,6 +34,10 @@ Symlink handling at the destination path:
     contract. If a caller wants to write through a symlink to its
     target, they should resolve the path first.
 
+``publish_new_directory`` publishes complete same-filesystem directory trees
+without replacing an occupied destination. It provides atomic visibility,
+not fsync durability; callers retain staging ownership on failure.
+
 The primitive is intended for durability-critical writers (state
 stores, sandbox files, credentials). Regeneratable outputs (scripts,
 one-shot corpus generators) shouldn't use it — the fsync overhead is
@@ -95,6 +99,8 @@ import shutil
 import stat as _stat
 import threading
 from pathlib import Path
+
+from .directory import publish_new_directory  # noqa: F401 — public filesystem primitive
 
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)

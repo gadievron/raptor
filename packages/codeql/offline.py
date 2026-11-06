@@ -17,7 +17,7 @@ import sys
 if __name__ == "__main__":
     sys.path.insert(0, os.environ['RAPTOR_DIR'])
 
-from core.atomic_fs import write_text_atomically  # noqa: E402
+from core.atomic_fs import write_text_atomically, publish_new_directory  # noqa: E402
 from core.config import RaptorConfig  # noqa: E402
 from core.json import dumps_canonical  # noqa: E402
 from core.security.capped_read import read_capped  # noqa: E402
@@ -215,7 +215,7 @@ def prepare(output: Path, languages, modes):
                     'languages': list(languages), 'modes': list(modes), 'packs': provenance, 'files': inventory}
         manifest = dumps_canonical(metadata)
         (kit / 'manifest.json').write_text(manifest, encoding='utf-8')
-        os.replace(kit, output)
+        publish_new_directory(kit, output)
     checksum = hashlib.sha256(manifest.encode()).hexdigest()
     print(f'Prepared {output}\nManifest SHA-256: {checksum}\nTransfer the directory and retain this hash for import.')
     return checksum
@@ -316,7 +316,7 @@ def _import_verified(kit, expected, boot, data, cache):
                     if _tree(target) != _tree(source):
                         raise ValueError(f'existing cached pack differs: {relative}')
                 else:
-                    os.replace(source, target)
+                    publish_new_directory(source, target)
         for rel in data['packs']:
             if _tree(ROOT / rel, source=True) != data['packs'][rel]['sources']:
                 raise ValueError(f'query sources changed during import: {rel}')
