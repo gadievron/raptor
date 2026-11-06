@@ -119,12 +119,10 @@ jobs:
             pyproject.toml
             uv.toml
 
-      - name: Create venv and install deps
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
+        with:
+          save-on-rebuild: 'true'
 
       - name: Run sandbox fast tier
         # The default (fast) tier over the whole sandbox surface —

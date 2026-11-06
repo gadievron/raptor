@@ -244,8 +244,8 @@ The first run after this key migration rebuilds the affected caches.
 
 | Cache family | Identity and validation |
 |---|---|
-| Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe and selected extras; producers and consumers share `ci_cache_key.py` |
-| uv downloads/builds | setup-uv supplies platform/architecture/Python identity and explicit keys cover lock, project and uv config; nested setup respects an existing cache owner; parser jobs also hash their installation requirements, separating them from base-only jobs; macOS retains source-built wheels |
+| Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe and selected extras; producers and consumers share `ci_cache_key.py`, including the self-test nightly and Ubuntu 26 canary |
+| uv downloads/builds | setup-uv supplies platform/architecture/Python identity and explicit keys cover lock, project and uv config; nested setup respects an existing cache owner; parser jobs also hash their installation requirements, separating them from base-only jobs; Semgrep consumers include the shared `semgrep-cli.txt` pin; macOS retains source-built wheels |
 | Python bytecode | Exact venv identity plus core/package/root Python source hashes; checked-hash imports validate restored files; misses, prefix hits and restore errors recompile |
 | Native APT packages | Host image/architecture and toolchain generation, refreshed weekly; partial restores are discarded and only successful installs are saved |
 | CodeQL CLI | Platform/architecture plus the version and archive checksum from `codeql-cli.json`; Java/C++ share that archive and the pinned library revision; download checksums remain mandatory |
