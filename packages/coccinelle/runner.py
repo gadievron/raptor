@@ -737,7 +737,10 @@ def run_rule(
         )
         jobs = 0
 
-    needs_harness = RESULT_PREFIX not in rule_text and "script:python" not in rule_text
+    # Documentation and C string patterns mentioning Python scripts do not
+    # provide reporting code; inspect the same lexer view as the script gate.
+    needs_harness = (RESULT_PREFIX not in rule_text
+                     and "script:python" not in _lexical_scan(rule_text)[0])
 
     # Per-invocation evidence nonce (see _make_nonce): every emit site
     # — the rule's own scripting blocks and our injected harness — is
@@ -1558,6 +1561,8 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     If no position metavariable is found, returns the rule unchanged
     (matches won't produce structured output, but spatch still runs).
     """
+    # Reuse the lexer view so comment/string examples cannot supply a
+    # position binding or masquerade as a second named rule.
     # `re.ASCII` so `\w` matches only ASCII identifiers. Pre-fix the
     # bare pattern admitted Unicode word chars (Cyrillic, Greek,
     # CJK, fullwidth letters) — and the captured pos_var is then
@@ -1569,11 +1574,12 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     # variable visually but not structurally. Stick to ASCII for
     # the harness-injected identifier; legitimate Coccinelle rules
     # use ASCII metavariable names per convention.
-    if not re.search(r"position\s+\w+", rule_text, re.ASCII):
+    view, ambiguous = _lexical_scan(rule_text)
+    if ambiguous:
         return rule_text
-
-    pos_match = re.search(r"position\s+(\w+)", rule_text, re.ASCII)
-    assert pos_match is not None
+    pos_match = re.search(r"\bposition\s+(\w+)", view, re.ASCII)
+    if pos_match is None:
+        return rule_text
     pos_var = pos_match.group(1)
 
     # ASCII-restricted via re.ASCII above, but the captured name
@@ -1613,7 +1619,7 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     # silently emitting partial / wrong data.
     # `re.ASCII` for the same identifier-scope reason as above —
     # rule names are Python identifiers in the harness.
-    rule_names = re.findall(r"@[ \t]*(\w+)[ \t]*@", rule_text, re.ASCII)
+    rule_names = re.findall(r"@[ \t]*(\w+)[ \t]*@", view, re.ASCII)
     if len(set(rule_names)) > 1:
         # Multi-rule file — harness injection isn't safe.
         # Caller handles the no-output case via spatch's
