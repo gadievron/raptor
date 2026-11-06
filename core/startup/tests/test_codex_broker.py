@@ -385,3 +385,114 @@ def test_broker_startup_allows_slower_interpreter_initialization(delayed_broker_
     values = broker.request(sid, {'op': 'environment'})['environment']
     assert values['RAPTOR_SESSION_PID'] == str(process.pid)
     assert values['RAPTOR_SESSION_TOKEN'] == credential[1]
+
+
+def test_lifecycle_reply_restores_context_without_provider_credentials(request, monkeypatch, tmp_path):
+    import builtins
+    monkeypatch.setenv('OPENAI_API_KEY', 'not-a-real-key')
+    monkeypatch.setenv('RAPTOR_OUT_DIR', str(tmp_path / 'output'))
+    monkeypatch.setenv('RAPTOR_LLM_PROVIDER', 'metadata-test-provider')
+    sid, process, credential = request.getfixturevalue('host')
+    full = broker.request(sid, {'op': 'environment'})['environment']
+    assert full['OPENAI_API_KEY'] == 'not-a-real-key'
+    partial = broker.request(sid, {'op': 'session'})['environment']
+    assert set(partial) <= environment._LIFECYCLE_ENV_KEYS
+    assert partial['RAPTOR_OUT_DIR'] == str(tmp_path / 'output')
+    assert partial['RAPTOR_SESSION_PID'] == str(process.pid)
+    assert partial['RAPTOR_SESSION_TOKEN'] == credential[1]
+    assert 'OPENAI_API_KEY' not in partial
+    assert 'RAPTOR_LLM_PROVIDER' not in partial
+    monkeypatch.delenv('OPENAI_API_KEY')
+    original_import = builtins.__import__
+
+    def metadata_import(name, *args, **kwargs):
+        if name == 'core.startup.codex_operator_environment' or name.startswith('core.llm.model_brokers'):
+            pytest.fail('lifecycle restore imported provider environment policy')
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, '__import__', metadata_import)
+        values = environment.restore(sid, lifecycle=True)
+    assert values['RAPTOR_SESSION_TOKEN'] == credential[1]
+    assert 'OPENAI_API_KEY' not in os.environ
+    # A full/provider-bearing reply must not be silently accepted in this mode.
+    monkeypatch.setattr(broker, 'request', lambda *a, **kw: {
+        'ok': True, 'environment_version': environment.BROKER_ENVIRONMENT_VERSION,
+        'environment': dict(full)})
+    with pytest.raises(ValueError, match='broker response does not match startup'):
+        environment.restore(sid, lifecycle=True)
+
+
+def test_startup_snapshot_pipe_is_bounded_when_child_does_not_read():
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(write_fd, 'wb', buffering=0)
+    try:
+        with pytest.raises(environment.CodexEnvironmentError, match='snapshot pipe timed out'):
+            broker._send_snapshot(SimpleNamespace(stdin=stream), b'x' * (1024 * 1024),
+                                  deadline=time.monotonic() + .02)
+        assert stream.closed
+    finally:
+        stream.close()
+        os.close(read_fd)
+
+
+def test_broker_child_uses_parent_validated_snapshot(request, monkeypatch):
+    original = subprocess.Popen
+
+    def spawn(command, *args, **kwargs):
+        if len(command) >= 3 and Path(command[2]).name == 'raptor-codex-env-broker':
+            command = [command[0], '-I', '-c',
+                       'import runpy,sys; sys.modules["core.llm.model_brokers"]=None; '
+                       'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")',
+                       *command[2:]]
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'Popen', spawn)
+    sid, process, credential = request.getfixturevalue('host')
+    result = broker.request(sid, {'op': 'environment'})['environment']
+    assert result['RAPTOR_SESSION_PID'] == str(process.pid)
+    assert result['RAPTOR_SESSION_TOKEN'] == credential[1]
+
+
+@pytest.mark.parametrize('payload', [[], {'': 'value'}, {'bad=key': 'value'},
+                                    {'key': None}, {'key': '\0'}])
+def test_broker_snapshot_handoff_rejects_invalid_environment(monkeypatch, payload):
+    import io
+    import json
+    from types import SimpleNamespace
+    monkeypatch.setattr(sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(json.dumps(payload).encode())))
+    monkeypatch.setattr(broker, 'serve', lambda *a, **kw: pytest.fail('invalid snapshot accepted'))
+    with pytest.raises(environment.CodexEnvironmentError, match='invalid operator environment snapshot'):
+        broker.serve_from_stdin('unused')
+
+
+def test_snapshot_pipe_delivers_large_packet_and_closes():
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, 'rb', buffering=0)
+    writer = os.fdopen(write_fd, 'wb', buffering=0)
+    packet = b'x' * (60 * 1024)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            received = pool.submit(reader.read)
+            broker._send_snapshot(SimpleNamespace(stdin=writer), packet,
+                                  deadline=time.monotonic() + 5)
+            assert received.result(timeout=5) == packet
+        assert writer.closed
+    finally:
+        writer.close()
+        reader.close()
+
+
+def test_start_refuses_old_protocol_without_replacing_live_broker(host, monkeypatch):
+    sid, process, _credential = host
+    ready = broker._address(sid) / 'ready'
+    previous = ready.read_bytes()
+    monkeypatch.setattr(broker, 'request', lambda *a, **kw: {
+        'ok': True, 'environment_version': environment.BROKER_ENVIRONMENT_VERSION - 1,
+        'environment': {'RAPTOR_SESSION_PID': str(process.pid)}})
+    with pytest.raises(environment.CodexEnvironmentError, match='session restart'):
+        broker.start(sid, process.pid)
+    assert ready.read_bytes() == previous

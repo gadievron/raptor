@@ -118,7 +118,7 @@ def consume(payload):
     # Native hooks can identify a child thread. Authenticate its alias first,
     # then use the restored root for both IPC addressing and receipt hashing,
     # exactly as _record does. Never select a root from inherited hook env.
-    restored = environment.restore(payload.get('session_id'))
+    restored = environment.restore(payload.get('session_id'), lifecycle=True)
     sid = restored['RAPTOR_CODEX_CONTEXT_ID']
     prefix = _prefix(sid, payload.get('tool_use_id'))
     context = environment.read_context(sid)
