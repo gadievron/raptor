@@ -65,12 +65,24 @@ class PreparedViews:
         import sys
         if not view.ok or len(view.line_map) > 32_000:
             return False
-        def size(value):
-            return sys.getsizeof(value) + (sum(size(v) for v in value) if isinstance(value, tuple) else 0)
+        with self._lock:
+            if key in self._values or len(self._values) >= 32:
+                return False
+            budget = min(2 * 1024 * 1024, self._max_bytes - self.retained_bytes)
+        # Admission only shrinks the available budget. Stop sizing as soon as
+        # this snapshot cannot fit; never walk a whole rejected source map.
+        cost = 512
+
+        def fits(value) -> bool:
+            nonlocal cost
+            cost += sys.getsizeof(value)
+            if cost > budget:
+                return False
+            return not isinstance(value, tuple) or all(fits(v) for v in value)
+
         # Include the key and immutable map/text, overcounting repeated strings
         # rather than underestimating a map's much larger Python representation.
-        cost = 512 + size(key) + size((view.file_path, view.text, view.line_map, view.tool, view.source_files))
-        if cost > 2 * 1024 * 1024:
+        if not fits(key) or not fits((view.file_path, view.text, view.line_map, view.tool, view.source_files)):
             return False
         with self._lock:
             if key in self._values or len(self._values) >= 32 or self.retained_bytes + cost > self._max_bytes:
