@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import textwrap
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -324,23 +325,32 @@ def test_deleted_unrelated_fork_metadata_does_not_break_freshness_check(api):
 def test_retry_limit_report_runs_without_checkout_or_api_access(tmp_path):
     import os
 
-    import yaml
-
-    workflow = yaml.safe_load((ROOT / '.github/workflows/macos-runner-recovery.yml').read_text())
-    job = workflow['jobs']['retry-limit']
-    assert job['runs-on'] == 'ubuntu-latest'
-    assert job['permissions'] == {}
-    assert job['timeout-minutes'] == 2
-    assert 'github.event.workflow_run.run_attempt == 2 &&' in job['if']
-    assert "conclusion == 'failure'" in job['if']
-    assert "conclusion == 'timed_out'" in job['if']
-    assert len(job['steps']) == 1
-    step = job['steps'][0]
-    assert 'uses' not in step
-    assert step['shell'] == 'bash'
+    # This lane installs pytest only. Inspect the literal job and shell block
+    # with stdlib tools, retaining the no-checkout/no-permissions assertions.
+    workflow = (ROOT / '.github/workflows/macos-runner-recovery.yml').read_text()
+    jobs = workflow.split('\njobs:\n', 1)[1]
+    match = re.search(r'^  retry-limit:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)',
+                      jobs, re.M | re.S)
+    assert match is not None, 'retry-limit job missing'
+    job = match[1]
+    assert re.search(r'^    runs-on: ubuntu-latest$', job, re.M)
+    assert re.search(r'^    permissions: \{\}$', job, re.M)
+    assert re.search(r'^    timeout-minutes: 2$', job, re.M)
+    condition = re.search(r'^    if: >-\n((?:      .*\n)+)', job, re.M)
+    assert condition is not None, 'retry-limit requires an explicit condition'
+    assert 'github.event.workflow_run.run_attempt == 2 &&' in condition[1]
+    assert "conclusion == 'failure'" in condition[1]
+    assert "conclusion == 'timed_out'" in condition[1]
+    steps = re.split(r'^      - ', job, flags=re.M)[1:]
+    assert len(steps) == 1
+    step = steps[0]
+    assert not re.search(r'^\s+uses:', step, re.M)
+    assert re.search(r'^        shell: bash$', step, re.M)
+    body = re.search(r'^        run: \|\n((?:          .*\n|\n)+)', step, re.M)
+    assert body is not None, 'retry-limit must run a literal shell block'
     summary = tmp_path / 'summary.md'
     summary.write_text('Earlier summary\n')
-    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', step['run']],
+    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', textwrap.dedent(body[1])],
                             cwd=tmp_path, capture_output=True, text=True, check=True,
                             env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)})
     assert summary.read_text() == 'Earlier summary\n' + result.stdout

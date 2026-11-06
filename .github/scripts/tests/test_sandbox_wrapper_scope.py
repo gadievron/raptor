@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -526,11 +527,17 @@ def test_scheduled_and_manual_runs_ignore_diff_base(tree, monkeypatch, event):
 
 
 def test_wrapper_workflow_passes_merge_group_base_to_scope():
-    import yaml
-
     root = Path(__file__).resolve().parents[3]
-    workflow = yaml.safe_load((root / '.github/workflows/sandbox-wrappers.yml').read_text())
-    step = next(step for step in workflow['jobs']['scope']['steps'] if step.get('id') == 'scope')
-    assert step['env']['BASE_SHA'] == (
+    workflow = (root / '.github/workflows/sandbox-wrappers.yml').read_text()
+    jobs = workflow.split('\njobs:\n', 1)[1]
+    job = re.search(r'^  scope:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)', jobs, re.M | re.S)
+    assert job is not None, 'wrapper scope job missing'
+    steps = re.split(r'^      - ', job[1], flags=re.M)[1:]
+    matches = [step for step in steps if re.search(r'^        id: scope$', step, re.M)]
+    assert len(matches) == 1, 'wrapper scope step must be unique'
+    environment = re.search(r'^        env:\n((?:          .*\n)+)', matches[0], re.M)
+    assert environment is not None, 'scope inputs must remain explicit'
+    fields = dict(re.findall(r'^          ([A-Z_]+): (.+)$', environment[1], re.M))
+    assert fields['BASE_SHA'] == (
         '${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}')
-    assert step['env']['EVENT'] == '${{ github.event_name }}'
+    assert fields['EVENT'] == '${{ github.event_name }}'
