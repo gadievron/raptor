@@ -1119,6 +1119,9 @@ if [ -n "$USE_CODEX" ]; then
     export RAPTOR_CODEX_HOOK_ROOT="$RAPTOR_DIR"
     export CODEX=1
     if [ -n "$RESUME_SESSION" ] && [ -z "$RAPTOR_LAUNCH_TARGET" ]; then
+        # Missing launch data means resume the conversation's prior target.
+        # An exported empty value would explicitly clear that target instead.
+        unset RAPTOR_LAUNCH_TARGET
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
             codex resume --last "${CODEX_ARGS[@]}"
     fi
