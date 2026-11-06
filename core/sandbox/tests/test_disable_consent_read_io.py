@@ -5,15 +5,20 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-from types import SimpleNamespace
+from types import ModuleType
 
 import pytest
 
 from core.sandbox import disable_consent as dc
+from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture
-def consent(tmp_path):
+def consent(tmp_path, monkeypatch):
+    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+    private = ModuleType('consent_read_os')
+    vars(private).update(vars(os))
+    monkeypatch.setattr(dc, 'os', private)
     nonce = dc._mint_nonce(tmp_path)
     return tmp_path / dc._nonce_filename(nonce), nonce
 
@@ -34,11 +39,15 @@ def test_growth_past_limit_is_refused(consent, monkeypatch):
 
     def stale_size(fd):
         st = real_fstat(fd)
-        return SimpleNamespace(st_mode=st.st_mode, st_uid=st.st_uid,
-                               st_size=65, st_mtime=st.st_mtime)
+        fields = list(st)
+        fields[6] = 65
+        return os.stat_result(fields)
 
     monkeypatch.setattr(dc.os, 'fstat', stale_size)
     assert dc._nonce_file_consents(path, nonce) is False
+    assert os.fstat is real_fstat
+    with path.open('rb') as native:
+        assert os.fstat(native.fileno()).st_size == path.stat().st_size
 
 
 def test_exact_limit_content_remains_valid(consent):

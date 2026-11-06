@@ -627,6 +627,7 @@ def _read_cache_profile(path: Path) -> SandboxProfile:
         path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
         | getattr(os, "O_CLOEXEC", 0),
     )
+    read_failed = False
     try:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
@@ -641,8 +642,17 @@ def _read_cache_profile(path: Path) -> SandboxProfile:
             data.extend(chunk)
         if len(data) > _MAX_CACHE_BYTES:
             raise ValueError("calibration cache entry exceeds the byte limit")
+    except BaseException:
+        read_failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            # Keep cancellation/body errors primary, but a close-only
+            # failure must still prevent successful metadata I/O.
+            if not read_failed:
+                raise
     return SandboxProfile.from_json(data.decode("utf-8"))
 
 

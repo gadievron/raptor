@@ -246,6 +246,7 @@ def _read_marker_record(path: Path) -> "tuple[dict | None, str | None]":
         if exc.errno in (errno.ELOOP, errno.EMLINK):
             return None, "symlink"
         return None, "unreadable"
+    read_failed = False
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -266,8 +267,17 @@ def _read_marker_record(path: Path) -> "tuple[dict | None, str | None]":
             return None, "too-large"
     except OSError:
         return None, "unreadable"
+    except BaseException:
+        read_failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            # Keep cancellation/body errors primary, but a close-only
+            # failure must still prevent successful metadata I/O.
+            if not read_failed:
+                raise
     try:
         record = json.loads(raw.decode("utf-8"),
                             object_pairs_hook=_unique_evidence_object)
