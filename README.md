@@ -178,33 +178,14 @@ tools/data and appropriate egress controls.
 
 ## Quick Start
 
-### Option 1: Install manually
+<!-- raptor:release-tag v3.1.0 -->
 
-Use the stable RAPTOR release (`v3.1.0`). Run in your terminal:
+**RAPTOR runs from your checkout. The Docker image supplies its tools and
+dependencies.** Use the stable RAPTOR release (`v3.1.0`) for normal use.
+Contributors should follow the [developer setup](docs/developers.md#working-on-the-development-version).
 
-```bash
-git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
-cd raptor
-uv venv
-uv pip install -r requirements.txt
-source .venv/bin/activate
-npm install -g @anthropic-ai/claude-code  # if not already installed
-uv tool install semgrep
-export PATH="$PATH:$PWD/bin"
-raptor
-```
-
-Use the `raptor` launcher from any directory. It loads RAPTOR's configuration,
-performs pre-flight checks, tracks coverage, and remembers your caller directory.
-For persistent PATH setup, launcher flags, and optional installation protection,
-see [manual installation](docs/installation.md#option-1-install-manually).
-
-### Option 2: Run in a container (recommended)
-
-The image supplies analysis, fuzzing, and browser tools; RAPTOR itself runs from
-the checkout you mount at `/workspaces/raptor`. Use the stable release below.
-The image digest pins the tools environment separately from the RAPTOR version.
-Run in your terminal:
+Run these commands in your terminal to mount the release checkout in the tools
+container. The image digest pins the tools environment separately from RAPTOR:
 
 ```bash
 git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
@@ -216,11 +197,11 @@ docker run -it \
   docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
 
-Replace the target path with your own; omit that mount if you do not need it.
-For an existing checkout, switch to `v3.1.0` before running these commands.
-Contributors working on unreleased code should use the [developer setup](docs/developers.md#working-on-the-development-version).
-Inside the container, run `raptor`. Local image builds, VS Code devcontainers,
-CodeQL provisioning, and debugger-specific requirements are covered in
+Replace the target path with your own, or omit that mount. For an existing
+checkout, switch to `v3.1.0` first. Inside the container, run `raptor`.
+
+For setup without Docker, see [manual installation](docs/installation.md#option-1-install-manually).
+Local builds, VS Code devcontainers and debugger requirements are covered in
 [container installation](docs/installation.md#option-2-run-in-a-container-recommended).
 
 ## What to expect on a first run
