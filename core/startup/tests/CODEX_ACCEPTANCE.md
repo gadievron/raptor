@@ -25,3 +25,24 @@ Do not automatically retry with elevated permissions or a weaker profile.
 Successful scan acceptance requires the fixture scan to complete under the
 requested isolation, with no hook failures. Record hook timeouts separately;
 a successful lightweight diagnostic command does not resolve earlier timeouts.
+
+
+## Title capability preflight
+
+The opt-in native suite checks `thread/name/set` and `thread/read` against
+separate temporary threads without starting a model turn. It verifies title
+round trips, manual replacement, and that another thread is unchanged.
+This proves the installed app-server's naming API, not lifecycle integration.
+
+Automatic naming still needs an adapter connected to the server hosting the
+firing session, with authenticated RAPTOR context and the shared title policy.
+In particular, a new stdio app-server is not a connection to the active TUI's
+server. Do not infer support from `/rename`, fabricate Claude's `sessionTitle`
+hook output, or edit Codex's database/transcript as a naming mechanism.
+
+## Hook failure evidence
+
+Record hook UI failures independently of tool exit status. A tool returning
+zero does not establish that its PostToolUse or Stop hook completed. Capture
+the event label and exact error, including timeout duration. Keep namespace
+refusals, hook failures, and scan results as separate acceptance observations.
