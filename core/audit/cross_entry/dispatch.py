@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
+from heapq import heappop, heappush
 
 from core.source.lines import split_lines
 
@@ -363,6 +364,49 @@ def expand_dispatch_paths(index, roots, limits):
     return rows,deferred
 
 
+_CALL_SUMMARY_DIRECT_MAX_WORK = 256
+
+
+def _catalogue_call_summaries(accesses, calls):
+    """Resolve point-containing calls with stable minimum-span tie breaking."""
+    points = sorted({access.start_byte for access in accesses})
+    if not points:
+        return {}
+    if len(points) * len(calls) <= _CALL_SUMMARY_DIRECT_MAX_WORK:
+        summaries = {}
+        for point in points:
+            enclosing = [call for call in calls if call.start_byte <= point < call.end_byte]
+            computed = max((sum(kind in {"binary_expression", "subscript_expression"}
+                                for kind in call.argument_kinds) for call in enclosing), default=0)
+            closest = min(enclosing, key=lambda call: call.end_byte-call.start_byte, default=None)
+            summaries[point] = computed, closest
+        return summaries
+
+    # Both heaps expire lazily. Original call positions preserve min()'s
+    # first-match choice even when equal spans start at different offsets.
+    ordered = iter(sorted(enumerate(calls), key=lambda row: row[1].start_byte))
+    pending = next(ordered, None)
+    by_span = []
+    by_computed = []
+    summaries = {}
+    for point in points:
+        while pending is not None and pending[1].start_byte <= point:
+            position, call = pending
+            if call.end_byte > point:
+                computed = sum(kind in {"binary_expression", "subscript_expression"}
+                               for kind in call.argument_kinds)
+                heappush(by_span, (call.end_byte-call.start_byte, position, call.end_byte, call))
+                heappush(by_computed, (-computed, position, call.end_byte))
+            pending = next(ordered, None)
+        while by_span and by_span[0][2] <= point:
+            heappop(by_span)
+        while by_computed and by_computed[0][2] <= point:
+            heappop(by_computed)
+        summaries[point] = (-by_computed[0][0] if by_computed else 0,
+                            by_span[0][3] if by_span else None)
+    return summaries
+
+
 def dispatch_catalogue(index, rows, budget):
     """Return exact source fragments plus citeable IDs; preserve omitted counts.
 
@@ -383,15 +427,23 @@ def dispatch_catalogue(index, rows, budget):
     for fid,bindings in sorted(by_target.items()):
         fn = index.functions[fid]
         accesses = [a for a in per_function[fid] if a.operation != "read"]
+        function_calls = per_calls[fid]
+        call_summaries = (_catalogue_call_summaries(accesses, function_calls)
+                          if len(accesses) * len(function_calls) > _CALL_SUMMARY_DIRECT_MAX_WORK else None)
         ranked = []
         for a in accesses:
             derived = any(p+"->" in a.object_origin or p+"." in a.object_origin for p in fn.params)
             derived |= a.object_origin.startswith("parameter:") and a.member_path != "*"
-            calls = [c for c in per_calls[fid] if c.start_byte <= a.start_byte < c.end_byte]
-            computed = max((sum(k in {"binary_expression","subscript_expression"} for k in c.argument_kinds)
-                            for c in calls),default=0)
+            if call_summaries is None:
+                enclosing = [c for c in function_calls if c.start_byte <= a.start_byte < c.end_byte]
+                computed = max((sum(k in {"binary_expression", "subscript_expression"}
+                                    for k in c.argument_kinds) for c in enclosing), default=0)
+                closest = min(enclosing, key=lambda c: c.end_byte-c.start_byte, default=None)
+            else:
+                computed, closest = call_summaries[a.start_byte]
             priority = (not derived,a.operation not in {"indirect_write","read_modify_write"},-computed,a.line,a.id)
-            ranked.append((priority,a,min(calls,key=lambda c:c.end_byte-c.start_byte) if calls else None))
+            ranked.append((priority,a,closest))
+        del call_summaries
         seen = set()
         candidates = []
         source_bytes = None
