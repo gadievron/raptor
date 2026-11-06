@@ -34,6 +34,8 @@ itself handles everything by default -- no extra API keys needed. If you want
 multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need
 to configure the other provider(s). See [LLM providers](llm.md).
 
+<!-- raptor:release-tag v3.1.0 -->
+
 These instructions use the stable RAPTOR release, `v3.1.0`. Contributors
 working on unreleased code should use the [developer setup](developers.md#working-on-the-development-version).
 
@@ -44,9 +46,13 @@ working on unreleased code should use the [developer setup](developers.md#workin
 git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
 
-# Install Python dependencies
-uv venv
-uv pip install -r requirements.txt
+# Install the checkout's Python dependencies with uv
+if [ -f uv.lock ]; then
+  uv sync --locked
+else
+  uv venv
+  uv pip install -r requirements.txt
+fi
 source .venv/bin/activate
 
 # Install Claude Code (if you don't already have it)

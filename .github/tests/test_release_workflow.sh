@@ -457,11 +457,18 @@ echo ""
 echo "=== stamp-version script strictness ==="
 
 STAMP_SCRIPT="$SCRIPT_DIR/.github/scripts/stamp-version"
+mkdir -p docs
+cat > docs/installation.md <<'MDEOF'
+<!-- raptor:release-tag v0.0.0 -->
+git clone --branch v0.0.0 https://github.com/gadievron/raptor.git
+MDEOF
 
 # Fixture README with the release banner line the script stamps.
 cat > README.md <<'MDEOF'
 # fixture
 ║             Based on Claude Code (v0.0.0)                                 ║
+<!-- raptor:release-tag v0.0.0 -->
+git clone --branch v0.0.0 https://github.com/gadievron/raptor.git
 MDEOF
 cat > pyproject.toml <<'TOMLEOF'
 [project]
@@ -481,6 +488,7 @@ assert_contains "script stamped config"    "$(cat core/config/__init__.py)" 'VER
 assert_contains "script stamped CITATION"  "$(cat CITATION.cff)"            'version: "9.9.9"'
 assert_contains "script stamped pyproject" "$(cat pyproject.toml)"          'version = "9.9.9"'
 assert_contains "script stamped README"    "$(cat README.md)"               "(v9.9.9)"
+assert_contains "script stamped installation checkout" "$(cat docs/installation.md)" "--branch v9.9.9"
 
 # A present file whose pattern misses must FAIL the run and be named —
 # warn-only per-file misses shipped stale versions flagged only in logs.
@@ -495,6 +503,8 @@ assert_contains "miss failure names README.md" "$OUT" "README.md"
 # Absent pyproject.toml is an optional target — still exit 0.
 cat > README.md <<'MDEOF'
 ║             Based on Claude Code (v0.0.0)                                 ║
+<!-- raptor:release-tag v0.0.0 -->
+git clone --branch v0.0.0 https://github.com/gadievron/raptor.git
 MDEOF
 rm -f pyproject.toml
 if OUT=$(python3 "$STAMP_SCRIPT" v9.9.11 2>&1); then

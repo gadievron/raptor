@@ -2,7 +2,8 @@
 """Stamp release version into tracked files.
 
 Called by the release workflow to bake the version tag into
-core/config/__init__.py, pyproject.toml, CITATION.cff, and README.md.
+core/config/__init__.py, pyproject.toml, uv.lock, CITATION.cff, README.md,
+and docs/installation.md.
 
 Usage:
   stamp-version <tag>
@@ -85,9 +86,50 @@ def stamp_pyproject(ver: str) -> str:
     return match.group(0) if match else ""
 
 
+def stamp_uv_lock(ver: str) -> str:
+    """Change only this checkout's virtual package, not dependency versions."""
+    path = Path("uv.lock")
+    text = path.read_text()
+    text, count = re.subn(
+        r'(^\[\[package\]\]\nname = "raptor"\nversion = ")[^"]+("\nsource = \{ virtual = "\." \})',
+        lambda match: match[1] + ver + match[2], text, flags=re.MULTILINE,
+    )
+    if count != 1:
+        print("warning: exactly one local RAPTOR package required in uv.lock", file=sys.stderr)
+        return ""
+    atomic_write(path, text)
+    return f"uv.lock: raptor {ver}"
+
+
+def release_references(text: str, tag: str, label: str) -> str | None:
+    """Advance this document's explicit RAPTOR tag, leaving other versions alone."""
+    markers = re.findall(r"<!-- raptor:release-tag (v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?) -->", text)
+    if len(markers) != 1:
+        print(f"warning: exactly one release-tag marker required in {label}", file=sys.stderr)
+        return None
+    previous = markers[0]
+    # Full token boundaries prevent v3.1.0 matching v3.1.0-rc.1 or v3.1.01.
+    result, count = re.subn(r"(?<![\w.-])" + re.escape(previous) + r"(?![\w.-])", lambda _: tag, text)
+    if count < 2:
+        print(f"warning: no release references found alongside marker in {label}", file=sys.stderr)
+        return None
+    return result
+
+
+def stamp_installation(tag: str) -> str:
+    path = Path("docs/installation.md")
+    text = release_references(path.read_text(), tag, str(path))
+    if text is None:
+        return ""
+    atomic_write(path, text)
+    return f"{path}: {tag}"
+
+
 def stamp_readme(tag: str) -> str:
     path = Path("README.md")
-    text = path.read_text()
+    text = release_references(path.read_text(), tag, str(path))
+    if text is None:
+        return ""
 
     def replace_banner(m: re.Match) -> str:
         prefix = m.group(1)
@@ -133,12 +175,14 @@ def main() -> None:
         ("core/config/__init__.py", lambda: stamp_config(ver)),
         ("CITATION.cff", lambda: stamp_citation(ver)),
         ("pyproject.toml", lambda: stamp_pyproject(ver)),
+        ("uv.lock", lambda: stamp_uv_lock(ver)),
         ("README.md", lambda: stamp_readme(tag)),
+        ("docs/installation.md", lambda: stamp_installation(tag)),
     ]
     failures: list[str] = []
     print("Stamped:")
     for label, stamp in targets:
-        if label == "pyproject.toml" and not Path(label).exists():
+        if label in {"pyproject.toml", "uv.lock"} and not Path(label).exists():
             # Optional target: present in source checkouts, permitted to
             # be absent (e.g. a pruned tree). A PRESENT file whose
             # pattern misses still fails below.
