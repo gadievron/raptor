@@ -106,9 +106,9 @@ def _owned_launch_state(monkeypatch):
 @pytest.fixture(autouse=True)
 def _virtual_launch_waits(monkeypatch):
     """Exercise real retry/poll budgets without real sleeps or shorter caps."""
-    import core.container.containers as consumer
+    import core.container.containers as containers
 
-    return install_poll_clock(monkeypatch, consumer)
+    return install_poll_clock(monkeypatch, containers)
 
 
 @patch("core.container.containers.run_cli")
