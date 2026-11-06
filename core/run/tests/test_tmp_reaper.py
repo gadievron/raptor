@@ -126,6 +126,8 @@ class TestDirReaping:
         dirs = [
             _make_old_dir(tmp_root, "raptor-native-ns-probe-abc12345"),
             _make_old_dir(tmp_root, "raptor-orchestration-inventory-abc12345"),
+            _make_old_dir(tmp_root, "raptor-codeql-offline-abc12345"),
+            _make_old_dir(tmp_root, "raptor-codeql-import-abc12345"),
             _make_old_dir(tmp_root, "raptor-llm-raptor-cafe0001-abc123"),
             _make_old_dir(tmp_root, "raptor-cc-cwd-abc123"),
             _make_old_dir(tmp_root, "raptor-joern-ws-abc123"),

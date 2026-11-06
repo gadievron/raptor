@@ -89,6 +89,9 @@ _DIR_PREFIXES = (
     "raptor-observe-tmp-",
     # Disposable orchestration inventories, protected by scratch keepalive.
     "raptor-orchestration-inventory-",
+    # Private offline CodeQL kit preparation/import scratch.
+    "raptor-codeql-offline-",
+    "raptor-codeql-import-",
     # Corpus receipt-replay temporary target/output trees.
     "receipt-replay-",
     "raptor-web-browser-",
