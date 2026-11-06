@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 RETIRED_BOUNDS_DEMOTION_PREFIX = '[smt-infeasible:'
+SOURCE_OVERFLOW_DISPROOF_PREFIX = '[smt-disproof:'
 
 
 def source_overflow_demotion_reason(
@@ -27,7 +28,7 @@ def source_overflow_demotion_reason(
             function_name=function_name, integer_abi=integer_abi,
         )
         if result.disproved is True:
-            return '[smt-disproof: integer overflow impossible (Z3 UNSAT)]'
+            return SOURCE_OVERFLOW_DISPROOF_PREFIX + ' integer overflow impossible (Z3 UNSAT)]'
     except Exception:
         logger.debug('source overflow disproof failed for %s:%s',
                      file_path, function_name, exc_info=True)

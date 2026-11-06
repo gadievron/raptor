@@ -2676,6 +2676,7 @@ _SILENCE_CLEAN_BODY_PREFIXES = (
 #: carries it is a reuse RE-JOURNAL, whose original basis (and body,
 #: behind the prefix or an index offload marker) is out of sight.
 _REUSED_BODY_PREFIX = "[reused:"
+_INTEGER_DISPROOF_REVALIDATION_REASON = "integer disproof requires target ABI revalidation"
 
 
 #: Body prefixes of cleans minted by gates that no longer exist because
@@ -2707,7 +2708,7 @@ _RETIRED_PROSE_CLEAN_BODY_PREFIXES = (
 #: the read-back body is accepted only when the origin row's offloaded
 #: fields (body, hypotheses, invariants_available,
 #: domain_concepts_available) hash to the index stub's MAC-covered
-#: pointer. Retired-prose eligibility reads the stub's verdict (index
+#: pointer. Gate-body eligibility reads the stub's verdict (index
 #: row) and that body (its ``[reused:`` leads and marker), so every
 #: input is authenticated; a stale or mutated origin can only make the
 #: read-back miss (the stub is then reused), never serve other content.
@@ -2729,7 +2730,7 @@ def _origin_journal_fingerprint(run_dir: Path) -> tuple:
 def _origin_run_body(entry, origin_cache: dict | None = None) -> str:
     """Body of a project-index stub, read back from its ORIGIN run.
 
-    The index write boundary offloads clean bodies >= 512 B to a stub
+    The index write boundary offloads clean/dormant bodies >= 512 B to a stub
     with no sidecar route (``journal._slim_index_row``), so a body
     marker is out of sight in the cross-run fold. The producing run
     journal keeps the row whole (or behind its own sidecar); it is
@@ -2780,10 +2781,14 @@ def _origin_run_body(entry, origin_cache: dict | None = None) -> str:
         return ""
 
 
-def _retired_gate_verdict(
+def _gate_body_revalidation(
     entry, hydrate_fn=None, origin_cache: dict | None = None,
 ) -> str | None:
-    """Refuse outcomes carrying a retired gate's leading pipeline stamp."""
+    """Revalidate pipeline stamps behind authenticated offloads and reuse leads.
+
+    A source hash cannot renew target-dependent integer proofs. When the
+    authenticated body is available, storage layout must not renew them.
+    """
     verdict = getattr(entry, "verdict", None)
     if verdict not in {"clean", "suspicious", "dormant"}:
         return None
@@ -2799,7 +2804,9 @@ def _retired_gate_verdict(
         if end < 0:
             break
         lead = lead[end + 1:].lstrip()
-    from .overflow_demotion import RETIRED_BOUNDS_DEMOTION_PREFIX
+    from .overflow_demotion import RETIRED_BOUNDS_DEMOTION_PREFIX, SOURCE_OVERFLOW_DISPROOF_PREFIX
+    if lead.startswith(SOURCE_OVERFLOW_DISPROOF_PREFIX):
+        return _INTEGER_DISPROOF_REVALIDATION_REASON
     if lead.startswith(RETIRED_BOUNDS_DEMOTION_PREFIX):
         return "unbound bounds demotion requires fresh review"
     if verdict == "clean" and lead.startswith(_RETIRED_PROSE_CLEAN_BODY_PREFIXES):
@@ -2816,9 +2823,10 @@ def _silence_derived_clean(
     """Why a clean entry may not be imported at $0 on its basis, or
     ``None``.
 
-    First, in every era: a clean minted by a retired prose gate or
-    site-unbound bounds gate is refused once whatever its basis —
-    those rows could be journaled ``verdict``.
+    First, gate stamps require revalidation whatever the clean's basis:
+    retired prose/bounds gates must not survive through cached outcomes,
+    and source integer disproofs lack a durable target-ABI binding. These
+    stamps are checked behind reuse wrappers and authenticated offloads.
 
     Stamped rows answer from the structured ``clean_basis``: the
     silence-derived bases and ``unknown`` are refused
@@ -2847,11 +2855,11 @@ def _silence_derived_clean(
     """
     if getattr(entry, "verdict", None) != "clean":
         return None
-    retired = _retired_gate_verdict(entry, hydrate_fn, origin_cache)
-    if retired is not None:
-        # Before the basis check: these rows were journaled with the
-        # collector's default ``verdict`` basis.
-        return retired
+    revalidation = _gate_body_revalidation(entry, hydrate_fn, origin_cache)
+    if revalidation is not None:
+        # Gate proof context is independent of the collector's basis;
+        # even a reviewed verdict cannot renew an unbound target ABI.
+        return revalidation
     basis = getattr(entry, "clean_basis", None)
     if basis:
         from core.coverage.journal import CLEAN_BASIS_NOT_REUSABLE
@@ -2903,8 +2911,10 @@ def _reuse_ineligibility(
     * verdict — ``error`` entries never reach here (filtered by the
       fold); everything else (clean/dormant/finding/suspicious) is a
       real verdict and eligible in principle.
-    * retired gate — marked bounds demotions require a fresh review,
-      including suspicious/dormant rows and reused or offloaded bodies.
+    * proof context — marked bounds demotions and target-dependent integer
+      disproofs require a fresh review, including suspicious/dormant rows
+      and reused or offloaded bodies. Positive findings are not rejected
+      as negative proof records.
     * ``context_reduced`` — the prior verdict came from the reduced-
       context timeout retry: lower-confidence by design, so it is
       re-reviewed rather than imported.
@@ -2951,11 +2961,16 @@ def _reuse_ineligibility(
     if any("smt:check-overflow:literal-call" in receipt for receipt in receipts if isinstance(receipt, str)):
         return "literal caller proof requires full source revalidation"
     if getattr(entry, "verdict", None) in {"suspicious", "dormant"}:
-        retired = _retired_gate_verdict(entry, hydrate_fn, origin_cache)
-        if retired is not None:
-            return retired
+        if any(part.strip().startswith("smt:disproof:")
+               for receipt in receipts if isinstance(receipt, str)
+               for part in receipt.split("+")):
+            return _INTEGER_DISPROOF_REVALIDATION_REASON
+        revalidation = _gate_body_revalidation(entry, hydrate_fn, origin_cache)
+        if revalidation is not None:
+            return revalidation
     if getattr(entry, "verdict", None) == "clean":
         from .smt_evidence import is_diagnostic_smt_rule
+        from .overflow_demotion import SOURCE_OVERFLOW_DISPROOF_PREFIX
         # Reclassifying a producer must also invalidate old clean verdicts
         # credited to it. Source hashes and clean_basis alone cannot restore
         # proof authority that the underlying model never established.
@@ -2973,8 +2988,8 @@ def _reuse_ineligibility(
         receipts = getattr(entry, "evidence_tools", None) or []
         body = getattr(entry, "body", "") or ""
         if any("smt:disproof:" in receipt or "smt:check-overflow" in receipt
-               for receipt in receipts if isinstance(receipt, str)) or body.startswith("[smt-disproof:"):
-            return "integer disproof requires target ABI revalidation"
+               for receipt in receipts if isinstance(receipt, str)) or body.startswith(SOURCE_OVERFLOW_DISPROOF_PREFIX):
+            return _INTEGER_DISPROOF_REVALIDATION_REASON
     if getattr(entry, "context_reduced", None):
         return "context_reduced verdict"
     if getattr(entry, "provisional", None):
