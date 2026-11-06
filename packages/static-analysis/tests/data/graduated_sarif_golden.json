@@ -67,9 +67,7 @@
                 "artifactLocation": {
                   "uri": "src/b.py"
                 },
-                "region": {
-                  "startLine": 0
-                }
+                "region": {}
               }
             }
           ],

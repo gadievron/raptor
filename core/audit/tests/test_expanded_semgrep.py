@@ -614,3 +614,51 @@ def test_e2e_real_semgrep_finds_macro_hidden_strcpy(tmp_path, sandbox_spy):
     for m in res.matches:
         assert m["file"] == "main.c"
         assert m["expanded_view"] is True
+
+
+def test_expanded_occurrences_share_original_line_without_becoming_source_columns(tmp_path):
+    from core.sarif.parser import deduplicate_findings, merge_sarif, parse_sarif_findings
+    from packages.semgrep.models import SemgrepFinding
+    import json
+
+    root = tmp_path / 'corpus'
+    root.mkdir()
+    (root / 'main.c').write_text('copy(a); copy(b);\ncopy(c);\n')
+    view = pv.ExpandedView(ok=True, file_path='main.c', line_map=(('main.c', 5), ('main.c', 5)))
+    corpus = es.ExpandedCorpus(root=root, tus={'main.c': es.ExpandedTu('main.c', view)})
+    findings = [SemgrepFinding(str(root / 'main.c'), line, rule_id='copy', column=column,
+                               line_end=line, column_end=column + 5)
+                for line, column in ((1, 1), (1, 10), (2, 1), (1, 1))]
+    mapped, dropped = translate_corpus_findings(corpus, findings)
+    assert len(mapped) == 3 and dropped == 0
+    report = tmp_path / 'expanded.sarif'
+    report.write_text(json.dumps(findings_to_sarif(mapped)))
+    merged = merge_sarif([str(report), str(report)])
+    assert len(merged['runs'][0]['results']) == 3
+    for row in merged['runs'][0]['results']:
+        assert row['locations'][0]['physicalLocation']['region'] == {'startLine': 5}
+    combined = tmp_path / 'combined.sarif'
+    combined.write_text(json.dumps(merged))
+    parsed = deduplicate_findings(parse_sarif_findings(combined))
+    assert len(parsed) == len({finding['finding_id'] for finding in parsed}) == 3
+
+
+def test_translation_path_memo_is_bounded_and_expires_between_calls(tmp_path, monkeypatch):
+    from packages.semgrep.models import SemgrepFinding
+
+    corpus = es.ExpandedCorpus(root=tmp_path)
+    calls = []
+
+    def resolve(root, path):
+        calls.append(path)
+        return None
+    monkeypatch.setattr(es, '_rel_in_corpus', resolve)
+    names = [f'missing-{i}.c' for i in range(300)]
+    names += [names[0], names[-1], 'x' * 5000, 'x' * 5000]
+    mapped, dropped = translate_corpus_findings(corpus, [SemgrepFinding(name, 1) for name in names])
+    assert mapped == [] and dropped == len(names)
+    assert calls.count(names[0]) == 1
+    assert calls.count(names[299]) == 2
+    assert calls.count('x' * 5000) == 2
+    translate_corpus_findings(corpus, [SemgrepFinding(names[0], 1)])
+    assert calls.count(names[0]) == 2

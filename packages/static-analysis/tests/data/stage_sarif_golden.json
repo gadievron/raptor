@@ -103,10 +103,7 @@
                 "artifactLocation": {
                   "uri": "src/c.java"
                 },
-                "region": {
-                  "startLine": 1,
-                  "endLine": 1
-                }
+                "region": {}
               }
             }
           ],
@@ -126,10 +123,7 @@
                 "artifactLocation": {
                   "uri": ""
                 },
-                "region": {
-                  "startLine": 1,
-                  "endLine": 1
-                }
+                "region": {}
               }
             }
           ],

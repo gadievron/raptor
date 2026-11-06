@@ -525,6 +525,11 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Expanded-source scans retain distinct matches within a macro expansion even
+when they share one original source line. Exact repeats from multiple packs
+still collapse. Expanded coordinates identify preprocessed occurrences;
+they are not presented as columns in the original source.
+
 Semgrep findings resolve artifact and rule references within their own SARIF
 run, including URI bases. Direct-source generated-rule reports retain line
 and column spans, so separate matches on the same line survive merging.
