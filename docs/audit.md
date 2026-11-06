@@ -1271,3 +1271,11 @@ constraint reduction is disabled. These are model assumptions, not verified
 callee definitions. Function-call operands in named numeric checks still use
 independent free placeholders; a SAT result involving them remains an
 approximation and cannot by itself establish a source bug.
+
+The SMT condition and numeric-operand grammars reserve only uppercase `NULL`
+as the zero constant. Other case variants are source identifiers, including
+`Null` and `null`; they retain distinct values and declared source domains.
+English null aliases still canonicalise to uppercase `NULL`. The shared
+variable builder rejects this reserved spelling before native allocation.
+This is the
+shared bitvector grammar's literal convention, not a cross-language resolver.
