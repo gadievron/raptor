@@ -47,6 +47,7 @@ class OwnedProxy:
     def __init__(self):
         self.fds = list(os.pipe())
         self.closed = False
+        self._loop = object()
 
     def stop(self, **kwargs):
         while self.fds:
@@ -57,15 +58,17 @@ class OwnedProxy:
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt, GeneratorExit, None])
 def test_proxy_reset_fixture_releases_owned_proxy(case, failure, monkeypatch):
-    owned = OwnedProxy()
+    owned = None
     fixture = None
     try:
         with monkeypatch.context() as patcher:
             # Preserve any pre-existing singleton; only this test's resource
             # may be touched by the real reset function.
             patcher.setattr(proxy_mod, "_instance", None)
+            patcher.setattr(proxy_mod, "EgressProxy", OwnedProxy)
             fixture = _fixture(case)
             next(fixture)
+            owned = proxy_mod.EgressProxy()
             proxy_mod._instance = owned
             if failure is None:
                 with pytest.raises(StopIteration):
@@ -80,7 +83,8 @@ def test_proxy_reset_fixture_releases_owned_proxy(case, failure, monkeypatch):
     finally:
         if fixture is not None:
             fixture.close()
-        owned.stop()
+        if owned is not None:
+            owned.stop()
 
 
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt, GeneratorExit])
