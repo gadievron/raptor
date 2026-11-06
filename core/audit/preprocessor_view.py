@@ -802,6 +802,28 @@ def recover_macro_defined_functions(
 # Files without it are skipped without spawning the preprocessor.
 _MACRO_INVOCATION_RE = re.compile(r"(?m)^[A-Z_][A-Z0-9_]{2,}\s*\(")
 
+_MACRO_COMMENT_RE = re.compile(r"\b[A-Z_][A-Z0-9_]{2,}\s*/[/*]")
+
+
+def _macro_candidate(text: str, pattern: re.Pattern[str]) -> bool:
+    """Shared conservative gate; callers retain their own anchoring policy."""
+    text = text or ""
+    if pattern.search(text):
+        return True
+    # This is an over-approximate gate, not a lexical proof: preserve every
+    # existing positive, then recover ordinary C preprocessing spellings.
+    # Phase-2 continuations join tokens before comments become whitespace.
+    logical = text.replace("\\\r\n", "").replace("\\\n", "")
+    if logical != text and pattern.search(logical):
+        return True
+    if not _MACRO_COMMENT_RE.search(logical):
+        return False
+    from .source_view import sanitized_view
+
+    # Keep strings and conditional code: macro configuration is only known
+    # to the real preprocessor, which remains authoritative for this pass.
+    return bool(pattern.search(sanitized_view(logical, language="cpp", keep_strings=True)))
+
 _AUGMENT_FILE_CAP = 50
 
 
@@ -853,7 +875,7 @@ def augment_checklist_with_macro_functions(
         got = read_text_capped(resolved)
         if got is None or got[1]:
             continue
-        if not _MACRO_INVOCATION_RE.search(got[0]):
+        if not _macro_candidate(got[0], _MACRO_INVOCATION_RE):
             continue
         budget -= 1
         try:
