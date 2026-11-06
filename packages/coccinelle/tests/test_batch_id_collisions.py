@@ -43,6 +43,7 @@ def test_duplicate_ids_preserve_results_options_and_refusals(tmp_path, monkeypat
         "second": SpatchResult("second", errors=["individual rule failure"], returncode=2),
     }
     calls = []
+    version_callbacks = []
     target = tmp_path / "target.c"
     include = [tmp_path / "include"]
     env = {"KEEP": "value"}
@@ -54,6 +55,8 @@ def test_duplicate_ids_preserve_results_options_and_refusals(tmp_path, monkeypat
     def individual(actual_target, path, **kwargs):
         calls.append(path)
         assert actual_target == target
+        version_callbacks.append(kwargs.pop("_installed_version"))
+        assert callable(version_callbacks[-1])
         assert kwargs == dict(include_dirs=include, no_includes=True, timeout=17,
                               env=env, defines=defines, subprocess_runner=no_batch,
                               allow_scripting=True)
@@ -66,6 +69,7 @@ def test_duplicate_ids_preserve_results_options_and_refusals(tmp_path, monkeypat
         allow_scripting=True,
     )
     assert calls == [first, second]
+    assert version_callbacks[0] is version_callbacks[1]
     assert results["first"] is expected["first"]
     assert results["second"] is expected["second"]
     assert results["oversize"].returncode == -1

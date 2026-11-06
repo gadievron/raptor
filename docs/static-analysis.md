@@ -83,6 +83,12 @@ Semgrep pass (`--expanded-semgrep`).
 
 ## Rule version requirements
 
+Coccinelle checks declared rule requirements against a successful, unambiguous
+version probe of the pinned executable. Unknown versions refuse only rules
+that declare a minimum; rules without a declaration still run. A rule sweep
+can reuse a successful probe while that executable remains unchanged. Failed
+probes are retried when needed, and a later sweep probes afresh.
+
 The startup banner shows installed Semgrep, Coccinelle and CodeQL versions.
 It warns about known compatibility limitations without disabling an entire
 backend. Tool-wide capability requirements and individual rule requirements

@@ -30,7 +30,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any
 
-from core.analysis.rule_versions import rule_version_refusal
+from core.analysis.rule_versions import rule_version_refusal, version_tuple as _release_version
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
@@ -485,39 +485,66 @@ MIN_SPATCH_VERSION = (1, 3)
 
 
 def version() -> str | None:
-    """Return the spatch version string, or None if unavailable.
-
-    Probe execution delegates to core.run.toolprobe (safe env,
-    resolved-path exec, uncached so per-test ``subprocess.run``
-    patches stay hermetic); the ``spatch version X`` line parse is
-    spatch-specific and stays here.
-    """
-    # Rule execution pins this resolved executable for the process. Probe
-    # that same executable: a later PATH change must not let a newer tool's
-    # version satisfy a rule that will still execute with the pinned old tool.
+    """Probe the pinned executable freshly; accept only stable spatch banners."""
     binary = _spatch_path()
     if binary is None:
         return None
     info = probe(binary)
-    if info is None:
+    if info is None or info.returncode != 0:
         return None
-    for line in info.stdout.splitlines():
-        if line.startswith("spatch version"):
-            return line.split("spatch version", 1)[1].strip()
-    return info.stdout.strip().splitlines()[0] if info.stdout.strip() else None
+    versions: dict[tuple[int, int, int], str] = {}
+    for stream in (info.stdout, info.stderr):
+        if not isinstance(stream, str):
+            continue
+        for line in stream.splitlines():
+            line = line.strip()
+            if line.startswith("spatch version "):
+                value = line.removeprefix("spatch version ").strip()
+                parsed = _release_version(value)
+                if parsed is None:
+                    return None
+                versions.setdefault(parsed, value)
+    # Conflicting banners cannot safely establish a rule's compatibility.
+    return next(iter(versions.values())) if len(versions) == 1 else None
 
 
 def version_tuple() -> tuple | None:
-    """Parse the leading ``major.minor`` of the spatch version into an
-    int tuple (e.g. ``"1.3 compiled with ..."`` → ``(1, 3)``), or None if
-    spatch is unavailable / the version string can't be parsed."""
-    v = version()
-    if not v:
-        return None
-    m = re.match(r"\s*(\d+)\.(\d+)", v)
-    if not m:
-        return None
-    return (int(m.group(1)), int(m.group(2)))
+    """Stable major.minor for the informational floor; unknown stays unknown."""
+    parsed = _release_version(version())
+    return parsed[:2] if parsed is not None else None
+
+
+def _rule_version_probe() -> Callable[[], str | None]:
+    """One positive cache entry for one rule sweep, tied to its pinned binary."""
+    cached_key: tuple[object, ...] | None = None
+    cached_value: str | None = None
+
+    def identity() -> tuple[object, ...] | None:
+        binary = _spatch_path()
+        if binary is None:
+            return None
+        try:
+            stat = os.stat(binary)
+            return (binary, stat.st_dev, stat.st_ino, stat.st_size,
+                    stat.st_mtime_ns, stat.st_ctime_ns)
+        except OSError:
+            return None
+
+    def installed() -> str | None:
+        nonlocal cached_key, cached_value
+        key = identity()
+        if key is not None and key == cached_key:
+            return cached_value
+        value = version()
+        if key is None:
+            return value
+        if identity() != key:
+            return None
+        if _release_version(value) is not None:
+            cached_key, cached_value = key, value
+        return value
+
+    return installed
 
 
 def meets_min_version() -> bool:
@@ -541,6 +568,7 @@ def run_rule(
     tree_files: set[str] | None = None,
     file_set: list[Path] | None = None,
     jobs: int = 0,
+    _installed_version: Callable[[], str | None] | None = None,
 ) -> SpatchResult:
     """Run a single Coccinelle rule against a target.
 
@@ -656,7 +684,7 @@ def run_rule(
             returncode=-1,
         )
 
-    refusal = rule_version_refusal(rule_text, version)
+    refusal = rule_version_refusal(rule_text, _installed_version or version)
     if refusal:
         return SpatchResult(
             rule=rule_name, rule_path=str(rule), errors=[refusal], returncode=-1,
@@ -1037,6 +1065,7 @@ def run_rules(
     tree_files = _walk_c_h(target) if target.is_dir() else None
 
     results = []
+    installed_version = _rule_version_probe()
     for idx, rule_path in enumerate(rule_paths):
         if rule_path.stem in exclude_rules:
             continue
@@ -1057,6 +1086,7 @@ def run_rules(
             subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
             tree_files=tree_files,
+            _installed_version=installed_version,
         )
         results.append(result)
 
@@ -1074,6 +1104,7 @@ def run_rules_batched(
     defines: dict[str, str] | None = None,
     subprocess_runner=None,
     allow_scripting: bool = False,
+    _installed_version: Callable[[], str | None] | None = None,
 ) -> dict[str, SpatchResult]:
     """Run multiple .cocci rules in a single spatch invocation.
 
@@ -1105,6 +1136,7 @@ def run_rules_batched(
     rules = [Path(r).resolve() for r in rules if Path(r).exists()]
     if not rules:
         return {}
+    installed_version = _installed_version or _rule_version_probe()
     if len(rules) == 1:
         result = run_rule(
             target, rules[0],
@@ -1114,6 +1146,7 @@ def run_rules_batched(
             env=env, defines=defines,
             subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
+            _installed_version=installed_version,
         )
         return {rules[0].stem: result}
 
@@ -1170,7 +1203,7 @@ def run_rules_batched(
                 returncode=-1,
             )
             continue
-        refusal = rule_version_refusal(text, version)
+        refusal = rule_version_refusal(text, installed_version)
         if refusal:
             refused[r.stem] = SpatchResult(
                 rule=r.stem, rule_path=str(r), errors=[refusal], returncode=-1,
@@ -1225,6 +1258,7 @@ def run_rules_batched(
                 env=env, defines=defines,
                 subprocess_runner=subprocess_runner,
                 allow_scripting=allow_scripting,
+                _installed_version=installed_version,
             )
             for r in selected
         }
@@ -1260,6 +1294,7 @@ def run_rules_batched(
                     timeout=timeout, env=env, defines=defines,
                     subprocess_runner=subprocess_runner,
                     allow_scripting=allow_scripting,
+                    _installed_version=installed_version,
                 ))
         out.update(refused)
         return {r.stem: out[r.stem] for r in rules if r.stem in out}
