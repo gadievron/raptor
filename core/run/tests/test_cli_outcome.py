@@ -181,3 +181,62 @@ def test_unmapped_child_cannot_use_inherited_root(context, monkeypatch, hook_ses
         outcome.consume(dict(payload, session_id=hook_session))
     assert list(directory.glob('outcome-*')) == receipts
     assert outcome.consume(payload) is not None
+
+
+@pytest.mark.parametrize('recorded_run', [True, False])
+@pytest.mark.parametrize('same_owner', [True, False])
+def test_lifecycle_restores_once_and_scopes_discovery(context, tmp_path, monkeypatch,
+                                                     recorded_run, same_owner):
+    import importlib.machinery
+    import importlib.util
+    import io
+    import json
+    from pathlib import Path
+    from core.config import RaptorConfig
+    from core.project import sessions
+    from core.run import metadata
+    from core.sandbox import summary
+
+    run = tmp_path / 'owned-run'
+    run.mkdir()
+    (run / '.raptor-run.json').write_text(json.dumps({
+        'status': 'running', 'session_pid': 12345, 'command': 'scan'}))
+    payload = context[2]
+    argv = [str(outcome.environment.ROOT / 'libexec/raptor-example'), '--out', str(run)]
+    monkeypatch.setattr(sys, 'argv', argv)
+    payload['tool_input']['command'] = ' '.join(shlex.quote(word) for word in argv)
+    monkeypatch.setattr(summary, '_active_run_dir', run if recorded_run else None)
+    with pytest.raises(SystemExit):
+        with outcome.cli_outcome():
+            raise SystemExit(7)
+    hook_path = Path(__file__).resolve().parents[3] / 'libexec/raptor-lifecycle-hook'
+    loader = importlib.machinery.SourceFileLoader('outcome_lifecycle_fixture', str(hook_path))
+    spec = importlib.util.spec_from_loader(loader.name, loader, origin=str(hook_path))
+    hook = importlib.util.module_from_spec(spec)
+    hook.__file__ = str(hook_path)
+    loader.exec_module(hook)
+    restores = []
+    original = outcome.environment.restore
+
+    def restore(sid):
+        restores.append(sid)
+        return original(sid)
+
+    monkeypatch.setattr(outcome.environment, 'restore', restore)
+    monkeypatch.setattr(metadata, '_get_session_pid', lambda: 12345)
+    monkeypatch.setattr(sessions, 'same_logical_owner', lambda *a: same_owner)
+    monkeypatch.setattr(RaptorConfig, 'get_out_dir', lambda: run.parent)
+    discoveries = []
+
+    def ledger(**kwargs):
+        discoveries.append(kwargs)
+        return [{'run_dir': str(run)}]
+
+    monkeypatch.setattr(sessions, 'ledger_runs', ledger)
+    monkeypatch.setattr(hook, 'REPO_ROOT', outcome.environment.ROOT)
+    monkeypatch.setattr(sys, 'argv', ['raptor-lifecycle-hook', 'codex-outcome'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(payload)))
+    hook._main([])
+    assert restores == ['session']
+    assert bool(discoveries) is not recorded_run
+    assert (run / '.raptor-tool-failure').exists() is same_owner
