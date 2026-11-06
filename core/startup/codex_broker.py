@@ -68,6 +68,30 @@ def _lock(directory):
     return fd
 
 
+
+def _send_snapshot(process, packet, *, deadline):
+    """Bound startup even if a child stalls before reading its private pipe."""
+    stream = process.stdin
+    try:
+        descriptor = stream.fileno()
+        os.set_blocking(descriptor, False)
+        pending = memoryview(packet)
+        while pending:
+            if time.monotonic() >= deadline:
+                raise environment.CodexEnvironmentError('startup snapshot pipe timed out')
+            try:
+                written = os.write(descriptor, pending)
+            except BlockingIOError:
+                time.sleep(.02)
+                continue
+            pending = pending[written:]
+    finally:
+        try:
+            stream.close()
+        except BrokenPipeError:
+            pass
+
+
 def start(session_id, pid):
     address = _address(session_id)
     with environment._directory(address, create=True) as directory:
@@ -93,6 +117,8 @@ def start(session_id, pid):
                                 raise environment.CodexEnvironmentError('prior broker did not retire')
                         time.sleep(0.02)
                         continue
+                    if current.get('environment_version') != environment.BROKER_ENVIRONMENT_VERSION:
+                        raise environment.CodexEnvironmentError('Codex broker needs a session restart')
                     if current['environment']['RAPTOR_SESSION_PID'] == str(pid):
                         return
                     raise environment.CodexEnvironmentError('another live owner holds this context')
@@ -101,19 +127,28 @@ def start(session_id, pid):
     from core.config import RaptorConfig
     from core.startup.codex_operator_environment import snapshot
     # This is a trusted RAPTOR service, never a target-code subprocess.
+    operator_environment = snapshot()
+    packet = json.dumps(operator_environment).encode()
+    if len(packet) > environment._MAX_BYTES:
+        raise environment.CodexEnvironmentError('operator environment snapshot exceeds startup budget')
     child_env = RaptorConfig.get_llm_env()
-    child_env.update(snapshot())
+    child_env.update(operator_environment)
     child_env.update({'RAPTOR_DIR': str(environment.ROOT), '_RAPTOR_TRUSTED': '1',
                       'RAPTOR_CODEX_HOOK': '1'})
     script = environment.ROOT / 'libexec/raptor-codex-env-broker'
     process = subprocess.Popen([sys.executable, '-I', str(script), session_id],
-                               env=child_env, stdin=subprocess.DEVNULL,
+                               env=child_env, stdin=subprocess.PIPE,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                start_new_session=True)
     try:
+        # The trusted parent already validated this vocabulary. A private pipe
+        # avoids repeating the source-inventory scan in every broker process;
+        # snapshot values never appear in argv or a persistent handoff file.
+        deadline = time.monotonic() + 10
+        _send_snapshot(process, packet, deadline=deadline)
         # Interpreter/config startup can exceed the ordinary IPC budget on
         # a loaded host. Keep normal requests fast, but allow bounded startup.
-        result = request(session_id, {'op': 'environment'}, timeout=10)
+        result = request(session_id, {'op': 'session'}, timeout=max(0, deadline - time.monotonic()))
         if result['environment']['RAPTOR_SESSION_PID'] == str(pid):
             return
     except (OSError, ValueError):
@@ -124,9 +159,11 @@ def start(session_id, pid):
     raise environment.CodexEnvironmentError('host broker did not initialize')
 
 
-def serve(session_id):
-    from core.startup.codex_operator_environment import snapshot
-    operator_environment = snapshot()
+def serve(session_id, operator_environment=None):
+    if operator_environment is None:
+        # Direct in-process callers retain the validated snapshot API.
+        from core.startup.codex_operator_environment import snapshot
+        operator_environment = snapshot()
     context = environment.read_context(session_id)
     pid = context['pid']
     os.environ.pop('RAPTOR_REGISTRY_HOME', None)
@@ -165,11 +202,14 @@ def serve(session_id):
                         if (isinstance(value, dict) and isinstance(value.get('capability'), str)
                                 and secrets.compare_digest(value['capability'], context['broker_key'])):
                             del value['capability']
-                            if value == {'op': 'environment'}:
+                            if value in ({'op': 'environment'}, {'op': 'session'}):
+                                selected = (operator_environment if value['op'] == 'environment' else
+                                            {k: v for k, v in operator_environment.items()
+                                             if k in environment._LIFECYCLE_ENV_KEYS})
                                 result = {'ok': True,
                                     'environment_version': environment.BROKER_ENVIRONMENT_VERSION,
                                     'environment': {
-                                    **operator_environment, **environment.overlay(context, fields)}}
+                                    **selected, **environment.overlay(context, fields)}}
                             elif (set(value) == {'op', 'pid', 'token', 'identity'}
                                   and value['op'] == 'identity' and value['pid'] == pid
                                   and value['identity'] == environment._identity(fields)
@@ -207,3 +247,16 @@ def serve(session_id):
             except FileNotFoundError:
                 pass
             os.close(lock)
+
+
+def serve_from_stdin(session_id):
+    """Accept the trusted parent's bounded in-memory snapshot, never a disk file."""
+    packet = sys.stdin.buffer.read(environment._MAX_BYTES + 1)
+    if len(packet) > environment._MAX_BYTES:
+        raise environment.CodexEnvironmentError('operator environment snapshot exceeds startup budget')
+    values = json.loads(packet)
+    if (not isinstance(values, dict)
+            or any(not isinstance(k, str) or not k or '=' in k or '\0' in k
+                   or not isinstance(v, str) or '\0' in v for k, v in values.items())):
+        raise environment.CodexEnvironmentError('invalid operator environment snapshot')
+    return serve(session_id, values)

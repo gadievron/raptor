@@ -306,7 +306,7 @@ def _main(ending):
             expected = "SessionEnd" if event == "codex-end" else "Stop"
             if not isinstance(payload, dict) or payload.get("hook_event_name") != expected:
                 raise ValueError("unexpected Codex lifecycle event")
-            restore(payload.get("session_id"))
+            restore(payload.get("session_id"), lifecycle=True)
         except (OSError, ValueError, TypeError):
             sys.exit("RAPTOR: lifecycle hook has no validated Codex session context")
         sys.stdin = io.StringIO(raw)

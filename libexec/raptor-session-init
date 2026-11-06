@@ -77,7 +77,7 @@ import core.startup.process_init  # noqa: E402,F401
 def codex_launch_context(session_id):
     """Expose only operator launch data after validating the session context."""
     from core.startup.codex_environment import restore
-    values = restore(session_id)
+    values = restore(session_id, lifecycle=True)
     return {"caller_dir": values.get("RAPTOR_CALLER_DIR"),
             "launch_target": values.get("RAPTOR_LAUNCH_TARGET") or None}
 

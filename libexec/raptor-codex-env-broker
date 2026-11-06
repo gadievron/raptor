@@ -23,11 +23,11 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(REPO_ROOT))
 import core.startup.process_init  # noqa: E402,F401
-from core.startup.codex_broker import serve  # noqa: E402
+from core.startup.codex_broker import serve_from_stdin  # noqa: E402
 
 if __name__ == "__main__":
     from core.run.cli_outcome import cli_outcome
     with cli_outcome():
         if len(sys.argv) != 2:
             sys.exit(2)
-        serve(sys.argv[1])
+        serve_from_stdin(sys.argv[1])

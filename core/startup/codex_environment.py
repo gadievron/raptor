@@ -18,8 +18,15 @@ import time
 from core.hash import sha256_bytes, sha256_string
 
 ROOT = Path(__file__).resolve().parents[2]
-BROKER_ENVIRONMENT_VERSION = 2
+BROKER_ENVIRONMENT_VERSION = 3
 _MAX_BYTES = 64 * 1024
+# Lifecycle bookkeeping needs session/output context, never provider secrets.
+_LIFECYCLE_ENV_KEYS = frozenset({
+    "RAPTOR_DIR", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "CODEX",
+    "RAPTOR_CODEX_CONTEXT_ID", "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_REGISTRY_HOME",
+    "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET", "RAPTOR_OUT_DIR", "RAPTOR_CONFIG",
+    "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
+})
 _FIELDS = {"version", "root", "session_id", "pid", "identity", "token_digest",
            "registry_home", "caller_dir", "launch_target", "broker_key"}
 _ALIAS_FIELDS = {"version", "root", "thread_id", "parent_id", "generation"}
@@ -317,7 +324,7 @@ def publish_alias(parent_id, thread_id):
     from core.project import sessions
     if sessions.resolve_codex_owner_pid() != context["pid"]:
         raise CodexEnvironmentError("subagent hook does not belong to the root owner")
-    restore(parent_id)
+    restore(parent_id, lifecycle=True)
     alias = {"version": 1, "root": str(ROOT), "thread_id": thread_id,
              "parent_id": parent_id,
              "generation": sha256_string(context["broker_key"])}
@@ -349,8 +356,8 @@ def overlay(context, fields):
     return values
 
 
-def restore(session_id):
-    """Validate first, then install the complete overlay in this process only."""
+def restore(session_id, *, lifecycle=False):
+    """Validate first; lifecycle callers request only session/output context."""
     from core.project import sessions
     value = read_context(_session_id(session_id))
     pid = value["pid"]
@@ -372,8 +379,11 @@ def restore(session_id):
     # settings. The broker owns the launch-time snapshot; missing IPC is an
     # explicit error, never a fallback to defaults or another root's values.
     from core.startup.codex_broker import request
-    from core.startup.codex_operator_environment import allowed_name, install
-    reply = request(session_id, {"op": "environment"})
+    if lifecycle:
+        allowed_name = _LIFECYCLE_ENV_KEYS.__contains__
+    else:
+        from core.startup.codex_operator_environment import allowed_name, install
+    reply = request(session_id, {"op": "session" if lifecycle else "environment"})
     if (type(reply.get("environment_version")) is not int
             or reply["environment_version"] != BROKER_ENVIRONMENT_VERSION):
         raise CodexEnvironmentError("Codex environment broker needs a session restart")
@@ -399,7 +409,11 @@ def restore(session_id):
             os.fsencode(item)
     except UnicodeError as exc:
         raise CodexEnvironmentError("invalid broker environment encoding") from exc
-    install(values)
+    if lifecycle:
+        for key in _LIFECYCLE_ENV_KEYS:
+            os.environ.pop(key, None)
+    else:
+        install(values)
     additions = [str(ROOT / "bin"), str(ROOT / "libexec")]
     values["PATH"] = os.pathsep.join(additions + [p for p in os.environ.get("PATH", "").split(os.pathsep)
                                                  if p and p not in additions])
@@ -438,7 +452,10 @@ def restore_for_process():
             or os.environ.get("RAPTOR_CODEX_HOOK") == "1"):
         return
     try:
-        restore(session_id)
+        metadata_only = (Path(sys.argv[0]).name == 'raptor-read'
+                         or (Path(sys.argv[0]).name == 'raptor-session-init'
+                             and sys.argv[1:] == ['--codex-context']))
+        restore(session_id, lifecycle=metadata_only)
     except (OSError, ValueError, TypeError, UnicodeError) as exc:
         # Avoid echoing file contents, paths supplied by targets, or tokens.
         raise SystemExit("RAPTOR: Codex startup context unavailable or invalid; "
