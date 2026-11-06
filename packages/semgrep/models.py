@@ -446,10 +446,17 @@ def parse_json_output(text: str) -> dict[str, Any]:
         errors = []
     if any(not isinstance(entry, dict) for entry in errors):
         out["errors"].append("Semgrep errors metadata contains invalid entries")
+    if any(isinstance(e, dict) and (
+        (e.get("path") is not None and (
+            not isinstance(e["path"], str) or "\x00" in e["path"]))
+        or _diagnostic_level(e) is None
+    ) for e in errors):
+        out["errors"].append("Semgrep errors metadata contains invalid diagnostic fields")
     out["files_failed"] = [
-        {"path": str(e.get("path", "")), "reason": str(e.get("message", "error"))}
+        {"path": e["path"], "reason": _diagnostic_message(e)}
         for e in errors
-        if isinstance(e, dict) and e.get("path")
+        if isinstance(e, dict) and isinstance(e.get("path"), str)
+        and e["path"] and "\x00" not in e["path"]
     ]
     out["skipped_rules"] = [
         _render_error(e) for e in errors
@@ -463,11 +470,29 @@ def parse_json_output(text: str) -> dict[str, Any]:
         _render_error(e)
         for e in errors
         if isinstance(e, dict)
-        and str(e.get("level", "error")).lower() in ("error", "fatal")
+        and _diagnostic_level(e) in ("error", "fatal", None)
     )
 
     out["semgrep_version"] = str(data.get("version", ""))
     return out
+
+
+def _diagnostic_level(entry: dict[str, Any]) -> str | None:
+    """Unknown severities cannot establish an error-free scan."""
+    level = entry.get("level", "error")
+    if not isinstance(level, str):
+        return None
+    level = level.strip().lower()
+    return level if level in ("debug", "info", "warn", "warning", "error", "fatal") else None
+
+
+def _diagnostic_message(entry: dict[str, Any], default: str = "error") -> str:
+    """Preserve supported diagnostic text without retaining oversized reasons."""
+    for key in ("message", "long_msg", "short_msg"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value[:500]
+    return default
 
 
 def _render_error(entry: dict[str, Any]) -> str:
@@ -476,11 +501,6 @@ def _render_error(entry: dict[str, Any]) -> str:
     Semgrep's error objects vary by type: rule-schema errors carry
     ``long_msg``/``short_msg``; runtime errors carry ``message``.
     """
-    msg = (
-        entry.get("message")
-        or entry.get("long_msg")
-        or entry.get("short_msg")
-        or "semgrep error"
-    )
+    msg = _diagnostic_message(entry, default="semgrep error")
     etype = entry.get("type") or "error"
     return f"{etype}: {msg}"[:500]
