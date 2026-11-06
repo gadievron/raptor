@@ -161,3 +161,15 @@ def test_plugin_python_ignores_target_import_paths(tmp_path, plugin_env):
         result = _fire(event, target, env)
         assert result.returncode == 0, result.stderr
         assert not marker.exists(), event
+
+
+def test_lifecycle_hooks_have_distinct_labels_without_relaxing_timeouts():
+    labels = []
+    for event, groups in HOOKS.items():
+        hook = groups[0]['hooks'][0]
+        assert event in hook['statusMessage']
+        labels.append(hook['statusMessage'])
+    assert len(set(labels)) == len(labels)
+    assert HOOKS['Stop'][0]['hooks'][0]['timeout'] == 5
+    assert HOOKS['PostToolUse'][0]['hooks'][0]['timeout'] == 5
+    assert HOOKS['SessionEnd'][0]['hooks'][0]['timeout'] == 3

@@ -272,7 +272,6 @@ def _main(ending):
         import json
         from core.run.cli_outcome import consume
         from core.run.literal_command import literal_invocation_argv
-        from core.startup.codex_environment import restore
         try:
             payload = json.loads(sys.stdin.read(1024 * 1024 + 1))
             inputs = payload.get("tool_input") if isinstance(payload, dict) else None
@@ -288,7 +287,8 @@ def _main(ending):
                 return
             command, recorded_run, arguments = receipt
             outcome_scope = (recorded_run, arguments)
-            restore(payload.get("session_id"))
+            # consume() already installed the authenticated root environment.
+            # Do not repeat its broker round trip after consuming the receipt.
         except (OSError, ValueError, TypeError, KeyError, RecursionError):
             return
         # Adapt proven exit evidence to the same failure-only attribution path
@@ -386,77 +386,83 @@ def _main(ending):
         )
         return
 
-    # PRIMARY discovery: the session's run ledger (exact — the records
-    # were written by this session's own lifecycle starts). The
-    # directory-walk fallback below survives for pre-series sessions
-    # with no ledger. Pre-fix this block read `REPO_ROOT/.active` — a
-    # path NOTHING creates (the real pointer lives at
-    # ~/.raptor/projects/.active and resolves to a JSON file, never a
-    # dir) — and the one-level out/ walk never reached
-    # out/projects/<name>/<run>: orphaned PROJECT runs were never
-    # finalized by Stop/SessionEnd at all.
-    ledger_dirs = []
-    try:
-        from core.project.sessions import ledger_runs
-        for record in ledger_runs(pid=session_pid, status="running"):
-            run_dir = Path(record["run_dir"])
-            if run_dir.is_dir():
-                ledger_dirs.append(run_dir)
-    except Exception:  # noqa: BLE001 — ledger is an aid, never a gate
-        pass
-
-    scan_dirs = []
-    # Honour RaptorConfig.get_out_dir() / DEFAULT_OUTPUT_BASE
-    # rather than hardcoding `REPO_ROOT / "out"`. Pre-fix the
-    # hardcoded path missed runs that landed under the
-    # operator-configured base (e.g. the project run dir from a
-    # `/project use` invocation, or RAPTOR_OUT_DIR override
-    # for shared CI workspaces). The hook's "find the active
-    # run" logic then said "no run found" for runs that
-    # genuinely existed elsewhere; lifecycle events fired
-    # against the wrong (stale) state.
-    try:
-        from core.config import RaptorConfig
-        configured_out = RaptorConfig.get_out_dir()
-        if configured_out.is_dir() and configured_out not in scan_dirs:
-            scan_dirs.append(configured_out)
-    except (ImportError, OSError, ValueError):
-        # core.config import failure shouldn't break the hook, and
-        # get_out_dir raises ValueError when RAPTOR_OUT_DIR points at
-        # a forbidden system prefix; fall back to the hardcoded
-        # default in both cases. A miswired call still propagates.
-        pass
-    out_dir = REPO_ROOT / "out"
-    if out_dir.is_dir() and out_dir not in scan_dirs:
-        scan_dirs.append(out_dir)
-
-    # Candidate run dirs: exact ledger records first, then the legacy
-    # one-level walk of the out roots (pre-series sessions only have
-    # the latter). Deduped by resolved path; per-dir validation below
-    # (status=running + session_pid match) applies identically to both
-    # sources, so a stale ledger line can never finalize a foreign run.
-    candidates = []
-    seen = set()
-    for d in ledger_dirs:
-        key = str(d)
-        if key not in seen:
-            seen.add(key)
-            candidates.append(d)
-    for parent in scan_dirs:
+    if outcome_scope is not None and outcome_scope[0] is not None:
+        # A native receipt identifies one exact run. The ownership and status
+        # gates below still apply; unrelated ledger/output directories cannot
+        # match this receipt and need not be enumerated on every tool failure.
+        candidates = [Path(outcome_scope[0])]
+    else:
+        # PRIMARY discovery: the session's run ledger (exact — the records
+        # were written by this session's own lifecycle starts). The
+        # directory-walk fallback below survives for pre-series sessions
+        # with no ledger. Pre-fix this block read `REPO_ROOT/.active` — a
+        # path NOTHING creates (the real pointer lives at
+        # ~/.raptor/projects/.active and resolves to a JSON file, never a
+        # dir) — and the one-level out/ walk never reached
+        # out/projects/<name>/<run>: orphaned PROJECT runs were never
+        # finalized by Stop/SessionEnd at all.
+        ledger_dirs = []
         try:
-            children = list(parent.iterdir())
-        except OSError:
-            continue
-        for d in children:
-            try:
-                if not d.is_dir() or d.name.startswith((".", "_")):
-                    continue
-            except OSError:
-                continue
+            from core.project.sessions import ledger_runs
+            for record in ledger_runs(pid=session_pid, status="running"):
+                run_dir = Path(record["run_dir"])
+                if run_dir.is_dir():
+                    ledger_dirs.append(run_dir)
+        except Exception:  # noqa: BLE001 — ledger is an aid, never a gate
+            pass
+
+        scan_dirs = []
+        # Honour RaptorConfig.get_out_dir() / DEFAULT_OUTPUT_BASE
+        # rather than hardcoding `REPO_ROOT / "out"`. Pre-fix the
+        # hardcoded path missed runs that landed under the
+        # operator-configured base (e.g. the project run dir from a
+        # `/project use` invocation, or RAPTOR_OUT_DIR override
+        # for shared CI workspaces). The hook's "find the active
+        # run" logic then said "no run found" for runs that
+        # genuinely existed elsewhere; lifecycle events fired
+        # against the wrong (stale) state.
+        try:
+            from core.config import RaptorConfig
+            configured_out = RaptorConfig.get_out_dir()
+            if configured_out.is_dir() and configured_out not in scan_dirs:
+                scan_dirs.append(configured_out)
+        except (ImportError, OSError, ValueError):
+            # core.config import failure shouldn't break the hook, and
+            # get_out_dir raises ValueError when RAPTOR_OUT_DIR points at
+            # a forbidden system prefix; fall back to the hardcoded
+            # default in both cases. A miswired call still propagates.
+            pass
+        out_dir = REPO_ROOT / "out"
+        if out_dir.is_dir() and out_dir not in scan_dirs:
+            scan_dirs.append(out_dir)
+
+        # Candidate run dirs: exact ledger records first, then the legacy
+        # one-level walk of the out roots (pre-series sessions only have
+        # the latter). Deduped by resolved path; per-dir validation below
+        # (status=running + session_pid match) applies identically to both
+        # sources, so a stale ledger line can never finalize a foreign run.
+        candidates = []
+        seen = set()
+        for d in ledger_dirs:
             key = str(d)
             if key not in seen:
                 seen.add(key)
                 candidates.append(d)
+        for parent in scan_dirs:
+            try:
+                children = list(parent.iterdir())
+            except OSError:
+                continue
+            for d in children:
+                try:
+                    if not d.is_dir() or d.name.startswith((".", "_")):
+                        continue
+                except OSError:
+                    continue
+                key = str(d)
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(d)
 
     # tool-failure: collect this session's running runs, then stamp
     # exactly ONE below (see _pick_failure_run).
