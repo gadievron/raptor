@@ -5,11 +5,11 @@ import os
 import subprocess
 import sys
 import threading
-from types import SimpleNamespace
 
 import pytest
 
 from core.sandbox import evidence
+from core.testing.module_bindings import patch_module_attribute
 
 
 def test_close_during_encoding_cannot_write_to_reused_descriptor(tmp_path, monkeypatch):
@@ -48,7 +48,7 @@ def test_close_during_encoding_cannot_write_to_reused_descriptor(tmp_path, monke
             return real_write(victim_fd, data)
 
         with monkeypatch.context() as patch:
-            patch.setattr(evidence, "os", SimpleNamespace(write=reused_write))
+            patch_module_attribute(patch, evidence, "os", "write", reused_write)
             release.set()
             worker.join(5)
         assert not worker.is_alive()
@@ -130,7 +130,7 @@ def test_concurrent_closers_share_one_verification_and_release(tmp_path, monkeyp
             errors.append(exc)
 
     monkeypatch.setattr(handle, "verify", verify)
-    monkeypatch.setattr(evidence.os, "close", close_fd)
+    patch_module_attribute(monkeypatch, evidence, "os", "close", close_fd)
     first = threading.Thread(target=close, daemon=True)
     second = threading.Thread(target=close, args=(True,), daemon=True)
     first.start()
