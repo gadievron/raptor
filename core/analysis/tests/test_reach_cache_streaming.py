@@ -1,6 +1,9 @@
 """Streaming cache writes preserve the format and atomic size limit."""
 import json
 import os
+
+from core.testing.module_bindings import patch_module_attribute
+from core import atomic_fs
 import stat
 
 import pytest
@@ -64,7 +67,7 @@ def test_late_oversize_rolls_back_after_writing_chunks(tmp_path, monkeypatch):
         sizes.append(len(data))
         return real_write(fd, data)
 
-    monkeypatch.setattr(os, "write", recording_write)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", "write", recording_write)
     cache.save_index(fp, idx)
     assert sum(sizes) > 64 * 1024
     assert path.read_bytes() == b"old"
@@ -80,7 +83,7 @@ def test_streamed_tokens_survive_short_writes(tmp_path, monkeypatch):
     def short_write(fd, data):
         return real_write(fd, data[:997])
 
-    monkeypatch.setattr(os, "write", short_write)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", "write", short_write)
     cache.save_index("c" * 64, idx)
     assert (tmp_path / ("c" * 64 + ".json")).read_bytes() == expected
     assert not list(tmp_path.glob(".reach-tmp-*"))

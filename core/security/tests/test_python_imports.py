@@ -1,5 +1,7 @@
 """Protected startup drops writable/undeclared imports, without executing them."""
 import os
+
+from core.testing.module_bindings import patch_module_attribute
 import sys
 from types import SimpleNamespace
 
@@ -71,9 +73,9 @@ def test_only_declared_readonly_paths_survive(tmp_path, monkeypatch):
 
 
 def test_readonly_check_uses_mount_flags(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, 'statvfs', lambda path: SimpleNamespace(f_flag=os.ST_RDONLY))
+    patch_module_attribute(monkeypatch, python_imports, "os", 'statvfs', lambda path: SimpleNamespace(f_flag=os.ST_RDONLY))
     assert python_imports._read_only(tmp_path)
-    monkeypatch.setattr(os, 'statvfs', lambda path: SimpleNamespace(f_flag=0))
+    patch_module_attribute(monkeypatch, python_imports, "os", 'statvfs', lambda path: SimpleNamespace(f_flag=0))
     assert not python_imports._read_only(tmp_path)
 
 
@@ -225,7 +227,7 @@ def test_hardening_is_idempotent(import_layout):
 def test_readonly_probe_errors_deny_path(monkeypatch, tmp_path):
     def denied(path):
         raise OSError('mount information unavailable')
-    monkeypatch.setattr(os, 'statvfs', denied)
+    patch_module_attribute(monkeypatch, python_imports, "os", 'statvfs', denied)
     assert not python_imports._read_only(tmp_path)
 
 

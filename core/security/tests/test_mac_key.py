@@ -12,6 +12,8 @@ from __future__ import annotations
 import itertools
 import multiprocessing
 import os
+
+from core.testing.module_bindings import patch_module_attribute
 import stat
 import time
 from pathlib import Path
@@ -71,7 +73,7 @@ class TestCreate:
         def one_byte_write(fd: int, data) -> int:
             return real_write(fd, bytes(data)[:1])
 
-        monkeypatch.setattr(os, "write", one_byte_write)
+        patch_module_attribute(monkeypatch, mac_key, "os", "write", one_byte_write)
         key = mac_key.load_or_create_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
         monkeypatch.undo()
@@ -100,7 +102,7 @@ class TestStaleCorruptKey:
         key_path.touch(mode=0o600)
         _backdate(key_path)
         sleeps: list[float] = []
-        monkeypatch.setattr(time, "sleep", sleeps.append)
+        patch_module_attribute(monkeypatch, mac_key, "time", "sleep", sleeps.append)
 
         got = mac_key.load_or_create_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
@@ -139,7 +141,7 @@ class TestStaleCorruptKey:
         future = time.time() + 3600
         os.utime(key_path, (future, future))
         sleeps: list[float] = []
-        monkeypatch.setattr(time, "sleep", sleeps.append)
+        patch_module_attribute(monkeypatch, mac_key, "time", "sleep", sleeps.append)
 
         got = mac_key.load_or_create_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
@@ -187,7 +189,7 @@ class TestFreshWrongLengthKey:
         the winner's completed key — no suspect-key warning."""
         key_path.parent.mkdir(mode=0o700, parents=True)
         key_path.touch(mode=0o600)  # winner created, not yet written
-        monkeypatch.setattr(time, "sleep", lambda s: None)
+        patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
         full_key = b"k" * _KEY_LEN
         reads = iter([b"", b"", full_key])
         got = mac_key.load_or_create_key(
@@ -204,7 +206,7 @@ class TestFreshWrongLengthKey:
         key_path.parent.mkdir(mode=0o700, parents=True)
         key_path.write_bytes(b"short")
         key_path.chmod(0o600)
-        monkeypatch.setattr(time, "sleep", lambda s: None)
+        patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
         got = mac_key.load_or_create_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls),
             read_existing=lambda path: b"short")
@@ -255,7 +257,7 @@ class TestReadDiscipline:
             values[4] = st.st_uid + 1  # st_uid slot
             return os.stat_result(values)
 
-        monkeypatch.setattr(os, "fstat", foreign)
+        patch_module_attribute(monkeypatch, mac_key, "os", "fstat", foreign)
         got = mac_key.read_existing_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
         assert got is mac_key.REFUSED
@@ -281,8 +283,7 @@ class TestReadDiscipline:
         key_path.write_bytes(data)
         key_path.chmod(0o600)
         real_read = os.read
-        monkeypatch.setattr(
-            os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+        patch_module_attribute(monkeypatch, mac_key, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
         got = mac_key.read_existing_key(
             key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
         assert got == data
@@ -307,8 +308,8 @@ class TestCreationRace:
                 raise FileExistsError(path)
             return real_open(path, flags, mode)
 
-        monkeypatch.setattr(os, "open", fake_open)
-        monkeypatch.setattr(time, "sleep", lambda s: None)
+        patch_module_attribute(monkeypatch, mac_key, "os", "open", fake_open)
+        patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
     def test_race_loser_retries_through_empty_read(
             self, key_path: Path, warn_calls: list[tuple],

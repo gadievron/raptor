@@ -2,6 +2,8 @@
 from contextlib import ExitStack
 import json
 import os
+
+from core.testing.module_bindings import patch_module_attribute
 from pathlib import Path
 import subprocess
 import sys
@@ -117,7 +119,7 @@ def test_darwin_default_uses_os_private_directory(monkeypatch):
     def confstr(key):
         called.append(key)
         return '/private/var/folders/example/T/'
-    monkeypatch.setattr(os, 'confstr', confstr)
+    patch_module_attribute(monkeypatch, env_sanitisation, "os", 'confstr', confstr)
     monkeypatch.setenv('TMPDIR', '/attacker/tmp')
     assert env_sanitisation._system_tmpdir('darwin') == '/private/var/folders/example/T/'
     assert called == [65537]
@@ -125,7 +127,7 @@ def test_darwin_default_uses_os_private_directory(monkeypatch):
 
 @pytest.mark.parametrize('answer', [None, '', '/tmp', '/private/tmp/', 'relative'])
 def test_darwin_private_default_failure_never_becomes_public_tmp(monkeypatch, answer):
-    monkeypatch.setattr(os, 'confstr', lambda key: answer)
+    patch_module_attribute(monkeypatch, env_sanitisation, "os", 'confstr', lambda key: answer)
     with pytest.raises(OSError):
         env_sanitisation._system_tmpdir('darwin')
 

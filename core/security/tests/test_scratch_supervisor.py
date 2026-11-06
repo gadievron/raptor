@@ -1,6 +1,8 @@
 """Supervisor launch-gating, portable fallback and single-execution behavior."""
 import errno
 import os
+
+from core.testing.module_bindings import patch_module_attribute
 import sys
 
 import pytest
@@ -73,7 +75,7 @@ def test_forged_metadata_cannot_redirect_a_valid_launch_authorization(owned, tmp
 def test_missing_cgroup_filesystem_is_optional(monkeypatch):
     def unavailable(path):
         raise FileNotFoundError
-    monkeypatch.setattr(supervisor.os, 'statvfs', unavailable)
+    patch_module_attribute(monkeypatch, supervisor, "os", 'statvfs', unavailable)
     assert supervisor._can_delegate() is False
 
 
