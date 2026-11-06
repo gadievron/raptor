@@ -43,10 +43,11 @@ def context(tmp_path, monkeypatch):
             if registry is not None:
                 os.environ['RAPTOR_REGISTRY_HOME'] = registry
             fields = bridge._entry(value['pid'], value['session_id'])
+        selected = operator_values[value['session_id']]
+        if message['op'] == 'session':
+            selected = {k: v for k, v in selected.items() if k in bridge._LIFECYCLE_ENV_KEYS}
         return {'ok': True, 'environment_version': bridge.BROKER_ENVIRONMENT_VERSION,
-                'environment': {
-            **operator_values[value['session_id']],
-            **bridge.overlay(value, fields)}}
+                'environment': {**selected, **bridge.overlay(value, fields)}}
     monkeypatch.setattr(codex_broker, "start", start)
     monkeypatch.setattr(codex_broker, "request", request)
     credential = sessions.ensure_codex_session(12345)
@@ -326,3 +327,45 @@ def test_old_broker_requires_restart_before_changing_environment(context, monkey
         bridge.restore(SID)
     assert os.environ['RAPTOR_OUT_DIR'] == '/unchanged'
 
+
+
+def test_stop_bootstrap_and_metadata_paths_do_not_load_broker_catalog(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    program = '''
+import hashlib, io, json, os, runpy, sys
+sys.path.insert(0, sys.argv[1])
+sys.modules['core.llm.model_brokers'] = None
+os.environ.update(_RAPTOR_TRUSTED='1', RAPTOR_CODEX_HOOK='1')
+from core.startup import codex_environment as bridge, codex_broker
+from core.project import sessions
+from core.run import metadata
+sid = '11111111-1111-1111-1111-111111111111'
+value = {'pid': 12345, 'session_id': sid, 'registry_home': None,
+         'token_digest': hashlib.sha256(b'fixture-token').hexdigest()}
+bridge.read_context = lambda _: value
+sessions.resolve_codex_owner_pid = lambda: None
+metadata._get_session_pid = lambda: 12345
+sessions.ledger_runs = lambda **kw: []
+calls = []
+output = sys.argv[2]
+def reply(session, message):
+    calls.append(message['op'])
+    return {'ok': True, 'environment_version': bridge.BROKER_ENVIRONMENT_VERSION,
+            'environment': {'RAPTOR_DIR': str(bridge.ROOT),
+            'RAPTOR_SESSION_PID': '12345', 'RAPTOR_SESSION_TOKEN': 'fixture-token',
+            'CODEX': '1', 'RAPTOR_CODEX_ENVIRONMENT': '1',
+            'RAPTOR_CODEX_CONTEXT_ID': sid, 'RAPTOR_OUT_DIR': output}}
+codex_broker.request = reply
+script = str(bridge.ROOT / 'libexec/raptor-lifecycle-hook')
+sys.argv = [script, 'codex-stop']
+sys.stdin = io.StringIO(json.dumps({'hook_event_name': 'Stop', 'session_id': sid}))
+runpy.run_path(script, run_name='__main__')
+assert calls == ['session'], calls
+assert sys.modules['core.llm.model_brokers'] is None
+'''
+    result = subprocess.run([sys.executable, '-I', '-c', program, str(root), str(tmp_path)],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr

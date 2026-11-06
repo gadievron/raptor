@@ -18,7 +18,7 @@ def context(tmp_path, monkeypatch):
                'token_digest': hashlib.sha256(b'credential').hexdigest()}
     monkeypatch.setattr(outcome.environment, 'ROOT', root)
     monkeypatch.setattr(outcome.environment, 'read_context', lambda sid: context)
-    def restore(sid):
+    def restore(sid, **options):
         if sid not in ('session', 'native-child'):
             raise outcome.environment.CodexEnvironmentError('unknown session')
         return {'RAPTOR_CODEX_CONTEXT_ID': 'session'}
@@ -218,9 +218,9 @@ def test_lifecycle_restores_once_and_scopes_discovery(context, tmp_path, monkeyp
     restores = []
     original = outcome.environment.restore
 
-    def restore(sid):
+    def restore(sid, **options):
         restores.append(sid)
-        return original(sid)
+        return original(sid, **options)
 
     monkeypatch.setattr(outcome.environment, 'restore', restore)
     monkeypatch.setattr(metadata, '_get_session_pid', lambda: 12345)

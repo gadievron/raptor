@@ -46,3 +46,18 @@ Record hook UI failures independently of tool exit status. A tool returning
 zero does not establish that its PostToolUse or Stop hook completed. Capture
 the event label and exact error, including timeout duration. Keep namespace
 refusals, hook failures, and scan results as separate acceptance observations.
+
+## Lifecycle performance
+
+Metadata hooks restore only authenticated session and output context. Provider
+credentials remain in the full environment path used by analysis dispatches.
+The broker receives its parent-validated operator snapshot over a bounded
+private startup pipe, avoiding a duplicate source-inventory scan in the child.
+No snapshot is added to argv or a persistent handoff file.
+
+After updating this protocol, exit the old Codex session and start a fresh
+launcher session. An old broker is rejected with a restart message. Check Stop
+after a startup-only turn as well as PostToolUse and Stop after a diagnostic.
+A successful command does not establish that the later Stop hook succeeded.
+Existing hook timeouts remain unchanged; record startup and hook timings
+separately from model response time and namespace diagnostics.

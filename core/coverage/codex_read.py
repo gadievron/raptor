@@ -124,7 +124,7 @@ def consume(payload):
         return
     # The restored root can differ from native child thread IDs. Namespace by
     # the authenticated root, exactly as the existing outcome transport does.
-    environment.restore(payload.get('session_id'))
+    environment.restore(payload.get('session_id'), lifecycle=True)
     sid = os.environ['RAPTOR_CODEX_CONTEXT_ID']
     context = environment.read_context(sid)
     prefix = _prefix(sid, payload.get('tool_use_id'))
