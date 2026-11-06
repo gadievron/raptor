@@ -35,9 +35,9 @@ class StackReturnAnalysis:
     target: Path
     seeds: dict[str, list[dict[str, Any]]]
     request_for: Callable[[str, Path], CompilerRequest] | None
-    sandbox_run: Callable[..., Any]
-    locate: Callable[[dict[str, Any], str], tuple[str, int] | None]
-    prepare_view: Callable[[str, Path], ExpandedView]
+    sandbox_run: Callable[..., Any] | None
+    locate: Callable[[dict[str, Any], str], tuple[str, int] | None] | None
+    prepare_view: Callable[[str, Path], ExpandedView] | None
     scratch_root: str | None = None
     max_workers: int = 4
     candidates: dict[str, set[tuple[str, int]]] = field(default_factory=dict)
@@ -47,6 +47,7 @@ class StackReturnAnalysis:
 
 
 def _candidates(state: StackReturnAnalysis) -> StageResult:
+    assert state.locate is not None
     selected = nsmallest(_MAX_TUS, state.seeds.items(), key=lambda item: item[0])
     if len(state.seeds) > _MAX_TUS:
         skipped = len(state.seeds) - _MAX_TUS
@@ -72,11 +73,14 @@ def _candidates(state: StackReturnAnalysis) -> StageResult:
 
 
 def _corroborate(state: StackReturnAnalysis) -> StageResult:
-    assert state.request_for is not None
+    request_for, sandbox_run = state.request_for, state.sandbox_run
+    prepare_view, locate = state.prepare_view, state.locate
+    assert request_for is not None and sandbox_run is not None
+    assert prepare_view is not None and locate is not None
 
     def one(tu):
         with scratch_dir("stack_return_", dir=state.scratch_root) as scratch:
-            view = state.prepare_view(tu, scratch)
+            view = prepare_view(tu, scratch)
             if not view.ok:
                 detail = "; ".join(str(e) for e in view.errors[:2])[:160]
                 raise RuntimeError("GCC preprocessed source view unavailable" + (": " + detail if detail else ""))
@@ -84,7 +88,7 @@ def _corroborate(state: StackReturnAnalysis) -> StageResult:
             write_bytes_atomically(source, view.text.encode("utf-8", errors="replace"))
             # Freeze GCC's macro decisions. Analyzing the original source under
             # Clang could select a different __clang__/__GNUC__ conditional arm.
-            execution = run_compiler_analysis(state.request_for(tu, source), state.sandbox_run)
+            execution = run_compiler_analysis(request_for(tu, source), sandbox_run)
             record = execution.value.record
             if (execution.status != "complete" or record is None
                     or any("error" in str(d.get("kind", "")) for d in record["diags"])):
@@ -111,7 +115,7 @@ def _corroborate(state: StackReturnAnalysis) -> StageResult:
                 if origin is None:
                     continue
                 mapped = {**diagnostic, "file": str(state.target / origin[0]), "line": origin[1]}
-                if state.locate(mapped, tu) in state.candidates[tu]:
+                if locate(mapped, tu) in state.candidates[tu]:
                     matches.append(mapped)
             return matches
 
@@ -151,8 +155,17 @@ def run_stack_return(
     A supplied prepare_view must honor the shared budget in its blocking tools,
     as the scan adapter does. Compiler invocations are clipped here.
     """
-    return run_detector(DETECTOR, StackReturnAnalysis(
+    state = StackReturnAnalysis(
         Path(target).resolve(), seeds, request_for,
         budget.runner(sandbox_run) if budget is not None else sandbox_run,
         locate, prepare_view, scratch_root, max_workers, budget=budget,
-    ))
+    )
+    try:
+        return run_detector(DETECTOR, state)
+    finally:
+        # Workers are joined before return; retain outcomes, not caller inputs.
+        state.seeds = {}
+        state.request_for = None
+        state.sandbox_run = None
+        state.locate = None
+        state.prepare_view = None

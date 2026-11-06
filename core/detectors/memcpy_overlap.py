@@ -38,7 +38,7 @@ class OverlapAnalysis:
     target: Path
     files: tuple[str, ...]
     request_for: Callable[[str], CompilerRequest] | None
-    sandbox_run: Callable[..., Any]
+    sandbox_run: Callable[..., Any] | None
     max_workers: int = 4
     candidates: set[str] = field(default_factory=set)
     diagnostics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -207,8 +207,9 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
 
 
 def _compile(state: OverlapAnalysis) -> StageResult:
-    assert state.request_for is not None
-    first = state.request_for(sorted(state.candidates)[0])
+    request_for, sandbox_run = state.request_for, state.sandbox_run
+    assert request_for is not None and sandbox_run is not None
+    first = request_for(sorted(state.candidates)[0])
     # Probe the exact pinned executable once per run. Older GCC remains usable
     # for the baseline; only this detector requires the overlap warning (GCC 14+).
     probe = replace(
@@ -218,7 +219,7 @@ def _compile(state: OverlapAnalysis) -> StageResult:
         timeout=min(first.timeout, 30), analyze=None,
     )
     try:
-        capability = run_compiler_analysis(probe, state.sandbox_run)
+        capability = run_compiler_analysis(probe, sandbox_run)
         if capability.status != "complete":
             raise RuntimeError("overlap warning option is unavailable")
     except Exception as exc:
@@ -226,8 +227,8 @@ def _compile(state: OverlapAnalysis) -> StageResult:
         return StageResult("skipped", "overlap capability unavailable")
 
     def one(rel):
-        request = state.request_for(rel)
-        execution = run_compiler_analysis(request, state.sandbox_run)
+        request = request_for(rel)
+        execution = run_compiler_analysis(request, sandbox_run)
         record = execution.value.record
         if execution.status != "complete" or record is None:
             raise RuntimeError("supplemental compiler did not complete successfully")
@@ -264,8 +265,17 @@ def run_memcpy_overlap(
     budget: WorkBudget | None = None,
 ) -> DetectorResult[OverlapAnalysis]:
     """Run only capped, baseline-successful C TUs supplied by the caller."""
-    return run_detector(DETECTOR, OverlapAnalysis(
+    state = OverlapAnalysis(
         target, files, request_for, budget.runner(sandbox_run) if budget is not None else sandbox_run,
         max_workers, include_dirs_memo=include_dirs_memo,
         setup=setup, budget=budget,
-    ))
+    )
+    try:
+        return run_detector(DETECTOR, state)
+    finally:
+        # Detach borrowed preparation and callbacks without clearing their data.
+        state.files = ()
+        state.request_for = None
+        state.sandbox_run = None
+        state.include_dirs_memo = None
+        state.setup = None
