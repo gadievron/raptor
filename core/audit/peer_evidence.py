@@ -74,10 +74,11 @@ def rule_id(dimension: str, *, detection: bool) -> str:
 
 
 def is_detection_rule_id(tool_id: str) -> bool:
-    """True for the detection-grade ``-majority`` variants: they never
-    promote alone, only aggregate across independent namespaces."""
-    return tool_id.startswith(f"{CONSISTENCY_NAMESPACE}:") and \
-        tool_id.endswith(DETECTION_VARIANT_SUFFIX)
+    """Majority variants and legacy predicate-only guard receipts are hints."""
+    if not tool_id.startswith(f"{CONSISTENCY_NAMESPACE}:"):
+        return False
+    family = tool_id.split(":", 2)[1].removesuffix(DETECTION_VARIANT_SUFFIX)
+    return family in {"guard-presence", "guard-predicate"} or tool_id.endswith(DETECTION_VARIANT_SUFFIX)
 
 
 @dataclass(frozen=True)

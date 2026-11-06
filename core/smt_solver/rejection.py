@@ -204,9 +204,9 @@ class Rejection:
 _HEX_LITERAL_RE = re.compile(r'0x[0-9a-f]+', re.IGNORECASE)
 # Decimal literals may carry a leading `-` so source-form expressions
 # like ``x > -10`` or ``errno == -EAGAIN`` (when the C macro expands
-# to a literal) are parseable. Hex literals stay positive-only —
-# `-0xff` isn't real source-form input; bit-pattern literals are
-# always written as their unsigned representation.
+# to a literal) are parseable. Hex tokens denote unsigned-spelled bit
+# patterns here. Source adapters may normalize a proven C negative hex
+# constant to a signed decimal atom before submitting it.
 _DEC_LITERAL_RE = re.compile(r'-?\d+')
 
 
@@ -323,8 +323,8 @@ def parse_literal_value(
     #   the bit pattern (0xC8) does — Z3 would silently
     #   reinterpret it as -56, producing a verdict that didn't
     #   match the source intent. Cap decimal literals at
-    #   2^(width-1) for signed profiles. (The regex rejects
-    #   leading '-', so we only see positive decimals here.)
+    #   2^(width-1) for signed profiles, with the asymmetric negative
+    #   endpoint admitted below.
     #
     # Pre-batch-210 the check used `v >= (1 << profile.width)`
     # uniformly, which over-accepted decimal literals (the `200`

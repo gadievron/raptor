@@ -11,11 +11,12 @@ import logging
 
 from ._util import IDENTIFIER_RE
 from .arithmetic_claim import parse_arithmetic_claim
-from .arithmetic_operation import ArithmeticOperation, _INTEGER_LITERAL_RE, _unwrap, bind_arithmetic_operation
+from .arithmetic_operation import ArithmeticOperation, _unwrap, bind_arithmetic_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type
 from .array_bounds import ArrayAccess, bind_array_access, parse_array_access_claim
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
+from .integer_literals import integer_literal_value, source_integer_atom
 from .integer_witness import evaluate_integer_operation, validate_integer_witness
 
 MAX_SOURCE_CHARS = 65536
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "literal-direct-call-v1",
+        "query_contract": "signed-guard-literal-call-v2",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -88,28 +89,14 @@ def _signature(function, text, abi, language):
     return text(name), tuple(parameters), body
 
 
-def _literal(node, text, abi):
-    node = _unwrap(node)
-    negative = False
-    if node is not None and node.type == "unary_expression" and text(node.child_by_field_name("operator")) == "-":
-        negative = True
-        node = _unwrap(node.child_by_field_name("argument"))
-    if node is None or node.type != "number_literal":
-        return None
-    literal = text(node)
-    # Pinned C/C++ grammars may include the minus in number_literal.
-    if literal.startswith("-") and not negative:
-        negative, literal = True, literal[1:]
-    if not _INTEGER_LITERAL_RE.fullmatch(literal):
-        return None
-    if len(literal) > 22:
-        return None
-    value = int(literal, 16 if literal.lower().startswith("0x") else 10)
+def _literal(node, data, abi):
+    literal = source_integer_atom(node, data)
+    value = integer_literal_value(literal)
     # Only unambiguous int literals. Wider/suffixed literals and conversion
     # wrap require explicit C conversion rules, not Python int coercion.
-    if value > (1 << (abi.int_bits - 1)) - 1:
+    if value is None or abs(value) > (1 << (abi.int_bits - 1)) - 1:
         return None
-    return -value if negative else value
+    return value
 
 
 def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
@@ -180,7 +167,7 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
         arguments = [child for child in args.named_children if child.type != "comment"]
         if len(arguments) != len(parameters):
             continue
-        assignment = {name: _literal(argument, text, abi) for (name, _), argument in zip(parameters, arguments)}
+        assignment = {name: _literal(argument, data, abi) for (name, _), argument in zip(parameters, arguments)}
         # No implicit wrap, bool conversion, or guessed narrowing is admitted.
         if validate_integer_witness(assignment, parameters, (), abi) is None:
             continue

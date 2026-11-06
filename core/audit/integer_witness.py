@@ -7,7 +7,7 @@ It covers only the admitted atomic comparisons and common promoted profile.
 import operator
 
 from ._util import IDENTIFIER_RE
-from .arithmetic_operation import _INTEGER_LITERAL_RE
+from .integer_literals import integer_literal_value
 from .arithmetic_types import integer_type
 
 _COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "==": operator.eq, "!=": operator.ne}
@@ -30,9 +30,7 @@ def source_model_scope():
 def _atom(text, values):
     if IDENTIFIER_RE.fullmatch(text):
         return values.get(text)
-    if _INTEGER_LITERAL_RE.fullmatch(text):
-        return int(text, 16 if text.lower().startswith("0x") else 10)
-    return None
+    return integer_literal_value(text)
 
 
 def validate_integer_witness(model, types, premises, integer_abi):

@@ -556,8 +556,8 @@ class TestPathFeasibility:
             _guard("x == 10", resolvable=True, concrete_values={}),
         ]
         result = check_path_feasibility(guards)
-        # Z3 detects this; arithmetic fallback doesn't (no upper/lower bounds)
-        # Either way, if Z3 is available it's UNSAT
+        # Neither a solver result nor the scalar fallback may call this
+        # feasible, including when a worker is unavailable.
         if result.feasible is not None:
             assert result.feasible is False
 
@@ -1829,7 +1829,7 @@ class TestConsumerWidthIndex:
 
 
 class TestSuccessReturnWhitespaceRun:
-    def test_return_whitespace_run_is_fast(self):
+    def test_return_whitespace_run_is_fast(self, monkeypatch):
         """Hostile line where a ``return 0`` token is followed by a
         long whitespace RUN and no line end: with the tail spelled
         ``\\s*;?\\s*$`` two unbounded whitespace spans border the
@@ -1844,6 +1844,9 @@ class TestSuccessReturnWhitespaceRun:
             _SUCCESS_RETURN_RE,
             check_auth_bypass,
         )
+        # Measure the regex/checker path, independent of worker startup and
+        # solver scheduling. Native worker contracts are tested separately.
+        monkeypatch.setattr("core.audit.condition_smt._try_z3_auth_bypass", lambda *a, **kw: None)
 
         hostile = "    return 0" + " " * (1 << 18) + "x\n"
         source = (

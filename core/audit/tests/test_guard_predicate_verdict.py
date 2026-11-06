@@ -71,15 +71,15 @@ def _deviation(
 
 
 class TestVerdictGrading:
-    def test_boundary_witness_promotes_at_the_floor(self, owned_smt_subprocess):
+    def test_boundary_value_alone_does_not_verify_a_safety_violation(self, owned_smt_subprocess):
         # `i <= 8` where peers use `i < 8`: the admitted-but-excluded
         # value i == 8 is trivially satisfiable — a concrete witness.
         res = guard_predicate_verdict(_deviation())
         assert res.outcome == "confirmed"
-        assert res.rule_id == RULE_GUARD_PREDICATE
-        assert res.contract is not None
-        assert res.contract["source"] == "smt_witness"
-        assert res.peer_evidence.contract_source == "smt_witness"
+        assert res.rule_id == "consistency:guard-predicate-majority"
+        assert res.contract is None
+        assert res.peer_evidence.contract_source == "majority"
+        assert res.corroboration[0]["smt_model"]["oracle_scope"] == "integer-constraints"
 
     def test_below_promote_ratio_stays_detection_grade(self, owned_smt_subprocess):
         res = guard_predicate_verdict(_deviation(n=4, conforming=3))

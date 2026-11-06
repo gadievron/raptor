@@ -167,7 +167,7 @@ class TestClassifierUnavailableFailClosed:
         "symbolic",
         "symbolic:symbolic-pc-hijack",
         "symbolic:symbolic-reach-crash",
-        "consistency:guard-presence",
+        "consistency:return-check",
         "fail_open:tristate",
         "ptr_lifecycle:stale-alias",
         "lock_region:callback-under-lock",
@@ -186,6 +186,8 @@ class TestClassifierUnavailableFailClosed:
         "smt:check-toctou",
         "smt:check-encoding-residual:witness",
         "consistency:cwe190-majority",
+        "consistency:guard-presence",
+        "consistency:guard-predicate",
         "fail_open:handler-outcome-naming",
     ])
     def test_known_detection_variant_still_detection(

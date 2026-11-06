@@ -355,15 +355,17 @@ class SmtSufficiencyResult:
 
 @dataclass
 class PathFeasibilityResult:
-    """Result of checking whether a path to a sink is satisfiable."""
+    """Feasibility of extracted integer constraints, not a source safety proof."""
 
-    feasible: bool | None = None  # True=path reachable, False=dead path
+    feasible: bool | None = None
     reasoning: str = ""
     witness: dict[str, int] | None = None
     guard_count: int = 0
+    oracle_scope: str = "integer-constraints"
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"reasoning": self.reasoning, "guard_count": self.guard_count}
+        d: dict[str, Any] = {"reasoning": self.reasoning, "guard_count": self.guard_count,
+                             "oracle_scope": self.oracle_scope}
         if self.feasible is not None:
             d["feasible"] = self.feasible
         if self.witness:
@@ -596,8 +598,9 @@ def check_path_feasibility(
 ) -> PathFeasibilityResult:
     """Check whether the conjunction of guard conditions is satisfiable.
 
-    If UNSAT, the sink is on a dead path and can never be reached.
-    If SAT, returns concrete witness values.
+    Results concern the extracted unbounded-integer constraint model.
+    They do not establish C widths, conversions, or source reachability.
+    SAT may carry a witness for the modeled fragment only.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
@@ -659,17 +662,24 @@ def _arithmetic_path_feasibility(
     constraints: list[BoundsConstraint],
     guard_count: int,
 ) -> PathFeasibilityResult:
-    """Simple arithmetic path-feasibility check without Z3.
+    """Exact independent integer intervals and finite exclusions, without Z3.
 
-    Detects contradictions like ``x < 10 && x > 20``.
+    This has the same unbounded-integer model as the bridge's Z3 checker;
+    it does not establish C widths or conversion semantics.
     """
     per_var: dict[str, list[BoundsConstraint]] = {}
+    unmodeled = False
     for c in constraints:
+        if not isinstance(c.variable, str) or not c.variable or type(c.bound_value) is not int:
+            unmodeled = True
+            continue
         per_var.setdefault(c.variable, []).append(c)
 
+    witness = {}
     for var, cs in per_var.items():
         lower: int | None = None
         upper: int | None = None
+        excluded = set()
         for c in cs:
             if c.operator in ("<", "<="):
                 ub = c.bound_value - 1 if c.operator == "<" else c.bound_value
@@ -679,16 +689,35 @@ def _arithmetic_path_feasibility(
                 lb = c.bound_value + 1 if c.operator == ">" else c.bound_value
                 if lower is None or lb > lower:
                     lower = lb
+            elif c.operator == "==":
+                lower = c.bound_value if lower is None else max(lower, c.bound_value)
+                upper = c.bound_value if upper is None else min(upper, c.bound_value)
+            elif c.operator == "!=":
+                excluded.add(c.bound_value)
+            else:
+                unmodeled = True
         if lower is not None and upper is not None and lower > upper:
             return PathFeasibilityResult(
                 feasible=False,
-                reasoning=f"dead path: {var} requires [{lower}, {upper}]",
+                reasoning=f"integer-constraint model: {var} requires empty interval [{lower}, {upper}]",
                 guard_count=guard_count,
             )
+        value = lower if lower is not None else upper if upper is not None else 0
+        direction = -1 if lower is None and upper is not None else 1
+        while value in excluded:
+            value += direction
+        if upper is not None and value > upper:
+            return PathFeasibilityResult(
+                feasible=False,
+                reasoning=f"integer-constraint model: every value for {var} in [{lower}, {upper}] is excluded",
+                guard_count=guard_count,
+            )
+        witness[var] = value
 
     return PathFeasibilityResult(
-        feasible=True,
-        reasoning="no arithmetic contradiction found",
+        feasible=None if unmodeled or not per_var else True,
+        reasoning="unsupported integer constraints — inconclusive" if unmodeled or not per_var else "integer-constraint model is feasible with a checked assignment",
+        witness=None if unmodeled or not per_var else witness,
         guard_count=guard_count,
     )
 
