@@ -1,4 +1,4 @@
-"""The real launcher requires explicit approval for non-interactive downgrade."""
+"""Unavailable optional tracking retains scratch without blocking launch."""
 import json
 from pathlib import Path
 import shutil
@@ -44,22 +44,23 @@ def launcher(tmp_path):
 
 
 @pytest.mark.parametrize('args', [[], ['--', '--allow-degraded-cleanup']])
-def test_noninteractive_launcher_refuses_unapproved_downgrade(launcher, args):
+def test_noninteractive_launcher_continues_with_retained_scratch(launcher, args):
     script, env, receipt = launcher
     result = subprocess.run(['/bin/bash', str(script), *args], env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
-    assert result.returncode == 126, result.stderr
-    assert '--allow-degraded-cleanup' in result.stderr
-    assert not receipt.exists()
+    assert result.returncode == 0, result.stderr
+    assert 'temporary files will be retained' in result.stderr
+    assert 'Continue with degraded cleanup?' not in result.stderr
+    assert receipt.exists()
 
 
-def test_explicit_approval_is_consumed_by_raptor_not_forwarded(launcher):
+def test_compatibility_approval_flag_is_consumed_by_raptor_not_forwarded(launcher):
     script, env, receipt = launcher
     result = subprocess.run(['/bin/bash', str(script), '--allow-degraded-cleanup'], env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert '--allow-degraded-cleanup' not in json.loads(receipt.read_text())
-    assert 'explicitly approved' in result.stderr
+    assert 'temporary files will be retained' in result.stderr
 
 
 def test_direct_project_status_does_not_start_a_frontend_session(launcher):

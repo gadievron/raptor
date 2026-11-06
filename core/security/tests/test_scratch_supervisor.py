@@ -33,7 +33,8 @@ def test_failed_attachment_never_executes_the_payload(tmp_path):
     assert not marker.exists()
 
 
-def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(owned, tmp_path, monkeypatch):
+@pytest.mark.parametrize('approved', [False, True])
+def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(owned, tmp_path, monkeypatch, approved):
     root, metadata, session_id = owned
     def unavailable(*args):
         raise OSError(errno.EROFS, 'no delegation')
@@ -42,13 +43,15 @@ def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(o
     marker = tmp_path / 'executions'
     command = [sys.executable, '-I', '-c',
                'import pathlib,sys;pathlib.Path(sys.argv[1]).write_text("once");sys.exit(7)', str(marker)]
-    assert supervisor.supervise(metadata, command, allow_degraded=True) == 7
+    assert supervisor.supervise(metadata, command, allow_degraded=approved) == 7
     assert marker.read_text() == 'once'
     assert root.exists()
     with supervisor.lifecycle.locked(session_id) as (_, value):
         assert value['state'] == 'retained'
         assert value['closure'] is None
         assert value['backend'] == 'untracked'
+        assert value['tracking_diagnostics'][0]['stage'] == 'create session cgroup'
+        assert value['tracking_diagnostics'][0]['errno'] == errno.EROFS
 
 
 def test_claimed_delegated_failure_cannot_rerun_payload_portably(owned, monkeypatch):
@@ -99,37 +102,16 @@ def test_hidden_namespace_cannot_mistake_a_controller_for_dead(owned, monkeypatc
     assert root.exists()
 
 
-def test_noninteractive_downgrade_requires_explicit_approval(monkeypatch, capsys):
-    monkeypatch.setattr(supervisor, '_terminal_may_ask', lambda: False)
-    assert supervisor._accept_degraded() is False
+@pytest.mark.parametrize('approved', [False, True])
+def test_unavailable_tracking_never_prompts(monkeypatch, capsys, approved):
+    def no_input(*args):
+        pytest.fail('scratch retention must not prompt')
+    monkeypatch.setattr(supervisor, 'input', no_input, raising=False)
+    assert supervisor._accept_degraded(approved) is True
     text = capsys.readouterr().err
-    assert 'refused' in text and '--allow-degraded-cleanup' in text
-    assert supervisor._accept_degraded(True) is True
-
-
-@pytest.mark.parametrize('answer,expected', [('y\n', True), ('\n', True), ('n\n', False), ('', False)])
-def test_interactive_downgrade_requires_an_answer(monkeypatch, answer, expected):
-    import io
-    class Terminal(io.StringIO):
-        def isatty(self): return True
-    monkeypatch.setattr(supervisor, '_terminal_may_ask', lambda: True)
-    monkeypatch.setattr(supervisor.sys, 'stdin', Terminal(answer))
-    monkeypatch.setattr(supervisor.sys, 'stderr', Terminal())
-    assert supervisor._accept_degraded() is expected
-    assert 'Continue with degraded cleanup?' in supervisor.sys.stderr.getvalue()
-
-
-def test_declined_downgrade_never_starts_frontend_and_cleans_unused_root(owned, monkeypatch):
-    root, metadata, _ = owned
-    monkeypatch.setattr(supervisor, '_delegated', lambda *a: 125)
-    monkeypatch.setattr(supervisor, '_try_delegated', lambda *a: None)
-    monkeypatch.setattr(supervisor, '_accept_degraded', lambda *a: False)
-    def no_execution(*args):
-        pytest.fail('declined launch must not execute the frontend')
-    monkeypatch.setattr(supervisor, '_spawn', no_execution)
-    monkeypatch.setattr(supervisor, '_terminal_may_ask', lambda: True)
-    assert supervisor.supervise(metadata, ['/never-run']) == 130
-    assert not root.exists()
+    assert 'temporary files will be retained' in text
+    assert 'cleanup --list' in text
+    assert 'Continue' not in text
 
 
 def test_group_attachment_failure_rolls_back_and_runs_once_in_degraded_mode(owned, tmp_path, monkeypatch):
@@ -410,3 +392,43 @@ def test_wait_failure_stops_claimed_group_without_deleting_uncertain_scratch(own
     with supervisor.lifecycle.locked(session_id) as (_, value):
         assert value['state'] == 'retained'
         assert value['closure'] is None
+
+
+def test_configured_user_bus_is_tried_without_default_socket(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(supervisor, 'sys', SimpleNamespace(platform='linux'))
+    local_os = SimpleNamespace(environ=os.environ, geteuid=os.geteuid, ST_RDONLY=os.ST_RDONLY, X_OK=os.X_OK,
+                               statvfs=lambda path: SimpleNamespace(f_flag=0),
+                               access=lambda *args: True)
+    monkeypatch.setattr(supervisor, 'os', local_os)
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/operator/session-bus')
+    assert supervisor._can_delegate()
+
+
+def test_custom_runtime_bus_is_tried(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(supervisor, 'sys', SimpleNamespace(platform='linux'))
+    local_os = SimpleNamespace(environ=os.environ, geteuid=os.geteuid, ST_RDONLY=os.ST_RDONLY, X_OK=os.X_OK,
+                               statvfs=lambda path: SimpleNamespace(f_flag=0),
+                               access=lambda *args: True)
+    monkeypatch.setattr(supervisor, 'os', local_os)
+    monkeypatch.delenv('DBUS_SESSION_BUS_ADDRESS', raising=False)
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
+    assert not supervisor._can_delegate()
+    (tmp_path / 'bus').touch()
+    assert supervisor._can_delegate()
+
+
+def test_tracking_diagnostics_are_bounded_and_escaped_in_listing(owned, capsys):
+    _, _, session_id = owned
+    for index in range(10):
+        supervisor._record_tracking_failure(session_id, 'create cgroup',
+                                             OSError(errno.EACCES, 'denied\x1b[2J\nforged'))
+    with supervisor.lifecycle.locked(session_id) as (_, value):
+        assert len(value['tracking_diagnostics']) == 6
+    assert supervisor.lifecycle.main(['--list', '--session', session_id]) == 0
+    text = capsys.readouterr().out
+    assert 'errno=13' in text
+    assert '\x1b' not in text
+    assert '\nforged' not in text

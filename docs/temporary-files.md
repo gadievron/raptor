@@ -78,15 +78,23 @@ These sessions remain `retained` for explicit cleanup after you have checked
 that no other programs need their temporary files.
 
 If tracking is unavailable or attachment fails before the command starts,
-interactive launches ask whether to continue; pressing Enter accepts.
-Non-interactive launches require `--allow-degraded-cleanup` before any
-frontend passthrough `--`:
+RAPTOR continues without a confirmation prompt and retains the session's scratch.
+The startup notice points to `bin/raptor cleanup --list`, which shows the failed
+tracking operations, error details and errno where available. Retention does not
+waive sandbox requirements or resource limits required by individual analysis tools.
+`--allow-degraded-cleanup` remains accepted for older scripts, but is no longer required.
 
-```bash
-bin/raptor --allow-degraded-cleanup [other-options] [target]
-```
+On Linux, run from a normal user login session with a running systemd user manager
+and a writable delegated cgroup hierarchy. SSH, sudo, services and containers may
+have different user-bus access and cgroup permissions. RAPTOR also honors configured
+`XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` when deciding whether to try the user
+manager. A read-only cgroup mount needs a host session or appropriately delegated
+container; changing permissions on the entire host cgroup tree is not required.
+Older kernels without `cgroup.kill` cannot provide this tracking backend.
 
-This approval accepts retained session scratch. It does not waive sandbox
-requirements or resource limits required by an individual analysis tool.
+Process groups and PID lists are not substituted for cgroup tracking: daemonized
+children can escape those groups, and PID disappearance alone does not prove the
+temporary files are unused. Inspect retained sessions before explicit cleanup.
+
 If a supervisor crashes, normal cleanup retains uncertain scratch; it does
 not kill unrelated work or infer that files are unused from a missing PID.
