@@ -113,6 +113,30 @@ def test_sarif_damaged_invocation_is_not_successful(invocation):
     assert errors
 
 
+@pytest.mark.parametrize("unit", ["a", "\x1b", "é\n", "\u202e"])
+def test_skip_summary_escapes_only_a_bounded_prefix(monkeypatch, unit):
+    reason = unit * 10_000
+    path = unit * 20_000
+    escape = models.escape_nonprintable
+    lengths = []
+
+    def bounded_escape(value):
+        lengths.append(len(value))
+        assert len(value) <= models._SKIPPED_PATH_MAXLEN
+        return escape(value)
+
+    monkeypatch.setattr(models, "escape_nonprintable", bounded_escape)
+    summary = models._summarise_skipped([{"reason": reason, "path": path}])
+    expected_reason = escape(reason)[:models._SKIPPED_REASON_MAXLEN]
+    expected_path = escape(path)[:models._SKIPPED_PATH_MAXLEN]
+    assert summary == {
+        "total": 1,
+        "reasons": {expected_reason: {"count": 1, "sample": [expected_path]}},
+        "reasons_truncated": 0,
+    }
+    assert lengths == [models._SKIPPED_REASON_MAXLEN] * 2 + [models._SKIPPED_PATH_MAXLEN]
+
+
 def both_consumers(tmp_path, entry):
     payload = {"paths": {"scanned": ["good.py"]}, "errors": [entry], "version": "1.177.0"}
     text = json.dumps(payload)

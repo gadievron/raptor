@@ -336,11 +336,10 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
     magnitude of the reported coverage limitations. Non-dict entries are ignored;
     a missing reason buckets as ``"unspecified"``.
 
-    Path and reason strings are rendered inert at ingestion
-    (``escape_nonprintable``) BEFORE the length caps — paths are
-    target-chosen file names, and escaping after truncation would let
-    hostile bytes ride inside the kept prefix while the cap hides the
-    evidence.
+    Only a bounded raw prefix needs escaping: every input character emits
+    at least one output character, so later input cannot affect the displayed
+    prefix. Apply the output cap after escaping as well, keeping target-chosen
+    controls inert without allocating their full escaped representation.
     """
     if not isinstance(raw, list):
         return {}
@@ -351,7 +350,7 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
             continue
         total += 1
         reason = escape_nonprintable(
-            str(entry.get("reason") or "unspecified"),
+            str(entry.get("reason") or "unspecified")[:_SKIPPED_REASON_MAXLEN],
         )[:_SKIPPED_REASON_MAXLEN]
         counts[reason] = counts.get(reason, 0) + 1
     if not total:
@@ -367,12 +366,12 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
         if not isinstance(entry, dict):
             continue
         reason = escape_nonprintable(
-            str(entry.get("reason") or "unspecified"),
+            str(entry.get("reason") or "unspecified")[:_SKIPPED_REASON_MAXLEN],
         )[:_SKIPPED_REASON_MAXLEN]
         bucket = samples.get(reason)
         if bucket is None or len(bucket) >= _SKIPPED_SAMPLE_CAP:
             continue
-        path = escape_nonprintable(str(entry.get("path") or ""))
+        path = escape_nonprintable(str(entry.get("path") or "")[:_SKIPPED_PATH_MAXLEN])
         if path:
             bucket.append(path[:_SKIPPED_PATH_MAXLEN])
             if len(bucket) == _SKIPPED_SAMPLE_CAP:
