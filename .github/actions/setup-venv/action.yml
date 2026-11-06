@@ -8,7 +8,7 @@ description: >
   its environment (both are workflow-level env in every caller).
 
   Exact keys include the host OS/image, architecture, interpreter build/ABI,
-  workspace location, project/lock/config files and selected export extras.
+  workspace location, project/lock/config files, install method and extras.
   Old-lock prefix hits are never executable environments. Reported restore
   failures retry the same exact key after backoff; misses rebuild locked deps.
 
@@ -17,14 +17,22 @@ inputs:
     description: >
       First segment of the cache key. The default matches the key the
       deps job saves; flavoured venvs (e.g. with extra dependency
-      groups) use their own prefix so a prefix-match restore never
-      hands them a venv missing their extras.
+      groups) use their own labels. The exact identity also includes
+      the install method and extras; prefix restores are never used.
     required: false
     default: 'venv'
+  install-method:
+    description: >
+      export (default) preserves the existing locked export/install recipe;
+      sync uses uv sync --locked in the fresh active venv, retaining lockfile
+      artifact validation for callers migrating from uv sync.
+    required: false
+    default: 'export'
   uv-export-extra-args:
     description: >
-      Extra arguments appended to ``uv export --locked --no-hashes``
-      on the rebuild path (e.g. ``--extra grammars``). Space-separated,
+      Extra arguments appended to the selected export or sync command
+      on the rebuild path (e.g. ``--extra grammars``). Must be valid for
+      the selected install method. Space-separated,
       word-split unquoted; empty adds nothing.
     required: false
     default: ''
@@ -57,6 +65,7 @@ runs:
       env:
         VENV_CACHE_PREFIX: ${{ inputs.cache-key-prefix }}
         VENV_CACHE_EXPORT_ARGS: ${{ inputs.uv-export-extra-args }}
+        VENV_CACHE_INSTALL_METHOD: ${{ inputs.install-method }}
       run: python3 .github/scripts/ci_cache_key.py
 
     - name: Stagger cache restore (avoid 429 thundering herd)
@@ -108,10 +117,15 @@ runs:
       shell: bash
       env:
         UV_EXPORT_EXTRA_ARGS: ${{ inputs.uv-export-extra-args }}
+        VENV_CACHE_INSTALL_METHOD: ${{ inputs.install-method }}
       run: |
         uv venv --clear --python "$(command -v python3)" "$VENV_PATH"
-        source $VENV_PATH/bin/activate
-        uv export --locked --no-hashes $UV_EXPORT_EXTRA_ARGS | uv pip install -r -
+        source "$VENV_PATH/bin/activate"
+        case "$VENV_CACHE_INSTALL_METHOD" in
+          export) uv export --locked --no-hashes $UV_EXPORT_EXTRA_ARGS | uv pip install -r - ;;
+          sync) uv sync --locked --active $UV_EXPORT_EXTRA_ARGS ;;
+          *) echo "Invalid venv install method" >&2; exit 2 ;;
+        esac
 
     - name: Save rebuilt venv to cache
       # continue-on-error: the cache is an optimisation — a failed save
@@ -137,4 +151,4 @@ runs:
         ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
         PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
-        find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
+        find "$VENV_PATH/bin" -maxdepth 1 -type f -exec chmod +x {} +

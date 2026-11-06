@@ -43,9 +43,12 @@ def interpreter_identity() -> dict:
 
 
 def venv_key(repo: Path, host: dict, interpreter: dict, *, prefix: str = 'venv',
-             export_args: str = '', venv_path: str = '.venv') -> str:
+             export_args: str = '', venv_path: str = '.venv',
+             install_method: str = 'export') -> str:
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', prefix):
         raise ValueError('invalid venv cache prefix')
+    if install_method not in {'export', 'sync'}:
+        raise ValueError('invalid venv install method')
     files = {}
     for name in VENV_INPUTS:
         path = repo / name
@@ -53,9 +56,10 @@ def venv_key(repo: Path, host: dict, interpreter: dict, *, prefix: str = 'venv',
             files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
         else:
             files[name] = None
-    material = dict(schema=2, host=host, interpreter=interpreter, files=files,
-                    export_args=export_args, path=str((repo / venv_path).resolve()))
-    return prefix + '-v2-' + digest(material)
+    material = dict(schema=3, host=host, interpreter=interpreter, files=files,
+                    export_args=export_args, install_method=install_method,
+                    path=str((repo / venv_path).resolve()))
+    return prefix + '-v3-' + digest(material)
 
 
 def codeql_metadata(repo: Path, host: dict) -> dict:
@@ -83,7 +87,8 @@ def main(argv=None) -> int:
         result['key'] = venv_key(repo, host, interpreter_identity(),
                                  prefix=os.environ.get('VENV_CACHE_PREFIX', 'venv'),
                                  export_args=os.environ.get('VENV_CACHE_EXPORT_ARGS', ''),
-                                 venv_path=os.environ.get('VENV_PATH', '.venv'))
+                                 venv_path=os.environ.get('VENV_PATH', '.venv'),
+                                 install_method=os.environ.get('VENV_CACHE_INSTALL_METHOD', 'export'))
     elif args.kind == 'codeql':
         result.update(codeql_metadata(repo, host))
     if os.environ.get('GITHUB_OUTPUT'):

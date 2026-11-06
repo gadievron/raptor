@@ -71,15 +71,19 @@ def test_all_semgrep_installers_use_the_pin_and_include_it_in_download_cache_inp
 
 @pytest.mark.parametrize('file,name', [
     ('nightly-self-test.yml', 'self-test'), ('ubuntu26-canary.yml', 'sandbox-canary'),
+    ('weekly_corpus.yml', 'corpus-drivers'), ('preflight.yml', 'preflight'),
 ])
 def test_scheduled_jobs_use_shared_exact_venv_and_save_successful_rebuilds(file, name):
     source = job(file, name)
     restore = named_step(source, 'Restore or rebuild venv')
     assert '        uses: ./.github/actions/setup-venv\n' in restore
     assert "          save-on-rebuild: 'true'\n" in restore
-    assert 'uv-export-extra-args' not in restore  # Same base/dev export as before.
-    assert 'cache-key-prefix' not in restore  # Share the exact base-env identity.
+    assert 'uv-export-extra-args' not in restore  # Same base/dev dependency selection.
+    assert 'cache-key-prefix' not in restore  # Base environment, with method in its key.
+    if file in {'preflight.yml', 'weekly_corpus.yml'}:
+        assert '          install-method: sync\n' in restore
     assert 'uv venv' not in source
+    assert 'uv sync' not in source
     assert source.index('actions/setup-python@') < source.index('uses: ./.github/actions/setup-venv')
 
 
@@ -137,3 +141,65 @@ def test_tool_pin_changes_have_a_ci_lint_owner():
     with patch.object(sys, 'path', [str(ROOT / '.github/scripts'), *sys.path]):
         from test_scope import TIERS, file_in_dir
     assert any(file_in_dir(Path(PIN), owner) for owner in TIERS['ci_lint']['extra_triggers'])
+
+
+def test_shuffled_nightly_reuses_grammar_profile_and_keeps_order_coverage():
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    restore = named_step(source, 'Restore or rebuild venv (with grammars)')
+    assert '        uses: ./.github/actions/setup-venv\n' in restore
+    assert '          cache-key-prefix: venv-grammars\n' in restore
+    assert '          install-method: sync\n' in restore
+    assert '          uv-export-extra-args: --extra grammars\n' in restore
+    assert "          save-on-rebuild: 'true'\n" in restore
+    assert 'uv sync' not in source
+    assert '        iteration: [1, 2, 3]\n' in source
+    run = script(named_step(source, 'Shuffled default-tier tests (seed ${{ matrix.iteration }})'))
+    assert 'seed="${{ github.run_id }}-${{ matrix.iteration }}"' in run
+    assert 'RAPTOR_RANDOMISE_TESTS="$seed"' in run
+    assert 'python -m pytest core packages engine' in run
+    assert '-n auto --dist loadfile --no-loadscope-reorder' in run
+    budget = script(named_step(source, 'Check default-tier skip count against its recorded budget'))
+    assert '--lane nightly-default --full' in budget
+    # Keep grammar extras aligned; install methods remain separately keyed.
+    other = named_step(job('nightly.yml', 'intentional-crashes'), 'Restore or rebuild venv')
+    assert 'cache-key-prefix: venv-grammars' in other
+    assert 'uv-export-extra-args: --extra grammars' in other
+
+
+def test_corpus_job_keeps_real_drivers_and_toolchain_skip_refusal():
+    source = job('weekly_corpus.yml', 'corpus-drivers')
+    run = script(named_step(source, 'Run corpus-scale drivers'))
+    assert 'python -m pytest -m corpus core packages engine' in run
+    assert '--junitxml="$RUNNER_TEMP/corpus-results.xml"' in run
+    assert 'rustup component add llvm-tools' in script(named_step(source, 'Install Rust llvm-tools (profraw format match)'))
+    refuse = script(named_step(source, 'Refuse an all-skipped measurement run'))
+    assert 'executed = tests - skipped' in refuse
+    assert 'if executed == 0:' in refuse and 'sys.exit(1)' in refuse
+
+
+@pytest.mark.parametrize('file,name', [
+    ('nightly_shuffled.yml', 'shuffled-fast'), ('weekly_corpus.yml', 'corpus-drivers'),
+    ('ubuntu26-canary.yml', 'sandbox-canary'), ('preflight.yml', 'preflight'),
+])
+def test_warm_venv_callers_do_not_restore_an_unused_uv_download_cache(file, name):
+    source = job(file, name)
+    assert 'astral-sh/setup-uv@' not in source
+    assert 'uv sync' not in source
+    assert 'uv run' not in source
+    assert 'uses: ./.github/actions/setup-venv' in source
+
+
+def test_preflight_activates_cached_environment_before_all_hazard_checks():
+    source = job('preflight.yml', 'preflight')
+    text = (ROOT / '.github/workflows/preflight.yml').read_text()
+    assert '  VENV_PATH: .venv\n' in text
+    run = script(named_step(source, 'Run changed tests under simulation'))
+    activate = 'source "$VENV_PATH/bin/activate"'
+    assert activate in run
+    assert run.index(activate) < run.index('hide_modules.py')
+    assert 'python .github/scripts/preflight_scope.py' in run
+    assert '--base "$BASE_SHA" --repo . --run' in run
+    assert 'if [ "$rc" -eq 5 ]; then exit 0; fi' in run
+    assert 'hidden-optional-deps' in source and 'hidden-tree-sitter' in source
+    assert 'duration-guard' in source and 'tree-hygiene' in source
+    assert 'shuffle-a' in source and 'shuffle-b' in source
