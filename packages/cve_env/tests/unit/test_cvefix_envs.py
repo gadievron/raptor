@@ -17,6 +17,9 @@ from pathlib import Path
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = (REPO_ROOT / "packages" / "cve_env" / "scripts"
           / "raptor-cvefix-envs")
@@ -226,8 +229,8 @@ class TestMainLoop:
     def test_budget_ceiling_stops_before_next_entry(
             self, mod, tmp_path, monkeypatch, capsys):
         specs_dir = self._setup(mod, tmp_path, n=3)
-        monkeypatch.setattr(
-            mod.subprocess, "run",
+        patch_module_attribute(monkeypatch,
+            mod, "subprocess", "run",
             _fake_runner_factory(dict(_SUCCESS, total_cost_usd=1.0)))
         rc = mod.main(["--specs", str(specs_dir),
                        "--out", str(tmp_path / "out"),
@@ -246,7 +249,7 @@ class TestMainLoop:
             calls.append(cmd)
             return _fake_runner_factory(_SUCCESS)(cmd, **kw)
 
-        monkeypatch.setattr(mod.subprocess, "run", counting_runner)
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", counting_runner)
         out = tmp_path / "out"
 
         def builds():
@@ -263,7 +266,7 @@ class TestMainLoop:
     def test_report_written_with_counts(self, mod, tmp_path,
                                         monkeypatch):
         specs_dir = self._setup(mod, tmp_path, n=1)
-        monkeypatch.setattr(mod.subprocess, "run",
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run",
                             _fake_runner_factory(_SUCCESS))
         out = tmp_path / "out"
         mod.main(["--specs", str(specs_dir), "--out", str(out)])
@@ -276,7 +279,7 @@ class TestMainLoop:
         def boom(cmd, **kw):  # pragma: no cover — must not be reached
             raise AssertionError("dry-run must not spawn builds")
 
-        monkeypatch.setattr(mod.subprocess, "run", boom)
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", boom)
         assert mod.main(["--specs", str(specs_dir),
                          "--out", str(tmp_path / "out"),
                          "--dry-run"]) == 0
@@ -309,7 +312,7 @@ class TestResolveParentChokepoints:
                 stderr = ""
             return R()
 
-        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", fake_run)
         assert mod.resolve_parent(spec) == "b" * 40
         expected = safe_git_command(
             "-C", str(clone), "rev-parse", f"{FIX}^")

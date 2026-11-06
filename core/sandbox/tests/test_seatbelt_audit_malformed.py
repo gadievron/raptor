@@ -13,6 +13,8 @@ import pytest
 from core.sandbox import probes, seatbelt_audit
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 def entry(message="Sandbox: Python(4242) deny file-read-data /tmp/example"):
     return {
         "senderImagePath": seatbelt_audit.SANDBOX_KEXT_SENDER,
@@ -64,7 +66,7 @@ def test_warmup_continues_after_malformed_entries(tmp_path, monkeypatch, malform
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     warmup = SimpleNamespace(pid=4242, wait=lambda timeout: 0)
     monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
-    monkeypatch.setattr(seatbelt_audit.subprocess, "Popen", lambda *a, **kw: warmup)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "subprocess", "Popen", lambda *a, **kw: warmup)
     with ExitStack() as cleanup:
         reader, writer = socket.socketpair()
         cleanup.callback(writer.close)

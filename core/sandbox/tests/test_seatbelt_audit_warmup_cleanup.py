@@ -13,6 +13,8 @@ from core.sandbox import probes, seatbelt_audit as audit
 from core.testing.streams import pipe_streams
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 @pytest.fixture
 def warmup_setup(tmp_path, monkeypatch):
     streamer = audit.LogStreamer(tmp_path)
@@ -25,7 +27,7 @@ def warmup_setup(tmp_path, monkeypatch):
         selector.select.return_value = []
         factory = Mock(return_value=selector)
         monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
-        monkeypatch.setattr(audit.subprocess, "Popen", Mock(return_value=proc))
+        patch_module_attribute(monkeypatch, audit, "subprocess", "Popen", Mock(return_value=proc))
         monkeypatch.setattr(selectors, "DefaultSelector", factory)
         yield streamer, proc, selector, factory
 

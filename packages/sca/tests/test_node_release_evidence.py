@@ -10,6 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location("check_node_release", ROOT / ".github/scripts/check_node_release.py")
 mod = importlib.util.module_from_spec(SPEC)
@@ -75,7 +78,7 @@ def test_only_gpg_authenticated_plaintext_is_parsed(tmp_path, monkeypatch):
     def run(command, **kwargs):
         calls.append((command, kwargs))
         return SimpleNamespace(stdout="a" * 64 + "  signed-source.tar.xz\n", stderr="[GNUPG:] VALIDSIG " + "A" * 40 + " 0\n")
-    monkeypatch.setattr(mod.subprocess, "run", run)
+    patch_module_attribute(monkeypatch, mod, "subprocess", "run", run)
     hashes, fingerprint = mod.signed_checksums(tmp_path)
     assert hashes == {"signed-source.tar.xz": "a" * 64}
     assert fingerprint == "A" * 40
@@ -88,6 +91,6 @@ def test_only_gpg_authenticated_plaintext_is_parsed(tmp_path, monkeypatch):
 def test_invalid_release_signature_is_refused(tmp_path, monkeypatch):
     def fail(command, **kwargs):
         raise subprocess.CalledProcessError(1, command)
-    monkeypatch.setattr(mod.subprocess, "run", fail)
+    patch_module_attribute(monkeypatch, mod, "subprocess", "run", fail)
     with pytest.raises(subprocess.CalledProcessError):
         mod.signed_checksums(tmp_path)

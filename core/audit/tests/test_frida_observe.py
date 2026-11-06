@@ -20,6 +20,8 @@ from core.audit.frida_observe import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 class TestShouldRunFrida:
     def test_disabled_when_no_dynamic_validation(self):
         outcome = mock.Mock(status="finding", evidence_tool="")
@@ -221,7 +223,7 @@ class TestRunFridaSession:
     """Timeout handling in _run_frida_session logs the applied timeout value."""
 
     def test_config_override_timeout_logged(self, tmp_path, monkeypatch, caplog):
-        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         config = SimpleNamespace(frida_timeout_s=7)
 
@@ -240,7 +242,7 @@ class TestRunFridaSession:
     def test_default_timeout_logged_without_override(
         self, tmp_path, monkeypatch, caplog,
     ):
-        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         config = SimpleNamespace()  # no frida_timeout_s
 
@@ -255,7 +257,7 @@ class TestRunFridaSession:
         assert f"after {fo._OBSERVE_TIMEOUT_S}s" in timeout_msgs[0]
 
     def test_timeout_with_partial_log_reports_success(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         log_file.write_text('{"type": "ready", "hooked": 1}\n')
         config = SimpleNamespace(frida_timeout_s=1)
@@ -274,7 +276,7 @@ class TestRunFridaSession:
             return fd, path
 
         monkeypatch.setattr(fo.tempfile, "mkstemp", _tracking_mkstemp)
-        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
         with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
             fo._run_frida_session(1234, "// script", log_fd,
                                   SimpleNamespace(frida_timeout_s=1))
@@ -304,7 +306,7 @@ class TestSessionCommandLine:
             captured["cmd"] = cmd
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-        monkeypatch.setattr(fo.subprocess, "run", _fake_run)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _fake_run)
         with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
             fo._run_frida_session(
                 1234, "// script", log_fd,
@@ -331,7 +333,7 @@ class TestSessionCommandLine:
         def _fake_run(cmd, **kwargs):
             return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
-        monkeypatch.setattr(fo.subprocess, "run", _fake_run)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _fake_run)
         log_file = tmp_path / "obs.jsonl"
         with _session_log_fd(log_file) as log_fd:
             ok = fo._run_frida_session(
@@ -348,7 +350,7 @@ class TestSessionCommandLine:
                 output='message: {\'type\': \'send\', \'payload\': \'{"type":"call","function":"f","args":[]}\'} data: None\n',
             )
 
-        monkeypatch.setattr(fo.subprocess, "run", _raise_with_partial)
+        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_with_partial)
         log_file = tmp_path / "obs.jsonl"
         with _session_log_fd(log_file) as log_fd:
             ok = fo._run_frida_session(

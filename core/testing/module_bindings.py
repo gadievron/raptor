@@ -1,4 +1,5 @@
 """Keep incidental stdlib mocks on the module that consumes them."""
+from contextlib import contextmanager
 from types import ModuleType
 
 
@@ -20,3 +21,22 @@ def patch_module_attribute(monkeypatch, consumer, binding, name, value):
     # preserves raw absence rather than freezing a lazy __getattr__ result.
     monkeypatch.setitem(vars(consumer), binding, private)
     return private
+
+
+@contextmanager
+def mock_module_attribute(consumer, binding, name, *args, **kwargs):
+    """Yield a unittest mock through a private consumer module binding.
+
+    Preserve patch.object's mock configuration and yielded object while
+    restoring the borrowed binding after normal, error or interrupt exits.
+    """
+    from pytest import MonkeyPatch
+    from unittest.mock import patch
+
+    with MonkeyPatch.context() as scope:
+        borrowed = getattr(consumer, binding)
+        private = patch_module_attribute(
+            scope, consumer, binding, "__name__", borrowed.__name__,
+        )
+        with patch.object(private, name, *args, **kwargs) as mocked:
+            yield mocked

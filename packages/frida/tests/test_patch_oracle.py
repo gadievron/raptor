@@ -18,6 +18,8 @@ from packages.frida import patch_oracle
 from packages.frida.patch_oracle import _parse_location, main, verify_patch
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 def _sink_event(fn: str, caller_module: str) -> dict:
     return {"ts": 0.1, "type": "send", "payload": {
         "category": "sink", "fn": fn, "tid": 1,
@@ -271,7 +273,7 @@ class TestCli:
         def hang(*args, **kwargs):
             raise sp.TimeoutExpired(cmd=["frida"], timeout=1)
 
-        monkeypatch.setattr(patch_oracle.subprocess, "run", hang)
+        patch_module_attribute(monkeypatch, patch_oracle, "subprocess", "run", hang)
         rc = main(["--before", str(before), "--after", str(after),
                    "--sink", "system", "--out", str(tmp_path / "out")])
         assert rc == 2
@@ -306,7 +308,7 @@ class TestRunSideEnvHygiene:
             seen.update(kwargs)
             return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, patch_oracle, "subprocess", "run", fake_run)
         binary = tmp_path / "vuln"
         binary.write_bytes(b"\x7fELF")
         script = tmp_path / "watch.js"
@@ -348,7 +350,7 @@ class TestRunSideSandboxDispatch:
             seen.update(kwargs)
             return sp.CompletedProcess(cmd, 0)
 
-        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, patch_oracle, "subprocess", "run", fake_run)
         binary = tmp_path / "vuln"
         binary.write_bytes(b"\x7fELF")
         script = tmp_path / "watch.js"
@@ -410,7 +412,7 @@ class TestTerminalEscapeScrub:
             kwargs["stderr"].write(b"boom \x1b[2J\x9bpwned")
             return sp.CompletedProcess(cmd, 1)
 
-        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, patch_oracle, "subprocess", "run", fake_run)
         binary = tmp_path / "vuln"
         binary.write_bytes(b"\x7fELF")
         script = tmp_path / "watch.js"
@@ -471,7 +473,7 @@ class TestRunSideBoundedCapture:
             err.write(flood)
             return sp.CompletedProcess(cmd, rc)
 
-        monkeypatch.setattr(po.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, po, "subprocess", "run", fake_run)
         monkeypatch.setenv(
             "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         binary = tmp_path / "target"

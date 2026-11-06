@@ -20,6 +20,9 @@ from core.dataflow.cvefix_loader import load_pairs
 # Advisory JSON fixtures
 # ---------------------------------------------------------------------------
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 def _adv(cve: str, cwes, eco: str, commit_url: str, year: str = "2024") -> dict:
     return {
         "schema_version": "1.4.0",
@@ -283,7 +286,7 @@ def test_resolve_parent_argv_is_hardened(monkeypatch):
         stdout = f"{fix} {parent}\n" if "rev-list" in cmd else ""
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(gh.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, gh, "subprocess", "run", fake_run)
     assert gh._resolve_parent("https://github.com/o/r", fix) == parent
 
     assert len(calls) == 4
@@ -320,8 +323,8 @@ def test_resolve_parent_env_from_safe_git_env(monkeypatch):
 
     monkeypatch.setattr(clone_mod, "get_safe_git_env", fake_env)
     calls: list[dict] = []
-    monkeypatch.setattr(
-        gh.subprocess, "run",
+    patch_module_attribute(monkeypatch,
+        gh, "subprocess", "run",
         lambda cmd, **kw: calls.append(kw)
         or SimpleNamespace(returncode=1, stdout="", stderr=""),
     )

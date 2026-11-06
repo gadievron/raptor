@@ -15,6 +15,8 @@ from packages.binary_analysis.manifest import BinaryManifest
 from packages.binary_analysis.pipeline import BinaryAnalysisResult
 
 
+from core.testing.module_bindings import mock_module_attribute
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-binary"
 
@@ -595,7 +597,7 @@ class TestRunActivePhaseStreaming:
             seen.update(kwargs)
             return real_run(cmd, **kwargs)
 
-        with patch.object(cli_mod.subprocess, "run", spying_run):
+        with mock_module_attribute(cli_mod, "subprocess", "run", spying_run):
             _run_active_phase(
                 kind="probe",
                 cmd=[sys.executable, "-c", "print('x')"],
@@ -615,7 +617,7 @@ class TestRunActivePhaseStreaming:
             kwargs["stderr"].write("partial diagnostics\n")
             raise subprocess.TimeoutExpired(cmd, 1)
 
-        with patch.object(cli_mod.subprocess, "run", exploding_run):
+        with mock_module_attribute(cli_mod, "subprocess", "run", exploding_run):
             phase = _run_active_phase(
                 kind="probe",
                 cmd=["whatever"],
@@ -662,7 +664,7 @@ class TestRunActivePhaseStreaming:
             raise subprocess.TimeoutExpired(
                 ["fuzz", "/tmp/evil\x1b]0;pwn\x07.bin"], 1)
 
-        with patch.object(cli_mod.subprocess, "run", exploding_run):
+        with mock_module_attribute(cli_mod, "subprocess", "run", exploding_run):
             phase = cli_mod._run_active_phase(
                 kind="probe",
                 cmd=["whatever"],

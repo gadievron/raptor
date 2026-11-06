@@ -9,12 +9,14 @@ import pytest
 from core.sandbox import seatbelt_audit
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 @pytest.fixture
 def setup_streamer(tmp_path, monkeypatch):
     proc = Mock(stdout=io.StringIO())
     proc.wait.return_value = 0
     launch = Mock(return_value=proc)
-    monkeypatch.setattr(seatbelt_audit.subprocess, "Popen", launch)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "subprocess", "Popen", launch)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     monkeypatch.setattr(streamer, "_warm_up_until_attached", lambda: True)
     return streamer, proc, launch
@@ -96,7 +98,7 @@ def test_thread_start_failure_reaps_a_real_producer(tmp_path, monkeypatch):
         stdout=subprocess.PIPE, start_new_session=True,
     )
     try:
-        monkeypatch.setattr(seatbelt_audit.subprocess, "Popen", Mock(return_value=proc))
+        patch_module_attribute(monkeypatch, seatbelt_audit, "subprocess", "Popen", Mock(return_value=proc))
         streamer = seatbelt_audit.LogStreamer(tmp_path)
         monkeypatch.setattr(streamer, "_warm_up_until_attached", lambda: True)
         monkeypatch.setattr(

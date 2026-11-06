@@ -9,6 +9,8 @@ from cve_diff.infra.service_health import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 def test_health_result_row_renders_status_and_latency() -> None:
     r = HealthResult(name="OSV API", ok=True, latency_ms=320.5, detail="ok")
     row = r.as_row()
@@ -350,11 +352,11 @@ def _patch_github_token(monkeypatch, *, gh_cli_returns: str | None = None,
     if gh_cli_returns is None:
         def fake_run(*a, **kw):
             raise FileNotFoundError("gh not found")
-        monkeypatch.setattr(service_health.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, service_health, "subprocess", "run", fake_run)
     else:
         class _Result:
             stdout = gh_cli_returns
-        monkeypatch.setattr(service_health.subprocess, "run",
+        patch_module_attribute(monkeypatch, service_health, "subprocess", "run",
                             lambda *a, **kw: _Result())
     if env_token is None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -412,7 +414,7 @@ def test_probe_github_marks_network_error(monkeypatch) -> None:
 def test_probe_github_handles_gh_cli_timeout(monkeypatch) -> None:
     def fake_run(*a, **kw):
         raise service_health.subprocess.TimeoutExpired(cmd="gh", timeout=2.0)
-    monkeypatch.setattr(service_health.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, service_health, "subprocess", "run", fake_run)
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fallback")
     body = {"resources": {"core": {"remaining": 1000, "limit": 5000}}}
     _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body=body))

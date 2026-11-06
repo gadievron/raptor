@@ -49,6 +49,9 @@ import pytest
 
 # Sentinel value we set in HTTPS_PROXY; if it leaks into the env= kwarg
 # passed to subprocess.run, the test fails.
+
+from core.testing.module_bindings import patch_module_attribute
+
 _LEAK_SENTINEL = "http://leak-detect.invalid:9999"
 
 
@@ -185,7 +188,7 @@ def test_run_with_timeout_default_strips_dangerous_env(
         m.stderr = ""
         return m
 
-    monkeypatch.setattr(_proc_mod.subprocess, "run", mock_subprocess_run)
+    patch_module_attribute(monkeypatch, _proc_mod, "subprocess", "run", mock_subprocess_run)
 
     # Call run_with_timeout with no env= → should default to safe.
     outcome = run_mod.run_with_timeout(["echo", "hi"], timeout=2.0)
@@ -217,7 +220,7 @@ def test_run_with_timeout_keep_env_opt_in(
         m.stderr = ""
         return m
 
-    monkeypatch.setattr(_proc_mod.subprocess, "run", mock_subprocess_run)
+    patch_module_attribute(monkeypatch, _proc_mod, "subprocess", "run", mock_subprocess_run)
 
     run_mod.run_with_timeout(
         ["echo", "hi"],

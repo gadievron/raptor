@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 
-from unittest.mock import patch
 
 import packages.joern.prereqs as prereqs
 
 from core.testing.module_bindings import patch_module_attribute
 
+
+from core.testing.module_bindings import mock_module_attribute
 
 class TestIsAvailable:
     def test_returns_bool(self):
@@ -67,7 +68,7 @@ class TestVersion:
         launcher.touch()
         monkeypatch.setattr(prereqs, "is_available", lambda: True)
         monkeypatch.setattr(prereqs, "_joern_path", lambda: str(launcher))
-        with patch.object(prereqs.subprocess, "run") as process:
+        with mock_module_attribute(prereqs, "subprocess", "run") as process:
             assert prereqs.version() == "4.0.601"
             process.assert_not_called()
 
@@ -86,7 +87,7 @@ class TestVersion:
         joern.touch()
         monkeypatch.setattr(prereqs, "is_available", lambda: True)
         monkeypatch.setattr(prereqs, "_joern_path", lambda: str(joern))
-        with patch.object(prereqs.subprocess, "run") as mock_run:
+        with mock_module_attribute(prereqs, "subprocess", "run") as mock_run:
             assert prereqs.version() == "4.0.599"
             mock_run.assert_not_called()
 
@@ -185,7 +186,7 @@ def test_macos_system_stub_resolves_configured_real_jdk(tmp_path, monkeypatch):
     monkeypatch.setenv("JAVA_HOME", str(root))
     patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock()
-    monkeypatch.setattr(prereqs.subprocess, "run", launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", "run", launch)
     prereqs.reset_path_cache()
     try:
         assert prereqs._java_path() == str(java)
@@ -203,7 +204,7 @@ def test_macos_system_stub_resolves_default_jdk_once(tmp_path, monkeypatch):
     monkeypatch.delenv("JAVA_HOME", raising=False)
     patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock(return_value=SimpleNamespace(returncode=0, stdout=str(root) + "\n"))
-    monkeypatch.setattr(prereqs.subprocess, "run", launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", "run", launch)
     prereqs.reset_path_cache()
     try:
         assert prereqs._java_path() == str(java)
@@ -222,7 +223,7 @@ def test_macos_invalid_explicit_jdk_is_not_silently_replaced(tmp_path, monkeypat
     monkeypatch.setenv("JAVA_HOME", str(tmp_path / "missing-jdk"))
     patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock()
-    monkeypatch.setattr(prereqs.subprocess, "run", launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", "run", launch)
     prereqs.reset_path_cache()
     try:
         assert prereqs._java_path() is None
@@ -239,7 +240,7 @@ def test_macos_real_java_on_path_does_not_probe_or_use_other_java_home(tmp_path,
     monkeypatch.setenv("JAVA_HOME", str(tmp_path / "other"))
     patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: str(java))
     launch = Mock()
-    monkeypatch.setattr(prereqs.subprocess, "run", launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", "run", launch)
     prereqs.reset_path_cache()
     try:
         assert prereqs._java_path() == str(java)
@@ -256,7 +257,7 @@ def test_macos_failed_default_jdk_probe_never_uses_system_stub(monkeypatch):
     monkeypatch.delenv("JAVA_HOME", raising=False)
     patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock(side_effect=subprocess.TimeoutExpired("java_home", 5))
-    monkeypatch.setattr(prereqs.subprocess, "run", launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", "run", launch)
     prereqs.reset_path_cache()
     try:
         assert prereqs._java_path() is None
@@ -317,7 +318,7 @@ def test_homebrew_wrappers_resolve_real_cli_parser_and_unregistered_jdk(tmp_path
     from unittest.mock import Mock
     keg, home, _ = _brew_joern(tmp_path, monkeypatch)
     launch = Mock(side_effect=AssertionError('discovery must not execute wrappers or the REPL'))
-    monkeypatch.setattr(prereqs.subprocess, 'run', launch)
+    patch_module_attribute(monkeypatch, prereqs, "subprocess", 'run', launch)
     try:
         assert prereqs.is_available()
         assert prereqs._joern_path() == str(keg / 'libexec/bin/repl-bridge')

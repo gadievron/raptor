@@ -17,6 +17,9 @@ import pytest
 
 from core.concepts.tests._study_cli import run_study_main
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
 
@@ -229,7 +232,7 @@ class TestChaseSubprocessEnv:
             captured.append(kwargs)
             return SimpleNamespace(stdout="")
 
-        monkeypatch.setattr(prep.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, prep, "subprocess", "run", fake_run)
         prep._chase_reading_list_definitions(rl, tmp_path, target)
 
         assert len(captured) == 2  # one grep, one find
