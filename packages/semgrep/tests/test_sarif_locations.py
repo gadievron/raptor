@@ -138,7 +138,8 @@ def test_unusable_primary_region_preserves_identity_but_records_incompleteness(r
 
 
 
-def test_repeated_locations_share_run_resolvers_and_empty_runs_do_not_build_them(monkeypatch):
+@pytest.mark.parametrize('reference,expected_rules', [('indexed', 0), ('id-only', 1)])
+def test_repeated_locations_share_run_resolvers_and_empty_runs_do_not_build_them(monkeypatch, reference, expected_rules):
     from core.sarif import parser
     actual_rule, actual_uri = parser.ResultRuleResolver, parser.ArtifactUriResolver
     calls = {'rule': 0, 'uri': 0}
@@ -154,10 +155,14 @@ def test_repeated_locations_share_run_resolvers_and_empty_runs_do_not_build_them
     monkeypatch.setattr(parser, 'ArtifactUriResolver', uris)
     run = _run(_result())
     run['results'] = [_result() for _ in range(1000)]
+    if reference == 'id-only':
+        for result in run['results']:
+            del result['ruleIndex']
+            result['ruleId'] = 'indexed-rule'
     empty = _run(_result())
     empty['results'] = []
     findings = parse_sarif_data({'runs': [run, empty]})
     assert len(findings) == 1000
     assert findings[0].file == findings[-1].file == 'src/app.c'
     assert findings[-1].level == 'error'
-    assert calls == {'rule': 1, 'uri': 1}
+    assert calls == {'rule': expected_rules, 'uri': 1}
