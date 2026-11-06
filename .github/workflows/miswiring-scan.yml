@@ -11,8 +11,9 @@ name: Miswiring scan (daily)
 # longer fire are warned as stale in the job log.
 #
 # These detectors ALSO gate PRs: lint.yml's ``repo-invariants`` job
-# runs the same detector scripts on every pull_request / push-to-main
-# / merge_group, because schedule-only coverage let a new finding
+# retains the same detectors for pull_request / push-to-main / merge_group;
+# its env-docs step alone can skip proven-irrelevant changes. This daily
+# sweep remains unconditional. Schedule-only coverage let a new finding
 # merge green and fail here the next morning — delayed and
 # misattributed. The daily sweep stays as belt-and-braces (catches
 # baseline drift that lands outside the gated paths) and as the

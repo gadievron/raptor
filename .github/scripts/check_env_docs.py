@@ -745,6 +745,17 @@ def _iter_files(root: Path):
             yield p
 
 
+def source_kind(path: Path) -> str | None:
+    """Recognised suffixes, or a Python/Bash shebang for extensionless files."""
+    if path.suffix == ".py":
+        return "python"
+    if path.suffix in (".sh", ".bash"):
+        return "bash"
+    if not path.suffix:
+        return _shebang_kind(path)
+    return None
+
+
 _ENVISH_CONST = re.compile(r"(^_?[A-Z][A-Z0-9_]*_ENV$|_ENV_[A-Z0-9_]+$)")
 
 
@@ -757,14 +768,7 @@ def scan_tree(root: Path) -> Inventory:
     py: list[tuple[str, str | ast.Module, _ModuleFacts | None]] = []
     for p in _iter_files(root):
         rel = p.relative_to(root).as_posix()
-        if p.suffix == ".py":
-            kind = "python"
-        elif p.suffix in (".sh", ".bash"):
-            kind = "bash"
-        elif p.suffix == "":
-            kind = _shebang_kind(p)
-        else:
-            continue
+        kind = source_kind(p)
         if kind == "python":
             source = p.read_text(encoding="utf-8", errors="replace")
             # Every supported Python form spells env in an identifier:
