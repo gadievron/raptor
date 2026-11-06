@@ -66,7 +66,12 @@ def enrich_caller_entries(callers: list[dict], target_path: Path, inventory: dic
         entry_start = first - 1 - window_start
         summary = _doc_summary(lines[:entry_start])
         entry = lines[entry_start:]
-        excerpt = "\n".join(f"{first + i:4d}  {line}" for i, line in enumerate(entry))
+        # Clipping each line after the global limit preserves the final prefix
+        # and overflow decision without formatting arbitrarily large source lines.
+        excerpt = "\n".join(
+            f"{first + i:4d}  {line[:CALLER_ENTRY_CHARS + 1]}"
+            for i, line in enumerate(entry)
+        )
         if summary is not None:
             i, text = summary
             excerpt = f"{window_start + i + 1:4d}  {text}\n" + excerpt
