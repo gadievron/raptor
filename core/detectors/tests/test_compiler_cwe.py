@@ -137,7 +137,8 @@ def test_compiler_sarif_indexes_rules_once_only_when_needed(tmp_path, monkeypatc
 
     monkeypatch.setattr(compiler, 'ResultRuleResolver', MeasuredResolver)
     report = tmp_path / 'gcc.sarif'
-    run = {'tool': {'driver': {'rules': [{'id': '-Wanalyzer-use-after-free'}]}}, 'results': [
+    run = {'tool': {'driver': {'rules': [{'id': '-Wanalyzer-use-after-free',
+        'defaultConfiguration': {'level': 'warning'}}]}}, 'results': [
         {'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'diagnostic'}}
         for _ in range(100)]}
     report.write_text(json.dumps({'runs': [run]}))
@@ -146,7 +147,17 @@ def test_compiler_sarif_indexes_rules_once_only_when_needed(tmp_path, monkeypatc
         row.pop('ruleId')
         row['ruleIndex'] = 0
     report.write_text(json.dumps({'runs': [run]}))
-    assert len(compiler._parse_gcc_sarif(report)) == 100 and len(builds) == 1
+    diagnostics = compiler._parse_gcc_sarif(report)
+    assert len(diagnostics) == 100 and not builds
+    assert all(row['id'] == '-Wanalyzer-use-after-free' and row['kind'] == 'warning' for row in diagnostics)
+    for row in run['results'][1:]:
+        row.pop('ruleIndex')
+        row.pop('level')
+        row['ruleId'] = '-Wanalyzer-use-after-free'
+    report.write_text(json.dumps({'runs': [run]}))
+    diagnostics = compiler._parse_gcc_sarif(report)
+    assert len(diagnostics) == 100 and len(builds) == 1
+    assert all(row['id'] == '-Wanalyzer-use-after-free' and row['kind'] == 'warning' for row in diagnostics)
 
 
 @pytest.mark.parametrize('index', [False, True, -2, 99, '0', 0.0])

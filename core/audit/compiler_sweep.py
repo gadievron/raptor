@@ -57,7 +57,7 @@ from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerExecutionError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
-from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, _thread_flow_location, get_run_execution_diagnostics, rule_default_level
+from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, _thread_flow_location, get_result_rule, get_run_execution_diagnostics, rule_default_level
 from core.run.scratch import scratch_dir
 
 from ._util import safe_join
@@ -1810,9 +1810,14 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             diagnostic_id = diagnostic_id if isinstance(diagnostic_id, str) else ""
             level = result.get("level") or ""
             if not diagnostic_id or not level:
-                if rule_resolver is None:
-                    rule_resolver = ResultRuleResolver(run)
-                rule = rule_resolver.resolve(result)
+                index = result.get("ruleIndex")
+                if "rule" not in result and type(index) is int and index >= 0:
+                    # Indexed driver references do not need a full ID index.
+                    rule = get_result_rule(run, result)
+                else:
+                    if rule_resolver is None:
+                        rule_resolver = ResultRuleResolver(run)
+                    rule = rule_resolver.resolve(result)
                 diagnostic_id = _result_rule_id(result, rule) or ""
                 level = level or rule_default_level(rule) or ""
             diags.append({
