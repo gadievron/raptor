@@ -296,6 +296,7 @@ class TestHookWithoutJq:
 
         env = dict(os.environ)
         env["HOME"] = str(home)
+        env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
         env["PATH"] = str(bindir)
 
         payload = json.dumps(
