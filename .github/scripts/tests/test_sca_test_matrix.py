@@ -36,14 +36,17 @@ def test_many_cheap_cases_still_split(tmp_path):
 
 
 def test_unselected_slow_records_do_not_inflate_selection(tmp_path):
-    path = _timings(tmp_path, {"a.py::test_a": 1, "b.py::test_b": 1000})
+    path = _timings(tmp_path, {"a.py::test_a": 1, "b.py::test_b": 1000, "b.py::test_huge": 10 ** 400})
     assert sca_matrix(["a.py", "a.py"], path) == _groups(1)
 
 
 @pytest.mark.parametrize("rows", [None, [], {}, {"a.py": 1}, {"a.py::test_a": 0},
     {"a.py::test_a": -1}, {"a.py::test_a": True}, {"a.py::test_a": "1"},
     {"a.py::test_a": float("nan")}, {"a.py::test_a": float("inf")},
-    {"a.py::test_a": 1e308, "a.py::test_b": 1e308}, {"b.py::test_b": 1}])
+    {"a.py::test_a": 1e308, "a.py::test_b": 1e308}, {"b.py::test_b": 1},
+    pytest.param({"a.py::test_a": 10 ** 400}, id="oversized-positive-integer"),
+    pytest.param({"a.py::test_a": -(10 ** 400)}, id="oversized-negative-integer"),
+    pytest.param({"a.py::": 1}, id="missing-test-name")])
 def test_unknown_or_invalid_timings_keep_four_groups(tmp_path, rows):
     assert sca_matrix(["a.py"], _timings(tmp_path, rows)) == _groups(4)
 
@@ -63,12 +66,13 @@ def test_no_selection_needs_no_runners(tmp_path):
     assert sca_matrix([], tmp_path / "missing.json") == []
 
 
-def test_cli_emits_matrix(tmp_path, monkeypatch):
+@pytest.mark.parametrize('duration,groups', [(1, 1), (10 ** 400, 4)], ids=['valid-timings', 'oversized-integer'])
+def test_cli_emits_matrix(tmp_path, monkeypatch, duration, groups):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "packages/sca").mkdir(parents=True)
-    (tmp_path / "packages/sca/test-durations.json").write_text('{"a.py::test_a": 1}')
+    (tmp_path / "packages/sca/test-durations.json").write_text(json.dumps({"a.py::test_a": duration}))
     output = tmp_path / "output"
     monkeypatch.setenv("SCA_FILES", "a.py")
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     _module.main()
-    assert json.loads(output.read_text().split("=", 1)[1]) == _groups(1)
+    assert json.loads(output.read_text().split("=", 1)[1]) == _groups(groups)

@@ -268,3 +268,45 @@ def test_refresh_refuses_to_erase_misshapen_baseline(gate, tmp_path, data):
     with pytest.raises(SystemExit):
         gate.write_baseline(base, 'lane-x', 5)
     assert base.read_bytes() == original
+
+
+@pytest.mark.parametrize('reported', [0, 2], ids=['underreported', 'overreported'])
+def test_detailed_skip_counter_mismatch_is_an_error(gate, tmp_path, reported):
+    xml = tmp_path / 'report.xml'
+    xml.write_text(f'<testsuite skipped="{reported}"><testcase name="test_x"><skipped/></testcase></testsuite>')
+    with pytest.raises(ValueError, match='does not match testcase records'):
+        gate.count_skips(xml)
+
+
+@pytest.mark.parametrize('wrapper', [False, True], ids=['suite-root', 'suites-root'])
+def test_nested_rollups_count_skipped_records_once(gate, tmp_path, wrapper):
+    body = ('<testsuite skipped="2">'
+            '<testsuite skipped="1"><testcase name="a"><skipped/></testcase></testsuite>'
+            '<testsuite skipped="1"><testcase name="b"><skipped/></testcase></testsuite>'
+            '</testsuite>')
+    if wrapper:
+        body = '<testsuites>' + body + '</testsuites>'
+    xml = tmp_path / 'report.xml'
+    xml.write_text(body)
+    assert gate.count_skips(xml) == 2
+
+
+def test_multiple_skip_phase_records_keep_their_count(gate, tmp_path):
+    xml = tmp_path / 'report.xml'
+    xml.write_text('<testsuite skipped="2"><testcase name="a"><skipped/><skipped/></testcase></testsuite>')
+    assert gate.count_skips(xml) == 2
+
+
+@pytest.mark.parametrize('write', [False, True], ids=['check', 'record-baseline'])
+def test_invalid_report_cannot_pass_or_refresh_baseline(gate, tmp_path, monkeypatch, capsys, write):
+    xml = tmp_path / 'report.xml'
+    xml.write_text('<testsuite skipped="0"><testcase name="a"><skipped/></testcase></testsuite>')
+    baseline = _baseline(tmp_path, {'lane-x': {'skips': 5, 'note': 'keep'}})
+    before = baseline.read_bytes()
+    argv = ['check_skip_budget.py', '--lane', 'lane-x', '--junit-xml', str(xml), '--baseline', str(baseline)]
+    if write:
+        argv.append('--write-baseline')
+    monkeypatch.setattr('sys.argv', argv)
+    assert gate.main() == 2
+    assert 'does not match testcase records' in capsys.readouterr().err
+    assert baseline.read_bytes() == before
