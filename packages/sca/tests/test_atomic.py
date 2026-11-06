@@ -16,6 +16,18 @@ import pytest
 
 from packages.sca._atomic import atomic_write_bytes, atomic_write_text
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_patch_targets(monkeypatch):
+    """Keep OS patch decorators and contexts on consumer-owned views."""
+    import core.atomic_fs as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "os", "getpid", consumer_0.os.getpid,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Happy-path semantics
