@@ -110,7 +110,7 @@ def test_describe_report_failure_reclaims_owned_restricted_extraction(
 ):
     created = []
     failure = error("report failed")
-    monkeypatch.setattr(cli, "_describe_binary", lambda *args: None)
+    monkeypatch.setattr(cli, "_describe_binary", lambda *args, report_options=None: None)
     with ExitStack() as stack:
 
         def extract(source, dest):
