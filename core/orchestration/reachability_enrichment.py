@@ -94,15 +94,15 @@ def mark_unreachable_low_priority(
 
     if inventory is None:
         try:
-            import tempfile
+            from core.run.scratch import scratch_dir
 
             from core.inventory.builder import build_inventory
-            with tempfile.TemporaryDirectory() as td:
+            with scratch_dir("raptor-orchestration-inventory-") as td:
                 # Union/raw view in isolation mode so the reachability
                 # query graph matches the operator's declared intent
                 # (review everything, incl. #if 0 code).
                 inventory = build_inventory(
-                    str(target_path), td,
+                    str(target_path), str(td),
                     allow_unreachable=allow_unreachable,
                 )
         except Exception as e:                      # noqa: BLE001
@@ -264,11 +264,11 @@ def compute_caller_context(
 
     if inventory is None:
         try:
-            import tempfile
+            from core.run.scratch import scratch_dir
 
             from core.inventory.builder import build_inventory
-            with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target_path), td)
+            with scratch_dir("raptor-orchestration-inventory-") as td:
+                inventory = build_inventory(str(target_path), str(td))
         except Exception as e:                          # noqa: BLE001
             logger.debug(
                 "reachability_enrichment: inventory build failed (%s); "

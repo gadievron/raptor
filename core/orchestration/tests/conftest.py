@@ -25,3 +25,27 @@ import pytest
 def _isolated_mac_keys(tmp_path: Path,
                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+
+
+@pytest.fixture(autouse=True)
+def _owned_orchestration_keepalive():
+    """Own ticker resources and fail if a orchestration owner forgets its pin."""
+    import threading
+    from core.run import scratch
+
+    with pytest.MonkeyPatch.context() as owner_patch:
+        stop = threading.Event()
+        paths = set()
+        owner_patch.setattr(scratch, "_keepalive_paths", paths)
+        owner_patch.setattr(scratch, "_keepalive_thread", None)
+        owner_patch.setattr(scratch, "_keepalive_loop", lambda: stop.wait())
+        try:
+            yield paths
+        finally:
+            stop.set()
+            thread = scratch._keepalive_thread
+            if thread is not None:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "owned orchestration keepalive did not stop"
+            leaked = [path for path in paths if Path(path).name.startswith("raptor-orchestration-inventory-")]
+            assert not leaked, f"Orchestration owner left workspace keepalives registered: {leaked}"

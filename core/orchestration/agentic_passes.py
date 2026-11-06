@@ -880,11 +880,13 @@ def run_reachability_prepass(
 
     if inventory is None:
         try:
-            import tempfile
+            from core.run.scratch import scratch_dir
 
             from core.inventory.builder import build_inventory
-            with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target), td)
+            with scratch_dir("raptor-orchestration-inventory-") as td:
+                inventory = build_inventory(
+                    str(target), str(td), allow_unreachable=allow_unreachable,
+                )
         except Exception as e:                      # noqa: BLE001
             logger.debug(
                 "reachability prepass: inventory build failed (%s)", e,
