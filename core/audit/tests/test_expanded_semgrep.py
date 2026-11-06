@@ -665,3 +665,85 @@ def test_translation_path_memo_is_bounded_and_expires_between_calls(tmp_path, mo
     assert calls.count('x' * 5000) == 2
     translate_corpus_findings(corpus, [SemgrepFinding(names[0], 1)])
     assert calls.count(names[0]) == 2
+
+
+def test_expansion_cache_separates_macro_flags_and_consumes_iterators_once(tmp_path, monkeypatch):
+    import core.audit.expanded_semgrep as expanded
+    calls = []
+
+    def prepare(**kwargs):
+        flags = tuple(kwargs['macro_config'])
+        calls.append(flags)
+        return expanded.ExpandedView(ok=True, file_path='main.c', text=' '.join(flags))
+
+    monkeypatch.setattr(expanded, 'expand_translation_unit', prepare)
+    budget = ExpansionBudget(3)
+    first = budget.view_for(tmp_path, 'main.c', macro_config=iter(['-DVALUE=1']))
+    same = budget.view_for(tmp_path, 'main.c', macro_config=['-DVALUE'])
+    second = budget.view_for(tmp_path, 'main.c', macro_config=['-DVALUE=2'])
+    undefined = budget.view_for(tmp_path, 'main.c', macro_config=['-UVALUE'])
+    assert first.text == same.text == '-DVALUE'
+    assert second.text == '-DVALUE=2' and undefined.text == '-UVALUE'
+    assert calls == [('-DVALUE',), ('-DVALUE=2',), ('-UVALUE',)]
+    assert budget.used == 3
+    assert budget.view_for(tmp_path, 'main.c', macro_config=['-DVALUE=3']) is None
+    assert budget.view_for(tmp_path, 'main.c', macro_config=['-DVALUE']).text == '-DVALUE'
+
+
+def test_expansion_cache_pins_relative_target_to_current_directory(tmp_path, monkeypatch):
+    import core.audit.expanded_semgrep as expanded
+    calls = []
+
+    def prepare(**kwargs):
+        calls.append(kwargs['target_path'])
+        return expanded.ExpandedView(ok=True, file_path='main.c', text=str(kwargs['target_path']))
+
+    monkeypatch.setattr(expanded, 'expand_translation_unit', prepare)
+    budget = ExpansionBudget(2)
+    first_dir = tmp_path / 'first'
+    second_dir = tmp_path / 'second'
+    first_dir.mkdir()
+    second_dir.mkdir()
+    monkeypatch.chdir(first_dir)
+    first = budget.view_for(Path('repo'), 'main.c')
+    monkeypatch.chdir(second_dir)
+    second = budget.view_for(Path('repo'), 'main.c')
+    assert first.text != second.text
+    assert calls == [first_dir / 'repo', second_dir / 'repo']
+    assert budget.used == 2
+
+
+@pytest.mark.parametrize('ok', [False, True])
+def test_expansion_cache_isolates_returned_snapshots(tmp_path, monkeypatch, ok):
+    import core.audit.expanded_semgrep as expanded
+    original = expanded.ExpandedView(ok=ok, file_path='main.c', text='original', errors=['reason'])
+    monkeypatch.setattr(expanded, 'expand_translation_unit', lambda **kw: original)
+    budget = ExpansionBudget(1)
+    first = budget.view_for(tmp_path, 'main.c')
+    first.text = 'modified'
+    first.errors.append('caller edit')
+    second = budget.view_for(tmp_path, 'main.c')
+    assert second.text == 'original' and second.errors == ['reason']
+    second.errors.clear()
+    assert budget.view_for(tmp_path, 'main.c').errors == ['reason']
+    assert budget.used == 1
+
+
+def test_expansion_cache_preserves_order_of_macro_overrides(tmp_path, monkeypatch):
+    import core.audit.expanded_semgrep as expanded
+    calls = []
+
+    def prepare(**kwargs):
+        flags = tuple(kwargs['macro_config'])
+        calls.append(flags)
+        return expanded.ExpandedView(ok=True, file_path='main.c', text=' '.join(flags))
+
+    monkeypatch.setattr(expanded, 'expand_translation_unit', prepare)
+    budget = ExpansionBudget(2)
+    flags = ['-DVALUE', '-UVALUE']
+    first = budget.view_for(tmp_path, 'main.c', macro_config=flags)
+    flags.reverse()
+    second = budget.view_for(tmp_path, 'main.c', macro_config=flags)
+    assert first.text == '-DVALUE -UVALUE'
+    assert second.text == '-UVALUE -DVALUE'
+    assert calls == [('-DVALUE', '-UVALUE'), ('-UVALUE', '-DVALUE')]
