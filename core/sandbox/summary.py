@@ -75,6 +75,7 @@ from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 from core.logging import log_security_event as _log_security_event
 from core.security.capped_read import path_may_exist, read_capped
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
@@ -1007,10 +1008,10 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
                 expected.decode("utf-8"),
                 tmp_prefix=".~audit-degraded-",
             )
-        except OSError:
+        except OSError as exc:
             logger.warning(
-                "reassert_audit_degraded: pending marker retry failed under %s",
-                run_dir, exc_info=True,
+                "reassert_audit_degraded: pending marker retry failed under %s: %s: %s",
+                sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
             )
         else:
             entry["persisted"] = True
@@ -1021,7 +1022,7 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
         "process wrote is %s — restoring it. The run dir is writable "
         "by the sandboxed target; a removed degradation marker is "
         "itself tamper evidence.",
-        run_dir, "missing" if current is None else "altered",
+        sanitise_for_terminal(str(run_dir)), "missing" if current is None else "altered",
     )
     _log_security_event(
         "sandbox_evidence_corrupt",
@@ -1034,12 +1035,12 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
             expected.decode("utf-8"),
             tmp_prefix=".~audit-degraded-",
         )
-    except OSError:
+    except OSError as exc:
         # Restore is best-effort; the True return (and the security
         # event above) still carries the tamper evidence to triage.
         logger.warning(
-            "reassert_audit_degraded: failed to restore marker under %s",
-            run_dir, exc_info=True,
+            "reassert_audit_degraded: failed to restore marker under %s: %s: %s",
+            sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
         )
     return True
 
@@ -1172,12 +1173,12 @@ def summarize_and_write(
         # A sibling summariser won the rename race, or the input
         # vanished. Keep this expected race quiet.
         return None
-    except OSError:
+    except OSError as exc:
         # Permission/storage failures leave the input in place for a
         # retry, but no summary was produced. Surface that distinction.
         logger.warning(
-            "summarize_and_write: failed to rename denial evidence %s",
-            jsonl, exc_info=True,
+            "summarize_and_write: failed to rename denial evidence %s: %s: %s",
+            sanitise_for_terminal(str(jsonl)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
         )
         if raise_on_io_error:
             raise
@@ -1217,8 +1218,8 @@ def summarize_and_write(
             # must see it. Mirrors c5a4505 / 8edf0f6 family.
             logger.warning(
                 "summarize_and_write: failed to open renamed JSONL "
-                "for reading; evidence retained at %s", tmp,
-                exc_info=True,
+                "for reading; evidence retained at %s: %s: %s", sanitise_for_terminal(str(tmp)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
             )
             if raise_on_io_error:
                 raise
@@ -1246,15 +1247,15 @@ def summarize_and_write(
                         chunks = []
                         break
                 raw = b"".join(chunks)
-        except OSError:
+        except OSError as exc:
             # See the open() failure branch above. The fd is NOT
             # closed here — the finally below owns the single close;
             # a second close would race a concurrent thread's fd
             # reuse.
             logger.warning(
                 "summarize_and_write: failed to read renamed JSONL; "
-                "evidence retained at %s", tmp,
-                exc_info=True,
+                "evidence retained at %s: %s: %s", sanitise_for_terminal(str(tmp)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
             )
             if raise_on_io_error:
                 raise
@@ -1323,14 +1324,14 @@ def summarize_and_write(
         # Strict callers still need the claimed stream's recovery path.
         logger.warning(
             "summarize_and_write: summary not written; evidence retained at %s",
-            tmp,
+            sanitise_for_terminal(str(tmp)),
         )
         raise
     if result is None and (records or corrupt_lines or inode_mismatch
                            or planted_object):
         logger.warning(
             "summarize_and_write: summary not written; evidence retained at %s",
-            tmp,
+            sanitise_for_terminal(str(tmp)),
         )
         return None
 
@@ -1529,7 +1530,7 @@ def _assemble_and_write_summary(
                 "beside records it holds — surfaced as unverified, "
                 "not merged (a child write can forge \"target never "
                 "executed\" on the Landlock-only tier).",
-                run_dir, len(unverified_refusals),
+                sanitise_for_terminal(str(run_dir)), len(unverified_refusals),
             )
         else:
             logger.warning(
@@ -1538,7 +1539,7 @@ def _assemble_and_write_summary(
                 "finalisation / sweep) — surfaced as unverified, not "
                 "counted; this process cannot vouch for records it "
                 "never witnessed.",
-                len(unverified_refusals), run_dir,
+                len(unverified_refusals), sanitise_for_terminal(str(run_dir)),
             )
     if corrupt_lines or inode_mismatch or planted_object or evidence_write_failure:
         # Tamper flags. Corrupt lines mean someone rewrote evidence in
@@ -1583,7 +1584,7 @@ def _assemble_and_write_summary(
             "SANDBOX EVIDENCE TAMPER SUSPECTED in %s: %s — the run's "
             "denial evidence is untrusted as a whole and the summary "
             "is flagged for triage.",
-            run_dir, "; ".join(_details),
+            sanitise_for_terminal(str(run_dir)), "; ".join(_details),
         )
         _log_security_event(
             "sandbox_evidence_corrupt",
@@ -1663,15 +1664,15 @@ def _assemble_and_write_summary(
             dumps_artifact(summary, ensure_ascii=True) + "\n",
             tmp_prefix=".~summary-",
         )
-    except OSError:
+    except OSError as exc:
         # WARNING (F071 W21 promote): the summary write is the run's
         # final-output artifact. Silent loss = silent audit integrity
         # gap. Return-None remains the correct contract signal (callers
         # check); this promotion adds the operator visibility that was
         # missing. Mirrors c5a4505 / 8edf0f6 family.
         logger.warning(
-            "summarize_and_write: failed to write/replace summary.json",
-            exc_info=True,
+            "summarize_and_write: failed to write/replace summary.json: %s: %s",
+            sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
         )
         if raise_on_io_error:
             raise
