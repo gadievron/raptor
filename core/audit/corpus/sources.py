@@ -15,16 +15,17 @@ fallback on failure with the real stderr surfaced.
 from __future__ import annotations
 
 import logging
-import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.atomic_fs import rmtree_hardened
 from core.json import load_json
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,60 @@ def _apply_symlinks(entry: SourceEntry, dest: Path) -> None:
         )
 
 
+def _check_destination(dest: Path) -> None:
+    from core.project.registry_home import refuse_registry_overlap
+
+    refuse_registry_overlap(dest)
+    if dest.is_symlink():
+        raise SourceFetchError(f"Source destination must not be a symlink: {dest}")
+
+
+def _remove_checkout(dest: Path, identity: tuple[int, int] | None = None) -> None:
+    """Remove only a real checkout root, never a redirected allocation."""
+    _check_destination(dest)
+    try:
+        current = dest.lstat()
+    except FileNotFoundError:
+        return
+    if (not stat.S_ISDIR(current.st_mode)
+            or identity is not None and (current.st_dev, current.st_ino) != identity):
+        raise SourceFetchError(f"Source checkout root changed before cleanup: {dest}")
+    if not rmtree_hardened(dest):
+        raise SourceFetchError(f"Partial source checkout retained after failed removal: {dest}")
+
+
+def _checkout_attempt(
+    dest: Path, entry: SourceEntry, fetch: Callable[[], tuple[bool, str]],
+) -> tuple[bool, str]:
+    # Exclusive reservation means a failed clone cannot erase a pre-existing
+    # directory, or a checkout another caller acquired in the meantime.
+    dest.mkdir()
+    info = dest.lstat()
+    complete = False
+    failed = False
+    try:
+        ok, detail = fetch()
+        if ok:
+            current = dest.lstat()
+            if (not stat.S_ISDIR(current.st_mode)
+                    or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)):
+                raise SourceFetchError(f"Source checkout root changed during acquisition: {dest}")
+            _apply_symlinks(entry, dest)
+            complete = True
+        return ok, detail
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        if not complete:
+            try:
+                _remove_checkout(dest, (info.st_dev, info.st_ino))
+            except BaseException:
+                if not failed:
+                    raise
+                logger.warning("Partial source cleanup failed for %s", dest, exc_info=True)
+
+
 def clone_source(
     repo_key: str,
     ref: str,
@@ -211,25 +266,26 @@ def clone_source(
 ) -> Path:
     """Create a pinned shallow clone of *repo_key* at *ref* in *dest*.
 
-    Tries the primary URL, then each mirror; a partial clone from a
-    failed attempt is removed before the next.  Raises
+    The destination must not already exist. Tries the primary URL, then
+    each mirror; a partial clone from a failed attempt is removed before
+    the next. Cancellation and post-clone setup failures also release
+    the exclusively reserved destination.  Raises
     :class:`SourceFetchError` with the last git stderr when every URL
     fails — the caller decides whether that aborts the run.
     """
     entry = _resolve_entry(repo_key, entry)
+    _check_destination(dest)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     last_err = ""
     for url in entry.urls:
         print(f"  Cloning {repo_key} at {ref} from {url}...", flush=True)
-        if _is_hex_sha(ref):
-            ok, last_err = _clone_at_sha(url, ref, dest, timeout_s=timeout_s)
-        else:
-            ok, last_err = _clone_at_ref(url, ref, dest, timeout_s=timeout_s)
+        clone = _clone_at_sha if _is_hex_sha(ref) else _clone_at_ref
+        ok, last_err = _checkout_attempt(
+            dest, entry, lambda: clone(url, ref, dest, timeout_s=timeout_s),
+        )
         if ok:
-            _apply_symlinks(entry, dest)
             return dest
-        shutil.rmtree(dest, ignore_errors=True)
         logger.warning(
             "clone of %s from %s failed: %s", repo_key, url, last_err,
         )
@@ -312,6 +368,7 @@ def fetch_files(
     :func:`clone_source`.
     """
     entry = _resolve_entry(repo_key, entry)
+    _check_destination(dest)
 
     if (dest / ".git").exists():
         head = _run_git(
@@ -335,7 +392,7 @@ def fetch_files(
                     _apply_symlinks(entry, dest)
                     return dest
         # Wrong ref or broken checkout — refetch from scratch.
-        shutil.rmtree(dest, ignore_errors=True)
+        _remove_checkout(dest)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     last_err = ""
@@ -345,13 +402,12 @@ def fetch_files(
             f"from {url}...",
             flush=True,
         )
-        ok, last_err = _fetch_files_from(
-            url, ref, files, dest, timeout_s=timeout_s,
+        ok, last_err = _checkout_attempt(
+            dest, entry,
+            lambda: _fetch_files_from(url, ref, files, dest, timeout_s=timeout_s),
         )
         if ok:
-            _apply_symlinks(entry, dest)
             return dest
-        shutil.rmtree(dest, ignore_errors=True)
         logger.warning(
             "file fetch of %s from %s failed: %s", repo_key, url, last_err,
         )

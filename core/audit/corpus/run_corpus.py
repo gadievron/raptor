@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ from core.audit.pipeline import (
     STATUS_RANK as _STATUS_RANK,
 )
 from core.llm.coerce import structured_result
+from core.atomic_fs import rmtree_hardened
 from core.run.scratch import keepalive_register, keepalive_unregister
 
 from .sources import FIXTURES_DIR
@@ -527,49 +529,87 @@ def _build_excerpt_tree(
         by_repo.setdefault(label.source.repo, set()).add(label.source.file)
 
     excerpt_dirs: dict[str, Path] = {}
-    for repo_key, files in by_repo.items():
-        src_dir = source_dirs.get(repo_key)
-        if src_dir is None or not src_dir.is_dir():
-            continue
+    try:
+        for repo_key, files in by_repo.items():
+            src_dir = source_dirs.get(repo_key)
+            if src_dir is None or not src_dir.is_dir():
+                continue
 
-        # Hand-rolled (not scratch_dir): ownership transfers to the
-        # corpus loop, which releases every excerpt dir in its finally
-        # (_release_excerpt_trees). The corpus-excerpt- prefix is
-        # listed in core.run.tmp_reaper's static tuple, so a SIGKILLed
-        # run strands nothing past the age floor — and the keepalive
-        # is what makes that listing safe: an excerpt tree is written
-        # once and then read for the whole (possibly multi-day) run,
-        # so the owner keeps it fresh until release.
-        tmp = Path(tempfile.mkdtemp(prefix=f"corpus-excerpt-{repo_key}-"))
-        keepalive_register(tmp)
-        copied = 0
-        for rel_file in sorted(files):
-            src = src_dir / rel_file
-            dst = tmp / rel_file
-            if src.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(src), str(dst))
-                copied += 1
+            # Hand-rolled (not scratch_dir): ownership transfers to the
+            # corpus loop, which releases every excerpt dir in its finally
+            # (_release_excerpt_trees). The corpus-excerpt- prefix is
+            # listed in core.run.tmp_reaper's static tuple, so a SIGKILLed
+            # run strands nothing past the age floor — and the keepalive
+            # is what makes that listing safe: an excerpt tree is written
+            # once and then read for the whole (possibly multi-day) run,
+            # so the owner keeps it fresh until release.
+            tmp = Path(tempfile.mkdtemp(prefix=f"corpus-excerpt-{repo_key}-"))
+            excerpt_dirs[repo_key] = tmp
+            keepalive_register(tmp)
+            copied = 0
+            for rel_file in sorted(files):
+                src = src_dir / rel_file
+                dst = tmp / rel_file
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(src), str(dst))
+                    copied += 1
 
-        from .excerpt import copy_c_translation_unit_owners
+            from .excerpt import copy_c_translation_unit_owners
 
-        owners = copy_c_translation_unit_owners(tmp, src_dir, files)
-        copied += len(owners)
-        copied += _copy_perlasm_drivers(tmp, src_dir)
-        copied += _copy_c_include_closure(tmp, src_dir, files | owners)
-        excerpt_dirs[repo_key] = tmp
-        print(f"  Excerpt: {repo_key} — {copied} file(s)", flush=True)
+            owners = copy_c_translation_unit_owners(tmp, src_dir, files)
+            copied += len(owners)
+            copied += _copy_perlasm_drivers(tmp, src_dir)
+            copied += _copy_c_include_closure(tmp, src_dir, files | owners)
+            print(f"  Excerpt: {repo_key} — {copied} file(s)", flush=True)
+
+    except BaseException:
+        _release_excerpt_trees(excerpt_dirs, preserve_error=True)
+        raise
 
     return excerpt_dirs
 
 
-def _release_excerpt_trees(excerpt_dirs: dict[str, Path]) -> None:
-    """Release the excerpt trees `_build_excerpt_tree` handed over:
-    drop each dir's keepalive (so an abandoned tree can age out for
-    the reaper) and best-effort-remove it."""
-    for d in excerpt_dirs.values():
-        keepalive_unregister(d)
-        shutil.rmtree(str(d), ignore_errors=True)
+def _release_excerpt_trees(
+    excerpt_dirs: dict[str, Path], *, preserve_error: bool = False,
+) -> None:
+    """Unregister and remove every owned tree, even if another teardown fails.
+
+    Ordinary cleanup errors are logged so completed work stays usable. A new
+    cancellation propagates only after all paths have been attempted, and
+    never replaces an exception already being handled by the owner.
+    """
+    interrupted = None
+    for directory in dict.fromkeys(excerpt_dirs.values()):
+        try:
+            keepalive_unregister(directory)
+        except BaseException as exc:
+            logger.warning("Excerpt keepalive teardown failed for %s", directory, exc_info=True)
+            if not isinstance(exc, Exception) and interrupted is None:
+                interrupted = exc
+        try:
+            if not rmtree_hardened(directory):
+                logger.warning("Excerpt directory retained after failed removal: %s", directory)
+        except BaseException as exc:
+            logger.warning("Excerpt removal failed for %s", directory, exc_info=True)
+            if not isinstance(exc, Exception) and interrupted is None:
+                interrupted = exc
+    if interrupted is not None and not preserve_error:
+        raise interrupted
+
+
+@contextmanager
+def _excerpt_trees(labels: list[Any], source_dirs: dict[str, Path]) -> Iterator[dict[str, Path]]:
+    """Own preparation and every consumer step, including mutation setup."""
+    directories = _build_excerpt_tree(labels, source_dirs)
+    failed = False
+    try:
+        yield directories
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        _release_excerpt_trees(directories, preserve_error=failed)
 
 
 def _copy_c_include_closure(
@@ -3109,7 +3149,7 @@ def main(argv: list[str] | None = None) -> int:
     def _heartbeat() -> None:
         _wall_segment_touch(wall_path, wall_segments, run_stamp)
 
-    with _corpus_project_context(run_tag):
+    with _corpus_project_context(run_tag), ExitStack() as excerpt_cleanup:
         if args.probe:
             t0 = time.monotonic()
             results = []
@@ -3137,7 +3177,7 @@ def main(argv: list[str] | None = None) -> int:
 
             audit_dirs = source_dirs
             if args.scope == "excerpt":
-                excerpt_dirs = _build_excerpt_tree(labels, source_dirs)
+                excerpt_dirs = excerpt_cleanup.enter_context(_excerpt_trees(labels, source_dirs))
                 audit_dirs = excerpt_dirs
 
             if run_kind == PROVENANCE_SYNTHETIC_MUTANT:
@@ -3160,8 +3200,6 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     for e in mutation_errors:
                         print(f"  {e}", file=sys.stderr)
-                    if excerpt_dirs:
-                        _release_excerpt_trees(excerpt_dirs)
                     return 1
                 n_mutants = sum(
                     1 for lb in labels
@@ -3183,27 +3221,23 @@ def main(argv: list[str] | None = None) -> int:
             }
 
             t0 = time.monotonic()
-            try:
-                results, run_dirs = _run_audit(
-                    labels, audit_dirs,
-                    model=model, out_dir=args.out,
-                    full_source_dirs=source_dirs if excerpt_dirs else None,
-                    mode=mode,
-                    triage=args.triage == "on",
-                    prefilter=args.prefilter == "on",
-                    profile=args.profile,
-                    open_discovery=args.open_discovery,
-                    immediate_verify=not args.no_immediate_verify,
-                    checkpoint=(
-                        args.out / f"checkpoint-{mode}-groups.json"
-                        if args.out else None
-                    ),
-                    checkpoint_stamp=ckpt_stamp_extra,
-                    heartbeat=_heartbeat,
-                )
-            finally:
-                if excerpt_dirs:
-                    _release_excerpt_trees(excerpt_dirs)
+            results, run_dirs = _run_audit(
+                labels, audit_dirs,
+                model=model, out_dir=args.out,
+                full_source_dirs=source_dirs if excerpt_dirs else None,
+                mode=mode,
+                triage=args.triage == "on",
+                prefilter=args.prefilter == "on",
+                profile=args.profile,
+                open_discovery=args.open_discovery,
+                immediate_verify=not args.no_immediate_verify,
+                checkpoint=(
+                    args.out / f"checkpoint-{mode}-groups.json"
+                    if args.out else None
+                ),
+                checkpoint_stamp=ckpt_stamp_extra,
+                heartbeat=_heartbeat,
+            )
             wall_s = time.monotonic() - t0
 
             # Mechanism attribution: join run-directory receipts back
