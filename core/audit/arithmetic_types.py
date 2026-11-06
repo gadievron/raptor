@@ -1,7 +1,7 @@
 """Source-bound arithmetic under an explicit target integer ABI.
 
 Unresolved aliases, pointers, references, enums, volatile objects and mixed
-promoted profiles require a richer model. No host or C32 default is used.
+promoted signedness require a richer model. No host or C32 default is used.
 """
 
 import re
@@ -69,6 +69,41 @@ def integer_type(spelling, integer_abi=None):
     return kind(abi.int_bits, "unsigned" not in tokens, promote=False)
 
 
+def common_integer_type(operands, types, integer_abi):
+    """Result frame for atomic operands with one promoted signedness.
+
+    Same-signedness C conversions preserve values and select the wider
+    promoted range. Small supported literals have type int; converting a
+    nonnegative int literal to a wider/equal unsigned frame preserves it.
+    Mixed signed/unsigned variables still require rank/conversion modeling.
+    Guard-only variables do not select the operation's result range.
+    """
+    abi = resolve_integer_abi(integer_abi)
+    if abi is None or not operands:
+        return None
+    declared = dict(types)
+    kinds, literals = [], []
+    for atom in operands:
+        value = integer_literal_value(atom)
+        if value is not None:
+            if abs(value) > (1 << (abi.int_bits - 1)) - 1:
+                return None
+            literals.append(value)
+        else:
+            kind = integer_type(declared.get(atom), abi)
+            if kind is None:
+                return None
+            kinds.append(kind)
+    signs = {kind.promoted_signed for kind in kinds}
+    if len(signs) > 1:
+        return None
+    signed = next(iter(signs), True)
+    if not signed and any(value < 0 for value in literals):
+        return None
+    width = max([kind.promoted_width for kind in kinds] + ([abi.int_bits] if literals else []))
+    return IntegerType(width, signed, width, signed)
+
+
 def has_builtin_integer_type(type_node, spelling, language=None):
     """Recognize grammar builtin types, including C's reserved _Bool token."""
     return type_node is not None and (
@@ -77,7 +112,7 @@ def has_builtin_integer_type(type_node, spelling, language=None):
     )
 
 
-def model_for_integer_terms(target, data, operands, premises, integer_abi=None, *, language=None):
+def model_for_integer_terms(target, data, operands, premises, integer_abi=None, *, language=None, result_operands=None):
     """Resolve integer terms and guard names with their promotion domains."""
     abi = resolve_integer_abi(integer_abi)
     if abi is None:
@@ -136,19 +171,26 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
             return ArithmeticModel("unavailable")
         resolved[name] = kind
         spellings[name] = spelling
-    profiles = {kind.profile for kind in resolved.values()}
-    if len(profiles) != 1:
+    result_type = common_integer_type(operands if result_operands is None else result_operands,
+                                      spellings.items(), abi)
+    if result_type is None or not resolved:
         return ArithmeticModel("unavailable")
-    profile = profiles.pop()
-    if profile.startswith("uint") and any(value < 0 for value in literals):
-        return ArithmeticModel("unavailable")  # mixed signed/unsigned literal conversion is not modeled
+    # The single-profile predicate DSL preserves these atomic comparisons
+    # only when every value fits the result frame with the same signedness.
+    # A wider guard variable must not silently widen the arithmetic query.
+    if any(kind.promoted_signed != result_type.signed or kind.promoted_width > result_type.width
+           for kind in resolved.values()):
+        return ArithmeticModel("unavailable")
+    profile = result_type.profile
+    if not result_type.signed and any(value < 0 for value in literals):
+        return ArithmeticModel("unavailable")
     domains = []
     for name, kind in resolved.items():
-        if kind.width == kind.promoted_width:
+        if kind.width == result_type.width:
             continue  # every bit pattern already denotes an admissible int value
         low = -(1 << (kind.width - 1)) if kind.signed else 0
         high = (1 << (kind.width - (1 if kind.signed else 0))) - 1
-        # The predicate parser accepts binary subtraction, not negative literals.
+        # Express the storage minimum exactly in the selected wider frame.
         lower = f"(0 - {-low})" if low < 0 else "0"
         domains.extend((f"{name} >= {lower}", f"{name} <= {high}"))
     return ArithmeticModel("bound", profile,

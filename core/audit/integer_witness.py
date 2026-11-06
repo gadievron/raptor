@@ -1,14 +1,14 @@
 """Independent integer checks on source-bound SMT counterexamples.
 
 This evaluator uses Python integers, never Z3 expressions or wrapped arithmetic.
-It covers only the admitted atomic comparisons and common promoted profile.
+It covers only admitted atomic comparisons and the common converted result type.
 """
 
 import operator
 
 from ._util import IDENTIFIER_RE
 from .integer_literals import integer_literal_value
-from .arithmetic_types import integer_type
+from .arithmetic_types import common_integer_type, integer_type
 
 _COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "==": operator.eq, "!=": operator.ne}
 _ARITHMETIC = {"+": operator.add, "-": operator.sub, "*": operator.mul}
@@ -69,10 +69,12 @@ def evaluate_integer_operation(operation, operands, op, values, integer_abi):
     if len(operands) != 2 or op not in _ARITHMETIC or not operation.types:
         return None
     a, b = (_atom(atom, values) for atom in operands)
-    kind = integer_type(operation.types[0][1], integer_abi)
+    kind = common_integer_type(operands, operation.types, integer_abi)
     if type(a) is not int or type(b) is not int or kind is None:
         return None
-    width, signed = kind.promoted_width, kind.promoted_signed
+    if operation.profile != kind.profile or operation.kind != ("signed_wrap" if kind.signed else "unsigned_wrap"):
+        return None
+    width, signed = kind.width, kind.signed
     low = -(1 << (width - 1)) if signed else 0
     high = (1 << (width - (1 if signed else 0))) - 1
     return _ARITHMETIC[op](a, b), low, high
