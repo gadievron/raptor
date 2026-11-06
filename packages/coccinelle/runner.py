@@ -25,8 +25,8 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
-from itertools import groupby
+from collections.abc import Callable, Iterator
+from itertools import chain, groupby
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ from core.analysis.rule_versions import VersionProbeCache, rule_version_refusal,
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
+from core.security.log_sanitisation import escape_nonprintable
 from core.source import ReadBudgetExceededError, read_text_gated
 
 from .models import SpatchMatch, SpatchResult
@@ -1717,7 +1718,7 @@ def _parse_results(
     return matches
 
 
-def _forged_marker_lines(output: str, nonce: str) -> list[str]:
+def _forged_marker_lines(output: str, nonce: str) -> Iterator[str]:
     """COCCIRESULT-shaped lines that do NOT carry the invocation nonce.
 
     These are exactly the lines the pre-nonce parser would have
@@ -1727,33 +1728,34 @@ def _forged_marker_lines(output: str, nonce: str) -> list[str]:
     match set by _parse_results; surfaced here as an attack signal.
     """
     prefix = _nonced_prefix(nonce)
-    forged = []
     for line in output.splitlines():
         s = line.strip()
         if not s.startswith("COCCIRESULT"):
             continue
         if s.startswith(prefix):
             continue
-        forged.append(s[:200])
-    return forged
+        yield s[:200]
 
 
 def _warn_forged_markers(
     stdout: str, stderr: str, *, nonce: str, rule_name: str, target: Path,
 ) -> int:
     """Count + log forged COCCIRESULT markers across both streams."""
-    forged = (
-        _forged_marker_lines(stdout or "", nonce)
-        + _forged_marker_lines(stderr or "", nonce)
-    )
-    if forged:
+    count = 0
+    first = ""
+    for marker in chain(_forged_marker_lines(stdout or "", nonce),
+                        _forged_marker_lines(stderr or "", nonce)):
+        count += 1
+        if count == 1:
+            first = escape_nonprintable(marker)[:200]
+    if count:
         logger.warning(
             "COCCIRESULT forgery signal: %d marker line(s) without the "
             "per-invocation nonce rejected (rule %s, target %s) — "
             "likely hostile-source evidence-forgery attempt; first: %s",
-            len(forged), rule_name, target, forged[0],
+            count, rule_name, target, first,
         )
-    return len(forged)
+    return count
 
 
 _ERROR_PATTERNS = (

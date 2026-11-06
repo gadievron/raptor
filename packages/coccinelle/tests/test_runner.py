@@ -3650,3 +3650,32 @@ def test_source_inventory_metadata_failure_preserves_other_files(tmp_path, monke
 
     monkeypatch.setattr(Path, 'is_file', inspect)
     assert runner_mod._walk_c_h(tmp_path) == {str(good)}
+
+
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_forged_marker_notice_counts_all_rows_and_bounds_inert_sample(tmp_path, monkeypatch, stream):
+    nonce = 'ab' * 16
+    prefix = runner_mod._nonced_prefix(nonce)
+    sample = 'COCCIRESULT:\x1b[2J' + 'x' * 500
+    output = sample + '\n' + ('COCCIRESULT:other\n' * 1_000) + prefix + '{}\n'
+    streams = {'stdout': '', 'stderr': ''}
+    streams[stream] = output
+    notices = []
+    monkeypatch.setattr(runner_mod.logger, 'warning', lambda *args: notices.append(args))
+    count = runner_mod._warn_forged_markers(**streams, nonce=nonce, rule_name='r', target=tmp_path)
+    assert count == 1_001
+    assert len(notices) == 1
+    rendered_sample = notices[0][-1]
+    assert len(rendered_sample) == 200
+    assert '\x1b' not in rendered_sample and '\\x1b' in rendered_sample
+
+
+def test_forged_marker_notice_accepts_single_pass_streams(tmp_path, monkeypatch):
+    def markers(output, nonce):
+        yield from ('COCCIRESULT:' + value for value in output)
+    monkeypatch.setattr(runner_mod, '_forged_marker_lines', markers)
+    notices = []
+    monkeypatch.setattr(runner_mod.logger, 'warning', lambda *args: notices.append(args))
+    count = runner_mod._warn_forged_markers('ab', 'cd', nonce='n', rule_name='r', target=tmp_path)
+    assert count == 4
+    assert notices[-1][-1] == 'COCCIRESULT:a'
