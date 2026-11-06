@@ -171,10 +171,18 @@ def test_combined_native_rule_controls_have_ci_and_nightly_owners():
                 and n.name == "test_error_path_controls")
     assert "pytest.mark.integration" in {ast.unparse(n) for n in case.decorator_list}
     nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
-    step = nightly.split("      - name: Run integration tests (retry once on external outage)\n", 1)[1]
-    step = step.split("      - name:", 1)[0]
-    assert "python -m pytest -m integration core packages engine" in step
-    tokens = shlex.split(step)
+    job = nightly.split("  slow-integration:\n", 1)[1]
+    job = re.split(r"\n  [a-z][a-z0-9-]*:\n", job, maxsplit=1)[0]
+    steps = re.split(r"^      - ", job, flags=re.M)[1:]
+    matches = [step for step in steps
+               if re.search(r"^        id: integration_tests$", step, re.M)]
+    assert len(matches) == 1, "nightly must have one integration_tests owner"
+    body = re.search(r"^        run: \|\n((?:          .*\n|\n)+)", matches[0], re.M)
+    assert body is not None, "integration owner must execute a literal shell block"
+    step = textwrap.dedent(body[1])
+    assert "python -m pytest" in step
+    assert "-m integration core packages engine" in step
+    tokens = shlex.split(step, comments=True)
     assert not any(token == "--ignore=engine" or token.startswith("--ignore=engine/coccinelle")
                    for token in tokens)
 
