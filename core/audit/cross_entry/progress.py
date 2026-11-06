@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from core.json import dumps_canonical
@@ -137,15 +137,18 @@ class WorkQueue:
         self.db.commit()
 
     def complete_view_if_finished(self, view):
-        pending = self.db.execute("SELECT count(*) FROM jobs WHERE namespace=? AND view_id=? AND status NOT IN ('complete','prepared','not_applicable','obsolete')",
-                                  (self.namespace,view)).fetchone()[0]
-        if self.undelivered(view):
+        pending = self.db.execute("SELECT 1 FROM jobs WHERE namespace=? AND view_id=? AND status NOT IN ('complete','prepared','not_applicable','obsolete') LIMIT 1",
+                                  (self.namespace,view)).fetchone()
+        if self._undelivered_count(view):
             self.db.execute("UPDATE views SET status='pending' WHERE namespace=? AND id=?",(self.namespace,view))
             self.db.commit()
         elif not pending:
             self.db.execute("UPDATE views SET status='complete' WHERE namespace=? AND id=?",(self.namespace,view))
             self.db.commit()
-        elif pending and not self.pending(view):
+        elif pending and not self.db.execute(
+            "SELECT 1 FROM jobs WHERE namespace=? AND view_id=? AND status NOT IN ('complete','prepared','not_applicable','blocked','obsolete') LIMIT 1",
+            (self.namespace,view),
+        ).fetchone():
             self.db.execute("UPDATE views SET status='blocked' WHERE namespace=? AND id=?",(self.namespace,view))
             self.db.commit()
 
@@ -158,24 +161,31 @@ class WorkQueue:
                 "blocked_work":[{"view":r["view_id"],"consumer":r["consumer"],"focus":r["focus"],"detail":json.loads(r["result"])}
                                 for r in self.db.execute("SELECT * FROM jobs WHERE namespace=? AND status='blocked'",(self.namespace,))],
                 "remaining_views":sum(v for k,v in views.items() if k not in {"complete","obsolete"}),
-                "undelivered_results":len(self.undelivered()),
+                "undelivered_results":self._undelivered_count(),
                 "report_keys":[r[0] for r in self.db.execute("SELECT key FROM reports WHERE namespace=? ORDER BY key",(self.namespace,))]}
 
-    def undelivered(self, view=None):
+    def _undelivered_rows(self, view=None):
+        """Validate every eligible result in delivery order without retaining it."""
         import json
         sql = "SELECT * FROM jobs WHERE namespace=? AND status IN ('complete','prepared')"
         params = [self.namespace]
         if view is not None:
             sql += " AND view_id=?"
             params.append(view)
-        result = []
-        for row in self.db.execute(sql+" ORDER BY rowid",params):
-            value = json.loads(row["result"])
-            evidence = value.get("key","")
-            if evidence and not self.db.execute("SELECT 1 FROM acknowledgements WHERE namespace=? AND view_id=? AND job_id=? AND evidence=?",
-                                               (self.namespace,row["view_id"],row["id"],evidence)).fetchone():
-                result.append({**dict(row),"outcome":value,"evidence":evidence})
-        return result
+        with closing(self.db.execute(sql+" ORDER BY rowid",params)) as rows:
+            for row in rows:
+                value = json.loads(row["result"])
+                evidence = value.get("key","")
+                if evidence and not self.db.execute("SELECT 1 FROM acknowledgements WHERE namespace=? AND view_id=? AND job_id=? AND evidence=?",
+                                                   (self.namespace,row["view_id"],row["id"],evidence)).fetchone():
+                    yield row,value,evidence
+
+    def _undelivered_count(self, view=None):
+        return sum(1 for _ in self._undelivered_rows(view))
+
+    def undelivered(self, view=None):
+        return [{**dict(row),"outcome":value,"evidence":evidence}
+                for row,value,evidence in self._undelivered_rows(view)]
 
     def acknowledge(self, view, job, evidence):
         self.db.execute("INSERT OR IGNORE INTO acknowledgements VALUES (?,?,?,?)",(self.namespace,view,job,evidence))
@@ -203,7 +213,7 @@ def pending_report_keys(out_dir: Path, *, selection_key=None, target=None):
         return set()
     queue = WorkQueue(Path(out_dir),progress["namespace"])
     try:
-        return {key for key in progress.get("report_keys",[]) if isinstance(key,str)} if queue.undelivered() else set()
+        return {key for key in progress.get("report_keys",[]) if isinstance(key,str)} if queue._undelivered_count() else set()
     finally:
         queue.close()
 
