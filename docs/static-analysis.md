@@ -208,10 +208,23 @@ organised by category:
 | `java` | Java-specific security rules |
 | `javascript` | JavaScript-specific security rules |
 | `logging` | Secrets in log output |
+| `php` | Request-driven command, include, redirect, HTML attribute, socket CRLF, reflection and deserialisation checks |
 | `python` | Python-specific security rules |
 | `secrets` | Hardcoded API keys |
 | `web` | Prototype pollution |
 | `xml` | XXE |
+
+The PHP request-taint rules also follow raw `filter_input` reads from
+`INPUT_GET`, `INPUT_POST` and `INPUT_COOKIE`, including calls with an
+explicit `FILTER_DEFAULT` or `FILTER_UNSAFE_RAW`. Both unqualified and
+fully qualified built-in spellings are covered. These sources taint the
+returned value, not the arguments passed to the reader.
+
+Calls that select other filters or supply filter options are outside this
+source check. That does not establish that those filters make the value
+safe for a particular sink. Direct same-namespace function and constant
+shadows are excluded; this check does not resolve arbitrary PHP imports
+or dynamic reader/filter selection.
 
 Run `ls engine/semgrep/rules/` for the current file list.
 
