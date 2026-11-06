@@ -25,8 +25,9 @@ Two modes:
     spawned command's exit (forwarded through).
 
 Exit codes:
-  - the spawned command's exit code on success
-  - 2 for arg-parse failures (argparse's parser.error default)
+  - the spawned command's exit code, or 128+signal for signal death
+  - 2 for argument errors or refused sandbox-disable consent
+  - 3 when the requested sandbox isolation could not engage
   - 64 (EX_USAGE) when the command to spawn cannot be found
   - 70 (EX_SOFTWARE) when observe-mode fails to engage (e.g. ptrace
     blocked) — operator can re-run on a host where it works.
@@ -55,7 +56,15 @@ _TIMEOUT_EX = 124    # command exceeded --timeout (timeout(1) convention)
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from core.detectors.budget import positive_seconds
+
     p = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  raptor-sandbox-observe -- /usr/bin/true\n"
+            "  raptor-sandbox-observe --json --timeout 15 -- /usr/bin/true"
+        ),
         prog="raptor-sandbox-observe",
         description=(
             "Run a command under sandbox(observe=True) and print the "
@@ -94,9 +103,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--timeout", type=float, default=30.0, metavar="SECONDS",
+        "--timeout", type=positive_seconds, default=30.0, metavar="SECONDS",
         help=(
-            "Wall-clock timeout for the spawned command. Default: 30s."
+            "Positive finite wall-clock timeout for the spawned command. Default: 30s."
         ),
     )
     p.add_argument(
@@ -273,6 +282,11 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from core.security.log_sanitisation import sanitise_for_terminal
+    from core.sandbox.errors import (
+        SANDBOX_ENGAGE_EXIT_CODE,
+        SandboxDisableRefusedError,
+        SandboxSetupError,
+    )
 
     cmd = list(args.cmd or [])
     # argparse.REMAINDER captures the leading "--" too; strip it so the
@@ -344,6 +358,15 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
                 timeout=args.timeout,
             )
             return_code = result.returncode
+        except SandboxSetupError as exc:
+            # Bound each field separately so a long reason cannot hide the
+            # remedy. This CLI boundary never proceeds without isolation.
+            message = "; ".join(sanitise_for_terminal(part)
+                                for part in (exc.reason, exc.instructions) if part)
+            if isinstance(exc, SandboxDisableRefusedError):
+                parser.error(message)
+            sys.stderr.write(f"raptor-sandbox-observe: {message}\n")
+            return SANDBOX_ENGAGE_EXIT_CODE
         except FileNotFoundError as exc:
             sys.stderr.write(f"raptor-sandbox-observe: {sanitise_for_terminal(str(exc))}\n")
             return _USAGE_EX
@@ -430,6 +453,10 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             return _TIMEOUT_EX
         # Forward the spawned command's exit code as our own — caller
         # composes naturally with shell pipelines that check $?.
+        # CompletedProcess uses -N for a signal; SystemExit needs the
+        # shell-facing 128+N representation. Rendered metadata stays raw.
+        if return_code is not None and return_code < 0:
+            return 128 - return_code
         return return_code  # type: ignore[return-value]
 
 
