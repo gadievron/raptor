@@ -372,7 +372,7 @@ _CLASSIFIER_FALLBACK_VERIFICATION: dict[str, frozenset[str]] = {
     "smt": frozenset(
         {f"smt:{v}" for v in _SMT_FALLBACK_VERIFICATION_VERBS}
         | {f"smt:{v}:witness" for v in _SMT_FALLBACK_WITNESS_VERBS}
-        | {"smt:disproof:sat"},
+        | {"smt:disproof:sat", "smt:check-overflow:literal-call"},
     ),
     "symbolic": frozenset({
         "symbolic:symbolic-pc-hijack", "symbolic:symbolic-reach-crash",
@@ -939,6 +939,10 @@ _RECEIPT_MAP: dict[str, tuple] = {
     "codeql": (EvidenceSource.CODEQL, "confirmed by CodeQL analysis"),
     "coccinelle": (EvidenceSource.COCCINELLE, "confirmed by Coccinelle"),
     "smt": (EvidenceSource.SMT, "path feasibility confirmed by SMT solver"),
+    "smt:check-overflow:literal-call": (
+        EvidenceSource.SMT,
+        "complete literal caller tuple violates typed source arithmetic, conditional on wrapper entry",
+    ),
     "dark_verify:sanitizer-violation": (EvidenceSource.DARK_VERIFY, "sanitizer violation observed in target call"),
     "dark_verify:confirmed": (EvidenceSource.DARK_VERIFY, "legacy witness prediction matched"),
     "dark_verify:refuted": (EvidenceSource.DARK_VERIFY, "refuted by executed dark witness"),
