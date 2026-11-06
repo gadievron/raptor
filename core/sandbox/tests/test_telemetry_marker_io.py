@@ -10,6 +10,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import telemetry_mac as tmac
 
 
@@ -66,8 +68,8 @@ def test_short_append_warns_without_retrying_fragments(monkeypatch, warning, wri
         closed.append(fd)
         return real_close(fd)
 
-    monkeypatch.setattr(tmac.os, "write", partial)
-    monkeypatch.setattr(tmac.os, "close", close)
+    patch_module_attribute(monkeypatch, tmac, 'os', "write", partial)
+    patch_module_attribute(monkeypatch, tmac, 'os', "close", close)
     tmac._record_tamper_event("reason", "quarantined")
     assert len(calls) == 1
     assert closed.count(calls[0]) == 1

@@ -5,6 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import calibrate as cal
 
 
@@ -87,7 +89,7 @@ def test_corrupt_field_is_a_cache_miss(tmp_path, monkeypatch):
 def test_decoder_recursion_failure_is_a_cache_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(cal, "_CACHE_DIR", tmp_path)
     cal._cache_path_for("fingerprint").write_text("{}")
-    monkeypatch.setattr(cal.json, "loads", Mock(side_effect=RecursionError("deep JSON")))
+    patch_module_attribute(monkeypatch, cal, 'json', "loads", Mock(side_effect=RecursionError("deep JSON")))
     assert cal._load_from_cache("fingerprint") is None
 
 
@@ -99,6 +101,6 @@ def test_cache_clear_skips_recursion_failure(tmp_path, monkeypatch):
     entry = cache / "broken.json"
     entry.write_text("{}")
     monkeypatch.setattr(cal, "_CACHE_DIR", cache)
-    monkeypatch.setattr(cal.json, "loads", Mock(side_effect=RecursionError("deep JSON")))
+    patch_module_attribute(monkeypatch, cal, 'json', "loads", Mock(side_effect=RecursionError("deep JSON")))
     assert cal.clear_cache(binary) == 0
     assert entry.exists()

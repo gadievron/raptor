@@ -5,6 +5,8 @@ import os
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import telemetry_mac as tmac
 
 
@@ -40,8 +42,8 @@ def test_read_failure_preserves_parsed_prefix(marker, monkeypatch, records):
         real_close(fd)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(tmac.os, 'fdopen', lambda *args, **kwargs: FailingStream())
-        scoped.setattr(tmac.os, 'close', close)
+        patch_module_attribute(scoped, tmac, 'os', 'fdopen', lambda *args, **kwargs: FailingStream())
+        patch_module_attribute(scoped, tmac, 'os', 'close', close)
         assert tmac.tamper_events() == records
     assert len(closed) == 1
 
@@ -58,7 +60,7 @@ def test_descriptor_close_failure_preserves_parsed_records(marker, monkeypatch):
         raise OSError(errno.EIO, 'marker close failed')
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(tmac.os, 'close', close_then_fail)
+        patch_module_attribute(scoped, tmac, 'os', 'close', close_then_fail)
         assert tmac.tamper_events() == records
     assert len(closed) == 1
 
@@ -68,5 +70,5 @@ def test_failure_before_first_record_returns_empty(marker, monkeypatch, operatio
     def fail(*args, **kwargs):
         raise OSError(errno.EIO, 'marker setup failed')
 
-    monkeypatch.setattr(tmac.os, operation, fail)
+    patch_module_attribute(monkeypatch, tmac, 'os', operation, fail)
     assert tmac.tamper_events() == []
