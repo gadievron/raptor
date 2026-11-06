@@ -137,7 +137,7 @@ class _Function:
                     raise _Unsupported("non-builtin pointer cast")
                 return _Pointer(target[:-2], value.obj, (_offset(node), _offset(node, True)), value.aliases)
             if isinstance(value, _Scalar) and target in _SCALARS and cast in (
-                "NoOp", "IntegralCast", "IntegralToFloating",
+                "NoOp", "IntegralCast", "IntegralToFloating", "FloatingCast", "FloatingToIntegral",
             ):
                 return _Scalar(target)
             raise _Unsupported("unsupported conversion")
