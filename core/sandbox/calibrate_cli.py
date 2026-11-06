@@ -41,7 +41,15 @@ _SOFTWARE_EX = 70    # EX_SOFTWARE
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from core.detectors.budget import positive_seconds
+
     p = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  raptor-sandbox-calibrate --bin /usr/bin/true --json --timeout 15\n"
+            "  raptor-sandbox-calibrate --bin /usr/bin/true --show"
+        ),
         prog="raptor-sandbox-calibrate",
         description=(
             "Probe a binary under sandbox(observe=True) and cache "
@@ -80,8 +88,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--timeout", type=float, default=30.0, metavar="SECONDS",
-        help="Wall-clock cap on the probe. Default: 30s.",
+        "--timeout", type=positive_seconds, default=30.0, metavar="SECONDS",
+        help="Positive finite wall-clock cap on the probe. Default: 30s.",
     )
     p.add_argument(
         "--json", action="store_true", dest="json_output",
@@ -166,6 +174,11 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from core.security.log_sanitisation import sanitise_for_terminal as _sft
+    from core.sandbox.errors import (
+        SANDBOX_ENGAGE_EXIT_CODE,
+        SandboxDisableRefusedError,
+        SandboxSetupError,
+    )
 
     # Lazy import — keep --help fast.
     from core.sandbox import calibrate as cal
@@ -254,6 +267,13 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             before is not None
             and before.captured_at == profile.captured_at
         )
+    except SandboxSetupError as exc:
+        message = "; ".join(_sft(part)
+                            for part in (exc.reason, exc.instructions) if part)
+        if isinstance(exc, SandboxDisableRefusedError):
+            parser.error(message)
+        sys.stderr.write(f"raptor-sandbox-calibrate: {message}\n")
+        return SANDBOX_ENGAGE_EXIT_CODE
     except FileNotFoundError as exc:
         sys.stderr.write(
             f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
