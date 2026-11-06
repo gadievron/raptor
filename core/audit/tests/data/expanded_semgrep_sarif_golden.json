@@ -53,6 +53,9 @@
           "properties": {
             "expanded_view": true,
             "expanded_line": 210
+          },
+          "partialFingerprints": {
+            "raptor/expandedLocation/v1": "210:0:0:0"
           }
         },
         {
@@ -76,6 +79,9 @@
           "properties": {
             "expanded_view": true,
             "expanded_line": 90
+          },
+          "partialFingerprints": {
+            "raptor/expandedLocation/v1": "90:0:0:0"
           }
         },
         {
