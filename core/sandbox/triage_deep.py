@@ -212,12 +212,17 @@ def _parse_assessments(text: str, report: dict) -> tuple:
         if not isinstance(judgement, str) or judgement not in _JUDGEMENTS:
             judgement = JUDGEMENT_UNCLEAR
         try:
-            value = float(item.get("confidence"))  # type: ignore[arg-type]
+            raw_confidence = item.get("confidence")
+            # JSON booleans are not numeric probabilities.
+            value = (0.0 if isinstance(raw_confidence, bool)
+                     else float(raw_confidence))
             confidence = min(1.0, max(0.0, value)) if math.isfinite(value) else 0.0
         except (TypeError, ValueError, OverflowError):
             confidence = 0.0
         rationale = item.get("rationale")
-        rationale = (escape_nonprintable(str(rationale))
+        # Escaping is character-local and never contracts. Only this
+        # prefix can contribute to the capped output; do not escape its tail.
+        rationale = (escape_nonprintable(str(rationale)[:_MAX_RATIONALE_CHARS])
                      [:_MAX_RATIONALE_CHARS] if rationale else "")
         assessments.append({
             "signal_type": signal_type,
@@ -226,7 +231,7 @@ def _parse_assessments(text: str, report: dict) -> tuple:
             "rationale": rationale,
         })
     note = parsed.get("overall_note")
-    note = (escape_nonprintable(str(note))[:_MAX_RATIONALE_CHARS]
+    note = (escape_nonprintable(note[:_MAX_RATIONALE_CHARS])[:_MAX_RATIONALE_CHARS]
             if isinstance(note, str) else "")
     return assessments, note, dropped
 
