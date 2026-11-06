@@ -396,7 +396,9 @@ def test_pipeline_options_forward_experimental_flags(tmp_path):
     assert (cfg.cross_entry,cfg.cross_entry_max_calls,cfg.cross_entry_max_files,cfg.cross_entry_root) == ("shadow",3,10,tmp_path)
 
 
-def test_delivery_receipt_reaches_review_result(tmp_path):
+def test_delivery_receipt_reaches_review_result(tmp_path, monkeypatch):
+    from core.audit import learning
+    monkeypatch.setattr(learning, "load_corrections", lambda out_dir=None: [])
     from core.audit.llm_review import make_review_fn
     from core.audit.orchestrator import OrchestratorConfig
     ctx = {"file":"a.c","function":"f","line_start":1,"source":"int f(void) { return 0; }",
