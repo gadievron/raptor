@@ -25,7 +25,7 @@ _CASES = [
     for helper in _HELPERS
     for fault in ("io", "interrupt", "invalid", "none")
 ]
-_CASES += [("wrapper", "identity")]
+_CASES += [("wrapper", "identity"), ("holder", "timeout")]
 _CASES += [("checkpoint", fault) for fault in ("clock", "interrupt", "wait", "none")]
 
 
@@ -52,6 +52,7 @@ def _in_group(pid, group):
 def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkeypatch):
     module = importlib.import_module(_MODULES[helper])
     started = []
+    owned = contextlib.ExitStack()
     descendants = []
     real_popen = subprocess.Popen
     ready = tmp_path / "owned-startup"
@@ -117,7 +118,7 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
 
     def invoke():
         if helper == "holder":
-            return module._spawn_holder(tmp_path / "lock", 60, tmp_path)
+            return owned.enter_context(module._spawn_holder(tmp_path / "lock", tmp_path))
         if helper == "audit":
             return module._spawn("owned stub")
         if helper == "lifecycle":
@@ -132,6 +133,25 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
         with monkeypatch.context() as patcher:
             # Also catches the wrapper's function-local subprocess import.
             patcher.setattr(subprocess, "Popen", popen)
+            if helper == "holder":
+                real_read = os.read
+
+                def readiness_read(fd, size):
+                    if fault in ("io", "interrupt"):
+                        return failure()
+                    if fault == "invalid":
+                        return b"not-ready\n"
+                    return real_read(fd, size)
+
+                patcher.setattr(module, "os", SimpleNamespace(**(vars(os) | {"read": readiness_read})))
+                if fault == "timeout":
+                    class NoReadiness:
+                        def __enter__(self): return self
+                        def __exit__(self, *args): return False
+                        def register(self, *args): pass
+                        def select(self, **kwargs): return []
+
+                    patcher.setattr(module, "selectors", SimpleNamespace(**(vars(module.selectors) | {"DefaultSelector": NoReadiness})))
             if helper == "checkpoint":
                 overrides = {}
                 if fault in ("clock", "interrupt"):
@@ -152,7 +172,7 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
                     KeyboardInterrupt
                     if fault == "interrupt"
                     else (ValueError, AssertionError)
-                    if fault == "invalid"
+                    if fault in ("invalid", "timeout")
                     else RuntimeError
                     if fault == "identity"
                     else OSError
@@ -186,13 +206,16 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
                 "failed startup left a descendant alive"
             )
     finally:
-        for process in started:
-            if process.poll() is None or any(
-                _in_group(pid, process.pid) for pid in descendants
-            ):
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None:
-                    stream.close()
+        try:
+            owned.close()
+        finally:
+            for process in started:
+                if process.poll() is None or any(
+                    _in_group(pid, process.pid) for pid in descendants
+                ):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
