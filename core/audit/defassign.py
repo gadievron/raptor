@@ -272,6 +272,7 @@ _INCLUDE_RE = re.compile(
 _DIRECTIVE_RE = re.compile(r"^[ \t]*#[ \t]*(\w+)(.*)$")
 _DEFINE_DIRECTIVE_RE = re.compile(r"#[ \t]*define(?!\w)(.*)")
 _DIRECTIVE_INDENT_RE = re.compile(r"[ \t]*")
+_CONTINUATION_BULK_MIN_CHARS = 512
 
 
 @dataclass(frozen=True)
@@ -315,6 +316,12 @@ class MacroTable:
     files_scanned: int = 0
 
 
+def _normalise_continuations(text: str) -> str:
+    """Keep the legacy one-space splice and single EOF-backslash removal."""
+    joined = text.replace("\\\n", " ")
+    return joined[:-1] if joined.endswith("\\") else joined
+
+
 def _join_continuations(text: str) -> list[str]:
     """Physical lines with backslash-newline continuations joined."""
     lines: list[str] = []
@@ -333,17 +340,19 @@ def _join_continuations(text: str) -> list[str]:
 
 def _iter_define_directives(text: str) -> Iterator[str]:
     """Yield define bodies, retaining legacy continuation and subclass handling."""
-    if type(text) is str and "\\\n" not in text and not text.endswith("\\"):
-        for match in _DEFINE_DIRECTIVE_RE.finditer(text):
-            # Search the literal marker first, then validate its line prefix.
-            start = text.rfind("\n", 0, match.start()) + 1
-            if _DIRECTIVE_INDENT_RE.fullmatch(text, start, match.start()) is not None:
-                yield match.group(1)
+    if type(text) is str and len(text) >= _CONTINUATION_BULK_MIN_CHARS:
+        text = _normalise_continuations(text)
+    elif type(text) is not str or "\\\n" in text or text.endswith("\\"):
+        for line in _join_continuations(text):
+            match = _DIRECTIVE_RE.match(line)
+            if match is not None and match.group(1) == "define":
+                yield match.group(2)
         return
-    for line in _join_continuations(text):
-        match = _DIRECTIVE_RE.match(line)
-        if match is not None and match.group(1) == "define":
-            yield match.group(2)
+    for match in _DEFINE_DIRECTIVE_RE.finditer(text):
+        # Search the literal marker first, then validate its line prefix.
+        start = text.rfind("\n", 0, match.start()) + 1
+        if _DIRECTIVE_INDENT_RE.fullmatch(text, start, match.start()) is not None:
+            yield match.group(1)
 
 
 def _parse_define(rest: str, path: str) -> MacroDef | None:
