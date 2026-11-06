@@ -34,6 +34,400 @@ from core.audit.source_view import (
 
 logger = logging.getLogger(__name__)
 
+
+_Search = Callable[[str], re.Match[str] | None]
+
+
+class _StaticSearches:
+    """Lazy search methods for a fixed catalog; subjects are never cached."""
+
+    @cached_property
+    def array_access(self) -> _Search:
+        return re.compile(r'\b\w+\s*\[').search
+
+    @cached_property
+    def c_atoi(self) -> _Search:
+        return re.compile(r'\batoi\s*\(|\batol\s*\(').search
+
+    @cached_property
+    def c_if(self) -> _Search:
+        return re.compile(r'if\s*\(').search
+
+    @cached_property
+    def c_member_array(self) -> _Search:
+        return re.compile(r'->\s*\w+\s*\[').search
+
+    @cached_property
+    def c_narrow_length(self) -> _Search:
+        return re.compile(r'\buint16_t\b.{0,1000}\boffset\b'
+            r'|\buint16_t\b.{0,1000}\blen\b').search
+
+    @cached_property
+    def c_pointer_cast(self) -> _Search:
+        return re.compile(r'\(\w+\s*\*\)\s*\w+').search
+
+    @cached_property
+    def c_pointer_offset(self) -> _Search:
+        return re.compile(r'\*\s*\(.{0,1000}\+').search
+
+    @cached_property
+    def c_sql_format(self) -> _Search:
+        return re.compile(r"(SELECT|INSERT|UPDATE|DELETE)\b.{0,1000}%s", re.IGNORECASE).search
+
+    @cached_property
+    def gets_call(self) -> _Search:
+        return re.compile(r'\bgets\s*\(').search
+
+    @cached_property
+    def go_cgo_call(self) -> _Search:
+        return re.compile(r'\bC\.\w+\s*\(').search
+
+    @cached_property
+    def go_database_call(self) -> _Search:
+        return re.compile(r'\bdb\.(Query|QueryRow|Exec)\s*\(').search
+
+    @cached_property
+    def go_decoder(self) -> _Search:
+        return re.compile(r'\b(?:json|xml)\.(?:Unmarshal|NewDecoder)').search
+
+    @cached_property
+    def go_exec_command(self) -> _Search:
+        return re.compile(r'\bexec\.Command(?:Context)?\s*\(').search
+
+    @cached_property
+    def go_file_api(self) -> _Search:
+        return re.compile(r'\bos\.(Open|Create|Remove|ReadFile|WriteFile|'
+            r'OpenFile|RemoveAll|MkdirAll)\s*\(').search
+
+    @cached_property
+    def go_generic_input(self) -> _Search:
+        return re.compile(r'interface\s*\{\s*\}|any\b').search
+
+    @cached_property
+    def go_gob_decoder(self) -> _Search:
+        return re.compile(r'\bgob\.(NewDecoder|Decode)\b').search
+
+    @cached_property
+    def go_http_request(self) -> _Search:
+        return re.compile(r'\bhttp\.(Get|Post|PostForm)\s*\(').search
+
+    @cached_property
+    def go_path_guard(self) -> _Search:
+        return re.compile(r'filepath\.Clean|filepath\.Abs|'
+                r'strings\.Contains.{0,1000}\.\.|path\.Clean').search
+
+    @cached_property
+    def go_path_input(self) -> _Search:
+        return re.compile(r'user|request|param|filename|r\.\w+|'
+            r'c\.Param|c\.Query|chi\.|mux\.').search
+
+    @cached_property
+    def go_reflection(self) -> _Search:
+        return re.compile(r'\breflect\.\w+\s*\(').search
+
+    @cached_property
+    def go_sql_format(self) -> _Search:
+        return re.compile(r'fmt\.Sprintf|"\s*\+\s*\w|\w\s*\+\s*"').search
+
+    @cached_property
+    def go_sql_placeholder(self) -> _Search:
+        return re.compile(r'\$\d+').search
+
+    @cached_property
+    def go_template_bypass(self) -> _Search:
+        return re.compile(r'\btemplate\.(HTML|JS|CSS|HTMLAttr|URL)\s*\(').search
+
+    @cached_property
+    def go_uintptr(self) -> _Search:
+        return re.compile(r'\buintptr\b').search
+
+    @cached_property
+    def go_unsafe_api(self) -> _Search:
+        return re.compile(r'\bunsafe\.(Pointer|Slice|String|Sizeof|Alignof|Offsetof)\b').search
+
+    @cached_property
+    def go_unsafe_pointer(self) -> _Search:
+        return re.compile(r'\bunsafe\.Pointer\b').search
+
+    @cached_property
+    def go_url_input(self) -> _Search:
+        return re.compile(r'user|request|param|fmt\.Sprintf|"\s*\+').search
+
+    @cached_property
+    def java_database_call(self) -> _Search:
+        return re.compile(r'\.(?:executeQuery|executeUpdate|execute)\s*\(').search
+
+    @cached_property
+    def java_ldap(self) -> _Search:
+        return re.compile(r'\bLDAP\b.{0,1000}\+\s*(?:request|param|input)', re.IGNORECASE).search
+
+    @cached_property
+    def java_object_input(self) -> _Search:
+        return re.compile(r'\bObjectInputStream\b').search
+
+    @cached_property
+    def java_process_builder(self) -> _Search:
+        return re.compile(r'\bProcessBuilder\s*\(').search
+
+    @cached_property
+    def java_reflection(self) -> _Search:
+        return re.compile(r'Class\.forName\s*\(|\.newInstance\s*\(|'
+            r'\.getMethod\s*\(.{0,1000}\.invoke\s*\(').search
+
+    @cached_property
+    def java_request_input(self) -> _Search:
+        return re.compile(r'\.getParameter\s*\(|\.getHeader\s*\(|'
+            r'\.getCookies\s*\(').search
+
+    @cached_property
+    def java_runtime_exec(self) -> _Search:
+        return re.compile(r'Runtime\.getRuntime\(\)\.exec\s*\(').search
+
+    @cached_property
+    def java_script_engine(self) -> _Search:
+        return re.compile(r'ScriptEngine|\.eval\s*\(.{0,200}(?:request|param|input)', re.IGNORECASE).search
+
+    @cached_property
+    def java_user_file(self) -> _Search:
+        return re.compile(r'new\s+File\s*\(.{0,200}'
+            r'(?:request|param|input|getParameter)', re.IGNORECASE).search
+
+    @cached_property
+    def java_xml_guard(self) -> _Search:
+        return re.compile(r'FEATURE_SECURE_PROCESSING|'
+                r'disallow-doctype-decl|'
+                r'setExpandEntityReferences.{0,1000}false').search
+
+    @cached_property
+    def java_xml_parser(self) -> _Search:
+        return re.compile(r'XMLInputFactory|SAXParser|DocumentBuilder').search
+
+    @cached_property
+    def js_child_process(self) -> _Search:
+        return re.compile(r'child_process.{0,1000}'
+            r'\b(?:exec|execSync|spawn|execFile)\s*\(').search
+
+    @cached_property
+    def js_child_process_module(self) -> _Search:
+        return re.compile(r'child_process|require.{0,1000}child').search
+
+    @cached_property
+    def js_command(self) -> _Search:
+        return re.compile(r'\b(?:exec|execSync|spawn|spawnSync|execFile)\s*\(').search
+
+    @cached_property
+    def js_dom_write(self) -> _Search:
+        return re.compile(r'\.innerHTML\s*=|\.outerHTML\s*=|'
+            r'insertAdjacentHTML\s*\(|'
+            r'document\.write\s*\(').search
+
+    @cached_property
+    def js_eval(self) -> _Search:
+        return re.compile(r'\beval\s*\(').search
+
+    @cached_property
+    def js_file_api(self) -> _Search:
+        return re.compile(r'\bfs\.(?:readFile|writeFile|unlink|rename|'
+            r'readFileSync|writeFileSync|unlinkSync|renameSync|'
+            r'createReadStream|createWriteStream)\s*\(').search
+
+    @cached_property
+    def js_function_constructor(self) -> _Search:
+        return re.compile(r'\bnew\s+Function\s*\(').search
+
+    @cached_property
+    def js_parse(self) -> _Search:
+        return re.compile(r'(?:JSON|YAML|yaml)\.parse\s*\(').search
+
+    @cached_property
+    def js_parse_input(self) -> _Search:
+        return re.compile(r'req\.|body\.|params\.').search
+
+    @cached_property
+    def js_path_guard(self) -> _Search:
+        return re.compile(r'path\.(?:resolve|normalize|basename)|'
+                r'sanitize|includes.{0,1000}\.\.').search
+
+    @cached_property
+    def js_path_input(self) -> _Search:
+        return re.compile(r'req\.|params\.|query\.|body\.|headers\.').search
+
+    @cached_property
+    def js_react_html(self) -> _Search:
+        return re.compile(r'dangerouslySetInnerHTML\s*=').search
+
+    @cached_property
+    def js_redirect(self) -> _Search:
+        return re.compile(r'\.redirect\s*\(.{0,200}(?:req\.|params\.|query\.)').search
+
+    @cached_property
+    def js_regexp(self) -> _Search:
+        return re.compile(r'\bnew\s+RegExp\s*\(.{0,1000}(?:req\.|params\.|input)').search
+
+    @cached_property
+    def js_request_input(self) -> _Search:
+        return re.compile(r'req\.(?:body|params|query|headers|cookies)\b').search
+
+    @cached_property
+    def js_sql_concat(self) -> _Search:
+        return re.compile(r'\$\{|\+\s*\w|\w\s*\+').search
+
+    @cached_property
+    def js_sql_text(self) -> _Search:
+        return re.compile(r'\.query\s*\(\s*[`"\']\s*(?:SELECT|INSERT|UPDATE|DELETE)', re.IGNORECASE).search
+
+    @cached_property
+    def malloc_product(self) -> _Search:
+        return re.compile(r'\bmalloc\s*\([^)]{0,4000}\*').search
+
+    @cached_property
+    def php_array_access(self) -> _Search:
+        return re.compile(r'\$\w+\s*\[').search
+
+    @cached_property
+    def php_command(self) -> _Search:
+        return re.compile(r'\b(?:system|exec|passthru|shell_exec|popen|'
+            r'proc_open|pcntl_exec)\s*\(').search
+
+    @cached_property
+    def php_eval_variable(self) -> _Search:
+        return re.compile(r'\b(?:eval|assert)\s*\(\s*\$').search
+
+    @cached_property
+    def php_extract_superglobal(self) -> _Search:
+        return re.compile(r'\bextract\s*\(\s*\$_').search
+
+    @cached_property
+    def php_file_variable(self) -> _Search:
+        return re.compile(r'\b(?:file_get_contents|file_put_contents|fopen|'
+            r'readfile|unlink|rename)\s*\(\s*\$').search
+
+    @cached_property
+    def php_include_variable(self) -> _Search:
+        return re.compile(r'\b(?:include|include_once|require|require_once)\s*\(\s*\$').search
+
+    @cached_property
+    def php_path_guard(self) -> _Search:
+        return re.compile(r'realpath|basename|str_replace.{0,1000}\.\.').search
+
+    @cached_property
+    def php_preg_replace_e(self) -> _Search:
+        return re.compile(r'\bpreg_replace\s*\(\s*["\'].{0,1000}?/e["\']').search
+
+    @cached_property
+    def php_redirect(self) -> _Search:
+        return re.compile(r'\bheader\s*\(\s*["\']Location.{0,1000}\$').search
+
+    @cached_property
+    def php_superglobal_echo(self) -> _Search:
+        return re.compile(r'\becho\b.{0,1000}\$_(?:GET|POST|REQUEST|COOKIE)').search
+
+    @cached_property
+    def php_superglobal_input(self) -> _Search:
+        return re.compile(r'\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\s*\[').search
+
+    @cached_property
+    def php_unserialize(self) -> _Search:
+        return re.compile(r'\bunserialize\s*\(').search
+
+    @cached_property
+    def python_eval_exec(self) -> _Search:
+        return re.compile(r'\beval\s*\(|\bexec\s*\(').search
+
+    @cached_property
+    def python_open(self) -> _Search:
+        return re.compile(r'\bopen\s*\(').search
+
+    @cached_property
+    def python_open_guard(self) -> _Search:
+        return re.compile(r'os\.path\.realpath|\.startswith\(|resolve\(\)').search
+
+    @cached_property
+    def python_path_guard(self) -> _Search:
+        return re.compile(r'os\.path\.realpath|os\.path\.abspath|'
+                r'\.startswith\(|resolve\(\)').search
+
+    @cached_property
+    def python_path_input(self) -> _Search:
+        return re.compile(r'os\.path\.join|user|request|param|filename').search
+
+    @cached_property
+    def python_path_join(self) -> _Search:
+        return re.compile(r'\bos\.path\.join\b').search
+
+    @cached_property
+    def python_pickle(self) -> _Search:
+        return re.compile(r'\bpickle\.loads?\s*\(').search
+
+    @cached_property
+    def python_safe_yaml(self) -> _Search:
+        return re.compile(r'Loader\s*=\s*yaml\.SafeLoader').search
+
+    @cached_property
+    def python_shell_true(self) -> _Search:
+        return re.compile(r'\bsubprocess\.\w+\(.{0,1000}shell\s*=\s*True').search
+
+    @cached_property
+    def python_yaml(self) -> _Search:
+        return re.compile(r'\byaml\.load\s*\(').search
+
+    @cached_property
+    def rust_extern_c(self) -> _Search:
+        return re.compile(r'\bextern\s+"C"\s*\{').search
+
+    @cached_property
+    def rust_no_mangle(self) -> _Search:
+        return re.compile(r'#\[no_mangle\]').search
+
+    @cached_property
+    def rust_process_command(self) -> _Search:
+        return re.compile(r'\bCommand::new\s*\(|\bprocess::Command\b').search
+
+    @cached_property
+    def rust_raw_cast(self) -> _Search:
+        return re.compile(r'\bas\s+\*(?:const|mut)\b').search
+
+    @cached_property
+    def rust_raw_parts(self) -> _Search:
+        return re.compile(r'\bfrom_raw_parts(?:_mut)?\s*\(').search
+
+    @cached_property
+    def rust_raw_pointer(self) -> _Search:
+        return re.compile(r'\*const\b|\*mut\b').search
+
+    @cached_property
+    def rust_sql_format(self) -> _Search:
+        return re.compile(r'(?:format!|&format!)\s*\(\s*"[^"]*'
+            r'(?:SELECT|INSERT|UPDATE|DELETE)', re.IGNORECASE).search
+
+    @cached_property
+    def rust_transmute(self) -> _Search:
+        return re.compile(r'\btransmute\s*[:<(]').search
+
+    @cached_property
+    def rust_unsafe_block(self) -> _Search:
+        return re.compile(r'\bunsafe\s*\{').search
+
+    @cached_property
+    def sprintf_call(self) -> _Search:
+        return re.compile(r'\bsprintf\s*\(').search
+
+    @cached_property
+    def strcpy_call(self) -> _Search:
+        return re.compile(r'\bstrcpy\s*\(').search
+
+    @cached_property
+    def string_concat(self) -> _Search:
+        return re.compile(r'"\s*\+\s*\w|\w\s*\+\s*"').search
+
+    @cached_property
+    def truncating_snprintf(self) -> _Search:
+        return re.compile(r'snprintf\s*\([^,]{1,4000},\s*sizeof\s*\([^)]{1,4000}\)\s*,'
+            r'\s*"[^"]{0,1000}%s[^"]{0,1000}"').search
+
+
+_STATIC_SEARCHES = _StaticSearches()
+
 # Universal libc/POSIX surface plus a marked kernel SEED core
 # (kmalloc/kzalloc/kfree exemplars + the classic copy_from_user /
 # copy_to_user boundary). The kernel API bulk (kv*/devm_* allocators,
@@ -3383,18 +3777,18 @@ def _check_c_patterns(
         )
 
     result.has_pointer_ops = bool(
-        re.search(r'\*\s*\(.{0,1000}\+', source)
-        or re.search(r'->\s*\w+\s*\[', source)
-        or re.search(r'\(\w+\s*\*\)\s*\w+', source)
+        _STATIC_SEARCHES.c_pointer_offset(source)
+        or _STATIC_SEARCHES.c_member_array(source)
+        or _STATIC_SEARCHES.c_pointer_cast(source)
     )
 
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
     for k, line in enumerate(source.splitlines()):
         i = line_start + k
         stripped = line.strip()
 
-        if re.search(r'\bstrcpy\s*\(', stripped):
+        if _STATIC_SEARCHES.strcpy_call(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="unbounded-strcpy",
                 message="strcpy() has no length limit — use strncpy or strlcpy",
@@ -3402,7 +3796,7 @@ def _check_c_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bsprintf\s*\(', stripped):
+        if _STATIC_SEARCHES.sprintf_call(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="unbounded-sprintf",
                 message="sprintf() has no length limit — use snprintf",
@@ -3410,7 +3804,7 @@ def _check_c_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bgets\s*\(', stripped):
+        if _STATIC_SEARCHES.gets_call(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="gets-usage",
                 message="gets() is always exploitable — use fgets",
@@ -3418,11 +3812,7 @@ def _check_c_patterns(
                 severity="error",
             ))
 
-        match = re.search(
-            r'snprintf\s*\([^,]{1,4000},\s*sizeof\s*\([^)]{1,4000}\)\s*,'
-            r'\s*"[^"]{0,1000}%s[^"]{0,1000}"',
-            stripped,
-        )
+        match = _STATIC_SEARCHES.truncating_snprintf(stripped)
         if match:
             result.hits.append(PrefilterHit(
                 rule_id="format-string-concat",
@@ -3434,10 +3824,7 @@ def _check_c_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r"(SELECT|INSERT|UPDATE|DELETE)\b.{0,1000}%s",
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.c_sql_format(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="sql-string-format",
                 message="SQL query built with string formatting — SQL injection risk",
@@ -3445,11 +3832,7 @@ def _check_c_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\buint16_t\b.{0,1000}\boffset\b'
-            r'|\buint16_t\b.{0,1000}\blen\b',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.c_narrow_length(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="narrow-integer-size",
                 message=(
@@ -3460,9 +3843,9 @@ def _check_c_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\batoi\s*\(|\batol\s*\(', stripped) and not (
+        if _STATIC_SEARCHES.c_atoi(stripped) and not (
             views.line_sees(r'if\s*\(', k)
-            and re.search(r'if\s*\(', stripped)  # baseline guard, verbatim (main)
+            and _STATIC_SEARCHES.c_if(stripped)  # baseline guard, verbatim (main)
         ):
                 result.hits.append(PrefilterHit(
                     rule_id="atoi-unchecked",
@@ -3471,7 +3854,7 @@ def _check_c_patterns(
                     severity="warning",
                 ))
 
-        if re.search(r'\bmalloc\s*\([^)]{0,4000}\*', stripped):
+        if _STATIC_SEARCHES.malloc_product(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="malloc-multiply-overflow",
                 message=(
@@ -3799,15 +4182,13 @@ def _check_python_patterns(
         i = line_start + k
         stripped = line.strip()
 
-        if re.search(r'\bos\.path\.join\b', stripped) and not (
+        if _STATIC_SEARCHES.python_path_join(stripped) and not (
             views.sees(
                 r'os\.path\.realpath|os\.path\.abspath|'
                 r'\.startswith\(|resolve\(\)',
-            ) and re.search(  # baseline guard, verbatim (main)
-                r'os\.path\.realpath|os\.path\.abspath|'
-                r'\.startswith\(|resolve\(\)',
-                source,
-            )
+            ) and _STATIC_SEARCHES.python_path_guard(  # baseline guard, verbatim (main)
+                      source,
+                  )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="path-join-no-containment",
@@ -3819,17 +4200,14 @@ def _check_python_patterns(
                 severity="warning",
             ))
 
-        if (re.search(r'\bopen\s*\(', stripped)
-                and re.search(
-                    r'os\.path\.join|user|request|param|filename', source,
-                )
+        if (_STATIC_SEARCHES.python_open(stripped)
+                and _STATIC_SEARCHES.python_path_input(source)
                 and not (
                     views.sees(
                         r'os\.path\.realpath|\.startswith\(|resolve\(\)',
-                    ) and re.search(  # baseline guard, verbatim (main)
-                        r'os\.path\.realpath|\.startswith\(|resolve\(\)',
-                        source,
-                    )
+                    ) and _STATIC_SEARCHES.python_open_guard(  # baseline guard, verbatim (main)
+                              source,
+                          )
                 )):
                     result.hits.append(PrefilterHit(
                         rule_id="open-user-controlled-path",
@@ -3841,7 +4219,7 @@ def _check_python_patterns(
                         severity="warning",
                     ))
 
-        if re.search(r'\beval\s*\(|\bexec\s*\(', stripped):
+        if _STATIC_SEARCHES.python_eval_exec(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="eval-exec",
                 message="eval/exec with potentially untrusted input — code injection risk",
@@ -3849,9 +4227,7 @@ def _check_python_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bsubprocess\.\w+\(.{0,1000}shell\s*=\s*True', stripped,
-        ):
+        if _STATIC_SEARCHES.python_shell_true(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="subprocess-shell-true",
                 message="subprocess with shell=True — command injection risk",
@@ -3859,7 +4235,7 @@ def _check_python_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bpickle\.loads?\s*\(', stripped):
+        if _STATIC_SEARCHES.python_pickle(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="pickle-untrusted",
                 message="pickle.load/loads can execute arbitrary code on untrusted data",
@@ -3867,11 +4243,11 @@ def _check_python_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\byaml\.load\s*\(', stripped) and not (
+        if _STATIC_SEARCHES.python_yaml(stripped) and not (
             views.line_sees(r'Loader\s*=\s*yaml\.SafeLoader', k)
-            and re.search(  # baseline guard, verbatim (main)
-                r'Loader\s*=\s*yaml\.SafeLoader', stripped,
-            )
+            and _STATIC_SEARCHES.python_safe_yaml(  # baseline guard, verbatim (main)
+                    stripped,
+                )
         ):
                 result.hits.append(PrefilterHit(
                     rule_id="yaml-unsafe-load",
@@ -3900,16 +4276,16 @@ def _check_go_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_GO_CALLEES)
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
     result.has_pointer_ops = bool(
-        re.search(r'\bunsafe\.Pointer\b', source)
-        or re.search(r'\buintptr\b', source)
+        _STATIC_SEARCHES.go_unsafe_pointer(source)
+        or _STATIC_SEARCHES.go_uintptr(source)
     )
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(r'\bexec\.Command(?:Context)?\s*\(', stripped):
+        if _STATIC_SEARCHES.go_exec_command(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="go-exec-command",
                 message=(
@@ -3920,10 +4296,7 @@ def _check_go_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bunsafe\.(Pointer|Slice|String|Sizeof|Alignof|Offsetof)\b',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.go_unsafe_api(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="go-unsafe-usage",
                 message="unsafe package usage — memory safety bypassed",
@@ -3931,18 +4304,12 @@ def _check_go_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bdb\.(Query|QueryRow|Exec)\s*\(', stripped) and (
-            re.search(
-                r'fmt\.Sprintf|"\s*\+\s*\w|\w\s*\+\s*"',
-                stripped,
-            ) or (
-                re.search(
-                    r'fmt\.Sprintf|"\s*\+\s*\w|\w\s*\+\s*"',
-                    source,
-                )
+        if _STATIC_SEARCHES.go_database_call(stripped) and (
+            _STATIC_SEARCHES.go_sql_format(stripped) or (
+                _STATIC_SEARCHES.go_sql_format(source)
                 and not (
                     views.feeds(_GO_SQL_GUARD)
-                    and re.search(r'\$\d+', source)  # baseline guard, verbatim (main)
+                    and _STATIC_SEARCHES.go_sql_placeholder(source)  # baseline guard, verbatim (main)
                 )
             )
         ):
@@ -3956,10 +4323,7 @@ def _check_go_patterns(
                     severity="error",
                 ))
 
-        if re.search(
-            r'\btemplate\.(HTML|JS|CSS|HTMLAttr|URL)\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.go_template_bypass(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="go-template-unescaped",
                 message=(
@@ -3970,23 +4334,13 @@ def _check_go_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bos\.(Open|Create|Remove|ReadFile|WriteFile|'
-            r'OpenFile|RemoveAll|MkdirAll)\s*\(',
-            stripped,
-        ) and re.search(
-            r'user|request|param|filename|r\.\w+|'
-            r'c\.Param|c\.Query|chi\.|mux\.',
-            source,
-        ) and not (
+        if _STATIC_SEARCHES.go_file_api(stripped) and _STATIC_SEARCHES.go_path_input(source) and not (
             (
                 views.sees(r'filepath\.Clean|filepath\.Abs|path\.Clean')
                 or views.feeds(_GO_CONTAINS_GUARD)
-            ) and re.search(  # baseline guard, verbatim (main)
-                r'filepath\.Clean|filepath\.Abs|'
-                r'strings\.Contains.{0,1000}\.\.|path\.Clean',
-                source,
-            )
+            ) and _STATIC_SEARCHES.go_path_guard(  # baseline guard, verbatim (main)
+                      source,
+                  )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="go-path-traversal",
@@ -3999,12 +4353,7 @@ def _check_go_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bhttp\.(Get|Post|PostForm)\s*\(', stripped,
-        ) and re.search(
-            r'user|request|param|fmt\.Sprintf|"\s*\+',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.go_http_request(stripped) and _STATIC_SEARCHES.go_url_input(stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="go-ssrf",
                     message=(
@@ -4015,10 +4364,7 @@ def _check_go_patterns(
                     severity="warning",
                 ))
 
-        if re.search(
-            r'\b(?:json|xml)\.(?:Unmarshal|NewDecoder)',
-            stripped,
-        ) and re.search(r'interface\s*\{\s*\}|any\b', source):
+        if _STATIC_SEARCHES.go_decoder(stripped) and _STATIC_SEARCHES.go_generic_input(source):
             result.hits.append(PrefilterHit(
                 rule_id="go-deserialize-interface",
                 message=(
@@ -4029,7 +4375,7 @@ def _check_go_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bgob\.(NewDecoder|Decode)\b', stripped):
+        if _STATIC_SEARCHES.go_gob_decoder(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="go-gob-decode",
                 message=(
@@ -4040,10 +4386,10 @@ def _check_go_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\breflect\.\w+\s*\(', stripped):
+        if _STATIC_SEARCHES.go_reflection(stripped):
             result.has_dangerous_apis = True
 
-        if re.search(r'\bC\.\w+\s*\(', stripped):
+        if _STATIC_SEARCHES.go_cgo_call(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="go-cgo-call",
                 message=(
@@ -4069,17 +4415,17 @@ def _check_rust_patterns(
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_RUST_CALLEES)
     result.has_pointer_ops = bool(
-        re.search(r'\*const\b|\*mut\b', source)
-        or re.search(r'\bas\s+\*(?:const|mut)\b', source)
+        _STATIC_SEARCHES.rust_raw_pointer(source)
+        or _STATIC_SEARCHES.rust_raw_cast(source)
     )
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
-    has_unsafe_block = bool(re.search(r'\bunsafe\s*\{', source))
+    has_unsafe_block = bool(_STATIC_SEARCHES.rust_unsafe_block(source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(r'\bunsafe\s*\{', stripped):
+        if _STATIC_SEARCHES.rust_unsafe_block(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-unsafe-block",
                 message="unsafe block — memory safety guarantees suspended",
@@ -4087,10 +4433,7 @@ def _check_rust_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bCommand::new\s*\(|\bprocess::Command\b',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.rust_process_command(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-command-exec",
                 message=(
@@ -4101,7 +4444,7 @@ def _check_rust_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bas\s+\*(?:const|mut)\b', stripped):
+        if _STATIC_SEARCHES.rust_raw_cast(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-raw-pointer-cast",
                 message="raw pointer cast — bypasses borrow checker",
@@ -4109,7 +4452,7 @@ def _check_rust_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\btransmute\s*[:<(]', stripped):
+        if _STATIC_SEARCHES.rust_transmute(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-transmute",
                 message=(
@@ -4120,7 +4463,7 @@ def _check_rust_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bextern\s+"C"\s*\{', stripped):
+        if _STATIC_SEARCHES.rust_extern_c(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-ffi-extern",
                 message=(
@@ -4131,7 +4474,7 @@ def _check_rust_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'#\[no_mangle\]', stripped):
+        if _STATIC_SEARCHES.rust_no_mangle(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-no-mangle",
                 message=(
@@ -4141,10 +4484,7 @@ def _check_rust_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bfrom_raw_parts(?:_mut)?\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.rust_raw_parts(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-from-raw-parts",
                 message=(
@@ -4155,11 +4495,7 @@ def _check_rust_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'(?:format!|&format!)\s*\(\s*"[^"]*'
-            r'(?:SELECT|INSERT|UPDATE|DELETE)',
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.rust_sql_format(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="rust-sql-format",
                 message=(
@@ -5040,7 +5376,7 @@ def _check_php_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_PHP_CALLEES)
-    result.has_array_access = bool(re.search(r'\$\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.php_array_access(source))
     # The prepare pointer asks for the shared view inside the
     # php-sql-injection fail-safe; a view failure there would only
     # drop the additions.
@@ -5065,9 +5401,7 @@ def _check_php_patterns(
         i = line_start + k
         stripped = line.strip()
 
-        if re.search(
-            r'\b(?:eval|assert)\s*\(\s*\$', stripped,
-        ):
+        if _STATIC_SEARCHES.php_eval_variable(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-eval-variable",
                 message="eval/assert with variable input — code injection",
@@ -5075,11 +5409,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\b(?:system|exec|passthru|shell_exec|popen|'
-            r'proc_open|pcntl_exec)\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.php_command(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-command-exec",
                 message="command execution function — injection risk",
@@ -5087,10 +5417,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\b(?:include|include_once|require|require_once)\s*\(\s*\$',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.php_include_variable(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-file-inclusion",
                 message=(
@@ -5101,7 +5428,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bunserialize\s*\(', stripped):
+        if _STATIC_SEARCHES.php_unserialize(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-unserialize",
                 message=(
@@ -5112,10 +5439,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bpreg_replace\s*\(\s*["\'].{0,1000}?/e["\']',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.php_preg_replace_e(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-preg-replace-e",
                 message="preg_replace with /e modifier — code execution",
@@ -5134,9 +5458,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\becho\b.{0,1000}\$_(?:GET|POST|REQUEST|COOKIE)', stripped,
-        ):
+        if _STATIC_SEARCHES.php_superglobal_echo(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-xss",
                 message=(
@@ -5147,7 +5469,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bextract\s*\(\s*\$_', stripped):
+        if _STATIC_SEARCHES.php_extract_superglobal(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-extract-superglobal",
                 message="extract() on superglobal — variable injection",
@@ -5155,23 +5477,16 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\s*\[', stripped,
-        ):
+        if _STATIC_SEARCHES.php_superglobal_input(stripped):
             result.has_user_input = True
 
-        if re.search(
-            r'\b(?:file_get_contents|file_put_contents|fopen|'
-            r'readfile|unlink|rename)\s*\(\s*\$',
-            stripped,
-        ) and not (
+        if _STATIC_SEARCHES.php_file_variable(stripped) and not (
             (
                 views.sees(r'realpath|basename')
                 or views.feeds(_PHP_STR_REPLACE_GUARD)
-            ) and re.search(  # baseline guard, verbatim (main)
-                r'realpath|basename|str_replace.{0,1000}\.\.',
-                source,
-            )
+            ) and _STATIC_SEARCHES.php_path_guard(  # baseline guard, verbatim (main)
+                      source,
+                  )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="php-path-traversal",
@@ -5183,9 +5498,7 @@ def _check_php_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bheader\s*\(\s*["\']Location.{0,1000}\$', stripped,
-        ):
+        if _STATIC_SEARCHES.php_redirect(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="php-open-redirect",
                 message="redirect with user-controlled URL — open redirect",
@@ -5213,14 +5526,12 @@ def _check_java_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_JAVA_CALLEES)
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(
-            r'Runtime\.getRuntime\(\)\.exec\s*\(', stripped,
-        ):
+        if _STATIC_SEARCHES.java_runtime_exec(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-runtime-exec",
                 message="Runtime.exec — command injection risk",
@@ -5228,7 +5539,7 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bProcessBuilder\s*\(', stripped):
+        if _STATIC_SEARCHES.java_process_builder(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-process-builder",
                 message="ProcessBuilder — command injection risk",
@@ -5236,7 +5547,7 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bObjectInputStream\b', stripped):
+        if _STATIC_SEARCHES.java_object_input(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-deserialization",
                 message=(
@@ -5247,10 +5558,7 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\.(?:executeQuery|executeUpdate|execute)\s*\(',
-            stripped,
-        ) and re.search(r'"\s*\+\s*\w|\w\s*\+\s*"', stripped):
+        if _STATIC_SEARCHES.java_database_call(stripped) and _STATIC_SEARCHES.string_concat(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-sql-concat",
                 message=(
@@ -5261,11 +5569,7 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'Class\.forName\s*\(|\.newInstance\s*\(|'
-            r'\.getMethod\s*\(.{0,1000}\.invoke\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.java_reflection(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-reflection",
                 message=(
@@ -5276,11 +5580,7 @@ def _check_java_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'new\s+File\s*\(.{0,200}'
-            r'(?:request|param|input|getParameter)',
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.java_user_file(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-path-traversal",
                 message=(
@@ -5291,29 +5591,19 @@ def _check_java_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\.getParameter\s*\(|\.getHeader\s*\(|'
-            r'\.getCookies\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.java_request_input(stripped):
             result.has_user_input = True
 
-        if re.search(
-            r'XMLInputFactory|SAXParser|DocumentBuilder',
-            stripped,
-        ) and not (
+        if _STATIC_SEARCHES.java_xml_parser(stripped) and not (
             (
                 views.sees(
                     r'FEATURE_SECURE_PROCESSING|'
                     r'setExpandEntityReferences.{0,1000}false',
                 )
                 or views.feeds(_JAVA_SET_FEATURE_GUARD)
-            ) and re.search(  # baseline guard, verbatim (main)
-                r'FEATURE_SECURE_PROCESSING|'
-                r'disallow-doctype-decl|'
-                r'setExpandEntityReferences.{0,1000}false',
-                source,
-            )
+            ) and _STATIC_SEARCHES.java_xml_guard(  # baseline guard, verbatim (main)
+                      source,
+                  )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="java-xxe",
@@ -5325,10 +5615,7 @@ def _check_java_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'ScriptEngine|\.eval\s*\(.{0,200}(?:request|param|input)',
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.java_script_engine(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-script-injection",
                 message="ScriptEngine.eval with user input — code injection",
@@ -5336,10 +5623,7 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bLDAP\b.{0,1000}\+\s*(?:request|param|input)',
-            stripped, re.IGNORECASE,
-        ):
+        if _STATIC_SEARCHES.java_ldap(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="java-ldap-injection",
                 message="LDAP query with user input — injection risk",
@@ -5367,12 +5651,12 @@ def _check_js_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_JS_CALLEES)
-    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
+    result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(r'\beval\s*\(', stripped):
+        if _STATIC_SEARCHES.js_eval(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-eval",
                 message="eval() — code injection risk",
@@ -5380,7 +5664,7 @@ def _check_js_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bnew\s+Function\s*\(', stripped):
+        if _STATIC_SEARCHES.js_function_constructor(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-function-constructor",
                 message="new Function() — code injection risk",
@@ -5388,14 +5672,7 @@ def _check_js_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'child_process.{0,1000}'
-            r'\b(?:exec|execSync|spawn|execFile)\s*\(',
-            stripped,
-        ) or (re.search(
-            r'\b(?:exec|execSync|spawn|spawnSync|execFile)\s*\(',
-            stripped,
-        ) and re.search(r'child_process|require.{0,1000}child', source)):
+        if _STATIC_SEARCHES.js_child_process(stripped) or (_STATIC_SEARCHES.js_command(stripped) and _STATIC_SEARCHES.js_child_process_module(source)):
             result.hits.append(PrefilterHit(
                 rule_id="js-command-exec",
                 message="child_process execution — command injection risk",
@@ -5403,12 +5680,7 @@ def _check_js_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\.innerHTML\s*=|\.outerHTML\s*=|'
-            r'insertAdjacentHTML\s*\(|'
-            r'document\.write\s*\(',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.js_dom_write(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-xss-dom",
                 message="DOM manipulation with raw HTML — XSS risk",
@@ -5416,10 +5688,7 @@ def _check_js_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'dangerouslySetInnerHTML\s*=',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.js_react_html(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-react-dangerous-html",
                 message=(
@@ -5430,10 +5699,7 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\.query\s*\(\s*[`"\']\s*(?:SELECT|INSERT|UPDATE|DELETE)',
-            stripped, re.IGNORECASE,
-        ) and re.search(r'\$\{|\+\s*\w|\w\s*\+', stripped):
+        if _STATIC_SEARCHES.js_sql_text(stripped) and _STATIC_SEARCHES.js_sql_concat(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-sql-injection",
                 message=(
@@ -5444,23 +5710,13 @@ def _check_js_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\bfs\.(?:readFile|writeFile|unlink|rename|'
-            r'readFileSync|writeFileSync|unlinkSync|renameSync|'
-            r'createReadStream|createWriteStream)\s*\(',
-            stripped,
-        ) and re.search(
-            r'req\.|params\.|query\.|body\.|headers\.',
-            source,
-        ) and not (
+        if _STATIC_SEARCHES.js_file_api(stripped) and _STATIC_SEARCHES.js_path_input(source) and not (
             (
                 views.sees(r'path\.(?:resolve|normalize|basename)|sanitize')
                 or views.feeds(_JS_INCLUDES_GUARD)
-            ) and re.search(  # baseline guard, verbatim (main)
-                r'path\.(?:resolve|normalize|basename)|'
-                r'sanitize|includes.{0,1000}\.\.',
-                source,
-            )
+            ) and _STATIC_SEARCHES.js_path_guard(  # baseline guard, verbatim (main)
+                      source,
+                  )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="js-path-traversal",
@@ -5472,16 +5728,10 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'req\.(?:body|params|query|headers|cookies)\b',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.js_request_input(stripped):
             result.has_user_input = True
 
-        if re.search(
-            r'(?:JSON|YAML|yaml)\.parse\s*\(',
-            stripped,
-        ) and re.search(r'req\.|body\.|params\.', source):
+        if _STATIC_SEARCHES.js_parse(stripped) and _STATIC_SEARCHES.js_parse_input(source):
             result.hits.append(PrefilterHit(
                 rule_id="js-unsafe-parse",
                 message=(
@@ -5492,7 +5742,7 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\.redirect\s*\(.{0,200}(?:req\.|params\.|query\.)', stripped):
+        if _STATIC_SEARCHES.js_redirect(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-open-redirect",
                 message="redirect with user-controlled URL — open redirect",
@@ -5500,10 +5750,7 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(
-            r'\bnew\s+RegExp\s*\(.{0,1000}(?:req\.|params\.|input)',
-            stripped,
-        ):
+        if _STATIC_SEARCHES.js_regexp(stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-regex-injection",
                 message="RegExp with user input — ReDoS risk",
