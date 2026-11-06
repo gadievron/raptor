@@ -49,8 +49,6 @@ env:
 
 permissions:
   contents: read
-  # The changes job's ``gh api repos/.../pulls/.../files`` query.
-  pull-requests: read
 
 jobs:
   changes:
@@ -58,55 +56,16 @@ jobs:
     timeout-minutes: 3
     outputs:
       run: ${{ steps.scope.outputs.run }}
-      test_files: ${{ steps.scope.outputs.test_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-
-      - id: changed_files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          out=/tmp/changed_files.txt
-          # ``?`` + ``// []`` suppress jq's null-iteration error on
-          # truncated or error-object responses (same defence as
-          # tests.yml). A TRUNCATED list still degrades to skip: unlike
-          # the main suite there is no full-dispatch fallback, because
-          # running the entire suite under six simulations is exactly
-          # the latency this workflow's changed-file bound exists to
-          # avoid. A hard ``gh api`` failure is different — an empty
-          # file would silently skip every simulation leg and let
-          # preflight-passed go green (skipped-is-pass), so retry it and
-          # then fail the step loudly instead of passing on no data.
-          ok=false
-          for attempt in 1 2 3; do
-            if gh api --paginate \
-                 "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-                 --jq '(. // [])[]?.filename' > "$out"; then
-              ok=true
-              break
-            fi
-            echo "::warning::gh api attempt ${attempt} failed; retrying"
-            sleep $(( attempt * 10 ))
-          done
-          if [ "$ok" != "true" ]; then
-            echo "::error::could not list the PR's changed files" \
-              "(GitHub API failure) — refusing to skip the preflight" \
-              "simulations on missing data; re-run this job."
-            exit 1
-          fi
-          echo "Changed files ($(wc -l < "$out")):"
-          cat "$out"
+          fetch-depth: 2
 
       - id: scope
-        run: |
-          python3 .github/scripts/preflight_scope.py \
-            --changed-files /tmp/changed_files.txt \
-            --repo .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 .github/scripts/preflight_scope.py --base "$BASE_SHA" --repo .
 
   preflight:
     name: preflight (${{ matrix.sim }})
@@ -141,6 +100,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -161,13 +121,12 @@ jobs:
 
       - name: Run changed tests under simulation
         env:
-          TEST_FILES: ${{ needs.changes.outputs.test_files }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HIDE_SET: ${{ matrix.hide }}
           MAX_TEST_SECONDS: ${{ matrix.max_test_seconds }}
           SHUFFLE_SEED: ${{ matrix.shuffle_seed }}
         run: |
           set -euo pipefail
-          set -f  # word-split $TEST_FILES without glob expansion
           if [ -n "${HIDE_SET:-}" ]; then
             stub_dir=$(python3 .github/scripts/hide_modules.py \
               --dest "$RUNNER_TEMP/preflight-stubs" --set "$HIDE_SET")
@@ -188,7 +147,10 @@ jobs:
           # Single process (no -n auto): honest per-test durations for
           # the duration-guard leg and one deterministic order for the
           # shuffle legs; the changed-file bound keeps this cheap.
-          uv run --locked python -m pytest $TEST_FILES || rc=$?
+          # Recompute the same immutable range locally; never transfer a bulk
+          # filename list through job outputs, the environment or exec argv.
+          uv run --locked python .github/scripts/preflight_scope.py \
+            --base "$BASE_SHA" --repo . --run || rc=$?
           # Exit 5 = "no tests collected" — legitimate when every
           # changed test file is deselected by the default markers
           # (slow / integration).
