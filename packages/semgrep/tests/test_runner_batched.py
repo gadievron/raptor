@@ -131,6 +131,8 @@ class TestSandboxScratch:
             home.mkdir(parents=True, exist_ok=True)
             (home / "semgrep.log").open("a").write("per-call log noise\n")
             (home / "settings.yml").write_text("anonymous_user_id: x\n")
+            output = Path(cmd[cmd.index("--json-output") + 1])
+            output.write_text(json.dumps({"paths": {"scanned": [str(t / "a.c")]}, "errors": []}))
             return MagicMock(stdout=sarif, stderr="", returncode=1)
 
         with patch("packages.semgrep.runner.is_available", return_value=True), \
@@ -163,7 +165,7 @@ class TestExplicitTargetsUnderProjectRoot:
             observed.append((cmd, kwargs))
             output = Path(cmd[cmd.index("--json-output") + 1])
             output.write_text(json.dumps({"paths": {"scanned": [str(first), str(second)]}, "errors": []}))
-            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"version": "2.1.0", "runs": []}))
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Semgrep"}}, "results": []}]}))
 
         monkeypatch.setattr("core.sandbox.context.run", fake_sandbox)
         result = run_rule(first, "/local/candidates.yml", extra_targets=(second,), target_root=root)
