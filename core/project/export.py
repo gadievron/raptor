@@ -842,7 +842,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                     f"{meta_info.file_size} bytes — exceeds the "
                     f"{_MAX_PROJECT_META_BYTES}-byte metadata cap"
                 )
-            with zf.open(meta_path) as meta_fh:
+            with zf.open(meta_path) as meta_fh:  # raw-open: ZIP metadata read capped at _MAX_PROJECT_META_BYTES + 1 below
                 raw_meta = meta_fh.read(_MAX_PROJECT_META_BYTES + 1)
             if len(raw_meta) > _MAX_PROJECT_META_BYTES:
                 raise ValueError(
