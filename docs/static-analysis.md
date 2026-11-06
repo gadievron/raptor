@@ -525,6 +525,12 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Coccinelle and generated Semgrep-stage findings preserve known source spans.
+Unknown start lines remain unlocated; invalid or backwards optional spans
+are omitted rather than turned into a line-one finding. Coccinelle report
+formatting normalizes source paths without reopening or resolving each source
+file, while retaining explicit paths outside the selected target.
+
 The file-level section at the end of `/scan` is labeled **current scan** and
 uses this invocation's coverage facts. It does not import an older checklist
 or persistent coverage store from a reused output directory. Project coverage

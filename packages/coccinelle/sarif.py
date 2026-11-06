@@ -41,21 +41,23 @@ _TOOL_FULL_NAME = "Coccinelle (spatch)"
 _TOOL_INFO_URI = "https://coccinelle.gitlabpages.inria.fr/website/"
 
 
-def _rel_to_repo(file_path: str, repo_path: Path) -> str:
-    """Best-effort repo-relative path. SpatchMatch's ``file`` is
-    sometimes absolute (when spatch was given an absolute target) or
-    target-relative (when given a relative target). Normalize so two
-    findings at the same line dedupe across spatch invocations."""
+def _rel_to_repo(file_path: str, repo_path: Path | None) -> str:
+    """Normalize a match lexically against the already resolved target root.
+
+    Keep explicit outside-target paths as supplied; never borrow a local
+    basename or follow source-file symlinks while formatting a report.
+    """
+    from core.paths import to_repo_relative
+
     if not file_path:
         return ""
-    try:
-        p = Path(file_path)
-        if p.is_absolute():
-            return str(p.resolve().relative_to(repo_path.resolve()))
-    except (ValueError, OSError):
-        # Cross-FS, non-repo path — leave as-is.
-        pass
-    return file_path
+    # Spatch supplies filesystem paths, not file:// URIs. Preserve legacy
+    # spelling for URI-looking names rather than rebinding their basename.
+    if repo_path is None or file_path.startswith("file://"):
+        return file_path
+    relative = to_repo_relative(file_path, repo_path, outside_root="relative")
+    confined = to_repo_relative(relative, repo_path) if relative is not None else None
+    return confined if confined is not None else file_path
 
 
 def results_to_sarif(
@@ -67,7 +69,12 @@ def results_to_sarif(
     ``tool.driver.rules`` so operators see the rule corpus that ran;
     only the ``results`` list filters to actual matches.
     """
-    repo_path = Path(repo_path)
+    try:
+        resolved_root = Path(repo_path).resolve()
+    except (OSError, RuntimeError):
+        # Report formatting must not discard findings when the target has
+        # disappeared or its root can no longer be resolved.
+        resolved_root = None
 
     # Collect distinct rule definitions. ``rule`` is the rule's stem
     # (filename without .cocci), used as ``ruleId`` in results.
@@ -88,19 +95,14 @@ def results_to_sarif(
         ))
 
         for match in r.matches:
-            file_rel = _rel_to_repo(match.file, repo_path)
+            file_rel = _rel_to_repo(match.file, resolved_root)
             sarif_results.append(emit.result(
                 rule_id,
                 match.message or f"{rule_id} matched",
-                [emit.location(file_rel, {
-                    "startLine": match.line,
-                    **({"endLine": match.line_end}
-                       if match.line_end else {}),
-                    **({"startColumn": match.column}
-                       if match.column else {}),
-                    **({"endColumn": match.column_end}
-                       if match.column_end else {}),
-                })],
+                [emit.location(file_rel, emit.source_region(
+                    match.line, end_line=match.line_end,
+                    column=match.column, end_column=match.column_end,
+                ))],
                 level=_DEFAULT_LEVEL,
             ))
 

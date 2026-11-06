@@ -2527,21 +2527,12 @@ def run_source_wrapper_stage(
 
 def _semgrep_source_region(finding: dict, *, repeat_end_line: bool = False) -> dict:
     """Preserve direct-source spans without inventing an unknown start line."""
-    from core.sarif.parser import _coerce_line
-    start = _coerce_line(finding.get("line") or finding.get("start_line"))
-    if start is None or start <= 0:
-        return {}
-    region = {"startLine": start}
-    end = _coerce_line(finding.get("line_end") or finding.get("end_line"))
-    if end is not None and end >= start:
-        region["endLine"] = end
-    elif repeat_end_line:
-        region["endLine"] = start
-    for source, target in (("column", "startColumn"), ("column_end", "endColumn")):
-        value = _coerce_line(finding.get(source))
-        if value is not None and value > 0:
-            region[target] = value
-    return region
+    return sarif_emit.source_region(
+        finding.get("line") or finding.get("start_line"),
+        end_line=finding.get("line_end") or finding.get("end_line"),
+        column=finding.get("column"), end_column=finding.get("column_end"),
+        repeat_end_line=repeat_end_line,
+    )
 
 
 def _stage_findings_to_sarif(

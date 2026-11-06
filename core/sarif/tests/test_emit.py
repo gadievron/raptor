@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from core.sarif import emit
 
 
@@ -152,3 +154,31 @@ class TestDocument:
         }
         assert len(uris) == 3
         assert all("2.1.0" in u for u in uris)
+
+
+@pytest.mark.parametrize('line', [0, -1, True, None, 1.5, float('inf'), float('nan'), '3'],
+                         ids=['zero', 'negative', 'boolean', 'missing', 'fraction', 'infinity', 'nan', 'string'])
+def test_unknown_start_does_not_acquire_a_region_from_optional_coordinates(line):
+    assert emit.source_region(line, end_line=9, column=2, end_column=4,
+                              repeat_end_line=True) == {}
+
+
+@pytest.mark.parametrize('values,expected', [
+    pytest.param({'line': 5}, {'startLine': 5}, id='known-start'),
+    pytest.param({'line': 5.0, 'column': 2.0}, {'startLine': 5, 'startColumn': 2}, id='integral-floats'),
+    pytest.param({'line': 5, 'repeat_end_line': True}, {'startLine': 5, 'endLine': 5}, id='legacy-end-default'),
+    pytest.param({'line': 5, 'end_line': 6, 'column': 9, 'end_column': 2},
+                 {'startLine': 5, 'endLine': 6, 'startColumn': 9, 'endColumn': 2}, id='multiline-columns'),
+    pytest.param({'line': 5, 'end_line': 4, 'column': 9, 'end_column': 10, 'repeat_end_line': True},
+                 {'startLine': 5, 'startColumn': 9}, id='backwards-end-line'),
+    pytest.param({'line': 5, 'end_line': 5, 'column': 9, 'end_column': 2},
+                 {'startLine': 5, 'endLine': 5, 'startColumn': 9}, id='backwards-same-line-column'),
+    pytest.param({'line': 5, 'column': 9, 'end_column': 2},
+                 {'startLine': 5, 'startColumn': 9}, id='backwards-implicit-end-column'),
+    pytest.param({'line': 5, 'column': True, 'end_column': float('inf')},
+                 {'startLine': 5}, id='invalid-columns'),
+])
+def test_source_region_preserves_only_supported_spans(values, expected):
+    actual = emit.source_region(**values)
+    assert actual == expected
+    json.dumps(actual, allow_nan=False)
