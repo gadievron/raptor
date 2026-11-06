@@ -943,6 +943,21 @@ def _read_marker_bytes(path: Path) -> bytes | None:
             pass
 
 
+def get_audit_degraded(run_dir: Path) -> dict | None:
+    """Return a detached parent-owned degradation payload, even before publication.
+
+    Storage failure must not erase the parent's knowledge that audit failed.
+    This snapshot does not describe disk integrity; reassertion owns that check.
+    """
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return None
+    with _lock:
+        entry = _degraded_markers.get(run_key)
+        return dict(entry["payload"]) if entry is not None else None
+
+
 def reassert_audit_degraded(run_dir: Path) -> bool:
     """Re-assert the audit-degraded marker after the workload exited.
 
