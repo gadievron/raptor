@@ -765,7 +765,9 @@ It follows local pointer reassignments when both object origins are known.
 Supported numeric conversions and assignments to initialized scalar locals
 preserve this tracking.
 Scalar locals declared without an initializer are supported after a direct
-assignment; reads before initialization remain outside this check.
+assignment or a compatible store through a known local pointer. Reads before
+initialization remain outside this check; incompatible stores can qualify
+without reading the object's previous value.
 The report identifies the object and both types under Raptor's strict-aliasing
 compiler model; project build flags are not inferred. Harmless casts alone do
 not qualify. `/audit` uses the same check for matching CWE-843 hypotheses.

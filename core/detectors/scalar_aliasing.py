@@ -1,9 +1,10 @@
 """Conservative C scalar-access proofs over a frozen compiler-parsed view.
 
-Only straight-line functions with initialized builtin scalar objects and
-unescaped local pointer aliases are supported. Casts are not accesses. Unknown
-syntax, branches, calls, qualifiers, typedefs and attributes refuse the whole
-function; absence of a proof never establishes safety.
+Only straight-line functions over builtin scalar objects and unescaped local
+pointer aliases are supported. Reads require definite initialization; stores
+retain declared object types. Casts are not accesses. Unknown syntax, branches,
+calls, qualifiers, typedefs and attributes refuse the whole function; absence
+of a proof never establishes safety.
 """
 from __future__ import annotations
 
@@ -94,13 +95,15 @@ class _Function:
         self.initialized: set[_Object] = set()
         self.proofs: list[dict[str, Any]] = []
 
-    def access(self, place, node):
+    def access(self, place, node, *, write=False):
         if not isinstance(place, _Place):
             raise _Unsupported("unknown access")
-        if place.obj not in self.initialized:
+        if not write and place.obj not in self.initialized:
             raise _Unsupported("uninitialized object access")
         # Corresponding signed and unsigned integer types may alias.
         if place.ctype.removeprefix("unsigned ") == place.obj.ctype.removeprefix("unsigned "):
+            if write:
+                self.initialized.add(place.obj)
             return
         if place.pointer is None or place.pointer.cast is None:
             raise _Unsupported("unknown pointer provenance")
@@ -217,7 +220,7 @@ class _Function:
                     self.variables[reference["id"]] = _Pointer(value.pointee, value.obj, value.cast, aliases)
                 elif isinstance(value, _Scalar) and isinstance(place, _Place):
                     if place.pointer is not None:
-                        self.access(place, nodes[0])
+                        self.access(place, nodes[0], write=True)
                     elif value.ctype != place.ctype:
                         raise _Unsupported("unmodeled scalar assignment conversion")
                     else:
