@@ -3803,9 +3803,12 @@ def _enrich_callees_with_source(
 
     Iterates callees in security-relevance order (sinks and
     validators first) and stops when the total lines budget is
-    exhausted, rather than using a fixed count cap.
+    exhausted, rather than using a fixed count cap. Known ends come from
+    exact source occurrences; inventory memoization lasts only this call.
     """
     header_index = None
+    checklist_files: dict[str, dict[str, Any]] | None = None
+    span_ends: dict[tuple[str, str, int], int | None] = {}
     sorted_callees = sorted(callees, key=_callee_security_priority)
     total_lines = 0
 
@@ -3836,13 +3839,27 @@ def _enrich_callees_with_source(
         line_end = None
 
         if checklist and line_start:
-            for file_info in checklist.get("files", []):
-                if file_info.get("path") != callee_file:
-                    continue
-                for item in file_info.get("items", file_info.get("functions", [])):
-                    if item.get("name") == callee_name:
-                        line_end = item.get("line_end")
-                        break
+            key = (callee_file, callee_name, line_start)
+            if key not in span_ends:
+                if checklist_files is None:
+                    # Index only requested files, once per enrichment. Keep the
+                    # resolver's first-file semantics and source-occurrence rules.
+                    wanted_files = {
+                        c.get("file") for c in sorted_callees
+                        if isinstance(c.get("file"), str) and c.get("line_start")
+                    }
+                    checklist_files = {}
+                    for file_info in checklist.get("files", []):
+                        path = file_info.get("path")
+                        if isinstance(path, str) and path in wanted_files:
+                            checklist_files.setdefault(path, file_info)
+                file_info = checklist_files.get(callee_file)
+                item = _find_checklist_item(
+                    {"files": [file_info]} if file_info is not None else None,
+                    callee_file, callee_name, line_start,
+                )
+                span_ends[key] = item.get("line_end") if item is not None else None
+            line_end = span_ends[key]
 
         full_path = _safe_path(target_path, callee_file)
         if full_path is None or not full_path.exists():
