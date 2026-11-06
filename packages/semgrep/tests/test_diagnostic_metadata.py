@@ -137,6 +137,44 @@ def test_skip_summary_escapes_only_a_bounded_prefix(monkeypatch, unit):
     assert lengths == [models._SKIPPED_REASON_MAXLEN] * 2 + [models._SKIPPED_PATH_MAXLEN]
 
 
+@pytest.mark.parametrize("mode", ["indexed", "legacy", "mixed"])
+def test_rule_table_walks_are_amortized_without_indexing_indexed_reports(mode):
+    visits = []
+
+    class CountingRules(list):
+        def __iter__(self):
+            visits.append(len(self))
+            return super().__iter__()
+
+    rules = CountingRules({"id": f"rule-{index}",
+                           "defaultConfiguration": {"level": "error"}}
+                          for index in range(1_000))
+    results = []
+    for index in range(20):
+        result = {"ruleId": f"rule-{index}", "message": {"text": "retained"}}
+        if mode == "indexed" or (mode == "mixed" and index % 2 == 0):
+            result["ruleIndex"] = index
+        results.append(result)
+    errors = []
+    findings = models.parse_sarif_data({"runs": [{"tool": {"driver": {
+        "name": "Semgrep", "rules": rules}}, "results": results}]}, errors=errors)
+    assert not errors
+    assert [(finding.rule_id, finding.level) for finding in findings] == [
+        (f"rule-{index}", "error") for index in range(20)
+    ]
+    assert visits == ([] if mode == "indexed" else [1_000])
+
+
+@pytest.mark.parametrize("index", [True, -2, 1_000, "0"])
+def test_invalid_index_does_not_borrow_readable_rule_severity(index):
+    errors = []
+    findings = models.parse_sarif_data({"runs": [{"tool": {"driver": {
+        "name": "Semgrep", "rules": [{"id": "keep", "defaultConfiguration": {"level": "error"}}]}},
+        "results": [{"ruleId": "keep", "ruleIndex": index}]}]}, errors=errors)
+    assert [(finding.rule_id, finding.level) for finding in findings] == [("keep", "warning")]
+    assert errors
+
+
 def both_consumers(tmp_path, entry):
     payload = {"paths": {"scanned": ["good.py"]}, "errors": [entry], "version": "1.177.0"}
     text = json.dumps(payload)
