@@ -256,7 +256,8 @@ def compiler_reported_cwe(diagnostic: dict, run: dict | None = None) -> str | No
     """Read GCC JSON metadata or an explicitly identified SARIF CWE taxonomy.
 
     Several different taxonomy entries remain ambiguous: never choose one by
-    list order. Unknown/malformed metadata does not remove a diagnostic.
+    list order. Indexed identities must agree with their referenced objects.
+    Unknown/malformed metadata does not remove a diagnostic.
     """
     found: set[str] = set()
     metadata = diagnostic.get("metadata")
@@ -276,27 +277,37 @@ def compiler_reported_cwe(diagnostic: dict, run: dict | None = None) -> str | No
                 continue
             taxonomy = None
             name = component.get("name")
-            if component.get("index") is not None and isinstance(run, dict):
+            if component.get("index") is not None:
                 index = component.get("index")
-                catalogs = run.get("taxonomies")
-                if (isinstance(index, int) and not isinstance(index, bool) and isinstance(catalogs, list)
-                        and 0 <= index < len(catalogs) and isinstance(catalogs[index], dict)):
-                    taxonomy = catalogs[index]
-                    indexed_name = taxonomy.get("name")
-                    if name is not None and name != indexed_name:
-                        continue
-                    name = indexed_name
-                else:
+                catalogs = run.get("taxonomies") if isinstance(run, dict) else None
+                if (type(index) is not int or not isinstance(catalogs, list)
+                        or not 0 <= index < len(catalogs) or not isinstance(catalogs[index], dict)):
                     continue
+                taxonomy = catalogs[index]
+                if any(key in component and component[key] != taxonomy.get(key)
+                       for key in ("name", "guid")):
+                    continue
+                name = taxonomy.get("name")
             if not isinstance(name, str) or len(name) != 3 or name.casefold() != "cwe":
                 continue
             value = entry.get("id")
-            if value is None and isinstance(taxonomy, dict):
-                index = entry.get("index")
-                entries = taxonomy.get("taxa")
-                if (isinstance(index, int) and not isinstance(index, bool) and isinstance(entries, list)
-                        and 0 <= index < len(entries) and isinstance(entries[index], dict)):
-                    value = entries[index].get("id")
+            index = entry.get("index")
+            if index is not None:
+                if type(index) is not int or index < -1:
+                    continue
+                if index >= 0:
+                    entries = taxonomy.get("taxa") if isinstance(taxonomy, dict) else None
+                    if (not isinstance(entries, list) or index >= len(entries)
+                            or not isinstance(entries[index], dict)):
+                        continue
+                    selected = entries[index]
+                    if "index" in selected and (type(selected["index"]) is not int
+                                                 or selected["index"] != index):
+                        continue
+                    if any(key in entry and entry[key] != selected.get(key)
+                           for key in ("id", "guid")):
+                        continue
+                    value = selected.get("id")
             cwe = _reported_cwe(value)
             if cwe:
                 found.add(cwe)
