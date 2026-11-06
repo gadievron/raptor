@@ -951,3 +951,46 @@ def test_output_growth_within_budget_is_read_completely(prepared_reuse, monkeypa
     assert view.ok, view.errors
     assert view.text.endswith('int appended;\n')
     assert view.origin_of(2) == (source.name, 2)
+
+
+@pytest.mark.parametrize("trailing_newline", [False, True])
+def test_macro_recovery_without_whole_view_line_lists(tmp_path, trailing_newline):
+    class UnsplitText(str):
+        def split(self, *args, **kwargs):
+            pytest.fail("macro recovery must not split the entire expanded view")
+
+    (tmp_path / 'macros.c').write_text('DEFINE(first)\nDEFINE(second)\n')
+    text = (
+        'int system_function(void) {\nreturn 0;\n}\n'
+        'int first(\nvoid) {\nreturn 1;\n}\n'
+        'int existing(void) { return 0; }\n'
+        'int second(void) { return 2; }'
+    ) + ('\n' if trailing_newline else '')
+    (tmp_path / 'other.c').write_text('int existing(void) { return 0; }\n')
+    origins = (
+        None, None, None,
+        ('macros.c', 1), ('macros.c', 1), ('macros.c', 1), ('macros.c', 1),
+        ('other.c', 1), ('macros.c', 2),
+    ) + ((('macros.c', 3),) if trailing_newline else ())
+    view = ExpandedView(ok=True, file_path='macros.c', text=UnsplitText(text),
+                        line_map=origins)
+    recovered = recover_macro_defined_functions(
+        target_path=tmp_path, file_path='macros.c', view=view,
+    )
+    assert [(item.name, item.file, item.line, item.signature) for item in recovered] == [
+        ('first', 'macros.c', 1, 'int first('),
+        ('second', 'macros.c', 2, 'int second(void) { return 2; }'),
+    ]
+
+
+def test_macro_recovery_counts_only_newline_for_attribution(tmp_path):
+    (tmp_path / 'macros.c').write_text('DEFINE(real)\n')
+    view = ExpandedView(
+        ok=True, file_path='macros.c',
+        text='// \u2028 \x0c \r\nint real(void) { return 1; }',
+        line_map=(None, ('macros.c', 1)),
+    )
+    recovered = recover_macro_defined_functions(
+        target_path=tmp_path, file_path='macros.c', view=view,
+    )
+    assert [(item.name, item.line) for item in recovered] == [('real', 1)]

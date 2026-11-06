@@ -737,13 +737,6 @@ def recover_macro_defined_functions(
     if not view.ok or not view.text:
         return []
 
-    # Precompute expanded-line offsets for offset → line lookup.
-    line_offsets: list = [0]
-    for line in view.text.split("\n"):  # line-model: offset arithmetic over cpp-emitted \n-model text
-        line_offsets.append(line_offsets[-1] + len(line) + 1)
-
-    import bisect
-
     original_cache: dict = {}
 
     def _original_text(rel: str) -> str:
@@ -758,17 +751,20 @@ def recover_macro_defined_functions(
 
     recovered: list = []
     seen: set = set()
-    # Hoisted: lines() re-splits the whole expanded text (up to 16MB)
-    # on every call.
-    view_lines = view.lines()
+    # Matches arrive in text order; count each intervening span once instead
+    # of allocating two full line lists and a per-line offset table.
+    counted_until = 0
+    name_line = 1
     for m in _FUNC_DEF_RE.finditer(view.text):
         name = m.group(1)
         if name in _C_KEYWORDS or name.lower() in _C_KEYWORDS:
             continue
         # Attribute the definition to the line holding the name itself
         # (the match can start on an earlier line for multi-line heads).
-        name_line = bisect.bisect_right(line_offsets, m.start(1)) - 1
-        origin = view.origin_of(name_line + 1)
+        name_start = m.start(1)
+        name_line += view.text.count("\n", counted_until, name_start)
+        counted_until = name_start
+        origin = view.origin_of(name_line)
         if origin is None:
             continue
         origin_file, origin_line = origin
@@ -781,7 +777,11 @@ def recover_macro_defined_functions(
         if key in seen:
             continue
         seen.add(key)
-        sig = view_lines[name_line].strip()
+        signature_start = view.text.rfind("\n", 0, name_start) + 1
+        signature_end = view.text.find("\n", name_start)
+        if signature_end < 0:
+            signature_end = len(view.text)
+        sig = view.text[signature_start:signature_end].strip()
         recovered.append(MacroDefinedFunction(
             name=name,
             file=origin_file,
