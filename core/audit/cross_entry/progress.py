@@ -82,8 +82,12 @@ class WorkQueue:
 
     def invalidate_files(self, changed):
         import json
+        changed_paths: set[str] | None = None
         for row in self.db.execute("SELECT id,dependencies FROM views WHERE namespace=?",(self.namespace,)).fetchall():
-            if set(json.loads(row["dependencies"])) & set(changed):
+            dependencies = set(json.loads(row["dependencies"]))
+            if changed_paths is None:
+                changed_paths = set(changed)
+            if not dependencies.isdisjoint(changed_paths):
                 self.db.execute("UPDATE views SET status='pending',fingerprint='' WHERE namespace=? AND id=?",(self.namespace,row["id"]))
         self.db.commit()
 
