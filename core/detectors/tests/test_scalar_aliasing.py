@@ -27,6 +27,11 @@ int saved_alias(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&ot
 int assigned_alias(float value) { int other=1; int *p=(int*)&value; int *q=&other; q=p; p=&other; return *q; }
 int self_assignment(float value) { int *p=(int*)&value; p=p; return *p; }
 int overwritten_alias(float value) { int other=1; int *p=(int*)&value; int *q=p; p=&other; q=p; return *q; }
+int scalar_update(float value) { value=1; return *(int*)&value; }
+int alias_after_store(float value) { int *p=(int*)&value; value=1; return *p; }
+int stored_read(float value) { int other=1; other=*(int*)&value; return other; }
+int unused_after_store(float value) { int *p=(int*)&value; value=1; return 0; }
+unsigned int compatible_after_store(int value) { unsigned int *p=(unsigned int*)&value; value=2; return *p; }
 void stop(void);
 int interrupted(float value) { int *p=(int*)&value; stop(); return *p; }
 typedef int alias_int __attribute__((may_alias));
@@ -57,6 +62,7 @@ def test_native_ast_proves_only_supported_actual_accesses(parsed):
     proofs = scalar_access_proofs(parsed, _SOURCE)
     assert {p["function"] for p in proofs} == {
         "direct", "indirect", "write_access", "reassigned_access", "saved_alias", "assigned_alias", "self_assignment",
+        "scalar_update", "alias_after_store", "stored_read",
     }
     indirect = next(p for p in proofs if p["function"] == "indirect")
     assert indirect["declared_type"] == "float" and indirect["access_type"] == "int"

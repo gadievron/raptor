@@ -205,8 +205,13 @@ class _Function:
                     # Replace this variable's immutable pointer value only;
                     # aliases copied earlier retain their original provenance.
                     self.variables[reference["id"]] = _Pointer(value.pointee, value.obj, value.cast, aliases)
-                elif isinstance(value, _Scalar) and isinstance(place, _Place) and place.pointer is not None:
-                    self.access(place, nodes[0])
+                elif isinstance(value, _Scalar) and isinstance(place, _Place):
+                    if place.pointer is not None:
+                        self.access(place, nodes[0])
+                    elif value.ctype != place.ctype:
+                        raise _Unsupported("unmodeled scalar assignment conversion")
+                    # A store to a declared scalar changes its value, not its
+                    # type or the object provenance held by existing pointers.
                 else:
                     raise _Unsupported("unsupported assignment")
             else:
