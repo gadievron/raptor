@@ -1,8 +1,8 @@
 """Exercise native clock-patch fixtures without running their I/O bodies."""
+from contextlib import contextmanager, nullcontext
 import ast
 import copy
 from functools import lru_cache
-import importlib
 from pathlib import Path
 import sys
 import time
@@ -66,10 +66,26 @@ def _fixture(file):
     return namespace[node.name]
 
 
-@lru_cache(maxsize=None)
-def _module(name):
-    with patch.object(sys, "path", sys.path.copy()):
-        return importlib.import_module(name)
+@contextmanager
+def _consumer_namespace(name):
+    # The actual fixture imports its consumer, and patch(target) resolves the
+    # actual string path. Own that module hierarchy so neither operation
+    # initializes SDKs or changes production module bindings. Native tests
+    # retain the real runtime behavior; this probe exercises clock ownership.
+    with pytest.MonkeyPatch.context() as registration:
+        parent = None
+        parts = name.split(".")
+        for index, part in enumerate(parts):
+            full_name = ".".join(parts[:index + 1])
+            module = ModuleType(full_name)
+            if index < len(parts) - 1:
+                module.__path__ = []
+            if parent is not None:
+                setattr(parent, part, module)
+            registration.setitem(sys.modules, full_name, module)
+            parent = module
+        module.time = time
+        yield module
 
 
 def _assert_namespace(owner, before):
@@ -82,9 +98,7 @@ def _assert_namespace(owner, before):
 @pytest.mark.parametrize("borrowed", [False, True], ids=["ordinary", "borrowed"])
 @pytest.mark.parametrize("exit_mode", ["normal", "error", "interrupt"])
 def test_native_fixture_owns_string_clock_patch(file, module, index, target, borrowed, exit_mode):
-    consumer = _module(module)
-    assert isinstance(consumer, ModuleType)
-    with pytest.MonkeyPatch.context() as inherited_scope:
+    with _consumer_namespace(module) as consumer, pytest.MonkeyPatch.context() as inherited_scope:
         if borrowed:
             view = ModuleType(consumer.time.__name__)
             vars(view).update(vars(consumer.time))
@@ -99,8 +113,8 @@ def test_native_fixture_owns_string_clock_patch(file, module, index, target, bor
         try:
             with pytest.MonkeyPatch.context() as scope:
                 _fixture(file)(scope)
-                # Resolve the actual native string target against the real
-                # production module. No native test body or worker is started.
+                # Retain real string-target resolution and the native fixture
+                # against the owned module. No production body is started.
                 with patch(target, new=fake_clock):
                     _assert_namespace(time, shared)
                     _assert_namespace(original, inherited)
@@ -123,8 +137,7 @@ def test_native_fixture_owns_string_clock_patch(file, module, index, target, bor
 @pytest.mark.parametrize("borrowed", [False, True])
 def test_unmodified_clock_control(borrowed):
     file, module = _SPECS[0]
-    consumer = _module(module)
-    with pytest.MonkeyPatch.context() as inherited_scope:
+    with _consumer_namespace(module) as consumer, pytest.MonkeyPatch.context() as inherited_scope:
         if borrowed:
             view = ModuleType(consumer.time.__name__)
             vars(view).update(vars(consumer.time))
@@ -137,3 +150,41 @@ def test_unmodified_clock_control(borrowed):
             _assert_namespace(original, before)
         assert consumer.time is original
         _assert_namespace(original, before)
+
+
+@pytest.mark.parametrize("prior", ["missing", "none", "module"])
+@pytest.mark.parametrize("error", [None, RuntimeError, KeyboardInterrupt])
+def test_owned_namespace_restores_registration(prior, error, monkeypatch):
+    root = "_owned_clock_fixture_namespace"
+    name = root + ".consumer"
+    original = ModuleType(root)
+    inherited_consumer = object()
+    original.consumer = inherited_consumer
+    for key in (root, name):
+        if prior == "missing":
+            monkeypatch.delitem(sys.modules, key, raising=False)
+        else:
+            monkeypatch.setitem(sys.modules, key, None if prior == "none" else original)
+    expected = pytest.raises(error) if error is not None else nullcontext()
+    shared_sleep = time.sleep
+    try:
+        with expected:
+            with _consumer_namespace(name) as consumer:
+                # Use real import and patch resolution on the owned hierarchy.
+                imported = __import__(name, fromlist=["consumer"])
+                assert imported is consumer
+                assert sys.modules[root].consumer is consumer
+                consumer.time = ModuleType("owned_time")
+                consumer.time.sleep = shared_sleep
+                with patch(name + ".time.sleep", new=object()) as replacement:
+                    assert consumer.time.sleep is replacement
+                    assert time.sleep is shared_sleep
+                if error is not None:
+                    raise error("owned registration exit")
+    finally:
+        for key in (root, name):
+            if prior == "missing":
+                assert key not in sys.modules
+            else:
+                assert sys.modules[key] is (None if prior == "none" else original)
+        assert original.consumer is inherited_consumer
