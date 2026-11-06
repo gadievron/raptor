@@ -19,7 +19,8 @@ from core.atomic_fs import rmtree_hardened
 from typing import Optional
 
 from .detect import get_project_name
-from .project_util import prepare_working_copy
+from .project_util import prepare_working_copy, release_working_copy
+from core.run.scratch import keepalive_register
 
 from .model import (
     REComment,
@@ -135,6 +136,7 @@ class GhidraSession:
         work_dir = tempfile.mkdtemp(prefix="raptor-ghidra-")
         self._work_dir = work_dir
         try:
+            keepalive_register(work_dir)
             work_gpr = prepare_working_copy(gpr_path, Path(work_dir))
             project_dir = work_gpr.parent
             project_name_str = get_project_name(work_gpr)
@@ -189,20 +191,19 @@ class GhidraSession:
                     f"failed to open program {target_program}: {e}"
                 ) from e
 
+            from core.security.log_sanitisation import sanitise_for_terminal
+            logger.info(
+                "opened %s/%s (%s)",
+                sanitise_for_terminal(project_name_str),
+                sanitise_for_terminal(target_program),
+                self._program.getLanguage().getLanguageDescription().getProcessor(),
+            )
         except BaseException:
             try:
-                self.close()
-            except Exception:
+                self.close(preserve_error=True)
+            except BaseException:
                 logger.warning("failed Ghidra open cleanup incomplete", exc_info=True)
             raise
-
-        from core.security.log_sanitisation import sanitise_for_terminal
-        logger.info(
-            "opened %s/%s (%s)",
-            sanitise_for_terminal(project_name_str),
-            sanitise_for_terminal(target_program),
-            self._program.getLanguage().getLanguageDescription().getProcessor(),
-        )
 
     def list_programs(self) -> list[str]:
         """List program paths in the open project (project-root
@@ -329,41 +330,49 @@ class GhidraSession:
             return None
         return self._decompile_one(func, timeout)
 
-    def close(self) -> None:
+    def close(self, *, preserve_error: bool = False) -> None:
         """Release children before parents, retaining failed obligations for retry."""
+        interrupted = None
         self._func_index = None
         if self._decomp is not None:
             try:
                 self._decomp.dispose()
-            except Exception:
+            except BaseException as exc:
+                if not isinstance(exc, Exception) and interrupted is None:
+                    interrupted = exc
                 logger.warning("Ghidra decompiler disposal incomplete", exc_info=True)
             else:
                 self._decomp = None
         if self._decomp is None and self._program is not None and self._consumer is not None:
             try:
                 self._program.release(self._consumer)
-            except Exception:
+            except BaseException as exc:
+                if not isinstance(exc, Exception) and interrupted is None:
+                    interrupted = exc
                 logger.warning("Ghidra program release incomplete", exc_info=True)
             else:
                 self._program = self._consumer = None
         if self._decomp is None and self._program is None and self._project is not None:
             try:
                 self._project.close()
-            except Exception:
+            except BaseException as exc:
+                if not isinstance(exc, Exception) and interrupted is None:
+                    interrupted = exc
                 logger.warning("Ghidra project close incomplete", exc_info=True)
             else:
                 self._project = None
         if all(item is None for item in (self._decomp, self._program, self._project)) and self._work_dir is not None:
-            if rmtree_hardened(self._work_dir):
+            if release_working_copy(self._work_dir, remove=rmtree_hardened,
+                                    preserve_error=preserve_error):
                 self._work_dir = None
-            else:
-                logger.warning("Ghidra working-copy cleanup incomplete: %r", self._work_dir)
+        if interrupted is not None and not preserve_error:
+            raise interrupted
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
-        self.close()
+        self.close(preserve_error=bool(exc and exc[0] is not None))
 
     # -- internal helpers -----------------------------------------------
 

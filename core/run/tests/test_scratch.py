@@ -512,3 +512,29 @@ def _idle_fixture_cwds(monkeypatch):
     # native integration concern. An unrelated lsof warning must not
     # turn their dead-owner/age assertions into host-dependent results.
     monkeypatch.setattr("core.run.tmp_reaper._live_cwds", lambda: set())
+
+
+
+@pytest.mark.parametrize("force_keepalive", [False, True])
+def test_explicit_parent_can_request_keepalive(tmp_path, force_keepalive):
+    import threading
+    from core.run import scratch as scratch_mod
+
+    with pytest.MonkeyPatch.context() as owner_patch:
+        stop = threading.Event()
+        paths = set()
+        owner_patch.setattr(scratch_mod, "_keepalive_paths", paths)
+        owner_patch.setattr(scratch_mod, "_keepalive_thread", None)
+        owner_patch.setattr(scratch_mod, "_keepalive_loop", lambda: stop.wait())
+        try:
+            with scratch_dir("raptor-ghidra-opt-in-", dir=tmp_path,
+                             keepalive=force_keepalive) as directory:
+                assert (str(directory) in paths) is force_keepalive
+            assert not directory.exists()
+            assert not paths
+        finally:
+            stop.set()
+            thread = scratch_mod._keepalive_thread
+            if thread is not None:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "owned explicit-parent ticker did not stop"

@@ -17,12 +17,37 @@ from pathlib import Path
 
 from core.atomic_fs import open_exclusive_artifact, rmtree_hardened
 from core.atomic_fs.fs_lock import artifact_lock
-from core.run.scratch import scratch_dir
+from core.run.scratch import scratch_dir, keepalive_unregister
 from core.source import open_regular_beneath, open_regular_gated
 
 from .detect import get_project_name
 
 logger = logging.getLogger(__name__)
+
+
+def release_working_copy(path, *, remove=None, preserve_error=False) -> bool:
+    """Unpin a closed database and independently attempt its tree removal."""
+    interrupted = None
+    unregistered = True
+    try:
+        keepalive_unregister(path)
+    except BaseException as exc:
+        unregistered = False
+        logger.warning("Ghidra keepalive teardown incomplete: %r", path, exc_info=True)
+        if not isinstance(exc, Exception):
+            interrupted = exc
+    removed = False
+    try:
+        removed = (remove or rmtree_hardened)(path)
+        if not removed:
+            logger.warning("Ghidra working-copy cleanup incomplete: %r", path)
+    except BaseException as exc:
+        logger.warning("Ghidra working-copy removal failed: %r", path, exc_info=True)
+        if not isinstance(exc, Exception) and interrupted is None:
+            interrupted = exc
+    if interrupted is not None and not preserve_error:
+        raise interrupted
+    return removed and unregistered
 
 
 def _get_xml_parser():

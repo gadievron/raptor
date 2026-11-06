@@ -47,3 +47,27 @@ def _stub_decomp_conformance(monkeypatch):
         lambda *args, **kwargs: {"stubbed": True},
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _owned_ghidra_keepalive():
+    """Own ticker resources and fail if a database owner forgets its pin."""
+    import threading
+    from core.run import scratch
+
+    with pytest.MonkeyPatch.context() as owner_patch:
+        stop = threading.Event()
+        paths = set()
+        owner_patch.setattr(scratch, "_keepalive_paths", paths)
+        owner_patch.setattr(scratch, "_keepalive_thread", None)
+        owner_patch.setattr(scratch, "_keepalive_loop", lambda: stop.wait())
+        try:
+            yield paths
+        finally:
+            stop.set()
+            thread = scratch._keepalive_thread
+            if thread is not None:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "owned Ghidra keepalive did not stop"
+            leaked = [path for path in paths if Path(path).name.startswith("raptor-ghidra-")]
+            assert not leaked, f"Ghidra owner left working-copy keepalives registered: {leaked}"

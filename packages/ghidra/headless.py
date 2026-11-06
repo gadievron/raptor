@@ -7,11 +7,11 @@ import os
 import logging
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Optional
 
 from core.security.log_sanitisation import sanitise_for_terminal
+from core.run.scratch import scratch_dir
 
 from .detect import get_project_dir, get_project_name
 from .export_script_java import EXPORT_SCRIPT_JAVA
@@ -232,21 +232,20 @@ def _refuse_symlinked_path(path: Path, what: str) -> Path:
 
 
 def _remove_created_project(project_dir: Path) -> None:
-    """Best-effort removal of a failed create's own debris.
+    """Attempt every artifact from this failed create, without masking it."""
+    from core.build.artifacts import cleanup_build_paths
+    from core.project.registry_home import refuse_registry_overlap
 
-    Only ever called on the ``raptor.*`` set this module itself just
-    created — a pre-existing project never reaches the failure paths
-    (the occupied-destination refusal runs first). Without this, a
-    half-written project makes every subsequent create refuse over
-    debris that no operator placed.
-    """
-    shutil.rmtree(project_dir / "raptor.rep", ignore_errors=True)
-    for leftover in (project_dir / "raptor.gpr",
-                     project_dir / "raptor.lock"):
+    for name in ("raptor.rep", "raptor.gpr", "raptor.lock", "raptor.lock~"):
+        path = project_dir / name
         try:
-            leftover.unlink()
-        except OSError:
-            pass
+            refuse_registry_overlap(path)
+            pending = [path]
+            cleanup_build_paths(pending)
+            if pending:
+                logger.warning("Incomplete Ghidra create artifact retained: %r", path)
+        except BaseException:
+            logger.warning("Failed Ghidra create cleanup incomplete: %r", path, exc_info=True)
 
 
 def create_project_from_binary(
@@ -294,8 +293,9 @@ def create_project_from_binary(
         gpr_path,
         gpr_path.with_suffix(".rep"),
         project_dir / "raptor.lock",
+        project_dir / "raptor.lock~",
     ):
-        if leftover.exists():
+        if leftover.exists() or leftover.is_symlink():
             raise GhidraProjectExistsError(
                 f"destination already exists: {leftover} — remove it, "
                 f"or import the existing project by passing "
@@ -303,76 +303,79 @@ def create_project_from_binary(
             )
 
     project_dir.mkdir(parents=True, exist_ok=True)
-    # JVM home/tmp inside the writable scope (see export_project for
-    # the /tmp-grant rationale).
-    with tempfile.TemporaryDirectory(
-        prefix="raptor-ghidra-create-", dir=project_dir,
-    ) as work_dir:
-        env = _jvm_scoped_env(Path(work_dir))
+    complete = False
+    try:
+        # JVM home/tmp inside the writable scope (see export_project for
+        # the /tmp-grant rationale).
+        with scratch_dir("raptor-ghidra-create-", dir=project_dir,
+                         keepalive=True) as work_path:
+            work_dir = str(work_path)
+            env = _jvm_scoped_env(Path(work_dir))
 
-        cmd = [
-            headless,
-            str(project_dir),
-            "raptor",
-            "-import", str(binary_path),
-        ]
+            cmd = [
+                headless,
+                str(project_dir),
+                "raptor",
+                "-import", str(binary_path),
+            ]
 
-        logger.info("running: %s", escape_nonprintable(" ".join(cmd)))
+            logger.info("running: %s", escape_nonprintable(" ".join(cmd)))
 
-        try:
-            # Same sandbox posture as export_project: the JVM parses
-            # an attacker-supplied binary (loader + auto-analysis) —
-            # network denied, reads restricted to system dirs, the
-            # binary's directory, the project dir, and the Ghidra
-            # install; writes scoped to the project dir.
-            from core.sandbox import run as _sandbox_run
-            result = _sandbox_run(
-                cmd,
-                block_network=True,
-                target=str(binary_path.parent),
-                output=str(project_dir),
-                restrict_reads=True,
-                readable_paths=_install_read_paths(headless),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-                # env comes from safe_subprocess_env() above —
-                # already allowlist-filtered upstream.
-                env_caller_filtered=True,
-            )
-        except subprocess.TimeoutExpired:
-            # A killed mid-create leaves partial project files that
-            # the occupied-destination refusal would blame on the
-            # operator next run — remove our own debris on every
-            # failure path.
-            _remove_created_project(project_dir)
+            try:
+                # Same sandbox posture as export_project: the JVM parses
+                # an attacker-supplied binary (loader + auto-analysis) —
+                # network denied, reads restricted to system dirs, the
+                # binary's directory, the project dir, and the Ghidra
+                # install; writes scoped to the project dir.
+                from core.sandbox import run as _sandbox_run
+                result = _sandbox_run(
+                    cmd,
+                    block_network=True,
+                    target=str(binary_path.parent),
+                    output=str(project_dir),
+                    restrict_reads=True,
+                    readable_paths=_install_read_paths(headless),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                    # env comes from safe_subprocess_env() above —
+                    # already allowlist-filtered upstream.
+                    env_caller_filtered=True,
+                )
+            except subprocess.TimeoutExpired:
+                # A killed mid-create leaves partial project files that
+                # the occupied-destination refusal would blame on the
+                # operator next run — remove our own debris on every
+                # failure path.
+                raise GhidraError(
+                    f"analyzeHeadless -import timed out after {timeout}s — "
+                    "auto-analysis on large binaries can need more; "
+                    "consider increasing timeout"
+                )
+            except OSError as e:
+                raise GhidraError(f"failed to run analyzeHeadless: {e}")
+
+        if result.returncode != 0:
+            stderr_tail = result.stderr[-500:] if result.stderr else "(no stderr)"
             raise GhidraError(
-                f"analyzeHeadless -import timed out after {timeout}s — "
-                "auto-analysis on large binaries can need more; "
-                "consider increasing timeout"
+                f"analyzeHeadless -import exited {result.returncode}:\n"
+                f"{stderr_tail}"
             )
-        except OSError as e:
+
+        if not gpr_path.is_file() or gpr_path.is_symlink():
+            raise GhidraError(
+                f"analyzeHeadless -import completed but no project was "
+                f"created at {gpr_path}:\n"
+                f"{(result.stdout or '')[-500:]}"
+            )
+
+        complete = True
+        return gpr_path
+
+    finally:
+        if not complete:
             _remove_created_project(project_dir)
-            raise GhidraError(f"failed to run analyzeHeadless: {e}")
-
-    if result.returncode != 0:
-        _remove_created_project(project_dir)
-        stderr_tail = result.stderr[-500:] if result.stderr else "(no stderr)"
-        raise GhidraError(
-            f"analyzeHeadless -import exited {result.returncode}:\n"
-            f"{stderr_tail}"
-        )
-
-    if not gpr_path.exists():
-        _remove_created_project(project_dir)
-        raise GhidraError(
-            f"analyzeHeadless -import completed but no project was "
-            f"created at {gpr_path}:\n"
-            f"{(result.stdout or '')[-500:]}"
-        )
-
-    return gpr_path
 
 
 def export_project(
@@ -414,10 +417,8 @@ def export_project(
     # private scratch under restrict_reads, so a /tmp work dir would
     # be invisible to the JVM — only target=/output= binds survive.
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="raptor-ghidra-work-", dir=output_path.parent,
-    ) as work_dir:
-        work_path = Path(work_dir)
+    with scratch_dir("raptor-ghidra-work-", dir=output_path.parent,
+                     keepalive=True) as work_path:
 
         work_gpr = prepare_working_copy(gpr_path, work_path)
         work_project_dir = str(get_project_dir(work_gpr))
@@ -574,9 +575,9 @@ def import_enrichments(
     from .import_script_java import IMPORT_SCRIPT_JAVA
     # Script dir + JVM HOME inside the output scope (see
     # export_project for the /tmp-grant rationale).
-    with tempfile.TemporaryDirectory(
-        prefix="raptor-ghidra-import-", dir=dst_dir,
-    ) as script_dir:
+    with scratch_dir("raptor-ghidra-import-", dir=dst_dir,
+                     keepalive=True) as script_root:
+        script_dir = str(script_root)
         script_path = Path(script_dir) / "ImportRaptor.java"
         script_path.write_text(IMPORT_SCRIPT_JAVA, encoding="utf-8")
         env = _jvm_scoped_env(Path(script_dir))

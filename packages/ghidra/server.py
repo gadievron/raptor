@@ -56,7 +56,8 @@ from core.source import open_regular
 
 from .detect import pyghidra_available
 from .headless import _install_read_paths
-from .project_util import prepare_working_copy
+from .project_util import prepare_working_copy, release_working_copy
+from core.run.scratch import keepalive_register
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class GhidraServer:
         self._result: Dict[str, Any] = {}
         self._req_id = 0
         self._lock = threading.Lock()
+        self._cleanup_lock = threading.Lock()
         self._boot_seq = 0
         self._restarts = 0
         self._opened_program: Optional[str] = None
@@ -151,7 +153,7 @@ class GhidraServer:
 
     def start(self) -> None:
         """Prepare the working copy and boot the sandboxed worker."""
-        if self._work_dir is not None:
+        if self._work_dir is not None or self._sock is not None or self._stream is not None or self._thread_alive():
             raise GhidraServerError(
                 "server already started — one GhidraServer per "
                 "lifecycle"
@@ -160,6 +162,7 @@ class GhidraServer:
             tempfile.mkdtemp(prefix="raptor-ghidra-server-")
         )
         try:
+            keepalive_register(self._work_dir)
             self._work_gpr = prepare_working_copy(self.gpr_path, self._work_dir)
             self._boot()
         except BaseException:
@@ -168,7 +171,7 @@ class GhidraServer:
             # restart() deliberately does NOT get this treatment —
             # a failed REBOOT must not destroy the working copy and
             # its saved enrichments.
-            self.stop()
+            self.stop(preserve_error=True)
             raise
 
     def _boot(self) -> None:
@@ -226,6 +229,10 @@ class GhidraServer:
 
     def _boot_transport(self, *, use_pathname: bool) -> None:
         """Boot one worker on the given transport (no fallback here)."""
+        if self._sock is not None or self._stream is not None:
+            self._disconnect()
+            if self._sock is not None or self._stream is not None:
+                raise GhidraServerError("transport cleanup incomplete; retry stop()")
         self._boot_seq += 1
         self._result = {}
         worker = Path(__file__).parent / "server_worker.py"
@@ -365,6 +372,11 @@ class GhidraServer:
                     with self._lock:
                         if self._child_sock is child_sock:
                             self._child_sock = None
+
+                # stop() may have returned while the sandbox call was still
+                # running. The worker is now reaped, so finish the deferred
+                # cleanup without requiring another call from the owner.
+                self._cleanup_work_dir(preserve_error=True)
 
         self._thread = threading.Thread(
             target=_serve, name="ghidra-server", daemon=True,
@@ -511,39 +523,52 @@ class GhidraServer:
             f"worker did not come up within {_BOOT_TIMEOUT_S}s"
         )
 
-    def stop(self) -> None:
-        """Shut the worker down and remove the work dir.
+    def _cleanup_work_dir(self, *, preserve_error=False) -> None:
+        with self._cleanup_lock:
+            if self._cleanup_pending and self._work_dir is not None:
+                if release_working_copy(self._work_dir, remove=rmtree_hardened,
+                                        preserve_error=preserve_error):
+                    self._work_dir = None
+                    self._work_gpr = None
+                    self._cleanup_pending = False
 
-        The socketpair child half is deliberately not closed here —
-        its owning _serve thread closes it in its finally once the
-        sandbox call returns (the join below waits for exactly that),
-        so a stop() racing an in-flight spawn can never free the fd
-        number out from under pass_fds.
+    def stop(self, *, preserve_error: bool = False) -> None:
+        """Close transport and join the worker before removing its database.
+
+        A worker still running after the bounded join owns its copy until
+        the sandbox call returns; its thread then completes pending removal.
+        The thread alone may close the inherited child socket after spawn.
         """
-        try:
-            if self._stream is not None:
+        with self._cleanup_lock:
+            already_stopping = self._cleanup_pending
+            if self._work_dir is not None:
+                self._cleanup_pending = True
+
+        def shutdown():
+            if self._stream is not None and self._work_dir is not None and not already_stopping:
                 try:
                     self._request({"op": "shutdown"}, timeout=_SHUTDOWN_GRACE_S)
                 except (OSError, GhidraServerError):
                     pass
-            self._disconnect()
+
+        def join_worker():
             if self._thread is not None:
                 self._thread.join(timeout=_SHUTDOWN_GRACE_S * 2)
                 if self._thread.is_alive():
-                    logger.warning(
-                        "ghidra server thread still alive after "
-                        "shutdown grace — sandbox timeout will "
-                        "reap it"
-                    )
-        finally:
-            if self._work_dir is not None and not self._thread_alive():
-                self._cleanup_pending = True
-                if rmtree_hardened(self._work_dir):
-                    self._work_dir = None
-                    self._work_gpr = None
-                    self._cleanup_pending = False
-                else:
-                    logger.warning("Ghidra working-copy cleanup incomplete: %r", self._work_dir)
+                    logger.warning("ghidra server thread still alive after shutdown grace — sandbox timeout will reap it")
+
+        first_error = None
+        for action in (shutdown, self._disconnect, join_worker):
+            try:
+                action()
+            except BaseException as exc:
+                logger.warning("Ghidra shutdown step incomplete", exc_info=True)
+                if first_error is None:
+                    first_error = exc
+        if not self._thread_alive():
+            self._cleanup_work_dir(preserve_error=preserve_error or first_error is not None)
+        if first_error is not None and not preserve_error:
+            raise first_error
 
     def restart(self) -> None:
         """Boot a fresh worker after the previous one died mid-run.
@@ -603,7 +628,7 @@ class GhidraServer:
         return self
 
     def __exit__(self, *exc) -> None:
-        self.stop()
+        self.stop(preserve_error=bool(exc and exc[0] is not None))
 
     # ── transport ────────────────────────────────────────────────
 
@@ -623,14 +648,25 @@ class GhidraServer:
         self._stream = sock.makefile("rwb")
 
     def _disconnect(self) -> None:
-        for closer in (self._stream, self._sock):
+        interrupted = None
+        for attribute in ("_stream", "_sock"):
+            closer = getattr(self, attribute)
             if closer is not None:
                 try:
                     closer.close()
-                except OSError:
-                    pass
-        self._stream = None
-        self._sock = None
+                except BaseException as exc:
+                    logger.warning("Ghidra transport close incomplete: %s", attribute, exc_info=True)
+                    if isinstance(exc, OSError):
+                        # Preserve the native close-error disposition: socket
+                        # and buffered-stream close can already have released
+                        # their descriptor when reporting this error.
+                        setattr(self, attribute, None)
+                    elif interrupted is None:
+                        interrupted = exc
+                else:
+                    setattr(self, attribute, None)
+        if interrupted is not None:
+            raise interrupted
 
     def _request(
         self, payload: Dict[str, Any], *, timeout: Optional[int] = None,
