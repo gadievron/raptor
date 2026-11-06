@@ -226,6 +226,21 @@ safe for a particular sink. Direct same-namespace function and constant
 shadows are excluded; this check does not resolve arbitrary PHP imports
 or dynamic reader/filter selection.
 
+For PHP include, redirect and reflection checks, calling `in_array` does
+not by itself make a request value safe. The recognized allowlist form
+uses `true` for strict comparison and an inline list of plain string
+literals. A negative check must immediately return or exit with a literal
+value, or replace the rejected value with a literal string. Ignored checks,
+blocklists and request-controlled allowlists continue to report.
+
+More complex guards, escaped/interpolated allowlist strings and dynamic
+allowlists are outside this narrow contract; safe code using those forms
+can still report. In scopes containing function imports, use the explicit
+`\in_array` built-in spelling for this guard recognition; an unqualified
+name may refer to an imported application function. The separate map-membership
+model does not yet impose the same constraints, so silence after
+`array_key_exists` or `isset` is not proof of safe validation.
+
 Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs

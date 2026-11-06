@@ -20,3 +20,10 @@ function method_dispatch($svc) {
     $m = $_GET['op'];
     return $svc->$m(); // reflection
 }
+function blocklist_does_not_validate() {
+    $fn = $_GET['action'];
+    if (in_array($fn, ['system', 'exec'], true)) {
+        die("blocked");
+    }
+    $fn("payload"); // reflection
+}
