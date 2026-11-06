@@ -41,6 +41,8 @@ import re
 import tempfile
 from pathlib import Path
 
+from core.atomic_fs import rmtree_hardened, write_new_bytes
+from core.run.scratch import scratch_dir
 from core.oci.blob import extract_files_from_layer
 from core.oci.client import OciRegistryClient, RegistryError
 from core.oci.image_ref import parse_image_ref
@@ -203,6 +205,7 @@ def fetch_image_binary(
 
     created_dir: Path | None = None
     handed_out = False
+    failed = False
     try:
         if out_dir is None:
             # Fresh mode-0700 directory per extraction — NEVER the
@@ -239,50 +242,49 @@ def fetch_image_binary(
                 "write for %s", image_ref_str,
             )
             return None
-        # O_EXCL|O_NOFOLLOW: never truncate or follow a pre-existing
-        # entry (a plain write_bytes was O_CREAT|O_TRUNC and followed
-        # symlinks — a resolve-then-write ordering an attacker's
-        # pre-created file or link wins). A pre-existing file is only
-        # reused when it is verifiably OUR earlier extraction of the
-        # same bytes.
-        try:
-            fd = os.open(
-                str(out_path),
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-            )
-        except FileExistsError:
+        # Reuse verified content before allocating staging or writing bytes.
+        # Publication below still handles a destination appearing afterwards.
+        if os.path.lexists(out_path):
             if _is_reusable_extraction(out_path, final_bytes):
                 handed_out = True
                 return out_path
-            logger.debug(
-                "sca.bump.image_binary_extract: refusing pre-existing "
-                "path %s (not our extraction)", out_path,
-            )
+            logger.debug("sca.bump.image_binary_extract: refusing pre-existing path %s", out_path)
             return None
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(final_bytes)
+        # The exclusive writer owns its descriptor even on interrupted writes.
+        # Keep partial bytes private until complete; a same-filesystem hard link
+        # publishes without overwriting contenders or copying the binary again.
+        with scratch_dir("raptor-sca-bump-write-", dir=out_dir, keepalive=True) as workspace:
+            staged = workspace / "binary"
+            write_new_bytes(staged, final_bytes, mode=0o600)
+            try:
+                os.link(staged, out_path)
+            except FileExistsError:
+                if not _is_reusable_extraction(out_path, final_bytes):
+                    logger.debug("sca.bump.image_binary_extract: refusing publication contender %s", out_path)
+                    return None
         handed_out = True
         return out_path
     except OSError as e:
+        failed = True
         logger.debug(
             "sca.bump.image_binary_extract: write failed for %s: %s",
             image_ref_str, e,
         )
         return None
+    except BaseException:
+        failed = True
+        raise
     finally:
         if created_dir is not None and not handed_out:
-            # Failure after we created the owned dir (ENOSPC-class
-            # os.open/write errors): the caller gets None and can
-            # never route the dir to cleanup_extracted_binary, so it
-            # leaks one dir per failed extraction. Remove it — and
-            # any partial write — here.
+            # Caller never received this root. Reclaim nested/restricted
+            # staging debris as well, without replacing the write failure.
             try:
-                for child in created_dir.iterdir():
-                    child.unlink()
-                created_dir.rmdir()
-            except OSError:
-                pass
+                if not rmtree_hardened(created_dir):
+                    logger.warning("Failed extraction directory retained: %s", created_dir)
+            except BaseException as exc:
+                logger.warning("Failed extraction cleanup failed: %s", created_dir, exc_info=True)
+                if not failed and not isinstance(exc, Exception):
+                    raise
 
 
 # Prefix for the per-extraction directories this module owns.

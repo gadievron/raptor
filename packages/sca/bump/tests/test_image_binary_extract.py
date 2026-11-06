@@ -622,7 +622,8 @@ class TestOwnedDirFailureCleanup:
         real_mkdtemp = mod.tempfile.mkdtemp
 
         def _tracking_mkdtemp(*a, **kw):
-            d = real_mkdtemp(*a, dir=str(tmp_path), **kw)
+            kw.setdefault("dir", str(tmp_path))
+            d = real_mkdtemp(*a, **kw)
             created.append(d)
             return d
 
@@ -631,12 +632,12 @@ class TestOwnedDirFailureCleanup:
 
         monkeypatch.setattr(mod.tempfile, "mkdtemp",
                             _tracking_mkdtemp)
-        monkeypatch.setattr(mod.os, "open", _failing_open)
+        monkeypatch.setattr(mod, "write_new_bytes", _failing_open)
 
         out = fetch_image_binary(
             "docker.io/library/test:1", client=client, out_dir=None,
         )
         assert out is None
-        assert len(created) == 1
+        assert len(created) == 2  # default output root and private staging
         from pathlib import Path as _P
-        assert not _P(created[0]).exists()   # no leaked owned dir
+        assert all(not _P(d).exists() for d in created)
