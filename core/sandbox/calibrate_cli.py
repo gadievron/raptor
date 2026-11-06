@@ -48,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Input inspection failures exit 70. "
             "Cache cleanup exits 70 if an operation fails, including partial "
             "cleanup. Entry failures do not stop other entries.\n\n"
             "Examples:\n"
@@ -222,7 +223,14 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         parser.error("--bin is required (except with --clear-all)")
 
     bin_path = Path(args.bin).expanduser()
-    if not bin_path.exists():
+    try:
+        bin_exists = bin_path.exists()
+    except OSError as exc:
+        sys.stderr.write(
+            f"raptor-sandbox-calibrate: cannot inspect {_sft(str(bin_path))}: {_sft(str(exc))}\n"
+        )
+        return _SOFTWARE_EX
+    if not bin_exists:
         sys.stderr.write(
             f"raptor-sandbox-calibrate: {_sft(str(bin_path))}: not found\n"
         )

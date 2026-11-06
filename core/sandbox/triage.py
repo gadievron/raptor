@@ -1384,6 +1384,9 @@ def _cli_main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Exit status: 0 for clean or empty input, 1 for input/report "
+            "failures, 2 for argument errors, 3 for notable and 4 for "
+            "suspicious verdicts.\n\n"
             "Examples:\n"
             "  raptor-sandbox-triage /path/to/run\n"
             "  raptor-sandbox-triage /path/to/run --json --deep"
@@ -1420,7 +1423,15 @@ def _cli_main(argv: list | None = None) -> int:
         return exc.code if isinstance(exc.code, int) else 2
 
     target = Path(args.run_dir)
-    if not target.is_dir():
+    try:
+        target_is_dir = target.is_dir()
+    except OSError as exc:
+        print(
+            f"error: cannot inspect {sanitise_for_terminal(str(target))}: "
+            f"{sanitise_for_terminal(str(exc))}", file=sys.stderr,
+        )
+        return 1
+    if not target_is_dir:
         print(f"error: {sanitise_for_terminal(str(target))} is not a directory", file=sys.stderr)
         return 1
 

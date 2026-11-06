@@ -1899,7 +1899,13 @@ def _cli_main(argv: list | None = None) -> int:
     from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
     target = Path(args.path)
-    if not target.is_dir():
+    try:
+        target_is_dir = target.is_dir()
+    except OSError as exc:
+        print(f"error: cannot inspect {_sft(str(target))}: {_sft(str(exc))}",
+              file=sys.stderr)
+        return 1
+    if not target_is_dir:
         print(f"error: {_sft(str(target))} is not a directory", file=sys.stderr)
         return 1
 
