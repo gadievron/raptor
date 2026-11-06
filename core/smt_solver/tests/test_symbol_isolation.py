@@ -26,12 +26,11 @@ def test_call_placeholders_are_disjoint_from_source_names(conditions):
     assert not source_names.intersection(result.anon_var_map)
 
 
-def test_shared_call_value_contract_still_detects_a_contradiction():
-    # Existing SSA-style dedup is a model assumption, not a purity proof.
+def test_repeated_opaque_calls_remain_distinct_from_each_other_and_source_names():
     result = check_path_feasibility([PathCondition("read_value() == 1", 0), PathCondition("read_value() == 2", 1),
                                      PathCondition("_anon_0 == 0", 2)], profile=BV_C_UINT32)
-    assert result.feasible is False
-    assert len(result.anon_var_map) == 1
+    assert result.feasible is True
+    assert len(result.anon_var_map) == 2
     assert "_anon_0" not in result.anon_var_map
 
 

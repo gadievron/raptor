@@ -66,46 +66,27 @@ Function-call subterms (``strlen(input)``, ``getpid()``, ...) are
 recovered through a free-variable fallback: each balanced
 ``<ident>(...)`` subterm is replaced with an ``_anon_N`` Z3 variable
 before parsing, so the rest of the condition can still contribute to
-feasibility analysis.  Textually-identical calls *within one
-``check_path_feasibility`` batch* (whether in the same condition string
-or across conditions in the list) share a single placeholder — the
-LLM's textual repetition of ``strlen(input)`` is read as intent that
-both references denote the same value, matching how a human writer
-would mean it.  Across separate ``check_path_feasibility`` calls the
-state resets; two batches that both mention ``strlen(input)`` allocate
-independent vars, preserving the conservative impure-call default for
-batch boundaries where the LLM has no way to express same-value intent.
+feasibility analysis. Each syntactic call occurrence receives a distinct
+result, even when its text matches another occurrence in the same guard.
+Text equality, scalar SSA names, and unchanged pointer arguments do not
+establish referential transparency or unchanged memory. When conditions
+refer to the same evaluation, the caller must name its result explicitly
+(e.g. ``Result > 100`` and ``Result < 50``).
 A conservative set of libc/POSIX calls additionally gets a *summary
 axiom* asserted on its placeholder (``strlen(...) >= 0`` at signed
 profiles, ``sizeof(...) != 0``, ``abs``-family with the INT_MIN corner,
 ``min``/``max`` as ITE definitions, and literal ``strnlen`` bounds) — see ``_CALL_SUMMARIES``; applied
 axioms are reported in ``PathSMTResult.summary_axioms``.
 
-This dedup contract assumes the conditions reflect an SSA view of the
-path: every appearance of an identifier denotes the same value.  A
-real CFG that mutates an identifier between guards
-(``input = realloc(input, n)``) violates that assumption.  Two
-defences:
+Deterministic definition summaries can relate separate results through the
+same modeled arguments, without assuming identity from text. Range-only
+summaries leave occurrences independent. These callee models remain
+explicit assumptions, not source signatures or effect proofs.
 
-  1. *Preferred — caller SSA-renames across mutations.*  Emit
-     ``strlen(input_pre) > 100`` then ``strlen(input_post) < 50``
-     instead of the same ``strlen(input)`` text twice.  Distinct text
-     → distinct placeholders → solver models the mutation correctly.
-     The LLM prompts in ``packages/codeql/dataflow_validator.py``
-     and ``packages/llm_analysis/prompts/schemas.py`` instruct the
-     extractor to do this.
-
-  2. *Defence-in-depth — assignment-shape barrier.*  Conditions that
-     contain a top-level assignment (``=``), compound-assignment
-     (``+=`` / ``-=`` / ...), or increment/decrement (``++`` / ``--``)
-     token are routed to :data:`RejectionKind.ASSIGNMENT_SHAPED`.
-     :func:`check_path_feasibility` then resets the call-dedup window
-     at that step so identical-text calls *after* the mutation
-     allocate fresh placeholders.  This catches the common case where
-     the LLM emits the program statement verbatim
-     (``input = realloc(input, n)``) without SSA-renaming the
-     surrounding guards — the verdict goes to "feasible (post-mutation
-     calls allocated fresh)" rather than a false refutation.
+Named scalar values still require an SSA view. Assignment-shaped input is
+rejected as a program effect and marks a new value-flow segment. An UNSAT
+core crossing that unmodeled mutation cannot refute the path; independent
+contradictions wholly within one segment may still do so.
 
 Other limitations of the uniform-profile model:
 
@@ -599,10 +580,8 @@ def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
 
 # Detects program-statement shapes that aren't valid Boolean path-
 # conditions. Matches route to RejectionKind.ASSIGNMENT_SHAPED so
-# check_path_feasibility can break the call-dedup window at that
-# step (textually-identical ``strlen(input)`` references before vs
-# after a ``realloc`` must be modelled as two free variables, not
-# one).
+# check_path_feasibility can mark a new value-flow segment and refuse
+# scalar contradictions that cross an unmodeled state update.
 #
 # Coverage is a mix of *designed* matches (operators we explicitly
 # enumerate in the regex) and *incidental* matches (operators that
@@ -682,9 +661,9 @@ _ASSIGNMENT_SHAPED_RE = re.compile(
 #     instead of pretending ``abs`` is always non-negative.
 #   * ``sizeof`` is modelled as ``!= 0`` (C guarantees sizeof >= 1); the
 #     form is signedness-neutral so it is asserted at every profile.
-# Like the call-dedup contract above, axioms model *writer intent* under
-# the SSA reading of the conditions — they are assumptions, surfaced to
-# consumers via ``PathSMTResult.summary_axioms``.
+# Axioms are explicit callee-model assumptions, surfaced to consumers via
+# ``PathSMTResult.summary_axioms``. They do not establish call purity or
+# unchanged memory; each occurrence receives its own result and axiom.
 
 _MAX_SUMMARY_ARGS_CHARS = 200
 
@@ -800,7 +779,6 @@ def _summarise_call(
 def _substitute_calls(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
     anon_map: dict[str, str] | None = None,
-    dedup_window: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with free Z3 variables.
@@ -814,82 +792,16 @@ def _substitute_calls(
     (``f(g(x))`` → ``_anon_0``), since the outer call drives the
     balanced-paren walk.
 
-    **Dedup contract.** Textually-identical call substrings share one
-    placeholder within a single ``_substitute_calls`` invocation, and —
-    when ``anon_map`` is supplied — across all invocations that share
-    that map (the call ``_anon_N → call-text`` mapping doubles as a
-    dedup oracle).  Pre-fix every match allocated a fresh placeholder,
-    so ``strlen(input) > 100 AND strlen(input) < 50`` across two
-    conditions in one ``check_path_feasibility`` batch encoded as
-    ``_anon_0 > 100 AND _anon_1 < 50`` — trivially satisfiable when
-    the two ``strlen(input)`` texts were meant to denote one value.
-    Reusing the placeholder when the call text exactly matches an
-    earlier subterm makes the encoding model writer intent: the LLM
-    re-typing ``strlen(input)`` reads as "same expression, same
-    value".  The conservative impure-call default is preserved at
-    *batch boundaries* — different ``check_path_feasibility`` calls
-    allocate fresh state — because that's the only granularity at
-    which the LLM has no syntactic way to spell shared identity.
+    Each syntactic occurrence gets a fresh result. Repeated text is not
+    proof of the same evaluation, call purity, or unchanged memory. The
+    optional anon_map records occurrence labels only; it is never an alias
+    oracle. Definition summaries may independently equate results through
+    their modeled arguments, while range summaries leave them independent.
 
-    Dedup is by literal text equality, so whitespace differences
-    (``strlen(s)`` vs ``strlen( s )``) and argument-form differences
-    (``strlen(a)`` vs ``strlen(b)``) stay distinct.
-
-    **SSA assumption.** Dedup assumes the conditions reflect an SSA
-    view of the path: every appearance of an identifier denotes the
-    same value.  A real CFG that mutates an identifier between
-    guards (``input = realloc(input, n)``) violates this — two
-    ``strlen(input)`` references straddling that mutation refer to
-    different memory.  The caller must SSA-rename across mutations
-    (``strlen(input_pre)`` / ``strlen(input_post)``) so dedup matches
-    intent, OR rely on :func:`check_path_feasibility` to detect
-    assignment-shaped conditions (via
-    :data:`RejectionKind.ASSIGNMENT_SHAPED`) and break the
-    ``dedup_window`` at each mutation step — see
-    :func:`check_path_feasibility` for that defence-in-depth layer.
-
-    Unbalanced parens (``strlen(x``) are left in place; the caller's
-    parens-check still rejects them.
-
-    When ``anon_map`` is supplied, each new ``_anon_N`` allocated
-    here is recorded with the original substring it replaced
-    (``anon_map["_anon_0"] = "strlen(argv[1])"``).  Threaded through
-    ``_parse_condition`` and ``_classify_text_condition`` from
-    ``check_path_feasibility`` so the final ``PathSMTResult`` can
-    surface meaningful labels for the witness model.  ``anon_map``
-    accumulates ALL placeholder→call-text bindings allocated across
-    every invocation that shares it — including across mutation
-    barriers — because labels are global per-result.
-
-    ``dedup_window`` is the optional source-of-truth for *which*
-    placeholders the current invocation may reuse.  Distinct from
-    ``anon_map`` so the caller can scope dedup to a window narrower
-    than the full label store: pass a fresh dict per call to disable
-    cross-call dedup, pass a shared dict spanning every call in a
-    batch to enable it, ``.clear()`` between calls at a mutation
-    barrier to reset the window.  When ``dedup_window`` is omitted
-    and ``anon_map`` is supplied, dedup falls back to inverting
-    ``anon_map`` (the pre-D2 behaviour, preserving backward
-    compatibility for callers that don't manage their own window).
-    When both are omitted, dedup is intra-invocation only.
+    Unbalanced parentheses are left for the condition parser to reject.
     """
     reserve_anon_names([text], vars_)
     counter = _next_anon_index(vars_)
-    # Reverse lookup from call-text to existing placeholder.
-    # Preference order (most to least specific):
-    #   1. caller-supplied `dedup_window` — explicit dedup scope,
-    #      lets the caller widen or narrow as needed (e.g.
-    #      check_path_feasibility resets at each mutation barrier).
-    #   2. derived from `anon_map` — pre-D2 behaviour, preserves
-    #      back-compat for callers that don't manage their own
-    #      window. Dedup spans every call that shares the anon_map.
-    #   3. local dict — dedup is intra-invocation only.
-    if dedup_window is not None:
-        rev = dedup_window
-    elif anon_map is not None:
-        rev = {v: k for k, v in anon_map.items()}
-    else:
-        rev = {}
     out: list[str] = []
     i = 0
     n = len(text)
@@ -899,11 +811,6 @@ def _substitute_calls(
             j = find_call_end(text, m.end())
             if j is not None:
                 call_text = text[i:j]
-                existing = rev.get(call_text)
-                if existing is not None:
-                    out.append(existing)
-                    i = j
-                    continue
                 while f'_anon_{counter}' in vars_:
                     counter += 1
                 placeholder = f'_anon_{counter}'
@@ -911,11 +818,7 @@ def _substitute_calls(
                 vars_[placeholder] = _mk_var(placeholder, profile.width)
                 if anon_map is not None:
                     anon_map[placeholder] = call_text
-                rev[call_text] = placeholder
-                # Summary axioms attach at allocation time only — a
-                # dedup reuse above re-references a var whose axiom is
-                # already recorded, and a fresh post-mutation-barrier
-                # placeholder gets its own assertion.
+                # Report the assumption separately for every occurrence.
                 if axiom_sink is not None:
                     summary = _summarise_call(
                         text[i:m.end()],
@@ -955,7 +858,6 @@ def _substitute_calls(
 def _parse_condition(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
     anon_map: dict[str, str] | None = None,
-    dedup_window: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
 ) -> Any | Rejection:
     """Parse a single condition string into a Z3 boolean expression.
@@ -997,10 +899,9 @@ def _parse_condition(
     # Reject program-statement shapes (assignment, compound assignment,
     # increment/decrement) BEFORE call substitution — they aren't
     # Boolean guards and routing them to ASSIGNMENT_SHAPED lets
-    # check_path_feasibility break the call-dedup window at this step
-    # (so two `strlen(input)` references straddling an `input = ...`
-    # mutation get distinct placeholders rather than colliding under
-    # the SSA assumption). The detection is purely textual; the regex
+    # check_path_feasibility mark a new scalar value-flow segment rather
+    # than proving a contradiction across an unmodeled mutation.
+    # The detection is purely textual; the regex
     # carefully excludes the `==` / `<=` / `>=` / `!=` relational ops.
     if _ASSIGNMENT_SHAPED_RE.search(canonicalised):
         return Rejection(
@@ -1017,7 +918,7 @@ def _parse_condition(
         )
     t = _substitute_calls(
         canonicalised, vars_, profile=profile,
-        anon_map=anon_map, dedup_window=dedup_window,
+        anon_map=anon_map,
         axiom_sink=axiom_sink,
     )
 
@@ -1135,7 +1036,6 @@ def _classify_text_condition(
     *,
     profile: BVProfile,
     anon_map: dict[str, str] | None = None,
-    dedup_window: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
 ) -> tuple[str | None, tuple[str, Any] | None, Rejection | None]:
     """Parse one text condition and classify it.
@@ -1153,14 +1053,10 @@ def _classify_text_condition(
     an optional tautology query. All call-summary and rejection handling stays
     active.
 
-    ``dedup_window`` is threaded through to :func:`_substitute_calls`
-    so the call-dedup scope is controllable by the outer iteration
-    (see :func:`check_path_feasibility` for how it's reset at
-    assignment-shaped barriers).
     """
     expr = _parse_condition(
         cond.text, vars_, profile=profile,
-        anon_map=anon_map, dedup_window=dedup_window,
+        anon_map=anon_map,
         axiom_sink=axiom_sink,
     )
     if isinstance(expr, Rejection):
@@ -1206,23 +1102,21 @@ def _classify_conditions(
 ) -> _ConditionBatch:
     """Parse a complete guard frame without dropping its background theory.
 
-    Reserve source names before allocating any placeholders. Calls share the
-    existing SSA-style identity only within each mutation-free window. An
-    assignment-shaped rejection ends that window without erasing labels or
-    axioms already collected. Every rejection remains visible to the caller.
+    Reserve source names before allocating fresh call occurrences. An
+    assignment-shaped rejection advances the scalar value-flow segment
+    without erasing labels or axioms. Every rejection remains visible.
     Each predicate and axiom retains its mutation-free segment so a native
     unsat core can establish an independent contradiction. A None solver
     disables only optional tautology queries.
     """
     reserve_anon_names([cond.text for cond in conditions], vars_)
     batch = _ConditionBatch()
-    dedup_window: dict[str, str] = {}
     epoch = 0
     for cond in conditions:
         previous_axioms = len(batch.axioms)
         sat_display, pending_pair, rejection = _classify_text_condition(
             cond, vars_, solver, profile=profile,
-            anon_map=batch.anon_map, dedup_window=dedup_window,
+            anon_map=batch.anon_map,
             axiom_sink=batch.axioms,
         )
         batch.axiom_epochs.extend([epoch] * (len(batch.axioms) - previous_axioms))
@@ -1232,7 +1126,6 @@ def _classify_conditions(
             batch.unknown.append(cond.text)
             batch.rejections.append(rejection)
             if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
-                dedup_window.clear()
                 epoch += 1
         else:
             assert pending_pair is not None

@@ -143,12 +143,10 @@ class RejectionKind(str, Enum):
     expects an SSA-renamed view where every reference to a name
     denotes the same value, but an assignment between two guards on
     the same name means later occurrences refer to a DIFFERENT value.
-    Path-validator entry points use this kind to break the call-dedup
-    window: textually-identical free-variable calls (``strlen(input)``)
-    do NOT dedup across an assignment-shaped step, so a path like
-    ``[strlen(input) > 100, input = realloc(input,...), strlen(input)
-    < 50]`` evaluates to feasible (the two ``strlen(input)`` denote
-    different post-mutation values), not a false refutation."""
+    Path-validator entry points use this kind to mark value-flow segments.
+    A native UNSAT core crossing an unmodeled mutation cannot refute the
+    path. Independent contradictions within one segment remain useful.
+    Call occurrences are always fresh, regardless of mutation markers."""
 
 
 # RejectionKinds that no encoder emits any more but that we've kept in

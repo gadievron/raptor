@@ -24,7 +24,7 @@ def verb_query(texts, profile, reduce):
 
 @pytest.mark.parametrize("reduce", [True, False])
 @pytest.mark.parametrize("texts,expected", [
-    (["probe(Data) == 1", "probe(Data) == 2"], False),
+    (["probe(Data) == 1", "probe(Data) == 2"], True),
     (["probe(Data) == 1", "probe(Other) == 2"], True),
     (["probe(Data) == 1", "Probe(Data) == 2"], True),
     (["strlen(Data) < 0"], False),
@@ -34,7 +34,7 @@ def verb_query(texts, profile, reduce):
     (["abs(Value) == -1"], False),
     (["abs(Value) == -128", "Value == -128"], True),
     (["project_size(Data) < 0"], True),
-], ids=["shared-call", "different-args", "case-sensitive-call", "nonnegative", "sizeof", "min", "max",
+], ids=["separate-occurrences", "different-args", "case-sensitive-call", "nonnegative", "sizeof", "min", "max",
         "abs-negative", "abs-minimum", "unknown-call"])
 def test_path_and_intrinsic_guards_agree(texts, expected, reduce):
     path = paths.check_path_feasibility(conditions(texts), profile=BV_C_INT8, reduce_constraints=reduce)
@@ -98,14 +98,14 @@ def test_summary_that_is_vacuous_for_unsigned_profiles_is_not_reported(reduce):
 
 
 @pytest.mark.parametrize("reduce", [True, False])
-def test_negated_guard_reuses_the_same_call_identity(reduce):
+def test_negated_guard_preserves_explicit_scalar_identity(reduce):
     import z3
-    guards = [paths.PathCondition("probe(Data) == 1", 0),
-              paths.PathCondition("probe(Data) == 1", 1, negated=True)]
+    guards = [paths.PathCondition("Result == 1", 0),
+              paths.PathCondition("Result == 1", 1, negated=True)]
     result = paths.check_verb_feasibility([("intrinsic true", z3.BoolVal(True))], guards, {},
                                          profile=BV_C_INT8, reduce_constraints=reduce)
     assert result.feasible is False
-    assert set(result.unsatisfied) == {"probe(Data) == 1", "NOT (probe(Data) == 1)"}
+    assert set(result.unsatisfied) == {"Result == 1", "NOT (Result == 1)"}
 
 
 @pytest.mark.parametrize("profile,values", [(BV_C_INT8, [-5, 0, 7]), (BV_C_UINT8, [0, 7, 250])],
