@@ -15,16 +15,25 @@ class FrozenDatetime(datetime):
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
-    monkeypatch.setattr(summary, 'datetime', FrozenDatetime)
-    monkeypatch.setattr(summary, '_active_run_dir', None)
-    monkeypatch.setattr(summary, '_evidence_handle', None)
-    monkeypatch.setattr(summary, '_floor_refusals', {
-        key: list(records) for key, records in summary._floor_refusals.items()})
-    monkeypatch.setattr(summary, '_evidence_inode_mismatches', dict(summary._evidence_inode_mismatches))
-    monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
+def owned_state(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+        monkeypatch.setattr(summary, 'datetime', FrozenDatetime)
+        monkeypatch.setattr(summary, '_active_run_dir', None)
+        monkeypatch.setattr(summary, '_evidence_handle', None)
+        monkeypatch.setattr(summary, '_floor_refusals', {
+            key: list(records) for key, records in summary._floor_refusals.items()})
+        monkeypatch.setattr(summary, '_evidence_inode_mismatches', dict(summary._evidence_inode_mismatches))
+        monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    """Undo body patches before restoring the file-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def refuse(run, reason):

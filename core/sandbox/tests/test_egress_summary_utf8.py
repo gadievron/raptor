@@ -9,8 +9,17 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+def owned_state(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    """Undo body patches before restoring the file-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def event(host='example.test', **fields):

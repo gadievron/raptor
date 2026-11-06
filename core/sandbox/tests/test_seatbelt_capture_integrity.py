@@ -10,11 +10,20 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
-    monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
-    monkeypatch.setattr(summary, '_evidence_inode_mismatches', dict(summary._evidence_inode_mismatches))
+def owned_state(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+        monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
+        monkeypatch.setattr(summary, '_evidence_inode_mismatches', dict(summary._evidence_inode_mismatches))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    """Undo body patches before restoring the file-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.mark.parametrize('failure', ['truncate', 'replace', 'close'])
