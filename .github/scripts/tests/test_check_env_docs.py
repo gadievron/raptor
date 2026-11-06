@@ -662,3 +662,12 @@ def test_broker_scan_preserves_borrowed_import_path(det, tmp_path, monkeypatch, 
             det.scan_tree(root)
     assert sys.path is caller
     assert caller == original
+
+
+@pytest.mark.parametrize("table", ["_LLM_NATIVE_KEYS", "_LLM_CLOUD_KEYS"])
+def test_lazy_credential_tables_preserve_public_policy_inventory(det, tmp_path, table):
+    root = _tree(tmp_path, {"core/config/__init__.py": (
+        f'class Config:\n    {table} = ("EXAMPLE_API_KEY",)\n'
+    )})
+    inv = det.scan_tree(root)
+    assert _kinds(inv, "EXAMPLE_API_KEY") == ["declared:LLM_API_KEY_VARS"]
