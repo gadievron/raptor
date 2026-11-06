@@ -50,7 +50,7 @@ import logging
 import os
 import struct
 from pathlib import Path
-from typing import NamedTuple
+from typing import BinaryIO, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ _EOCD_SEARCH_BYTES = 65557
 
 
 def peek_eocd(
-    source: "Path | str | bytes | os.PathLike[str]",
+    source: "Path | str | bytes | os.PathLike[str] | BinaryIO",
 ) -> EocdSummary | None:
     """Read the EOCD pre-flight from ``source`` and return the zip's
     declared totals (entry count + central-directory size), or
@@ -158,6 +158,8 @@ def peek_eocd(
         and seek-read the trailing bytes.
       * ``bytes`` — an in-memory zip; we read trailing bytes from
         the buffer directly.
+      * a seekable binary stream — preflight the held input without
+        reopening its path; its original position is restored.
 
     A ``None`` return means "couldn't parse the EOCD record" — the
     caller should fall through to ``zipfile.ZipFile()`` which will
@@ -169,6 +171,8 @@ def peek_eocd(
     parse cleanly, :func:`bomb_shaped_reason` over the returned
     summary fires the caller's gate.
     """
+    if hasattr(source, "read") and hasattr(source, "seek"):
+        return _peek_from_stream(source)
     if isinstance(source, (bytes, bytearray)):
         return _peek_from_bytes(bytes(source))
     return _peek_from_path(Path(source))
@@ -185,6 +189,23 @@ def peek_total_entries(
     """
     summary = peek_eocd(source)
     return summary.entries_total if summary is not None else None
+
+
+def _peek_from_stream(fh: BinaryIO) -> EocdSummary | None:
+    """Preflight the same held file ZipFile will read; preserve its position."""
+    original = fh.tell()
+    try:
+        fh.seek(0, 2)
+        size = fh.tell()
+        if size < 22:
+            return None
+        read_len = min(size, _EOCD_SEARCH_BYTES)
+        fh.seek(size - read_len)
+        return _parse_eocd(fh.read(read_len), total_size=size, fh=fh)
+    except (OSError, ValueError, struct.error):
+        return None
+    finally:
+        fh.seek(original)
 
 
 def _peek_from_path(zip_path: Path) -> EocdSummary | None:
