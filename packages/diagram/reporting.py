@@ -83,12 +83,14 @@ def capture_directory_blocks(output_dir: Path) -> list[Block]:
         return [Block("paragraph", title="Additional diagrams",
                       text="Diagram capture unavailable; the finding results and other report sections are retained.",
                       extensions={"raptor.diagram_export": True})]
-    # Summary pies have a typed equivalent with the exact report population.
-    content = re.sub(r"(?ms)^## Findings Summary\n.*?(?=^## |\Z)", "", content)
     blocks = []
     fence = re.compile(r"(?ms)^```mermaid\n(.*?)^```[ \t]*$")
     for match in re.finditer(r"(?ms)^## ([^\n]+)\n(.*?)(?=^## |\Z)", content):
         title, body = match.groups()
+        # Summary pies already have a typed equivalent for this population.
+        # Filter during the existing section walk instead of rescanning text.
+        if title == "Findings Summary":
+            continue
         sources = [m.group(1).strip() for m in fence.finditer(body)]
         prose = fence.sub("", body).strip()
         if not sources:
