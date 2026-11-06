@@ -983,6 +983,40 @@ def test_macro_recovery_without_whole_view_line_lists(tmp_path, trailing_newline
     ]
 
 
+@pytest.mark.parametrize('source, expected', [
+    ('DEFINE_HANDLER/**/(alpha)\n', True),
+    ('DEFINE_HAND\\\nLER(alpha)\n', True),
+    ('DEFINE_HAND\\\r\nLER/**/(alpha)\r\n', True),
+    ('DEFINE_HANDLER // comment\n(alpha)\n', True),
+    ('    DEFINE_HANDLER/**/(alpha)\n', False),
+    ('void f(void) { DEFINE_HANDLER/**/(alpha); }\n', False),
+    ('void ordinary(void) {}\n', False),
+])
+def test_checklist_macro_gate_uses_shared_normalization_with_column_zero_policy(tmp_path, monkeypatch, source, expected):
+    (tmp_path / 'a.c').write_text(source)
+    checklist = {'files': [{'path': 'a.c', 'items': []}]}
+    calls = []
+
+    def recover(**kwargs):
+        calls.append(kwargs['file_path'])
+        return [MacroDefinedFunction('handler_alpha', 'a.c', 1)]
+
+    monkeypatch.setattr(pv, 'recover_macro_defined_functions', recover)
+    added = augment_checklist_with_macro_functions(checklist, tmp_path)
+    assert added == int(expected)
+    assert calls == (['a.c'] if expected else [])
+
+
+@needs_cpp
+def test_native_checklist_recovers_spliced_definition_macro(tmp_path, sandbox_spy):
+    _probe_cpp(tmp_path, sandbox_spy, context='spliced definition macro')
+    target = _target_with(tmp_path, 'handlers.h')
+    (target / 'generated.c').write_text('#include "handlers.h"\nDEFINE_HAND\\\nLER/**/(alpha)\n')
+    checklist = {'files': [{'path': 'generated.c', 'items': []}]}
+    assert augment_checklist_with_macro_functions(checklist, target, out_dir=tmp_path / 'out') == 1
+    assert [item['name'] for item in checklist['files'][0]['items']] == ['handler_alpha']
+
+
 def test_macro_recovery_counts_only_newline_for_attribution(tmp_path):
     (tmp_path / 'macros.c').write_text('DEFINE(real)\n')
     view = ExpandedView(

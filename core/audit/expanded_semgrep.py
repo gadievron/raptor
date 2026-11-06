@@ -57,6 +57,7 @@ from .preprocessor_view import (
     _AUGMENT_FILE_CAP,
     _CXX_SUFFIXES,
     _macro_flags,
+    _macro_candidate,
     ExpandedView,
     expand_translation_unit,
 )
@@ -81,7 +82,6 @@ _SEMGREP_TIMEOUT_S = 120
 # bodies (``LIST_FOREACH(...)``, ``SPIN_LOCK(...)``), so the same
 # heuristic is relaxed to a word boundary anywhere on the line.
 _MACRO_USE_RE = re.compile(r"\b[A-Z_][A-Z0-9_]{2,}\s*\(")
-_MACRO_COMMENT_RE = re.compile(r"\b[A-Z_][A-Z0-9_]{2,}\s*/[/*]")
 
 
 def is_c_family(file_path: str) -> bool:
@@ -91,22 +91,7 @@ def is_c_family(file_path: str) -> bool:
 
 def has_macro_invocation(text: str) -> bool:
     """Does *text* contain a function-like ALL_CAPS macro invocation?"""
-    text = text or ""
-    if _MACRO_USE_RE.search(text):
-        return True
-    # This is an over-approximate gate, not a lexical proof: preserve every
-    # existing positive, then recover ordinary C preprocessing spellings.
-    # Phase-2 continuations join tokens before comments become whitespace.
-    logical = text.replace("\\\r\n", "").replace("\\\n", "")
-    if logical != text and _MACRO_USE_RE.search(logical):
-        return True
-    if not _MACRO_COMMENT_RE.search(logical):
-        return False
-    from .source_view import sanitized_view
-
-    # Keep strings and conditional code: macro configuration is only known
-    # to the real preprocessor, which remains authoritative for this pass.
-    return bool(_MACRO_USE_RE.search(sanitized_view(logical, language="cpp", keep_strings=True)))
+    return _macro_candidate(text, _MACRO_USE_RE)
 
 
 # ---------------------------------------------------------------------------
