@@ -33,14 +33,18 @@ _DENIED_PREFIXES = ("denied_", "would_deny_")
 
 _FAILED_RESULTS = frozenset({
     "dns_failed", "upstream_failed", "timed_out",
-    "bad_request", "handler_error", "refused_capacity",
+    "bad_request", "handler_error", "refused_capacity", "parser_unavailable",
 })
 
 log = logging.getLogger(__name__)
 
 
-def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
-    """Read bounded JSONL; this convenience summary does not verify MACs."""
+def _read_proxy_events(
+    run_dir: Path, *, issues: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Read bounded JSONL and retain loss reasons; does not verify MACs."""
+    if issues is None:
+        issues = set()
     data = read_capped(run_dir / PROXY_EVENTS_FILENAME, _MAX_INPUT_BYTES)
     if data is None:
         return []
@@ -53,8 +57,10 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
     with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="surrogateescape") as fh:
         for i, line in enumerate(fh):
             if i >= _MAX_LINES:
+                issues.add("line_limit")
                 break
             if len(line) > _MAX_LINE_CHARS:
+                issues.add("oversized_record")
                 continue
             line = line.strip()
             if not line:
@@ -66,7 +72,10 @@ def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
                 obj = json.loads(line, object_pairs_hook=_unique_evidence_object)
                 if isinstance(obj, dict):
                     events.append(obj)
+                else:
+                    issues.add("nonobject_record")
             except (ValueError, RecursionError):
+                issues.add("malformed_record")
                 continue
     return events
 
@@ -92,14 +101,26 @@ def _valid_proxy_event(event: dict[str, Any]) -> bool:
 
 
 def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
-    """Build the egress summary dict. Returns None if no events exist."""
-    raw_events = _read_proxy_events(run_dir)
+    """Aggregate usable events, with optional known-input-loss metadata.
+
+    Returns None when no connection events are usable. Partial results add
+    input_incomplete/input_issues; absence of these fields is not provenance
+    verification or proof that the producer captured every connection.
+    """
+    issues: set[str] = set()
+    raw_events = _read_proxy_events(run_dir, issues=issues)
     if not raw_events:
         return None
 
-    events = [e for e in raw_events
-              if _valid_proxy_event(e)
-              and e["result"] not in _CONTROL_PLANE_RESULTS]
+    events = []
+    for event in raw_events:
+        if not _valid_proxy_event(event):
+            issues.add("malformed_fields")
+            continue
+        if event["result"] == "buffer_overflow":
+            issues.add("producer_overflow")
+        if event["result"] not in _CONTROL_PLANE_RESULTS:
+            events.append(event)
     if not events:
         return None
 
@@ -164,7 +185,7 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
     unique_hosts = {host for host, _port in by_host if host is not None}
 
     total = total_allowed + total_denied + total_failed
-    return {
+    summary = {
         "total_connections": total,
         "allowed": total_allowed,
         "denied": total_denied,
@@ -174,6 +195,10 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         "total_bytes_out": total_bytes_out,
         "hosts": sorted(by_host.values(), key=lambda e: e["host"]),
     }
+    if issues:
+        summary["input_incomplete"] = True
+        summary["input_issues"] = sorted(issues)
+    return summary
 
 
 def _format_bytes(n: int) -> str:
@@ -206,6 +231,13 @@ def finalize_egress_summary(output_dir: Path) -> dict[str, Any] | None:
             out_path,
             json.dumps(summary, indent=2, default=str) + "\n",
         )
+
+        if summary.get("input_incomplete"):
+            log.warning(
+                "egress summary uses partial input (%s); "
+                "counts cover accepted records only",
+                ", ".join(summary["input_issues"]),
+            )
 
         denied = summary["denied"]
         failed = summary["failed"]
