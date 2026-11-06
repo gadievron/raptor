@@ -263,3 +263,54 @@ def test_execution_summary_retains_diagnostics_without_coverage_files(tmp_path):
         'Scan execution: partial (1 failed tool invocation(s); '
         '2 coverage limitation(s); 3 report issue(s))'
     )
+
+
+@pytest.mark.parametrize('counts', [{}, {'semgrep': 0}, {'semgrep': True}, {'semgrep': -1}, {'semgrep': '9'}])
+def test_authoritative_tool_counts_do_not_fall_back_to_rule_names(tmp_path, counts):
+    _write(tmp_path, 'coverage-semgrep.json', {'tool': 'semgrep'})
+    _write(tmp_path, 'scan_metrics.json', {
+        'findings_by_tool': counts,
+        'findings_by_rule': {'engine.semgrep.example': 9},
+    })
+    assert '0 findings' in render_scan_coverage(tmp_path)
+
+
+@pytest.mark.parametrize('malformed', [[], 'invalid', 42, False])
+def test_malformed_record_cannot_hide_sibling_or_execution_summary(tmp_path, malformed):
+    _write(tmp_path, 'coverage-semgrep.json', malformed)
+    _write(tmp_path, 'coverage-codeql.json', {'tool': 'codeql'})
+    _write(tmp_path, 'scan_metrics.json', {'execution_status': 'partial'})
+    text = render_scan_coverage(tmp_path)
+    assert 'CodeQL' in text
+    assert 'Semgrep' not in text
+    assert 'Scan execution: partial' in text
+
+
+def test_tool_issue_paths_are_visible_once_without_echoing_diagnostics(tmp_path):
+    _write(tmp_path, 'coverage-codeql.json', {
+        'tool': 'codeql',
+        'rules_applied': ['java/example', 'java/example', '', None, {}],
+        'files_failed': [
+            {'path': 'src/A.java', 'reason': 'private diagnostic'},
+            {'path': 'src/A.java', 'reason': 'second issue'},
+            {'path': 'src/B.java', 'reason': 'third issue'},
+            {'path': ''}, None, {'path': []},
+        ],
+    })
+    text = render_scan_coverage(tmp_path)
+    assert '2 path(s) with tool warnings or errors' in text
+    assert '1 rule group' in text
+    assert 'private diagnostic' not in text
+
+
+@pytest.mark.parametrize('rules', [[], 'invalid', 42, False, {'example': True}, {'example': -2}])
+def test_malformed_legacy_rule_counts_are_not_reported_as_findings(tmp_path, rules):
+    _write(tmp_path, 'coverage-codeql.json', {'tool': 'codeql'})
+    _write(tmp_path, 'scan_metrics.json', {'findings_by_rule': rules})
+    assert '0 findings' in render_scan_coverage(tmp_path)
+
+
+def test_malformed_failed_packs_do_not_break_summary(tmp_path):
+    _write(tmp_path, 'coverage-semgrep.json', {'tool': 'semgrep'})
+    _write(tmp_path, 'scan_metrics.json', {'semgrep_failed_packs': ['pack', {}, None, 'pack']})
+    assert '1 pack(s) failed: pack' in render_scan_coverage(tmp_path)
