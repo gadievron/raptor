@@ -32,6 +32,89 @@ rules:
           - pattern: $_POST[...]
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
+      # Only unfiltered request reads are sources. Keep filter/options
+      # selection literal, and taint the return value rather than arguments.
+      - patterns:
+          - pattern: $READER($INPUT, $NAME)
+          - metavariable-regex:
+              metavariable: $READER
+              constant-propagation: false
+              regex: '(?i)^\\?filter_input$'
+          - metavariable-regex:
+              metavariable: $INPUT
+              constant-propagation: false
+              regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              function $READER(...) { ... }
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                function $READER(...) { ... }
+                ...
+              }
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $INPUT = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $INPUT = $VALUE;
+                ...
+              }
+        exact: true
+      - patterns:
+          - pattern: $READER($INPUT, $NAME, $FILTER)
+          - metavariable-regex:
+              metavariable: $READER
+              constant-propagation: false
+              regex: '(?i)^\\?filter_input$'
+          - metavariable-regex:
+              metavariable: $INPUT
+              constant-propagation: false
+              regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              function $READER(...) { ... }
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                function $READER(...) { ... }
+                ...
+              }
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $INPUT = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $INPUT = $VALUE;
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $FILTER
+              constant-propagation: false
+              regex: '^\\?(?:FILTER_DEFAULT|FILTER_UNSAFE_RAW)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $FILTER = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $FILTER = $VALUE;
+                ...
+              }
+        exact: true
     pattern-sanitizers:
       - by-side-effect: true
         patterns:
