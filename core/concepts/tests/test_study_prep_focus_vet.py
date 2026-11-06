@@ -28,6 +28,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.concepts.tests._study_cli import run_prep_main
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
 _LOOP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-loop"
@@ -54,7 +56,9 @@ _DROP_LINE = ("reading-list identifiers resolve to no file in this "
               "tree — dropped from focus (different binary?)")
 
 
-def _run(script: Path, args: list[str]) -> subprocess.CompletedProcess:
+def _run(script: Path, args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
+    if script == _PREP_PATH and in_process:
+        return run_prep_main(_load_prep, script, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -178,8 +182,9 @@ class TestVetHelper:
 
 
 class TestForeignReadingList:
+    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
     def test_foreign_identifiers_dropped_unfocused_fallback(
-        self, tmp_path: Path,
+        self, tmp_path: Path, in_process,
     ) -> None:
         """All-foreign reading list: identifiers dropped loudly, the
         study proceeds with the unfocused default — never a silent
@@ -191,7 +196,7 @@ class TestForeignReadingList:
         result = _run(_PREP_PATH, [
             str(repo), str(out), "--root", str(repo),
             "--reading-list", str(rl),
-        ])
+        ], in_process=in_process)
         assert result.returncode == 0, result.stderr
         assert f"2 {_DROP_LINE}" in result.stderr
         assert "proceeding with the unfocused default scope" in result.stderr

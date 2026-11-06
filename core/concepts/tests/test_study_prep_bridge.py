@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.concepts.tests._study_cli import run_prep_main
+
 _PREP_PATH = (Path(__file__).resolve().parents[3]
               / "libexec" / "raptor-study-prep")
 
@@ -36,7 +38,9 @@ def _load_prep() -> ModuleType:
 prep = _load_prep()
 
 
-def _run_prep(args: list[str]) -> subprocess.CompletedProcess:
+def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
+    if in_process:
+        return run_prep_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -123,15 +127,16 @@ class TestLoadBridgeSeeds:
 
 
 class TestBridgeSeedTier:
+    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
     def test_bridge_seeds_prioritize_without_filtering(
-            self, tmp_path: Path) -> None:
+            self, tmp_path: Path, in_process) -> None:
         repo = _make_tree(tmp_path)
         bridge = _write_bridge_file(tmp_path, ["parse_hdr"])
         out = tmp_path / "out"
         result = _run_prep([
             str(repo), str(out), "--root", str(repo),
             "--bridge-seed-file", str(bridge),
-        ])
+        ], in_process=in_process)
         assert result.returncode == 0, result.stderr
         items = _items(out)
         by_name = {it["name"]: it for it in items}
