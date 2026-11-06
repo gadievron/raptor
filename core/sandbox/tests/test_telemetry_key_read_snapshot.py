@@ -9,14 +9,22 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture
-def key(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    path = tmp_path / 'key'
-    path.write_bytes(b'k' * mac._KEY_LEN)
-    path.chmod(0o600)
-    monkeypatch.setattr(mac, '_key_path', lambda: path)
-    monkeypatch.setattr(mac, '_warned_paths', set())
-    return path
+def key(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        path = tmp_path / 'key'
+        path.write_bytes(b'k' * mac._KEY_LEN)
+        path.chmod(0o600)
+        monkeypatch.setattr(mac, '_key_path', lambda: path)
+        monkeypatch.setattr(mac, '_warned_paths', set())
+        yield path
+
+
+@pytest.fixture
+def monkeypatch(key):
+    """Undo body patches before restoring fixture-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def mutate_after_read(monkeypatch, key, mutation):

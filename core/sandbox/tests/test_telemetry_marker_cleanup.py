@@ -12,12 +12,20 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture
-def marker(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    path = tmp_path / 'tamper.jsonl'
-    path.write_text('{"reason":"first"}\n{"reason":"second"}\n')
-    monkeypatch.setattr(tmac, 'tamper_marker_path', lambda: path)
-    return path
+def marker(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        path = tmp_path / 'tamper.jsonl'
+        path.write_text('{"reason":"first"}\n{"reason":"second"}\n')
+        monkeypatch.setattr(tmac, 'tamper_marker_path', lambda: path)
+        yield path
+
+
+@pytest.fixture
+def monkeypatch(marker):
+    """Undo body patches before restoring fixture-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def local_os(monkeypatch, **changes):
