@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -78,7 +78,7 @@ class BundlerResolver:
         # Copy Gemfile + Gemfile.lock to a temp dir so the operator's
         # checkout is untouched. ``bundle lock`` writes the lockfile
         # in-place which is why the temp-copy pattern is needed.
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-bundler-") as tmp:
+        with scratch_dir("raptor-sca-bundler-") as tmp:
             tmp_path = Path(tmp)
             # lstat-gated, size-bounded copies — these paths live in
             # the SCANNED (hostile) directory; a plain ``copy2``

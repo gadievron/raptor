@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -92,7 +92,7 @@ class CargoResolver:
         # ``Cargo.lock -> ~/.ssh/id_ed25519`` link would otherwise
         # pull operator files into the resolve) and FIFOs are never
         # opened (a blocking open would hang the resolver worker).
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-cargo-") as tmp:
+        with scratch_dir("raptor-sca-cargo-") as tmp:
             tmp_path = Path(tmp)
             for fname in ("Cargo.toml", "Cargo.lock"):
                 copy_regular_file(project_dir / fname, tmp_path / fname)

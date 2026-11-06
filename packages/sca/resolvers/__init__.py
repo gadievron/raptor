@@ -277,10 +277,11 @@ def _run(
     ``dry_run`` catches it and translates to a ``ResolverResult`` with
     a "timed out after Xs" error.
     """
-    import tempfile
+    from core.run.scratch import scratch_dir
     from core.sandbox.context import run_untrusted, run_untrusted_networked
 
-    with tempfile.TemporaryDirectory(prefix="raptor-sca-resolver-") as out_dir:
+    with scratch_dir("raptor-sca-resolver-") as out_path:
+        out_dir = str(out_path)
         # When the call is local-only (e.g. ``python -m venv``,
         # ``ensurepip``), pass ``block_network=True`` and skip the proxy
         # entirely — the sandbox refuses ``use_egress_proxy=True`` with an

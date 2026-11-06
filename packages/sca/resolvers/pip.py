@@ -45,10 +45,9 @@ import secrets
 import shlex
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from core.atomic_fs import rmtree_hardened
+from core.run.scratch import scratch_dir
 
 from . import ResolverResult, _check_tool, _run
 
@@ -258,52 +257,14 @@ class PipResolver:
 
     # --- ephemeral-venv pipeline ---------------------------------------
 
-    def _venv_dir(self) -> Path:
-        """Fresh per-call venv path — ``mkdtemp``, never a derived name.
+    def _venv_dir(self):
+        """Own an unpredictable private venv reservation through setup and run.
 
-        Lives under the host temp dir rather than the project tree
-        because the sandbox makes most subdirs of the project
-        read-only at the mount-ns level (``output=cwd`` permits writes
-        only to a narrow surface — a deeply-nested manifest dir like
-        ``.devcontainer/`` may hit "Read-only file system" when we
-        try to mkdir inside it). ``/tmp`` is in the sandbox's default
-        writable_paths.
-
-        The path MUST be unpredictable: the pre-fix
-        ``/tmp/raptor-sca-venv-<pid>-<hash>`` name was fully
-        derivable (pid guessable, hash of the scan-target path), and
-        in sandbox lanes that share the host ``/tmp`` (the Landlock
-        containment floor) a co-resident local user could pre-create
-        it and pre-plant ``bin/pip-compile`` — which the pipeline then
-        executes with PyPI egress. ``mkdtemp`` creates the directory
-        mode 0700 with an unpredictable suffix, refusing pre-planted
-        paths by construction. In mount-ns lanes the sandbox's own
-        tmpfs at ``/tmp`` is fresh, so the host-side directory simply
-        doesn't exist inside — the setup script's ``mkdir -p`` /
-        ``python -m venv`` recreate it there; callers clean the
-        host-side dir up after the sandbox call returns.
+        In mount-namespace lanes the sandbox recreates this name in its
+        private tmpfs. Shared-/tmp lanes populate the host reservation.
+        Both need host cleanup; keepalive protects long resolver calls.
         """
-        return Path(tempfile.mkdtemp(prefix="raptor-sca-venv-"))
-
-    def _create_venv(
-        self, project_dir: Path, _timeout: int,
-    ) -> tuple[Path | None, str | None]:
-        """Compute the ephemeral venv path; creates nothing itself.
-
-        Each ``_run`` call gets a fresh mount-ns with its own tmpfs at
-        ``/tmp`` — venv state created in one call does NOT persist into
-        a follow-up call. So venv-create, ensurepip, the pip-tools
-        install and the resolver invocation all have to run as a single
-        shell pipeline inside one sandbox call. The sole caller,
-        :meth:`_run_pip_compile_in_venv`, builds that pipeline with
-        :meth:`_venv_setup_script` as its prefix; this helper only
-        returns ``(venv_dir, None)`` so the caller can locate the venv
-        by path inside its own sandbox call. The host-side directory
-        ``mkdtemp`` creates exists only to reserve the unpredictable
-        name; the sandbox pipeline rebuilds it inside its own tmpfs.
-        """
-        del project_dir  # name no longer derived from the target
-        return self._venv_dir(), None
+        return scratch_dir("raptor-sca-venv-")
 
     def _venv_setup_script(self, venv_dir: Path) -> str:
         """Shell snippet that creates the venv + bootstraps pip.
@@ -413,57 +374,48 @@ class PipResolver:
         # Use a single venv for the whole batch. mkdtemp gives an
         # unpredictable, mode-0700 path (see _venv_dir — a derived
         # name is pre-plantable in shared-/tmp sandbox lanes).
-        venv_dir = self._venv_dir()
+        with self._venv_dir() as venv_dir:
+            # Per-invocation random marker nonce: the batch markers
+            # frame attacker-influenceable pip-compile output (a hostile
+            # manifest can make pip-compile echo chosen text), and the
+            # parser takes the FIRST occurrence of each marker — a
+            # forged plaintext marker shifted every following section,
+            # attributing attacker-chosen 'lockfiles' to other
+            # manifests. Fresh randomness per run is unforgeable from
+            # inside the batch — EXCEPT under ``--allow-sdist-builds``,
+            # where a build backend executes with enough access to read
+            # the batch script (e.g. via /proc) and recover the nonce;
+            # that opt-in already grants code execution, so the residual
+            # is attribution shuffling inside an accepted trust grant.
+            nonce = secrets.token_hex(16)
+            script = self._build_batch_script(venv_dir, manifests, nonce)  # type: ignore[arg-type]
+            try:
+                proc = _run(
+                    ["sh", "-c", script],
+                    cwd=common_root, timeout=timeout,
+                    proxy_hosts=self.proxy_hosts,
+                )
+            except subprocess.TimeoutExpired:
+                # One shared budget across venv setup + N pip-compiles:
+                # a single slow batch used to mark ALL N manifests failed
+                # (and, pre-fix, cache those failures for a full TTL)
+                # while sequential resolution — each project on a fresh
+                # full budget — would have succeeded. Fall back rather
+                # than fabricate N failures.
+                logger.warning(
+                    "sca.resolvers.pip: batch venv pipeline timed out "
+                    "after %ss; falling back to sequential per-manifest "
+                    "resolution", timeout,
+                )
+            else:
+                return self._parse_batch_output(
+                    proc.stdout, proc.stderr, proc.returncode, manifests,  # type: ignore[arg-type]
+                    nonce,
+                )
 
-        # Per-invocation random marker nonce: the batch markers
-        # frame attacker-influenceable pip-compile output (a hostile
-        # manifest can make pip-compile echo chosen text), and the
-        # parser takes the FIRST occurrence of each marker — a
-        # forged plaintext marker shifted every following section,
-        # attributing attacker-chosen 'lockfiles' to other
-        # manifests. Fresh randomness per run is unforgeable from
-        # inside the batch — EXCEPT under ``--allow-sdist-builds``,
-        # where a build backend executes with enough access to read
-        # the batch script (e.g. via /proc) and recover the nonce;
-        # that opt-in already grants code execution, so the residual
-        # is attribution shuffling inside an accepted trust grant.
-        nonce = secrets.token_hex(16)
-        script = self._build_batch_script(venv_dir, manifests, nonce)  # type: ignore[arg-type]
-        try:
-            proc = _run(
-                ["sh", "-c", script],
-                cwd=common_root, timeout=timeout,
-                proxy_hosts=self.proxy_hosts,
-            )
-        except subprocess.TimeoutExpired:
-            # One shared budget across venv setup + N pip-compiles:
-            # a single slow batch used to mark ALL N manifests failed
-            # (and, pre-fix, cache those failures for a full TTL)
-            # while sequential resolution — each project on a fresh
-            # full budget — would have succeeded. Fall back rather
-            # than fabricate N failures.
-            logger.warning(
-                "sca.resolvers.pip: batch venv pipeline timed out "
-                "after %ss; falling back to sequential per-manifest "
-                "resolution", timeout,
-            )
-            return [
-                self.dry_run(p, timeout=timeout) for p in project_dirs
-            ]
-        finally:
-            # Host-side cleanup: in mount-ns lanes the sandbox tmpfs
-            # already discarded the venv and this removes the empty
-            # mkdtemp reservation; in shared-/tmp lanes it removes the
-            # populated venv (mkdtemp names never dedupe across calls
-            # the way the old derived name did). rmtree_hardened: the
-            # venv ran attacker-influenced installs — a griefed
-            # mode-0 subdirectory defeats plain rmtree.
-            rmtree_hardened(venv_dir)
-
-        return self._parse_batch_output(
-            proc.stdout, proc.stderr, proc.returncode, manifests,  # type: ignore[arg-type]
-            nonce,
-        )
+        # Release the timed-out batch workspace before retrying. Sequential
+        # resolution can itself be lengthy and must not retain its venv.
+        return [self.dry_run(p, timeout=timeout) for p in project_dirs]
 
     def _build_batch_script(
         self, venv_dir: Path,
@@ -628,34 +580,28 @@ class PipResolver:
         ensurepip + pip-tools install + pip-compile into one shell
         pipeline.
         """
-        venv_dir, _ = self._create_venv(project_dir, timeout)
-        # ``set -e`` short-circuits on any step's non-zero exit so the
-        # whole call returns the first failing step's stderr.
-        qvenv = shlex.quote(str(venv_dir))
-        script = (
-            self._venv_setup_script(venv_dir)  # type: ignore[arg-type]
-            + f"{qvenv}/bin/python -m pip install --quiet pip-tools && "
-            + f"{qvenv}/bin/pip-compile --quiet "
-            + f"--output-file - {shlex.quote(str(rel_manifest))}"
-        )
-        try:
-            proc = _run(
-                ["sh", "-c", script],
-                cwd=project_dir, timeout=timeout,
-                proxy_hosts=self.proxy_hosts,
+        with self._venv_dir() as venv_dir:
+            # ``set -e`` short-circuits on any step's non-zero exit so the
+            # whole call returns the first failing step's stderr.
+            qvenv = shlex.quote(str(venv_dir))
+            script = (
+                self._venv_setup_script(venv_dir)  # type: ignore[arg-type]
+                + f"{qvenv}/bin/python -m pip install --quiet pip-tools && "
+                + f"{qvenv}/bin/pip-compile --quiet "
+                + f"--output-file - {shlex.quote(str(rel_manifest))}"
             )
-        except subprocess.TimeoutExpired:
-            return ResolverResult(
-                ecosystem=self.ecosystem, success=False, available=True,
-                error=f"venv pipeline timed out after {timeout}s",
-            )
-        finally:
-            # Remove the host-side mkdtemp reservation (and, in
-            # shared-/tmp sandbox lanes, the populated venv itself) —
-            # unpredictable names never dedupe across calls.
-            # rmtree_hardened: see the batch dry_run finally above.
-            if venv_dir is not None:
-                rmtree_hardened(venv_dir)
+            try:
+                proc = _run(
+                    ["sh", "-c", script],
+                    cwd=project_dir, timeout=timeout,
+                    proxy_hosts=self.proxy_hosts,
+                )
+            except subprocess.TimeoutExpired:
+                return ResolverResult(
+                    ecosystem=self.ecosystem, success=False, available=True,
+                    error=f"venv pipeline timed out after {timeout}s",
+                )
+
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
             return ResolverResult(

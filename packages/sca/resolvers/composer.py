@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -65,7 +65,7 @@ class ComposerResolver:
 
         # ``composer update --lock`` writes composer.lock in-place;
         # use a temp copy so the operator's checkout is untouched.
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-composer-") as tmp:
+        with scratch_dir("raptor-sca-composer-") as tmp:
             tmp_path = Path(tmp)
             # lstat-gated, size-bounded copies — a symlinked or
             # special-file manifest in the scanned (hostile) tree is

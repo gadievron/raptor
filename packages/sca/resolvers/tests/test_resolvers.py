@@ -451,7 +451,8 @@ def _recording_mkdtemp(monkeypatch) -> list[Path]:
     unpredictable by design, so tests observe rather than predict)."""
     import tempfile
 
-    from packages.sca.resolvers import pip as pip_mod
+    from core.run import scratch
+    from types import SimpleNamespace
 
     created: list[Path] = []
     real_mkdtemp = tempfile.mkdtemp
@@ -462,7 +463,7 @@ def _recording_mkdtemp(monkeypatch) -> list[Path]:
             created.append(Path(d))
         return d
 
-    monkeypatch.setattr(pip_mod.tempfile, "mkdtemp", recording)
+    monkeypatch.setattr(scratch, "tempfile", SimpleNamespace(mkdtemp=recording))
     return created
 
 
@@ -505,22 +506,17 @@ def test_pip_venv_dir_is_unpredictable_and_private(tmp_path: Path) -> None:
     (the old /tmp/raptor-sca-venv-<pid>-<hash> name was pre-plantable
     in shared-/tmp sandbox lanes): mkdtemp reserves an unpredictable
     directory, mode 0700, distinct per call."""
-    import shutil
     import stat
 
     r = PipResolver()
-    d1 = r._venv_dir()
-    d2 = r._venv_dir()
-    try:
+    with r._venv_dir() as d1, r._venv_dir() as d2:
         assert d1 != d2
         for d in (d1, d2):
             assert d.is_dir()
             assert d.name.startswith("raptor-sca-venv-")
             mode = stat.S_IMODE(d.stat().st_mode)
             assert mode == 0o700, f"expected 0700, got {oct(mode)}"
-    finally:
-        shutil.rmtree(d1, ignore_errors=True)
-        shutil.rmtree(d2, ignore_errors=True)
+    assert not d1.exists() and not d2.exists()
 
 
 def test_pip_batch_venv_uses_mkdtemp_and_cleans_up(
@@ -1339,6 +1335,7 @@ def test_pip_set_allow_sdist_builds_process_default():
     CLI-flag plumbing for the registry's import-time singleton), while
     an explicitly-pinned instance keeps its own value."""
     from packages.sca.resolvers import pip as pip_mod
+
     r = PipResolver()
     assert r.allow_sdist_builds is False
     pip_mod.set_allow_sdist_builds(True)
