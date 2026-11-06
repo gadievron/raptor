@@ -319,6 +319,18 @@ _O_TRUNC = 0o0001000
 _O_APPEND = 0o0002000
 
 
+def _open_record_flags(record: dict) -> int | None:
+    """Return usable open/openat flags, retaining the legacy fallback otherwise."""
+    name = record.get("syscall")
+    index = 1 if name == "open" else 2 if name == "openat" else None
+    args = record.get("args")
+    if (index is None or not isinstance(args, (list, tuple))
+            or len(args) <= index):
+        return None
+    flags = args[index]
+    return flags if type(flags) is int else None
+
+
 def _open_record_is_write_intent(record: dict) -> bool:
     """Decide whether a path-syscall record represents a write.
 
@@ -340,24 +352,12 @@ def _open_record_is_write_intent(record: dict) -> bool:
     tracer's safe-default for openat2 in _is_write_intent.
     """
     name = record.get("syscall")
-    args = record.get("args") or []
-    if not isinstance(args, (list, tuple)):
-        args = []
-    if name == "open":
-        # open(path, flags, mode) → flags at args[1]
-        if len(args) < 2:
-            return False
-        flags = args[1]
-    elif name == "openat":
-        # openat(dirfd, path, flags, mode) → flags at args[2]
-        if len(args) < 3:
-            return False
-        flags = args[2]
-    else:
+    if name not in ("open", "openat"):
         # openat2: conservative write-classify (see docstring).
         # Any other syscall name is not an open-family record.
         return name == "openat2"
-    if type(flags) is not int:
+    flags = _open_record_flags(record)
+    if flags is None:
         return False
     if flags & (_O_WRONLY | _O_RDWR):
         return True
@@ -680,6 +680,13 @@ def parse_observe_log(run_dir, *,
         # Completion belongs to the last accepted record, not an earlier
         # summary followed by additional records from the same capture.
         summary_at_tail = rec.get("type") == "audit_summary"
+        # Truthiness can admit malformed stamps or silently discard records.
+        # Check after the nonce gate so foreign rows cannot claim capture loss.
+        if any(field in rec and type(rec[field]) is not bool
+               for field in ("observe", "parse_ambiguous")):
+            summary_at_tail = False
+            profile.capture_incomplete = True
+            continue
         if rec.get("parse_ambiguous"):
             summary_at_tail = False
             profile.capture_incomplete = True
@@ -757,6 +764,11 @@ def parse_observe_log(run_dir, *,
             path = rec.get("path")
             if not path:
                 continue
+            # Keep the historical read fallback, but distinguish unusable
+            # supplied flags from older writers that omitted args entirely.
+            if (name in ("open", "openat") and "args" in rec
+                    and _open_record_flags(rec) is None):
+                profile.capture_incomplete = True
             if _open_record_is_write_intent(rec):
                 if path not in seen_write:
                     seen_write.add(path)
@@ -787,6 +799,9 @@ def parse_observe_log(run_dir, *,
             if (name == "network-outbound"
                     and not _is_local_socket_destination(rec.get("path"))):
                 if target is None:
+                    # A later valid destination or clean summary cannot
+                    # recover this observation's missing destination.
+                    profile.capture_incomplete = True
                     darwin_connect_unparsed += 1
                 else:
                     darwin_connect_parsed += 1
