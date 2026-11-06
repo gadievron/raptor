@@ -59,7 +59,7 @@ _PACK_NOT_FOUND_RE = re.compile(
 
 def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     """True when every dep pinned in `pack_dir/codeql-pack.lock.yml`
-    exists at its pinned version under `~/.codeql/packages/`.
+    has matching package metadata at its pinned cache version.
 
     Used by `analyze_iris_packs` to skip the network-permitted
     `codeql pack install` call when the dep cache is already warm —
@@ -69,27 +69,53 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     /codeql or /agentic runs).
 
     Returns False (i.e. defer to full install) on any parse error,
-    missing lockfile, or missing dep — never raises.
+    missing lockfile, or incomplete/mismatched cached dep. Metadata reads
+    are bounded; malformed cache hints defer to CodeQL installation.
     """
-    lock = pack_dir / "codeql-pack.lock.yml"
-    if not lock.is_file():
-        return False
     try:
         import yaml  # transitively available via codeql packs
     except ImportError:
         return False
+
+    def metadata(path: Path) -> dict | None:
+        text = read_capped_text(path, 1024 * 1024, errors="strict")
+        if text is None:
+            return None
+        try:
+            data = yaml.safe_load(text)
+        except (ValueError, RecursionError, yaml.YAMLError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def component(value: object) -> bool:
+        return (isinstance(value, str) and value not in ("", ".", "..")
+                and not any(char in value for char in ("/", "\\", "\x00")))
+
+    data = metadata(pack_dir / "codeql-pack.lock.yml")
+    deps = data.get("dependencies") if data is not None else None
+    if not isinstance(deps, dict) or not deps:
+        return False
     try:
-        data = yaml.safe_load(lock.read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001
+        cache = (Path.home() / ".codeql" / "packages").resolve(strict=True)
+        for dep_name, info in deps.items():
+            if not isinstance(dep_name, str) or not isinstance(info, dict):
+                return False
+            parts = dep_name.split("/")
+            version = info.get("version")
+            if (len(parts) != 2 or not all(component(part) for part in parts)
+                    or not isinstance(version, str) or not component(version)):
+                return False
+            package = (cache / dep_name / version).resolve(strict=True)
+            package.relative_to(cache)
+            manifest = package / "qlpack.yml"
+            if not manifest.is_file():
+                manifest = package / "codeql-pack.yml"
+            installed = metadata(manifest)
+            if (installed is None or installed.get("name") != dep_name
+                    or installed.get("version") != version):
+                return False
+    except (OSError, ValueError, RuntimeError):
         return False
-    deps = (data.get("dependencies") or {})
-    if not deps:
-        return False
-    cache = Path.home() / ".codeql" / "packages"
-    for dep_name, info in deps.items():
-        version = (info or {}).get("version")
-        if not version or not (cache / dep_name / version).is_dir():
-            return False
     return True
 
 
