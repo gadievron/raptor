@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from heapq import nsmallest
 from typing import Any
 
 from core.json.bounded import loads_bounded
@@ -29,8 +30,9 @@ _MAX_TOOL_OUTPUT_BYTES = 128 * 1024 * 1024
 # 5 sample paths per reason is enough to recognise the affected
 # subtree without retaining the whole list; 12 distinct reasons
 # covers semgrep's skip-reason enum (~10 values on 1.172.0) with
-# headroom while refusing an unbounded set of fabricated reason
-# strings from a damaged payload.
+# headroom while bounding retained samples for fabricated reasons in
+# a damaged payload. Exact counts still require one counter per distinct
+# normalized reason.
 _SKIPPED_SAMPLE_CAP = 5
 _SKIPPED_REASON_CAP = 12
 # Per-string caps for the same reason: a single entry must not carry
@@ -338,7 +340,6 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, list):
         return {}
     counts: dict[str, int] = {}
-    samples: dict[str, list[str]] = {}
     total = 0
     for entry in raw:
         if not isinstance(entry, dict):
@@ -348,20 +349,36 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
             str(entry.get("reason") or "unspecified"),
         )[:_SKIPPED_REASON_MAXLEN]
         counts[reason] = counts.get(reason, 0) + 1
-        bucket = samples.setdefault(reason, [])
-        path = escape_nonprintable(str(entry.get("path") or ""))
-        if path and len(bucket) < _SKIPPED_SAMPLE_CAP:
-            bucket.append(path[:_SKIPPED_PATH_MAXLEN])
     if not total:
         return {}
-    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ordered = nsmallest(_SKIPPED_REASON_CAP, counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    # Count first, then sample only the retained reasons. Avoid both an
+    # all-reasons sort and path copies for buckets that cannot be reported.
+    samples: dict[str, list[str]] = {reason: [] for reason, _ in ordered}
+    remaining = len(samples)
+    for entry in raw:
+        if not remaining:
+            break
+        if not isinstance(entry, dict):
+            continue
+        reason = escape_nonprintable(
+            str(entry.get("reason") or "unspecified"),
+        )[:_SKIPPED_REASON_MAXLEN]
+        bucket = samples.get(reason)
+        if bucket is None or len(bucket) >= _SKIPPED_SAMPLE_CAP:
+            continue
+        path = escape_nonprintable(str(entry.get("path") or ""))
+        if path:
+            bucket.append(path[:_SKIPPED_PATH_MAXLEN])
+            if len(bucket) == _SKIPPED_SAMPLE_CAP:
+                remaining -= 1
     return {
         "total": total,
         "reasons": {
             reason: {"count": count, "sample": samples.get(reason, [])}
-            for reason, count in ordered[:_SKIPPED_REASON_CAP]
+            for reason, count in ordered
         },
-        "reasons_truncated": max(0, len(ordered) - _SKIPPED_REASON_CAP),
+        "reasons_truncated": max(0, len(counts) - _SKIPPED_REASON_CAP),
     }
 
 
