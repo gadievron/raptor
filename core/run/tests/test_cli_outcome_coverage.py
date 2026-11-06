@@ -17,6 +17,7 @@ NON_DISPATCHERS = {
     'raptor-sage-mcp-guard': 'long-lived MCP transport filter',
     'raptor-seatbelt-shim': 'isolated sandbox transport with no RAPTOR imports',
     'raptor-session-init': 'startup and exec modes have dedicated lifecycle tests',
+    'raptor-session-title': 'best-effort session naming hook, not workflow dispatch',
     'raptor-wsl-consent': 'host consent ceremony',
 }
 
