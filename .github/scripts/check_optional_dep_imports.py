@@ -51,6 +51,7 @@ import json
 import re
 import sys
 import tomllib
+import unicodedata
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -142,11 +143,18 @@ def iter_test_files(root: Path):
         base = root / sub
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*.py")):
-            if any(part in SKIP_DIR_NAMES for part in p.parts):
-                continue
-            if is_test_file(p):
-                yield p
+        files = []
+        for directory, dirs, names in base.walk():
+            # Exclusions describe repository paths, never checkout ancestors.
+            # Prune them before descent instead of walking fixture/build trees.
+            dirs[:] = [name for name in dirs if name not in SKIP_DIR_NAMES]
+            for name in names:
+                if not name.endswith(".py"):
+                    continue
+                path = directory / name
+                if is_test_file(path.relative_to(root)):
+                    files.append(path)
+        yield from sorted(files)
 
 
 def _module_matches(imported: str, optional: str) -> bool:
@@ -176,9 +184,25 @@ class _ImportScan(ast.NodeVisitor):
 
     def __init__(self, mods: set[str]) -> None:
         self.mods = mods
+        self._visitor_methods = {}
         self._try_guard_depth = 0
         self.guarded: set[str] = set()
         self.unguarded: dict[str, int] = {}  # module -> first lineno
+
+    def visit(self, node: ast.AST) -> None:
+        kind = type(node)
+        method = self._visitor_methods.get(kind)
+        if method is None:
+            method = getattr(type(self), "visit_" + kind.__name__, type(self).generic_visit)
+            self._visitor_methods[kind] = method
+        method(self, node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # Imports are statements; identifiers and constants contain none.
+        pass
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        pass
 
     def _record(self, imported: str, lineno: int) -> None:
         for opt in self.mods:
@@ -234,9 +258,18 @@ def scan(root: Path) -> tuple[dict[str, int], set[str]]:
     """Return ({finding_key: lineno}, optional_module_set)."""
     mods = optional_modules(root)
     findings: dict[str, int] = {}
+    if not mods:
+        return findings, mods
+    roots = {module.split(".", 1)[0] for module in mods}
+    root_pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(roots))) + r")\b")
     for path in iter_test_files(root):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
+            # Every static optional import must spell its top-level root.
+            # Use roots so dotted/continued imports stay visible, and NFKC
+            # so the filter agrees with Python's identifier normalisation.
+            if not root_pattern.search(unicodedata.normalize("NFKC", text)):
+                continue
             tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
