@@ -1730,6 +1730,11 @@
     "kind": "literal",
     "note": "correlate result-shape section keys (actions/join/disagreements/... view sections), not a name vocabulary; sandbox_campaign added conditionally after the literal"
   },
+  "core/project/findings_utils.py::findings_from_report_context": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Fixed project-finding schema projected from a frozen report context: identity, location, verdict, suppression and snapshot provenance keys. Native rows remain intact; this is not an API-name vocabulary."
+  },
   "core/project/merge.py::_STATUS_RANK": {
     "count": 14,
     "kind": "literal"
@@ -1738,9 +1743,10 @@
     "count": 15,
     "kind": "literal"
   },
-  "core/project/report.py::generate_project_report": {
-    "count": 11,
-    "kind": "literal"
+  "core/project/report.py::_generate_project_report": {
+    "count": 15,
+    "kind": "literal",
+    "note": "Project report completion-result schema: counts, output destinations, snapshot identity and publication diagnostics/errors. Renamed from generate_project_report during shared-report integration; fixed return fields, not learned function names."
   },
   "core/project/sandbox_campaign.py::entry": {
     "count": 11,
@@ -1767,6 +1773,21 @@
     "kind": "literal",
     "note": "mechanical-warm report field names (raw/warm FP counts, per-CWE rows, damage list), not name vocabulary \u2014 same class as the recall-report field-name entries"
   },
+  "core/reporting/adapters.py::context_from_sarif": {
+    "count": 21,
+    "kind": "literal",
+    "note": "Portable finding schema populated from SARIF: occurrence/source identity, rule namespace, location, scanner severity, suppression and dataflow evidence. Values come from the parsed document; these literal keys are a serialization contract, not target API names."
+  },
+  "core/reporting/adapters.py::failures": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Closed scanner-accounting field names inspected by apply_scan_metrics to preserve failed, partial or incomplete execution in reports. These producer schema keys must match recorded scan metrics; they do not classify function names."
+  },
+  "core/reporting/adapters.py::normalized": {
+    "count": 14,
+    "kind": "literal",
+    "note": "Native-finding normalization schema: occurrence/source IDs, rule, location, scanner level/security severity, verdict origin and diagnostics. The original evidence is retained; keys define the portable record, not a learned API vocabulary."
+  },
   "core/reporting/findings.py::counts": {
     "count": 13,
     "kind": "literal"
@@ -1776,8 +1797,9 @@
     "kind": "literal"
   },
   "core/reporting/formatting.py::status_map": {
-    "count": 16,
-    "kind": "literal"
+    "count": 17,
+    "kind": "literal",
+    "note": "Closed display mapping for canonical verdict/status values, including explicit constrained and unverified variants. This preserves verdict semantics in reports; it is not a detector API-name vocabulary."
   },
   "core/reporting/scan_coverage.py::_EXECUTION_FAILURE_FIELDS": {
     "count": 12,
@@ -1953,9 +1975,10 @@
     "kind": "literal",
     "note": "Closed scan-metrics serialization schema: finding counts, artifact counts and tool execution/coverage diagnostics. These fixed report field names are infrastructure schema keys, not a learned target-name vocabulary."
   },
-  "core/sarif/parser.py::parse_sarif_findings": {
+  "core/sarif/parser.py::parse_sarif_document": {
     "count": 12,
-    "kind": "literal"
+    "kind": "literal",
+    "note": "Normalized SARIF finding schema returned by the document parser: identity, rule, message, location, scanner level, CWE and dataflow metadata. Replaces the parse_sarif_findings baseline after the parser split; fixed interchange keys, not function-name recognition."
   },
   "core/schema_constants/__init__.py::MEMORY_CORRUPTION_TYPES": {
     "count": 13,
@@ -2687,19 +2710,20 @@
     "kind": "literal"
   },
   "packages/exploit_feasibility/smt_path.py::validate_path": {
-    "count": 13,
-    "kind": "literal"
+    "count": 14,
+    "kind": "literal",
+    "note": "SMT result serialization schema: feasibility, witness/model, unknown diagnostics, summary axioms and weakest-precondition metadata including wp_ordering. Fixed interchange fields, not a function-name vocabulary."
   },
   "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
-    "count": 13,
+    "count": 14,
     "kind": "literal",
-    "note": "JSON result-shape keys (validate_path's documented dict shape), not a name vocabulary; the key set is pinned to smt_path.validate_path by the shape-parity tests",
+    "note": "SMT verb result projection kept shape-compatible with validate_path, including wp_ordering and the complete weakest-precondition block. These are fixed result-schema keys.",
     "reviewed": "2026-09-22"
   },
   "packages/exploit_feasibility/smt_verbs.py::_smt_unavailable_result": {
-    "count": 13,
+    "count": 14,
     "kind": "literal",
-    "note": "same validate_path result-shape keys on the z3-unavailable lane; shape parity is test-enforced against smt_path.validate_path",
+    "note": "Unavailable-SMT result schema preserves parity with validate_path and successful verb results, including wp_ordering. Fixed degraded-result fields, not learned API names.",
     "reviewed": "2026-09-22"
   },
   "packages/exploit_feasibility/techniques.py::get_technique_requirements": {
@@ -2974,8 +2998,9 @@
     "kind": "literal"
   },
   "packages/sca/cli.py::SUBCOMMANDS": {
-    "count": 12,
-    "kind": "literal"
+    "count": 13,
+    "kind": "literal",
+    "note": "Closed SCA CLI dispatch command names, including the SBOM entry point. These select implemented operator commands rather than matching analyzed function names."
   },
   "packages/sca/dockerfile_from.py::_IMAGE_DISCOVERY_EXCLUDE_PARENT_DIRS": {
     "count": 11,
@@ -3270,11 +3295,6 @@
     "kind": "literal",
     "note": "generic-web seed prior (universal parameter/cookie/path tokens, not learned target vocabulary); candidate for data-pack migration with the web scanner owner"
   },
-  "packages/web/scanner.py::_empty_result": {
-    "count": 10,
-    "kind": "literal",
-    "note": "result-dict field names of the web scanner's evidence/summary records (schema keys), not a name vocabulary"
-  },
   "packages/web/scanner.py::_record": {
     "count": 12,
     "kind": "literal",
@@ -3286,7 +3306,7 @@
     "note": "result-dict field names of the web scanner's evidence/summary records (schema keys), not a name vocabulary"
   },
   "packages/web/scanner.py::result": {
-    "count": 21,
+    "count": 10,
     "kind": "literal",
     "note": "result-dict field names of the web scanner's evidence/summary records (schema keys), not a name vocabulary"
   },
