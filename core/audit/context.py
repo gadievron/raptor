@@ -5757,4 +5757,8 @@ def _aggregate_subsystem_patterns(
                 f"{len(sources)}/{total_functions} functions)"
             )
 
+            if (len(patterns) == 10 and type(same_dir[0]) is dict
+                    and type(kind) is str):
+                return patterns
+
     return patterns[:10]

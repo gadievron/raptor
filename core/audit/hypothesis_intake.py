@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -283,9 +284,12 @@ def _load_one_record(
     flags_raw = raw.get("derived_from_target")
     flags: dict[str, bool] = {}
     if isinstance(flags_raw, dict):
+        # Snapshot the selected entries before value conversions can run.
+        flag_items = (list(islice(flags_raw.items(), 8))
+                      if type(flags_raw) is dict else list(flags_raw.items())[:8])
         flags = {
             _escape(k, 32): bool(v)
-            for k, v in list(flags_raw.items())[:8]
+            for k, v in flag_items
             if isinstance(k, str)
         }
 

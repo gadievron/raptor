@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any
 
 from ._util import safe_joern_name_lenient as _safe_name
@@ -267,10 +268,10 @@ def _verify_taint_source_sink(
 
 def _extract_sinks_from_hypothesis(hypothesis: str) -> list[str]:
     """Extract sink function/method names from hypothesis text."""
-    explicit = re.findall(
+    explicit = re.finditer(
         r"[`'\"](\w+(?:\.\w+)?)[`'\"]", hypothesis,
     )
-    keyword_sinks = re.findall(
+    keyword_sinks = re.finditer(
         r"\b((?:interpolat|inject|concat|format|join|render|write|exec|eval"
         r"|system|popen|query|execute)\w*)\b",
         hypothesis, re.IGNORECASE,
@@ -279,14 +280,17 @@ def _extract_sinks_from_hypothesis(hypothesis: str) -> list[str]:
     seen = set()
     skip = {"the", "this", "that", "its", "and", "for", "not", "can", "are",
             "has", "was", "but", "from", "with", "into", "will", "may"}
-    for name in explicit + keyword_sinks:
+    for match in chain(explicit, keyword_sinks):
+        name = match.group(1)
         bare = name.split(".")[-1] if "." in name else name
         low = bare.lower()
         if low in seen or low in skip or len(bare) < 2:
             continue
         seen.add(low)
         candidates.append(bare)
-    return candidates[:5]
+        if len(candidates) == 5:
+            break
+    return candidates
 
 
 # ── Verifier 3: caller_constraint ────────────────────────────────────

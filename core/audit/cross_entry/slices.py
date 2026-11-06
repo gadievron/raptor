@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from itertools import islice
 import time
 from typing import Iterable
 
@@ -26,7 +27,7 @@ def entry_paths(index: AccessIndex, target: str, depth: int, parents=None) -> li
                     queue.append([parent]+trail)
         # Bound both depth and breadth even in dense cyclic call graphs.
         if len(queue) > 256:
-            queue = deque(list(queue)[:256])
+            queue = deque(islice(queue, 256))
     return paths
 
 

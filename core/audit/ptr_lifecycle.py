@@ -48,6 +48,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -318,47 +319,63 @@ def detect_field_parity_deviations(
     majority statistic; every receipt names the exact sites.
     """
     # (file, function, dst_owner, src_owner) → {field: FieldWrite}
+    from_field_prefix = f"{RHS_FROM_FIELD}:"
     clusters: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for rec in census.fields.values():
         for w in rec.writes:
-            if not w.rhs_class.startswith(f"{RHS_FROM_FIELD}:"):
+            if not w.rhs_class.startswith(from_field_prefix):
                 continue
             src_expr = w.rhs_class.split(":", 1)[1]
             src_owner = src_expr.split(".", 1)[0]
             if not (w.function and w.owner and src_owner):
                 continue
             key = (w.file, w.function, w.owner, src_owner)
-            clusters.setdefault(key, {})[rec.field] = w
+            writes = clusters.get(key)
+            if writes is None:
+                writes = {}
+                clusters[key] = writes
+            writes[rec.field] = w
 
     deviations: list[FieldParityDeviation] = []
+    ordered_fields = None
     for (file_path, function, dst, src), writes in sorted(
         clusters.items(),
     ):
         if len(writes) < min_cluster:
             continue
         cluster_fields = tuple(sorted(writes))
-        for name, rec in sorted(census.fields.items()):
+        cluster_owners = (dst, src)
+        cluster_location = (file_path, function)
+        if ordered_fields is None or type(census.fields) is not dict:
+            ordered_fields = sorted(census.fields.items())
+        for name, rec in ordered_fields:
             if name in writes:
                 continue
             # (b) provenance link: the field lives on the replaced
             # graph — an access with the cluster's dst or src owner.
-            linked = [
-                s for s in (list(rec.writes) + list(rec.reads))
-                if s.owner in (dst, src)
-            ]
+            linked = False
+            for site in rec.writes:
+                if site.owner in cluster_owners:
+                    linked = True
+                    break
+            if not linked:
+                for site in rec.reads:
+                    if site.owner in cluster_owners:
+                        linked = True
+                        break
             if not linked:
                 continue
             # (a) read sites elsewhere (the accessor-returns-it shape).
-            outside_reads = [
-                r for r in rec.reads
-                if (r.file, r.function) != (file_path, function)
-            ]
-            if not outside_reads:
+            deviant_site = None
+            for read in rec.reads:
+                if (read.file, read.function) != cluster_location:
+                    deviant_site = read
+                    break
+            if deviant_site is None:
                 continue
-            deviant_site = outside_reads[0]
             exhibits = [
                 PeerExhibit(file=w.file, line=w.line, snippet=w.code)
-                for w in list(writes.values())[:3]
+                for w in islice(writes.values(), 3)
             ]
             n = len(writes) + 1
             pe = PeerEvidence(

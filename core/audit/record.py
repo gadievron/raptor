@@ -199,6 +199,8 @@ def _audit_log_orphan_names(out_dir: Path, known: int) -> list[str]:
         # rather than silently shadowed by the canonical shard.
         if name != _audit_log_shard_name(n) or n > known:
             names.append(name)
+            if len(names) == 8 and type(known) is int:
+                return names
     return names[:8]
 
 

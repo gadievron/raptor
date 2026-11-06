@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -118,13 +119,18 @@ def build_alarm_record(
         # The claimed invariant ids (+ tiers when the gate stamped
         # them) go on the record so the operator can audit what the
         # unverified claim named.
-        record["bypass_claimed"] = [str(b)[:100] for b in bypass][:16] \
-            if isinstance(bypass, (list, tuple)) else str(bypass)[:200]  # type: ignore[assignment]
+        if type(bypass) in (list, tuple) and all(type(b) is str for b in bypass):
+            record["bypass_claimed"] = [b[:100] for b in bypass[:16]]  # type: ignore[assignment]
+        else:
+            record["bypass_claimed"] = [str(b)[:100] for b in bypass][:16] \
+                if isinstance(bypass, (list, tuple)) else str(bypass)[:200]  # type: ignore[assignment]
         tiers = (review_result or {}).get("g2_invariant_bypass_tiers")
         if isinstance(tiers, dict):
+            tier_items = (list(islice(tiers.items(), 16))
+                          if type(tiers) is dict else list(tiers.items())[:16])
             record["bypass_claimed_tiers"] = {  # type: ignore[assignment]
                 str(k)[:100]: str(v)[:40]
-                for k, v in list(tiers.items())[:16]
+                for k, v in tier_items
             }
     return record
 
