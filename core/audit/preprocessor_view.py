@@ -838,6 +838,8 @@ def augment_checklist_with_macro_functions(
     tu_suffixes = frozenset({".c"}) | (_CXX_SUFFIXES - {".hh", ".hpp", ".hxx"})
     added = 0
     budget = max_files
+    flags: tuple[str, ...] | None = None
+    known_names: dict[int, set[str]] = {}
     for path in by_path:
         if budget <= 0:
             break
@@ -849,16 +851,18 @@ def augment_checklist_with_macro_functions(
         if resolved is None:
             continue
         got = read_text_capped(resolved)
-        if got is None:
+        if got is None or got[1]:
             continue
         if not _MACRO_INVOCATION_RE.search(got[0]):
             continue
         budget -= 1
         try:
+            if flags is None:
+                flags = tuple(_macro_flags(macro_config))
             recovered = recover_macro_defined_functions(
                 target_path=target_path,
                 file_path=path,
-                macro_config=macro_config,
+                macro_config=flags,
                 out_dir=out_dir,
             )
         except Exception:
@@ -871,9 +875,15 @@ def augment_checklist_with_macro_functions(
             if dest is None:
                 continue
             items = dest.setdefault("items", [])
-            if any(it.get("name") == rec.name for it in items):
+            identity = id(dest)
+            if identity not in known_names:
+                known_names[identity] = {name for item in items
+                                         if isinstance(name := item.get("name"), str)}
+            names = known_names[identity]
+            if rec.name in names:
                 continue
             items.append(rec.to_checklist_item())
+            names.add(rec.name)
             added += 1
 
     if added:

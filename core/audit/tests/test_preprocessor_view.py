@@ -994,3 +994,64 @@ def test_macro_recovery_counts_only_newline_for_attribution(tmp_path):
         target_path=tmp_path, file_path='macros.c', view=view,
     )
     assert [(item.name, item.line) for item in recovered] == [('real', 1)]
+
+
+def test_checklist_recovery_reuses_normalized_macro_configuration(tmp_path, monkeypatch):
+    for name in ('a.c', 'b.c'):
+        (tmp_path / name).write_text('DEFINE_HANDLER(value)\n')
+    checklist = {'files': [{'path': name, 'items': []} for name in ('a.c', 'b.c')]}
+    calls = []
+
+    def recover(**kwargs):
+        flags = tuple(kwargs['macro_config'])
+        calls.append(flags)
+        return [MacroDefinedFunction('generated', kwargs['file_path'], 1)]
+
+    monkeypatch.setattr(pv, 'recover_macro_defined_functions', recover)
+    assert augment_checklist_with_macro_functions(checklist, tmp_path,
+        macro_config=iter(['-DVALUE=2', '-UOTHER'])) == 2
+    assert calls == [('-DVALUE=2', '-UOTHER')] * 2
+
+
+def test_truncated_checklist_input_does_not_spend_expansion_budget(tmp_path, monkeypatch):
+    for name in ('bad.c', 'good.c'):
+        (tmp_path / name).write_text('DEFINE_HANDLER(value)\n')
+    checklist = {'files': [{'path': name, 'items': []} for name in ('bad.c', 'good.c')]}
+    original = pv.read_text_capped
+    calls = []
+
+    def read(path, **kwargs):
+        return ('DEFINE_HANDLER(value)', True) if Path(path).name == 'bad.c' else original(path, **kwargs)
+
+    def recover(**kwargs):
+        calls.append(kwargs['file_path'])
+        return [MacroDefinedFunction('generated', kwargs['file_path'], 1)]
+
+    monkeypatch.setattr(pv, 'read_text_capped', read)
+    monkeypatch.setattr(pv, 'recover_macro_defined_functions', recover)
+    assert augment_checklist_with_macro_functions(checklist, tmp_path, max_files=1) == 1
+    assert calls == ['good.c']
+    assert checklist['files'][0]['items'] == []
+
+
+def test_checklist_recovery_indexes_names_once_and_deduplicates_across_tus(tmp_path, monkeypatch):
+    visits = []
+
+    class ExistingItem(dict):
+        def get(self, key, *args):
+            if key == 'name':
+                visits.append(key)
+            return super().get(key, *args)
+
+    for name in ('a.c', 'b.c'):
+        (tmp_path / name).write_text('DEFINE_HANDLER(value)\n')
+    existing = ExistingItem(name='existing', human_note='retain')
+    header = {'path': 'shared.h', 'items': [existing]}
+    checklist = {'files': [{'path': name, 'items': []} for name in ('a.c', 'b.c')] + [header]}
+    recovered = [MacroDefinedFunction('existing', 'shared.h', 1)] + [
+        MacroDefinedFunction(f'generated_{index}', 'shared.h', index + 2) for index in range(1000)]
+    monkeypatch.setattr(pv, 'recover_macro_defined_functions', lambda **kw: recovered)
+    assert augment_checklist_with_macro_functions(checklist, tmp_path) == 1000
+    assert visits == ['name']
+    assert header['items'][0] is existing and existing['human_note'] == 'retain'
+    assert [item['name'] for item in header['items'][1:]] == [f'generated_{index}' for index in range(1000)]
