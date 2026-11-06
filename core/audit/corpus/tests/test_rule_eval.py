@@ -1351,3 +1351,172 @@ def test_raw_engine_artifact_keeps_partial_evidence(tmp_path):
     assert raw["failed_files"] == ["a.c"]
     assert len(raw["hits"]) == 1
     assert raw["errors"] == ["partial parse"]
+
+
+@pytest.mark.parametrize('coverage', [
+    {'skipped_summary': {'total': 1}},
+    {'skipped_rules': ['incompatible rule']},
+])
+@pytest.mark.parametrize('with_hit', [False, True])
+def test_semgrep_skips_gate_only_affected_config_absence(tmp_path, monkeypatch, coverage, with_hit):
+    from core.audit.corpus import rule_eval
+    from packages.semgrep import runner
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    affected, healthy = tmp_path / 'affected', tmp_path / 'healthy'
+    rules = [_rule(engine='semgrep', rule_id=name) for name in ('affected', 'healthy')]
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(rule_eval, 'discover_semgrep_rules',
+                        lambda dirs: ([rule for rule in rules if rule.rule_id == dirs[0].name], []))
+
+    def run(target, config, **kwargs):
+        if config == str(healthy):
+            return SemgrepResult()
+        return SemgrepResult(findings=[SemgrepFinding('net/a.c', 120, rule_id='affected')]
+                             if with_hit else [], **coverage)
+
+    monkeypatch.setattr(runner, 'run_rule', run)
+    outcome = run_semgrep_engine(tmp_path, config_dirs=[affected, healthy])
+    assert not outcome.complete_for('net/a.c', 'affected')
+    assert outcome.complete_for('net/a.c', 'healthy')
+    assert bool(outcome.hits) is with_hit
+    assert outcome.analysis_notes
+    label = _label()
+    label.expected_rule_hits = {'semgrep': ['affected', 'healthy']}
+    report = evaluate([label], {'test-repo': {'semgrep': outcome}}, rules)
+    affected_row = next((row for row in report['per_rule'] if row['rule_id'] == 'affected'), None)
+    if with_hit:
+        assert affected_row['tp'] == [label.function_id]
+    else:
+        assert affected_row is None
+    healthy_row = next(row for row in report['per_rule'] if row['rule_id'] == 'healthy')
+    assert healthy_row['misses'] == [label.function_id]
+
+
+@pytest.mark.parametrize('artifact', [None, [], {}, {'runs': None}, {'runs': [None]},
+    {'runs': [{'invocations': None}]},
+    {'runs': [{'invocations': [{'toolExecutionNotifications': [None, {'properties': []}]}]}]},
+])
+def test_codeql_damaged_diagnostics_do_not_crash_or_establish_coverage(artifact):
+    from core.audit.corpus.rule_eval import codeql_extraction_notes
+    assert codeql_extraction_notes(artifact)
+
+
+@pytest.mark.parametrize('status', [None, [], {},
+    {'#total': True, '#success': True}, {'#total': -1, '#success': -1},
+    {'#total': '2', '#success': '2'}, {'#total': 2, '#success': 2, '#partial': False},
+    {'#total': 2, '#success': 2, '#errors': -1},
+])
+def test_codeql_invalid_counts_do_not_prove_complete_extraction(status):
+    from core.audit.corpus.rule_eval import codeql_extraction_notes
+    artifact = {'runs': [{'invocations': [{'toolExecutionNotifications': [
+        {'properties': {'attributes': {'extraction_status': status}}},
+    ]}]}]}
+    assert codeql_extraction_notes(artifact)
+
+
+def test_codeql_one_run_cannot_supply_missing_coverage_for_another():
+    from core.audit.corpus.rule_eval import codeql_extraction_notes
+    complete = {'invocations': [{'toolExecutionNotifications': [
+        {'properties': {'attributes': {'extraction_status': {'#total': 1, '#success': 1}}}},
+    ]}]}
+    assert codeql_extraction_notes({'runs': [complete]}) == []
+    assert codeql_extraction_notes({'runs': [complete, {}]})
+    assert codeql_extraction_notes({'runs': [{}, complete]})
+
+
+@pytest.fixture
+def codeql_report_run(tmp_path, monkeypatch):
+    from core.audit.corpus import rule_eval
+    from packages.codeql import database_manager, query_runner
+
+    monkeypatch.setenv('RAPTOR_DIR', str(tmp_path))
+    monkeypatch.setattr(rule_eval.shutil, 'which', lambda name: '/mock/codeql')
+    monkeypatch.setattr(rule_eval, 'codeql_feasibility', lambda labels: ('cpp', ''))
+    monkeypatch.setattr(rule_eval, 'codeql_query_dir', lambda language: tmp_path)
+    db = database_manager.DatabaseResult(
+        success=True, language='cpp', database_path=tmp_path, metadata=None,
+        errors=[], duration_seconds=0,
+    )
+    monkeypatch.setattr(database_manager, 'DatabaseManager', lambda **kw:
+                        SimpleNamespace(create_database=lambda *a: db))
+
+    def run(text, *, skipped_rules=()):
+        report = None
+        if text is not None:
+            report = tmp_path / 'report.sarif'
+            report.write_text(text)
+        result = query_runner.QueryResult(
+            success=True, language='cpp', database_path=tmp_path, sarif_path=report,
+            findings_count=0, duration_seconds=0, errors=[], suite_name='custom',
+            skipped_rules=list(skipped_rules),
+        )
+        monkeypatch.setattr(query_runner, 'QueryRunner', lambda:
+                            SimpleNamespace(run_custom_queries=lambda *a: result))
+        return rule_eval.run_codeql_engine(tmp_path, [_label()], tmp_path / 'out')
+    return run
+
+
+@pytest.mark.parametrize('text', [None, '', 'not-json', '[]', '{"runs": {}}'])
+def test_codeql_missing_or_damaged_report_is_not_a_miss(codeql_report_run, text):
+    outcome = codeql_report_run(text)
+    assert outcome.ran
+    assert not outcome.analysis_complete
+    assert not outcome.complete_for('net/a.c', 'example')
+    assert outcome.errors
+    assert outcome.hits == []
+
+
+@pytest.mark.parametrize('damage', ['row', 'invocation', 'skipped-rule', 'diagnostics', 'none'])
+def test_codeql_partial_reports_preserve_positive_hits(codeql_report_run, damage):
+    import json
+
+    run = {'invocations': [{'toolExecutionNotifications': [{'properties': {
+        'attributes': {'extraction_status': {'#total': 1, '#success': 1}},
+    }}]}], 'results': [{'ruleId': 'example', 'locations': [{'physicalLocation': {
+        'artifactLocation': {'uri': 'net/a.c'}, 'region': {'startLine': 120},
+    }}]}]}
+    if damage == 'row':
+        run['results'].insert(0, None)
+    elif damage == 'invocation':
+        run['invocations'][0]['executionSuccessful'] = False
+    elif damage == 'diagnostics':
+        run['invocations'][0]['toolExecutionNotifications'] = [None]
+    outcome = codeql_report_run(json.dumps({'runs': [run]}),
+                               skipped_rules=['unavailable query'] if damage == 'skipped-rule' else [])
+    assert outcome.analysis_complete is (damage == 'none')
+    assert len(outcome.hits) == 1
+    assert outcome.hits[0].rule_id == 'example'
+    if damage != 'none':
+        assert outcome.errors or outcome.analysis_notes
+
+
+@pytest.mark.parametrize('attrs', [
+    {'extractor-failures': False, 'extractor-successes': 1},
+    {'extractor-failures': 0, 'extractor-successes': True},
+    {'extractor-failures': -1, 'extractor-successes': 1},
+    {'extractor-failures': '0', 'extractor-successes': 1},
+    {'extractor-successes': 1}, {'extractor-failures': 0},
+])
+def test_codeql_invalid_legacy_counts_remain_incomplete(attrs):
+    from core.audit.corpus.rule_eval import codeql_extraction_notes
+    artifact = {'runs': [{'invocations': [{'toolExecutionNotifications': [
+        {'properties': {'attributes': attrs}},
+    ]}]}]}
+    assert codeql_extraction_notes(artifact)
+
+
+def test_unknown_failed_semgrep_inventory_cannot_borrow_file_failure_attribution(tmp_path, monkeypatch):
+    from core.audit.corpus import rule_eval
+    from packages.semgrep import runner
+    from packages.semgrep.models import SemgrepResult
+
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'run_rule', lambda *a, **kw: SemgrepResult(
+        errors=['engine failed'], files_failed=[{'path': 'other.c', 'reason': 'parse error'}],
+    ))
+    monkeypatch.setattr(rule_eval, 'discover_semgrep_rules', lambda dirs: ([], ['unreadable rule']))
+    outcome = run_semgrep_engine(tmp_path, config_dirs=[tmp_path])
+    assert not outcome.analysis_complete
+    assert not outcome.complete_for('net/a.c', 'expected')
+    assert outcome.errors

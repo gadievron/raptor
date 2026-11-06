@@ -650,11 +650,23 @@ def run_semgrep_engine(
         )
         for failure in getattr(result, "files_failed", []):
             outcome.failed_files.add(_relativize(failure["path"], excerpt))
-        if not result.ok:
-            rules, _ = discover_semgrep_rules([d])
+        skipped = (getattr(result, "skipped_summary", None) or {}).get("total", 0)
+        skipped_rules = getattr(result, "skipped_rules", ())
+        if not result.ok or skipped or skipped_rules:
+            rules, discovery_errors = discover_semgrep_rules([d])
             outcome.failed_rules.update(rule.rule_id for rule in rules)
-            detail = "; ".join(result.errors) or f"rc={result.returncode}"
-            outcome.errors.append(f"{name}: {detail}")
+            # A bounded skip summary cannot identify every excluded file or
+            # rule. Restrict the absence gate to this config's inventory;
+            # unknown inventory requires a conservative engine-wide gate.
+            if discovery_errors or not rules:
+                outcome.analysis_complete = False
+            if not result.ok:
+                detail = "; ".join(result.errors) or f"rc={result.returncode}"
+                outcome.errors.append(f"{name}: {detail}")
+            if skipped or skipped_rules:
+                outcome.analysis_notes.append(
+                    f"{name}: files or rules skipped; absence is not a proven miss"
+                )
         for f in result.findings or []:
             outcome.hits.append(RuleHit(
                 engine="semgrep",
@@ -834,28 +846,50 @@ def codeql_feasibility(labels: list[Any]) -> tuple[str, str]:
     return ql_lang, ""
 
 
-def codeql_extraction_notes(artifact: dict[str, Any]) -> list[str]:
-    """Require affirmative extraction coverage before treating absence as a miss."""
-    observed = False
+def codeql_extraction_notes(artifact: Any) -> list[str]:
+    """Require valid extraction diagnostics independently for every SARIF run."""
+    runs = artifact.get("runs") if isinstance(artifact, dict) else None
+    unavailable = not isinstance(runs, list) or not runs
     incomplete = False
-    for run in artifact.get("runs", []):
-        for invocation in run.get("invocations", []):
-            for note in invocation.get("toolExecutionNotifications", []):
-                attrs = note.get("properties", {}).get("attributes", {})
-                status = attrs.get("extraction_status", {})
-                if status:
+    for run in runs if isinstance(runs, list) else []:
+        observed = False
+        invocations = run.get("invocations") if isinstance(run, dict) else None
+        for invocation in invocations if isinstance(invocations, list) else []:
+            if not isinstance(invocation, dict):
+                continue
+            incomplete |= invocation.get("executionSuccessful") is False
+            notifications = invocation.get("toolExecutionNotifications")
+            for note in notifications if isinstance(notifications, list) else []:
+                properties = note.get("properties") if isinstance(note, dict) else None
+                attrs = properties.get("attributes") if isinstance(properties, dict) else None
+                if not isinstance(attrs, dict):
+                    continue
+                if "extraction_status" in attrs:
                     observed = True
-                    total = status.get("#total", 0)
-                    incomplete |= (not total or status.get("#partial", 0) > 0
-                                   or status.get("#errors", 0) > 0
-                                   or status.get("#success", 0) != total)
-                if "extractor-failures" in attrs:
+                    status = attrs["extraction_status"]
+                    if not isinstance(status, dict):
+                        incomplete = True
+                    else:
+                        total = status.get("#total")
+                        success = status.get("#success")
+                        partial = status.get("#partial", 0)
+                        errors = status.get("#errors", 0)
+                        valid = all(type(value) is int and value >= 0
+                                    for value in (total, success, partial, errors))
+                        incomplete |= (not valid or not total or success != total
+                                       or partial != 0 or errors != 0)
+                if "extractor-failures" in attrs or "extractor-successes" in attrs:
                     observed = True
-                    incomplete |= (attrs["extractor-failures"] > 0
-                                   or attrs.get("extractor-successes", 0) == 0)
+                    failures = attrs.get("extractor-failures")
+                    successes = attrs.get("extractor-successes")
+                    incomplete |= not (
+                        type(failures) is int and failures == 0
+                        and type(successes) is int and successes > 0
+                    )
+        unavailable |= not observed
     if incomplete:
         return ["CodeQL extraction incomplete; absence is not a proven miss"]
-    if not observed:
+    if unavailable:
         return ["CodeQL extraction coverage unavailable; absence is not a proven miss"]
     return []
 
@@ -922,6 +956,11 @@ def run_codeql_engine(
         if not query_result.success:
             outcome.analysis_complete = False
             outcome.errors.extend(query_result.errors or [])
+        if getattr(query_result, "skipped_rules", ()):
+            outcome.analysis_complete = False
+            outcome.analysis_notes.append(
+                "CodeQL custom queries skipped; absence is not a proven miss"
+            )
         sarif_path = query_result.sarif_path
         if sarif_path and Path(sarif_path).is_file():
             from packages.semgrep.models import parse_sarif_data
@@ -933,7 +972,11 @@ def run_codeql_engine(
                 outcome.analysis_complete = False
             # Reuse the bounded, already decoded artifact; no second raw
             # read that can race replacement or bypass the byte budget.
-            findings = parse_sarif_data(artifact)
+            report_errors: list[str] = []
+            findings = parse_sarif_data(artifact, errors=report_errors)
+            if report_errors:
+                outcome.analysis_complete = False
+                outcome.errors.extend(f"CodeQL report: {error}" for error in report_errors)
             for f in findings:
                 outcome.hits.append(RuleHit(
                     engine="codeql",
@@ -943,6 +986,9 @@ def run_codeql_engine(
                     line_end=int(f.line_end or 0),
                     message=(f.message or "")[:200],
                 ))
+        else:
+            outcome.analysis_complete = False
+            outcome.errors.append("CodeQL query execution produced no readable SARIF report")
     except (RuntimeError, OSError, ValueError) as exc:
         outcome.analysis_complete = False
         outcome.errors.append(f"CodeQL execution failed: {exc}")

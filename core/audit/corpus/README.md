@@ -344,6 +344,13 @@ active project provides it. The actionable output for rule authoring
 is the **RULE-COVERAGE GAP** list — `finding` labels no evaluated
 rule even targets.
 
+Skipped Semgrep files or incompatible rules prevent absent hits from being
+scored as misses for the affected configuration. CodeQL requires valid
+extraction diagnostics for every report run; skipped custom queries and
+missing or damaged reports remain incomplete. Positive hits survive partial
+analysis. Inspect the analysis notes and errors before comparing recall
+across runs.
+
 Per-invocation wall time is recorded in `rule-eval-results.json`
 under `rule_timings` (coccinelle per rule, semgrep per category dir,
 codeql per query-suite pass) and the summary surfaces the slowest
