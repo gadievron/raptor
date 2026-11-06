@@ -54,14 +54,15 @@ jobs:
             uv.lock
             pyproject.toml
             uv.toml
+            .github/scripts/semgrep-cli.txt
 
-      - name: Create venv and install deps
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
-          uv tool install --python "$(command -v python3)" semgrep==1.177.0
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
+        with:
+          save-on-rebuild: 'true'
+
+      - name: Install Semgrep
+        run: uv tool install --python "$(command -v python3)" "$(cat .github/scripts/semgrep-cli.txt)"
 
       - name: Install external tools (radare2 + gcc)
         continue-on-error: true

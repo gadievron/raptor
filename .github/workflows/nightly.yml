@@ -191,6 +191,7 @@ jobs:
             uv.lock
             pyproject.toml
             uv.toml
+            .github/scripts/semgrep-cli.txt
 
       # Grammar and web extras supply the parsers and Playwright needed
       # by the real slow/integration cases. Keep this venv separate from
@@ -216,7 +217,7 @@ jobs:
         # an EXECUTED confirmed sweep, so without the binary those
         # tests can only skip. Installed here so the nightly keeps
         # covering the sweep → record → report → feedback chain.
-        run: uv tool install --python "$(command -v python3)" semgrep==1.177.0
+        run: uv tool install --python "$(command -v python3)" "$(cat .github/scripts/semgrep-cli.txt)"
 
       # The toolchain .debs are cached so the warm path installs from
       # local files instead of round-tripping apt.llvm.org every night
@@ -741,6 +742,7 @@ jobs:
             uv.lock
             pyproject.toml
             uv.toml
+            .github/scripts/semgrep-cli.txt
 
       - name: Restore or rebuild venv
         uses: ./.github/actions/setup-venv
@@ -750,7 +752,7 @@ jobs:
 
       - name: Install Semgrep
         run: |
-          uv tool install --python "$(command -v python3)" semgrep==1.177.0
+          uv tool install --python "$(command -v python3)" "$(cat .github/scripts/semgrep-cli.txt)"
           semgrep --version
 
       - name: Run Semgrep engine regressions
