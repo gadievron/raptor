@@ -163,7 +163,7 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     parts = []
     parts.append(f"command exit code: {return_code}")
     if kept:
-        parts.append(f"audit-run-dir kept at: {run_dir}")
+        parts.append(f"audit-run-dir kept at: {sanitise_for_terminal(str(run_dir))}")
 
     # Surface authentication state before the content: an
     # unauthenticated profile (degraded audit, no per-run nonce)
@@ -226,7 +226,12 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
         parts.extend(
             f"  {sanitise_for_terminal(str(t.ip), max_len=64)}:{t.port}"
             f" ({sanitise_for_terminal(str(t.family), max_len=32)})"
-            for t in profile.connect_targets)
+            for t in profile.connect_targets[:SAMPLE])
+        if len(profile.connect_targets) > SAMPLE:
+            parts.append(
+                f"  ... (+{len(profile.connect_targets) - SAMPLE} more; "
+                f"--json for the complete list)"
+            )
     return "\n".join(parts)
 
 
@@ -266,6 +271,8 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    from core.security.log_sanitisation import sanitise_for_terminal
 
     cmd = list(args.cmd or [])
     # argparse.REMAINDER captures the leading "--" too; strip it so the
@@ -338,7 +345,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             )
             return_code = result.returncode
         except FileNotFoundError as exc:
-            sys.stderr.write(f"raptor-sandbox-observe: {exc}\n")
+            sys.stderr.write(f"raptor-sandbox-observe: {sanitise_for_terminal(str(exc))}\n")
             return _USAGE_EX
         except subprocess.TimeoutExpired:
             # A first-class CLI flag must produce a diagnostic, not a

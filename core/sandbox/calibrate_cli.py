@@ -124,9 +124,9 @@ def _format_human(profile, *, cached: bool) -> str:
     SAMPLE = 15
     lines = []
     lines.append(f"binary: {_sft(str(profile.binary_path), max_len=200)}")
-    lines.append(f"  sha256:        {profile.binary_sha256[:16]}…")
-    lines.append(f"  env signature: {profile.env_signature[:16]}…")
-    lines.append(f"  captured at:   {profile.captured_at}")
+    lines.append(f"  sha256:        {_sft(profile.binary_sha256[:16])}…")
+    lines.append(f"  env signature: {_sft(profile.env_signature[:16])}…")
+    lines.append(f"  captured at:   {_sft(str(profile.captured_at), max_len=200)}")
     lines.append(f"  source:        {'cache' if cached else 'fresh probe'}")
     lines.append(f"  probe argv:    {_sft(str(profile.probe_args), max_len=200)}")
 
@@ -165,6 +165,8 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
     # Lazy import — keep --help fast.
     from core.sandbox import calibrate as cal
 
@@ -180,7 +182,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     bin_path = Path(args.bin).expanduser()
     if not bin_path.exists():
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: {bin_path}: not found\n"
+            f"raptor-sandbox-calibrate: {_sft(str(bin_path))}: not found\n"
         )
         return _USAGE_EX
 
@@ -189,11 +191,11 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             n = cal.clear_cache(bin_path)
         except OSError as exc:
             sys.stderr.write(
-                f"raptor-sandbox-calibrate: cannot clear profiles for {bin_path}: {exc}\n"
+                f"raptor-sandbox-calibrate: cannot clear profiles for {_sft(str(bin_path))}: {_sft(str(exc))}\n"
             )
             return _SOFTWARE_EX
         sys.stdout.write(
-            f"cleared {n} profile(s) for {bin_path}\n"
+            f"cleared {n} profile(s) for {_sft(str(bin_path))}\n"
         )
         return 0
 
@@ -208,7 +210,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             bin_sha = cal._sha256_file(bin_path.resolve())
         except OSError as exc:
             sys.stderr.write(
-                f"raptor-sandbox-calibrate: cannot hash {bin_path}: {exc}\n"
+                f"raptor-sandbox-calibrate: cannot hash {_sft(str(bin_path))}: {_sft(str(exc))}\n"
             )
             return _SOFTWARE_EX
         env_sig = cal._env_signature(env_keys)
@@ -216,7 +218,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         if cached_profile is None:
             sys.stderr.write(
                 f"raptor-sandbox-calibrate: no cached profile for "
-                f"{bin_path} (env keys: "
+                f"{_sft(str(bin_path))} (env keys: "
                 f"{list(env_keys) or '(none)'}). Run without --show "
                 f"to create one.\n"
             )
@@ -254,12 +256,12 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         )
     except FileNotFoundError as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: {exc}\n"
+            f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
         )
         return _USAGE_EX
     except (RuntimeError, OSError) as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: {exc}\n"
+            f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
         )
         return _SOFTWARE_EX
 

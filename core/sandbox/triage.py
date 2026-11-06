@@ -1404,7 +1404,7 @@ def _cli_main(argv: list | None = None) -> int:
 
     target = Path(args.run_dir)
     if not target.is_dir():
-        print(f"error: {target} is not a directory", file=sys.stderr)
+        print(f"error: {sanitise_for_terminal(str(target))} is not a directory", file=sys.stderr)
         return 1
 
     # Fail-closed by default: this exit code is documented as a CI
@@ -1412,7 +1412,7 @@ def _cli_main(argv: list | None = None) -> int:
     # a target that rewrote its own telemetry looks like.
     result = triage_run(target, allow_legacy=args.legacy)
     if result is None:
-        print(f"(no sandbox telemetry found for {target})")
+        print(f"(no sandbox telemetry found for {sanitise_for_terminal(str(target))})")
         return 0
 
     if args.json:
@@ -1420,7 +1420,7 @@ def _cli_main(argv: list | None = None) -> int:
     else:
         print(f"Verdict: {result['verdict'].title()}  "
               f"({len(result['signals'])} signal(s)) -> "
-              f"{target / TRIAGE_FILE}")
+              f"{sanitise_for_terminal(str(target / TRIAGE_FILE))}")
         for signal in result["signals"]:
             print(f"  - {signal['type']} [{signal['severity']}] "
                   f"count={signal['count']}")
@@ -1447,7 +1447,7 @@ def _cli_main(argv: list | None = None) -> int:
                 # a consumer reading the report from disk without
                 # re-verification would reach the terminal raw.
                 # Sanitise at the emission site like the caveat print.
-                print(f"Deep assessment ({deep['model'] or 'LLM'}) — "
+                print(f"Deep assessment ({sanitise_for_terminal(str(deep['model'] or 'LLM'), max_len=128)}) — "
                       f"advisory, rules verdict stands:")
                 for a in deep["assessments"]:
                     print(f"  - {sanitise_for_terminal(str(a['signal_type']), max_len=64)}: "
