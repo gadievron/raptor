@@ -175,3 +175,15 @@ def test_test_collection_restores_import_state(filename):
     assert sys.path is path_object
     assert sys.path == path_values
     assert all(sys.modules.get(name, missing) is value for name, value in before.items())
+
+
+def test_developer_commands_follow_the_verified_publication(repo):
+    developer = repo / "docs/developers.md"
+    developer.write_text("```bash\ndocker pull docker.io/danielcuthbert/raptor:latest\n"
+                         "docker run -it docker.io/danielcuthbert/raptor:latest\n```\n")
+    current = publication()
+    module.update(repo, current)
+    assert developer.read_text().count(":latest@" + current.digest) == 2
+    newer = publication(digest="sha256:" + "d" * 64, published_at=current.published_at + 1)
+    module.update(repo, newer)
+    assert developer.read_text().count(":latest@" + newer.digest) == 2

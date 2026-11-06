@@ -15,7 +15,7 @@ from dockerhub_scope import BUILD_INPUTS, copy_sources
 
 IMAGE = "danielcuthbert/raptor"
 STATE = ".github/published-image.json"
-DOCS = ("README.md", "docs/installation.md")
+DOCS = ("README.md", "docs/installation.md", "docs/developers.md")
 MAX_BYTES = 2 * 1024 * 1024
 IMAGE_REF = re.compile(r"(?<![\w/.-])(?:docker\.io/)?danielcuthbert/raptor(?::latest@sha256:[0-9a-f]{64}|@sha256:[0-9a-f]{64}|:latest)(?![\w:@.-])")
 
