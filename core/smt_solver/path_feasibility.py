@@ -9,8 +9,8 @@ Callers extract branch/guard conditions as structured constraint strings;
 this module encodes them into Z3 bitvector expressions and checks whether
 they are jointly satisfiable.
 
-- sat   → path is reachable; model gives concrete variable values for PoC
-- unsat → path conditions are mutually exclusive (likely false positive);
+- sat   → the encoded conjunction is satisfiable under its model assumptions
+- unsat → the encoded conditions are mutually exclusive under those assumptions;
           unsat core names the specific conflicting conditions
 - None  → Z3 unavailable or all conditions unparseable; fall back to LLM
 
@@ -78,7 +78,7 @@ batch boundaries where the LLM has no way to express same-value intent.
 A conservative set of libc/POSIX calls additionally gets a *summary
 axiom* asserted on its placeholder (``strlen(...) >= 0`` at signed
 profiles, ``sizeof(...) != 0``, ``abs``-family with the INT_MIN corner,
-``min``/``max`` as ITE definitions) — see ``_CALL_SUMMARIES``; applied
+``min``/``max`` as ITE definitions, and literal ``strnlen`` bounds) — see ``_CALL_SUMMARIES``; applied
 axioms are reported in ``PathSMTResult.summary_axioms``.
 
 This dedup contract assumes the conditions reflect an SSA view of the
@@ -107,7 +107,7 @@ defences:
      surrounding guards — the verdict goes to "feasible (post-mutation
      calls allocated fresh)" rather than a false refutation.
 
-Other limitations (verdict still trustworthy, but with caveats):
+Other limitations of the uniform-profile model:
 
   - **C operator precedence**, not arithmetic-textbook precedence.
     Within an expression, ``*`` binds tightest, then ``+ -``, then
@@ -166,6 +166,7 @@ from core.smt_solver import (
     z3_available as _z3_available,
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
+from core.smt_solver.call_arguments import split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
@@ -702,16 +703,20 @@ def _nonneg_summary(var: Any, _args_text: str, _vars: dict[str, Any],
     return ge(var, _mk_val(0, profile.width), signed=True)
 
 
-def _abs_summary(var: Any, _args_text: str, _vars: dict[str, Any],
+def _abs_summary(var: Any, args_text: str, vars_: dict[str, Any],
                  profile: BVProfile) -> Any | None:
-    """``result >= 0 OR result == INT_MIN`` at signed profiles.
+    """Signed absolute value, preserving the conservative INT_MIN corner.
 
-    ``abs(INT_MIN)`` is UB in C but evaluates to INT_MIN in
-    two's-complement practice; excluding that bit-pattern would
-    wrongly refute paths that reach it.
+    The prior model retains INT_MIN as a possible result bit pattern.
+    This is conservative handling of C undefined behavior, not proof of
+    a defined C execution at INT_MIN.
     """
     if not profile.signed:
         return None
+    argument = _parse_expr(args_text.strip(), vars_, profile=profile)
+    if not isinstance(argument, Rejection):
+        return var == z3.If(ge(argument, _mk_val(0, profile.width), signed=True), argument, -argument)
+    # Unsupported argument expressions retain the prior conservative range.
     int_min = _mk_val(1 << (profile.width - 1), profile.width)
     return z3.Or(ge(var, _mk_val(0, profile.width), signed=True),
                  var == int_min)
@@ -723,22 +728,21 @@ def _sizeof_summary(var: Any, _args_text: str, _vars: dict[str, Any],
     return var != _mk_val(0, profile.width)
 
 
-def _split_two_args(args_text: str) -> tuple[str, str] | None:
-    """Split ``args_text`` on its single top-level comma, or None."""
-    depth = 0
-    split_at = None
-    for i, ch in enumerate(args_text):
-        if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth -= 1
-        elif ch == ',' and depth == 0:
-            if split_at is not None:
-                return None  # more than two args
-            split_at = i
-    if split_at is None:
+def _strnlen_summary(var: Any, args_text: str, _vars: dict[str, Any],
+                     profile: BVProfile) -> Any | None:
+    """A literal bound constrains raw result bits even under a signed frame.
+
+    Bounds outside the frame, negative values, and symbolic bounds do not
+    establish a range. In particular, do not invent signed nonnegativity
+    when a representable result can set the sign bit.
+    """
+    parts = split_call_arguments(args_text)
+    if parts is None or len(parts) != 2:
         return None
-    return args_text[:split_at], args_text[split_at + 1:]
+    bound = _parse_literal_value(parts[1], BVProfile(width=profile.width, signed=False))
+    if isinstance(bound, Rejection):
+        return None
+    return le(var, _mk_val(bound, profile.width), signed=False)
 
 
 def _minmax_summary(pick_smaller: bool):
@@ -748,8 +752,8 @@ def _minmax_summary(pick_smaller: bool):
     axiom — the placeholder stays free, today's behaviour)."""
     def _builder(var: Any, args_text: str, vars_: dict[str, Any],
                  profile: BVProfile) -> Any | None:
-        parts = _split_two_args(args_text)
-        if parts is None:
+        parts = split_call_arguments(args_text)
+        if parts is None or len(parts) != 2:
             return None
         a = _parse_expr(parts[0].strip(), vars_, profile=profile)
         if isinstance(a, Rejection):
@@ -763,21 +767,21 @@ def _minmax_summary(pick_smaller: bool):
     return _builder
 
 
-# Callee name (case-sensitive, matching C) → axiom builder.  A builder
+# Callee name (case-sensitive, matching C) → (arity, axiom builder). A builder
 # returns a Z3 expression or None (axiom not meaningful for this
 # profile / arguments) — None keeps today's free-variable behaviour.
-_CALL_SUMMARIES: dict[str, Any] = {
-    "strlen": _nonneg_summary,
-    "strnlen": _nonneg_summary,
-    "wcslen": _nonneg_summary,
-    "abs": _abs_summary,
-    "labs": _abs_summary,
-    "llabs": _abs_summary,
-    "sizeof": _sizeof_summary,
-    "min": _minmax_summary(pick_smaller=True),
-    "max": _minmax_summary(pick_smaller=False),
-    "MIN": _minmax_summary(pick_smaller=True),
-    "MAX": _minmax_summary(pick_smaller=False),
+_CALL_SUMMARIES: dict[str, tuple[int, Any]] = {
+    "strlen": (1, _nonneg_summary),
+    "strnlen": (2, _strnlen_summary),
+    "wcslen": (1, _nonneg_summary),
+    "abs": (1, _abs_summary),
+    "labs": (1, _abs_summary),
+    "llabs": (1, _abs_summary),
+    "sizeof": (1, _sizeof_summary),
+    "min": (2, _minmax_summary(pick_smaller=True)),
+    "max": (2, _minmax_summary(pick_smaller=False)),
+    "MIN": (2, _minmax_summary(pick_smaller=True)),
+    "MAX": (2, _minmax_summary(pick_smaller=False)),
 }
 
 
@@ -786,8 +790,12 @@ def _summarise_call(
     vars_: dict[str, Any], *, profile: BVProfile,
 ) -> tuple[str, Any] | None:
     """Return ``(label, axiom_expr)`` for a recognised call, else None."""
-    builder = _CALL_SUMMARIES.get(callee)
-    if builder is None or len(args_text) > _MAX_SUMMARY_ARGS_CHARS:
+    summary = _CALL_SUMMARIES.get(callee)
+    if summary is None or len(args_text) > _MAX_SUMMARY_ARGS_CHARS:
+        return None
+    arity, builder = summary
+    arguments = split_call_arguments(args_text)
+    if arguments is None or len(arguments) != arity:
         return None
     expr = builder(var, args_text, vars_, profile)
     if expr is None:

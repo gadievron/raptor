@@ -1279,3 +1279,14 @@ English null aliases still canonicalise to uppercase `NULL`. The shared
 variable builder rejects this reserved spelling before native allocation.
 This is the
 shared bitvector grammar's literal convention, not a cross-language resolver.
+
+Optional call summaries require a well-formed argument list with the expected
+arity. Malformed or mismatched calls retain free placeholders without summary
+axioms. Signed `abs`-family summaries relate supported arithmetic arguments
+to the result; the existing two's-complement `INT_MIN` case remains admitted.
+Unsupported arguments retain only the conservative result range. `strnlen`
+gets a result bound only for a nonnegative literal representable at the active
+width. Its bound compares unsigned result bits even in a signed frame, so
+values with the sign bit set remain possible. Unknown, negative, ambiguous,
+or out-of-width bounds assert no range. These remain callee-model assumptions
+and do not grant source-bound audit proof authority.
