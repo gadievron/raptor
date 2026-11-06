@@ -167,7 +167,7 @@ from core.smt_solver import (
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
 from core.smt_solver.assertion_frames import track_frames
-from core.smt_solver.call_arguments import split_call_arguments
+from core.smt_solver.call_arguments import find_call_end, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
@@ -569,31 +569,16 @@ def is_balanced_call(text: str) -> bool:
     m = _CALL_HEAD_RE.match(text)
     if not m or m.end() >= len(text) or text[m.end()] != '(':
         return False
-    depth = 1
-    j = m.end() + 1
-    while j < len(text) and depth > 0:
-        if text[j] == '(':
-            depth += 1
-        elif text[j] == ')':
-            depth -= 1
-        j += 1
-    return depth == 0 and j == len(text)
+    return find_call_end(text, m.end()) == len(text)
 
 
 def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     """Allocate a fresh internal Z3 BV for a function-call operand.
 
-    Each call allocates a new variable.  This is the verb-path
-    allocator (one BV per operand the verb's caller hands it); it has
-    no call-text input and therefore can't dedup textually-identical
-    operands the way :func:`_substitute_calls` does for the
-    path-validator entry point.  Verb callers wanting same-text dedup
-    must consult their own operand-text → BV map before calling — the
-    verb dispatcher in ``packages/exploit_feasibility/smt_verbs.py``
-    currently does NOT, so passing the same operand text twice to one
-    verb (e.g. ``check_overflow(["strlen(s)", "strlen(s)"], "+")``)
-    will produce two independent anon vars.  Tracked as a follow-on
-    to the path-validator dedup landed alongside this comment.
+    Every allocation represents a separate call occurrence. Textual
+    repetition does not establish execution identity with another operand
+    or guard. Optional summaries can constrain a result without merging
+    its variable with another occurrence.
 
     The native name contains ``!`` and cannot be a parsed source identifier.
     It stays separate from parser aliases and from source names introduced
@@ -903,15 +888,8 @@ def _substitute_calls(
     while i < n:
         m = _CALL_HEAD_RE.match(text, i)
         if m and m.end() < n and text[m.end()] == '(':
-            depth = 1
-            j = m.end() + 1
-            while j < n and depth > 0:
-                if text[j] == '(':
-                    depth += 1
-                elif text[j] == ')':
-                    depth -= 1
-                j += 1
-            if depth == 0:
+            j = find_call_end(text, m.end())
+            if j is not None:
                 call_text = text[i:j]
                 existing = rev.get(call_text)
                 if existing is not None:
@@ -1391,7 +1369,7 @@ def _solve_pending(
     # confirm the variable is present, and the unsat-core /
     # smallest-model behaviour still produces a valid (just not
     # extremal) witness.
-    if prefer_witness is not None and pending and vars_ is not None:
+    if prefer_witness is not None and (pending or axioms) and vars_ is not None:
         var_name, direction = prefer_witness
         target = vars_.get(var_name)
         if target is not None:
@@ -1413,7 +1391,7 @@ def _solve_pending(
     _axioms = axioms or []
     _axiom_labels = [label for label, _ in _axioms]
 
-    if not pending:
+    if not pending and not _axioms:
         if unknown:
             return PathSMTResult(
                 wp_complete=reduce_constraints,
@@ -1544,6 +1522,39 @@ def _solve_pending(
     )
 
 
+@dataclass
+class CallOperandModel:
+    """Independent call occurrences and their optional background theory."""
+
+    anon_var_map: dict[str, str] = field(default_factory=dict)
+    axioms: list[tuple[str, Any]] = field(default_factory=list)
+
+
+def make_call_operand(
+    text: str, vars_: dict[str, Any], *, profile: BVProfile,
+    model: CallOperandModel,
+) -> Any:
+    """Allocate one independent occurrence, retaining its labels and theory.
+
+    Matching operand or guard text never establishes execution identity.
+    The same optional summaries used by guards constrain only this fresh
+    result. Argument variables retain the shared uniform-profile model.
+    """
+    text = text.strip()
+    if len(text) > _MAX_CONDITION_CHARS:
+        raise ValueError("call operand exceeds the condition character limit")
+    if not is_balanced_call(text):
+        raise ValueError("call operand must be one balanced function call")
+    head = _CALL_HEAD_RE.match(text)
+    assert head is not None
+    variable = make_anon_call_var(vars_, profile=profile)
+    summary = _summarise_call(head.group(), text[head.end() + 1:-1], text, variable, vars_, profile=profile)
+    model.anon_var_map[str(variable.decl().name())] = text
+    if summary is not None:
+        model.axioms.append(summary)
+    return variable
+
+
 def is_literal_identifier(name: str) -> bool:
     """Whether the condition grammar treats an identifier token as a literal."""
     return bool(_NULL_RE.fullmatch(name))
@@ -1591,6 +1602,7 @@ def check_verb_feasibility(
     *,
     profile: BVProfile = BV_C_UINT64,
     reduce_constraints: bool = True,
+    operand_model: CallOperandModel | None = None,
 ) -> PathSMTResult:
     """Feasibility analysis for a named SMT verb.
 
@@ -1603,7 +1615,9 @@ def check_verb_feasibility(
     ``text_guards`` are caller-supplied path conditions, parsed via the
     same path as :func:`check_path_feasibility`.  Verbs and the parser
     share ``vars_`` so identifier-named operands resolve to the same
-    Z3 BV regardless of which path created them.
+    Z3 BV regardless of which path created them. ``operand_model`` carries
+    independent call occurrences and their optional theory; matching call
+    text does not merge operand and guard executions.
 
     ``reduce_constraints=False`` skips optional tautology and constraint-summary
     queries. The full parsed obligation is still asserted; summary fields are
@@ -1631,14 +1645,18 @@ def check_verb_feasibility(
     tautology_solver = _new_solver() if reduce_constraints else None
     solver = _new_solver()
     batch = _classify_conditions(text_guards, vars_, tautology_solver, profile=profile)
-    # Intrinsic predicates and guards are asserted together with the guards'
-    # call-summary axioms. Each query owns its labels and mutation windows.
+    # Operand calls remain independent occurrences. Their theory has no
+    # established scalar segment across rejected mutations.
+    operand_model = operand_model if operand_model is not None else CallOperandModel()
+    operand_axioms = list(operand_model.axioms)
     return _solve_pending(
         list(intrinsic) + batch.pending, solver,
         batch.satisfied, batch.unknown, batch.rejections,
-        profile=profile, anon_map=batch.anon_map, axioms=batch.axioms,
+        profile=profile, anon_map={**operand_model.anon_var_map, **batch.anon_map},
+        axioms=operand_axioms + batch.axioms,
         pending_epochs=[None] * len(intrinsic) + batch.pending_epochs,
-        axiom_epochs=batch.axiom_epochs, reduce_constraints=reduce_constraints,
+        axiom_epochs=[None] * len(operand_axioms) + batch.axiom_epochs,
+        reduce_constraints=reduce_constraints,
     )
 
 

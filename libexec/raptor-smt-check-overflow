@@ -11,8 +11,9 @@ Usage:
 Each ``--operand`` is one operand of the suspect arithmetic op.  Operands
 must be atomic — single identifiers (``count``), numeric literals
 (``16``, ``0x10``), or balanced function-call shapes (``sizeof(record)``,
-``strlen(input)``).  Call shapes become unconstrained free variables, so
-a ``feasible=true`` verdict involving one is a hint, not proof.  Compound
+``strlen(input)``). Each call gets an independent symbol with any supported
+summary assumptions. A ``feasible=true`` verdict involving one is a hint,
+not proof of source execution.  Compound
 arithmetic (``a + b``), pointer deref, and struct access are rejected
 with a clear error; pass the numeric value or use raptor-smt-validate-path
 directly for free-form predicates.

@@ -10,7 +10,7 @@ Usage:
 ``SIZE`` and ``INDEX`` name the buffer length and the index used at the
 access site.  Each must be atomic: a single identifier (``count``), a
 numeric literal (``16``, ``0x10``), or a balanced function-call shape
-(``strlen(input)`` — treated as an unconstrained free variable, so a
+(``strlen(input)`` — an independent symbol with optional summary theory, so a
 ``feasible=true`` verdict involving one is a hint, not proof).  Compound
 arithmetic (``--index 'offset + length'``) is rejected with a clear
 error; introduce a helper variable in ``--guard``
@@ -30,8 +30,9 @@ Output: JSON to stdout matching :func:`validate_path`'s shape.  Of interest:
   feasible=null   Z3 unavailable / unencodable
 
 Notes:
-  Only checks the upper bound (``index >= buffer_size``).  Negative-index
-  escapes need a signed profile AND an explicit guard expression.
+  Unsigned profiles check the upper bound (``index >= buffer_size``).
+  Signed profiles also check negative indices. Signed decimal operands
+  such as ``--index -1`` are accepted only under a signed profile.
 """
 import argparse
 import sys

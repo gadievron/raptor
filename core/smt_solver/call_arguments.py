@@ -41,3 +41,37 @@ def split_call_arguments(text: str) -> tuple[str, ...] | None:
     if stack or quote or not tail:
         return None
     return (*parts, tail)
+
+
+def find_call_end(text: str, opening: int) -> int | None:
+    """Return the exclusive end of a balanced call, respecting quoted text.
+
+    The opening index must name '('. Delimiters inside string or character
+    literals do not change nesting; malformed or incomplete calls decline.
+    This is structural recognition, not a C expression or type checker.
+    """
+    if not 0 <= opening < len(text) or text[opening] != "(":
+        return None
+    closing = {"(": ")", "[": "]", "{": "}"}
+    stack = [")"]
+    quote = ""
+    escaped = False
+    for index in range(opening + 1, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char in closing:
+            stack.append(closing[char])
+        elif char in closing.values():
+            if not stack or stack.pop() != char:
+                return None
+            if not stack:
+                return index + 1
+    return None
