@@ -2829,12 +2829,16 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
         return []
     # Pass 1 collects module-local helpers whose return value is
     # tainted (render_json-style); pass 2 reports with calls to them
-    # treated as foreign reads. Pass-1 violations are discarded — the
-    # second pass re-derives them with the fuller call knowledge.
+    # treated as foreign reads. When such helpers exist, discard pass-1
+    # violations and re-derive them with the fuller call knowledge.
     pre = _Scanner(rel)
     pre.visit(tree)
-    scanner = _Scanner(rel, frozenset(pre.tainted_return_funcs))
-    scanner.visit(tree)
+    # Without tainted helper returns, pass 2 has exactly the same inputs.
+    # Reuse pass 1's findings instead of repeating the entire taint walk.
+    scanner = pre
+    if pre.tainted_return_funcs:
+        scanner = _Scanner(rel, frozenset(pre.tainted_return_funcs))
+        scanner.visit(tree)
     violations = scanner.violations
     violations.extend(_mermaid_scan(tree, rel))
     violations.extend(_sanitiser_shadow_scan(tree, rel))

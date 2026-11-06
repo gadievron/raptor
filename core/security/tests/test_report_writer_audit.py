@@ -1484,3 +1484,31 @@ def test_schema_key_derivation_failure_doctrine(tmp_path):
         stub.write_text("x = 1\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="yielded no keys"):
         _derive_schema_keys(root=tmp_path)
+
+
+@pytest.mark.parametrize("helper, expected_walks", [(False, 1), (True, 2)],
+                         ids=["direct-read", "tainted-helper"])
+def test_taint_walk_repeats_only_when_helper_returns_require_it(monkeypatch, helper, expected_walks):
+    from core.security import report_writer_audit as audit
+
+    scanners = []
+    original = audit._Scanner
+
+    class CountingScanner(original):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            scanners.append(self)
+
+    monkeypatch.setattr(audit, "_Scanner", CountingScanner)
+    source = (
+        "def title(finding):\n    return finding.get('title')\n"
+        "def show(finding):\n    print(title(finding))\n"
+        if helper else
+        "def title():\n    return 'local constant'\n"
+        "def show(finding):\n    print(finding.get('title'))\n"
+    )
+    findings = audit.audit_source(source, "sample.py")
+    assert len(scanners) == expected_walks
+    assert findings
+    assert any(v.func_name == "show" for v in findings)
+    assert findings == audit.audit_source(source, "sample.py")
