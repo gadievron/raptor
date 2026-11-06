@@ -246,14 +246,13 @@ class ObserveProfile:
         the run (per-category cap or global cap exhausted). When
         True, this profile is INCOMPLETE — operators tuning a probe
         should re-run with a larger ``--audit-budget`` to capture
-        every event. Comes from the end-of-run audit_summary record
-        the tracer writes; absent if the run didn't write a summary
-        (tracer crashed mid-run, audit didn't engage, etc.).
+        every event. Comes from accepted drop markers or end-of-run
+        audit_summary accounting; counts may be unavailable without a tail.
     dropped_by_category
         Per-category drop counts from the audit_summary record. Use
         to understand WHICH category overflowed (e.g. "we lost 2000
         file-read-data records but kept all connects"). Empty dict
-        if no drops.
+        if no counted drops; a drop marker may establish loss without counts.
     nonce_trusted
         False when the parser refused nonce-based trust for this run:
         the sandbox executed on a namespace-less backend AND the
@@ -265,7 +264,7 @@ class ObserveProfile:
     capture_incomplete
         True when an accepted audit summary reports append/reader failure or an
         undrained stream, or parsing loses records to read, format, size,
-        schema, or attribution errors.
+        schema, or attribution errors, including ambiguity admission drops.
         Independent of budget drops; sticky across merges.
     """
     paths_read: list = field(default_factory=list)
@@ -701,6 +700,19 @@ def parse_observe_log(run_dir, *,
             ambiguous_skipped += 1
             continue
 
+        marker_type = rec.get("type")
+        if isinstance(marker_type, str) and marker_type in {
+            "category_budget_exceeded", "pid_budget_exceeded",
+            "sampling_budget_exceeded",
+        }:
+            # These markers accompany actual drops. Global and sampling-mode
+            # notices can accompany kept records and do not establish loss.
+            profile.budget_truncated = True
+            continue
+        if marker_type == "parse_ambiguous_cap_exceeded":
+            profile.capture_incomplete = True
+            continue
+
         # Audit-summary tail record carries budget data. Surface
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
@@ -712,12 +724,10 @@ def parse_observe_log(run_dir, *,
                     profile.capture_incomplete = True
             if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
                 profile.capture_incomplete = True
-            append_failures = rec.get("append_failures")
-            # A supplied counter is clean only as an exact integer zero;
-            # positive counts and malformed values make capture incomplete.
-            if "append_failures" in rec and (
-                    type(append_failures) is not int or append_failures != 0):
-                profile.capture_incomplete = True
+            # A supplied loss counter is clean only as an exact integer zero.
+            for field in ("append_failures", "parse_ambiguous_records_dropped"):
+                if field in rec and (type(rec[field]) is not int or rec[field] != 0):
+                    profile.capture_incomplete = True
             dropped = rec.get("dropped_by_category", {})
             if not isinstance(dropped, dict):
                 profile.capture_incomplete = True
