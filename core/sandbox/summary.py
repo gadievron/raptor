@@ -255,7 +255,7 @@ def _record_evidence_write_failure(run_dir: Path) -> None:
     """Retain producer loss for the captured run, including budget drops."""
     try:
         failure_key = str(run_dir.resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         logger.warning("record_denial: could not retain evidence failure state",
                        exc_info=True)
     else:
@@ -482,7 +482,7 @@ def record_proxy_persist_state(run_dir: Path, *,
     never raises. See _proxy_persist_state for the trust model."""
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return
     with _lock:
         cur = _proxy_persist_state.setdefault(
@@ -502,7 +502,7 @@ def get_proxy_persist_state(run_dir: Path) -> "dict | None":
     """
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     with _lock:
         cur = _proxy_persist_state.get(run_key)
@@ -515,7 +515,7 @@ def get_evidence_write_failure(run_dir: Path) -> bool:
     """Whether this parent observed loss while recording denial evidence."""
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return False
     with _lock:
         return run_key in _evidence_write_failures
@@ -529,7 +529,7 @@ def get_evidence_inode_mismatch(run_dir: Path) -> bool:
     """
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return False
     with _lock:
         return run_key in _evidence_inode_mismatches
@@ -565,7 +565,7 @@ def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
     hidden = bool(mount_ns_active) or bool(restrict_reads)
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return
 
     def _weakest_tier(cur_label: "str | None",
@@ -632,7 +632,7 @@ def get_run_posture(run_dir: Path) -> dict[str, bool] | None:
     re-triage in a fresh process, or a run predating posture wiring."""
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     with _lock:
         cur = _run_postures.get(run_key)
@@ -662,7 +662,7 @@ def record_cli_disable(run_dir: Path, consent: str) -> None:
     """
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return
     with _lock:
         _cli_disables.setdefault(run_key, str(consent))
@@ -673,7 +673,7 @@ def get_cli_disable(run_dir: Path) -> str | None:
     CLI disable in force, or None."""
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     with _lock:
         return _cli_disables.get(run_key)
@@ -789,7 +789,7 @@ def record_floor_refusal(run_dir: Path, *, floor: str, achievable: str,
     }
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return
     with _lock:
         _floor_refusals.setdefault(run_key, []).append(dict(record))
@@ -846,7 +846,7 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     out = run_dir / AUDIT_DEGRADED_FILE
     try:
         run_key = str(run_dir.resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         logger.warning("record_audit_degraded: cannot resolve run directory",
                        exc_info=True)
         return
@@ -953,7 +953,7 @@ def get_audit_degraded(run_dir: Path) -> dict | None:
     """
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     with _lock:
         entry = _degraded_markers.get(run_key)
@@ -982,7 +982,7 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
     """
     try:
         run_key = str(Path(run_dir).resolve())
-    except OSError:
+    except (OSError, RuntimeError):
         return False
     with _lock:
         entry = _degraded_markers.get(run_key)
