@@ -20,6 +20,7 @@ from typing import Any
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
 from core.sandbox.evidence import _unique_evidence_object
 from core.security.capped_read import read_capped
+from core.security.log_sanitisation import sanitise_for_terminal
 
 EGRESS_SUMMARY_FILE = "egress-summary.json"
 
@@ -251,7 +252,7 @@ def finalize_egress_summary(output_dir: Path) -> dict[str, Any] | None:
             log.info(
                 "egress: %d connection(s) to %d host(s), %s in / %s out"
                 " → %s",
-                total, hosts, bytes_in, bytes_out, out_path,
+                total, hosts, bytes_in, bytes_out, sanitise_for_terminal(str(out_path)),
             )
         else:
             parts = []
@@ -263,12 +264,15 @@ def finalize_egress_summary(output_dir: Path) -> dict[str, Any] | None:
                 "egress: %d connection(s) to %d host(s) (%s),"
                 " %s in / %s out → %s",
                 total, hosts, ", ".join(parts),
-                bytes_in, bytes_out, out_path,
+                bytes_in, bytes_out, sanitise_for_terminal(str(out_path)),
             )
         return summary
-    except Exception:  # noqa: BLE001 — never fail lifecycle
+    except Exception as exc:  # noqa: BLE001 — never fail lifecycle
+        # A raw traceback can reintroduce path/error control bytes after
+        # sanitizing the message. Retain bounded exception context instead.
         log.debug(
-            "finalize_egress_summary failed for %s",
-            output_dir, exc_info=True,
+            "finalize_egress_summary failed for %s: %s: %s",
+            sanitise_for_terminal(str(output_dir)), type(exc).__name__,
+            sanitise_for_terminal(str(exc)),
         )
         return None
