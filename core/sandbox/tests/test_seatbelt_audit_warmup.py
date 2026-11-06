@@ -23,6 +23,8 @@ from core.sandbox import seatbelt_audit
 from core.sandbox.seatbelt import SANDBOX_KEXT_SENDER
 
 
+from core.testing.module_bindings import mock_module_attribute
+
 def _kext_line(*, pid: int, name: str = "sandbox-exec",
                action: str = "file-read-data",
                path: str = "/usr/bin/true") -> bytes:
@@ -128,8 +130,8 @@ def test_warm_up_returns_true_when_target_pid_event_seen(tmp_path):
     streamer = _make_streamer(tmp_path)
     streamer._proc = _FakeProc(_FakeStdout(lines))
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         return_value=_FakeWarmUp(target_pid),
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
@@ -155,8 +157,8 @@ def test_warm_up_returns_false_when_no_target_pid_event(tmp_path):
     # Compress the timeout for a fast unit-test run.
     with mock.patch.object(
         seatbelt_audit, "_WARM_UP_TIMEOUT_S", 0.5,
-    ), mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    ), mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         return_value=_FakeWarmUp(target_pid),
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
@@ -190,8 +192,8 @@ def test_warm_up_returns_false_when_sandbox_exec_oserror(tmp_path):
     streamer = _make_streamer(tmp_path)
     streamer._proc = _FakeProc(_FakeStdout([]))
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         side_effect=OSError("denied"),
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
@@ -220,8 +222,8 @@ def test_warm_up_invokes_sandbox_exec_with_deny_default_profile(tmp_path):
         captured.append(argv)
         return _FakeWarmUp(target_pid)
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen", side_effect=_capture_popen,
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen", side_effect=_capture_popen,
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
         return_value="/usr/bin/sandbox-exec",
@@ -270,8 +272,8 @@ def test_warm_up_skips_non_kext_entries(tmp_path):
     streamer = _make_streamer(tmp_path)
     streamer._proc = _FakeProc(_FakeStdout(lines))
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         return_value=_FakeWarmUp(target_pid),
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
@@ -302,8 +304,8 @@ def test_start_proceeds_in_best_effort_when_warm_up_times_out(tmp_path):
 
     with mock.patch.object(
         seatbelt_audit, "_WARM_UP_TIMEOUT_S", 0.2,
-    ), mock.patch.object(
-        seatbelt_audit.subprocess, "Popen", side_effect=_popen_substitute,
+    ), mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen", side_effect=_popen_substitute,
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
         return_value="/usr/bin/sandbox-exec",
@@ -335,8 +337,8 @@ def test_start_raises_when_warm_up_required_and_gate_fails(tmp_path):
     )
     fake_log_stream = _FakeProc(_FakeStdout([]))
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         return_value=fake_log_stream,
     ), mock.patch.object(
         seatbelt_audit.LogStreamer, "_warm_up_until_attached",
@@ -358,8 +360,8 @@ def test_start_keeps_best_effort_when_warm_up_not_required(tmp_path):
     streamer = _make_streamer(tmp_path)
     fake_log_stream = _FakeProc(_FakeStdout([]))
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen",
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen",
         return_value=fake_log_stream,
     ), mock.patch.object(
         seatbelt_audit.LogStreamer, "_warm_up_until_attached",
@@ -431,8 +433,8 @@ def test_warm_up_reaps_child_even_on_match(tmp_path):
         return orig_wait(timeout)
     warm_up.wait = _track_wait
 
-    with mock.patch.object(
-        seatbelt_audit.subprocess, "Popen", return_value=warm_up,
+    with mock_module_attribute(
+        seatbelt_audit, "subprocess", "Popen", return_value=warm_up,
     ), mock.patch.object(
         _probes, "_find_sandbox_binary",
         return_value="/usr/bin/sandbox-exec",

@@ -18,6 +18,9 @@ from core.audit.corpus.sources import (
     looks_like_connectivity_error,
 )
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git not available",
 )
@@ -195,7 +198,7 @@ class TestRunGitEnv:
             captured["env"] = kw["env"]
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        monkeypatch.setattr(sources_mod.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, sources_mod, "subprocess", "run", fake_run)
         sources_mod._run_git(["version"], timeout_s=5)
         assert captured["env"].get("HTTPS_PROXY") == (
             "http://proxy.invalid:3128"

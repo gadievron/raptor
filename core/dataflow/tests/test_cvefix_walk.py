@@ -22,6 +22,9 @@ from core.dataflow.cvefix_walk import (
 )
 from core.git.clone import safe_git_command, safe_git_readonly_command
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 
@@ -199,7 +202,7 @@ def test_run_passes_safe_env(monkeypatch):
         captured.update(kw)
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(cvefix_walk.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, cvefix_walk, "subprocess", "run", fake_run)
     assert cvefix_walk._run(["true"], 5) is True
     assert captured["env"] == {"SENT": "1"}            # sanitised env, not os.environ
 
@@ -520,7 +523,7 @@ def _capture_subprocess(monkeypatch):
         calls.append({"cmd": list(cmd), **kw})
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(cvefix_walk.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, cvefix_walk, "subprocess", "run", fake_run)
     return calls
 
 

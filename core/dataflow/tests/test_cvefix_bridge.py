@@ -13,6 +13,8 @@ from core.dataflow.barrier_synth import SynthResult
 from core.dataflow.cvefix_loader import CveFixPair
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 def _pair(cwe="CWE-89", lang="Python", fix="f1"):
     return CveFixPair("CVE-X", cwe, "https://github.com/o/a", lang, fix, "p1")
 
@@ -319,7 +321,7 @@ def test_git_diff_argv_carries_safety_pins(monkeypatch, tmp_path: Path):
             stdout = "+ guarded\n"
         return R()
 
-    monkeypatch.setattr(cvefix_bridge.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, cvefix_bridge, "subprocess", "run", fake_run)
     cvefix_bridge._git_diff(tmp_path, "p", "f", "src/a.py")
     cvefix_bridge._git_touched_files(tmp_path, "p", "f")
 
@@ -377,7 +379,7 @@ def test_git_touched_files_returns_empty_on_subprocess_fail(monkeypatch, tmp_pat
     not abort the synth."""
     def fake_run(*a, **k):
         raise OSError("simulated git failure")
-    monkeypatch.setattr(cvefix_bridge.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, cvefix_bridge, "subprocess", "run", fake_run)
     assert cvefix_bridge._git_touched_files(tmp_path, "p", "f") == []
 
 

@@ -16,6 +16,9 @@ from core.llm.cc_probe import (
 # The probe's subprocess.run is mocked throughout — spawn-machinery
 # shape tests, so the transport kill switch the root conftest sets is
 # cleared for this module.
+
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.usefixtures("cc_spawn_machinery_enabled")
 
 
@@ -96,7 +99,7 @@ class TestProbe:
                 cmd, returncode, stdout=stdout, stderr="",
             )
 
-        monkeypatch.setattr(cc_probe.subprocess, "run", run)
+        patch_module_attribute(monkeypatch, cc_probe, "subprocess", "run", run)
         return calls
 
     def test_success_returns_model_and_caches(self, monkeypatch):
@@ -234,7 +237,7 @@ class TestCachedRead:
         def boom(*a, **k):
             raise AssertionError("cache-only read must not spawn claude")
 
-        monkeypatch.setattr(cc_probe.subprocess, "run", boom)
+        patch_module_attribute(monkeypatch, cc_probe, "subprocess", "run", boom)
         monkeypatch.setattr(
             cc_probe.shutil, "which", lambda name: "/usr/bin/claude",
         )
@@ -248,8 +251,8 @@ class TestCachedRead:
         )
         sig = cc_probe._backend_signature("/usr/bin/claude")
         cc_probe._write_cache(sig, "backend.claude-model-id")
-        monkeypatch.setattr(
-            cc_probe.subprocess, "run",
+        patch_module_attribute(monkeypatch,
+            cc_probe, "subprocess", "run",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError),
         )
         assert cached_cc_session_model() == "backend.claude-model-id"

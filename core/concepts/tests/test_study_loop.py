@@ -13,6 +13,9 @@ import pytest
 
 from core.concepts.tests._study_cli import run_loop_with_prep
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 STUDY_LOOP = str(RAPTOR_DIR / "libexec" / "raptor-study-loop")
 
@@ -527,7 +530,7 @@ class TestRunEnvCuration:
 
             return R()
 
-        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", fake_run)
         monkeypatch.setenv("EDITOR", "evil-editor")
         monkeypatch.setenv("SOME_RANDOM_SHELL_VAR", "leak-me")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
@@ -555,7 +558,7 @@ class TestRunEnvCuration:
 
             return R()
 
-        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", fake_run)
         monkeypatch.delenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", raising=False)
         mod._run([sys.executable, "-c", "pass"])
         assert "RAPTOR_STUDY_MAX_OUTPUT_TOKENS" not in captured["env"]
@@ -676,7 +679,6 @@ class TestPendingItemsShapeTolerance:
         ]}))
         pending = _loop._pending_items(p)
         assert [i["id"] for i in pending] == ["rl-1"]
-
 
 
 def test_real_empty_prep_preserves_required_model_failure(tmp_path):

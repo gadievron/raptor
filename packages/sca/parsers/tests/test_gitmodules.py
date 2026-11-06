@@ -12,6 +12,9 @@ from packages.sca.parsers.gitmodules import parse
 
 # skip-or-hermetic: the ls-tree fallback tests build REAL git repos —
 # on a git-less runner they must skip, not error.
+
+from core.testing.module_bindings import patch_module_attribute
+
 _needs_git = pytest.mark.skipif(
     shutil.which("git") is None, reason="git binary not available",
 )
@@ -379,7 +382,7 @@ def test_ls_tree_runs_hardened_and_env_sanitised(
         seen["kwargs"] = kwargs
         return _Result()
 
-    monkeypatch.setattr(gm.subprocess, "run", _fake_run)
+    patch_module_attribute(monkeypatch, gm, "subprocess", "run", _fake_run)
     monkeypatch.setenv("GITHUB_TOKEN", "hostile-must-not-leak")
     sha = gm._resolve_from_ls_tree(tmp_path, "libs/x")
     assert sha == "0123456789abcdef0123456789abcdef01234567"

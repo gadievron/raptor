@@ -10,6 +10,8 @@ import pytest
 from core.sandbox import parser_jail as parser
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 class TestParserWorkerTeardown:
     @pytest.mark.parametrize("stage", ["poll", "kill", "wait"])
     def test_os_error_still_attempts_bounded_reap(self, stage, caplog):
@@ -87,7 +89,7 @@ class TestParserWorkerTeardown:
         proc.poll.return_value = None
         proc.wait.side_effect = OSError("wait failed")
         proc.kill.side_effect = OSError("kill failed")
-        monkeypatch.setattr(parser.subprocess, "Popen", Mock(return_value=proc))
+        patch_module_attribute(monkeypatch, parser, "subprocess", "Popen", Mock(return_value=proc))
         monkeypatch.setattr(
             jail, "_read_ready_frame", Mock(side_effect=parser._ProtocolError("bad ready frame")),
         )

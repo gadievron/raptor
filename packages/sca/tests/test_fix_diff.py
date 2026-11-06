@@ -16,6 +16,8 @@ from packages.sca import fix_diff
 from packages.sca.cli import SUBCOMMANDS, _dispatch
 
 
+from core.testing.module_bindings import patch_module_attribute
+
 def _row(adv_id="GHSA-xxxx-yyyy-zzzz", aliases=("CVE-2021-44228",),
          suppressed=False):
     row = {
@@ -89,7 +91,7 @@ class TestRunOne:
             })
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-        monkeypatch.setattr(fix_diff.subprocess, "run", _fake_run)
+        patch_module_attribute(monkeypatch, fix_diff, "subprocess", "run", _fake_run)
         row = fix_diff.run_one(
             "CVE-2024-12345", tmp_path,
             budget_multiplier=2.0, model="gemini-2.5-pro",
@@ -107,14 +109,14 @@ class TestRunOne:
         def _boom(cmd, **kw):
             raise subprocess.TimeoutExpired(cmd, 1)
 
-        monkeypatch.setattr(fix_diff.subprocess, "run", _boom)
+        patch_module_attribute(monkeypatch, fix_diff, "subprocess", "run", _boom)
         row = fix_diff.run_one("CVE-2024-12345", tmp_path)
         assert row["ok"] is False
         assert row["error_class"] == "TimeoutExpired"
 
     def test_unparseable_output_yields_failure_row(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            fix_diff.subprocess, "run",
+        patch_module_attribute(monkeypatch,
+            fix_diff, "subprocess", "run",
             lambda cmd, **kw: subprocess.CompletedProcess(
                 cmd, 5, stdout="garbage", stderr="agent surrendered"),
         )
@@ -230,7 +232,7 @@ def test_run_one_child_env_is_llm_composed_not_ambient(
         seen["env"] = kw["env"]
         return _Proc()
 
-    monkeypatch.setattr(fix_diff.subprocess, "run", _fake_run)
+    patch_module_attribute(monkeypatch, fix_diff, "subprocess", "run", _fake_run)
     fix_diff.run_one("CVE-2024-0001", tmp_path)
     env = seen["env"]
     assert env["_RAPTOR_TRUSTED"] == "1"

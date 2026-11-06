@@ -9,6 +9,9 @@ import tarfile
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
 ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location("check_playwright_source", ROOT / ".github/scripts/check_playwright_source.py")
 mod = importlib.util.module_from_spec(SPEC)
@@ -65,7 +68,7 @@ def source_case(tmp_path, monkeypatch):
     artifact = {"version": version, "locations": [{"path": "/site/playwright-1.60.0.dist-info/METADATA"}]}
     calls = []
     monkeypatch.setattr(mod, "verify_signature", lambda *args, **kwargs: calls.append(kwargs))
-    monkeypatch.setattr(mod.subprocess, "run", lambda command, **kwargs: kwargs["stdout"].write(b"{}\n"))
+    patch_module_attribute(monkeypatch, mod, "subprocess", "run", lambda command, **kwargs: kwargs["stdout"].write(b"{}\n"))
     return artifact, files, tmp_path, calls
 
 
@@ -123,7 +126,7 @@ def test_attestation_must_bind_release_workflow_commit_and_digest(fault):
 
 def test_signature_verification_requires_identity_issuer_and_offline_cache(tmp_path, monkeypatch):
     commands = []
-    monkeypatch.setattr(mod.subprocess, "run", lambda command, **kwargs: commands.append((command, kwargs)))
+    patch_module_attribute(monkeypatch, mod, "subprocess", "run", lambda command, **kwargs: commands.append((command, kwargs)))
     mod.verify_signature(tmp_path, "1.60.0", Path("/tools/sigstore"), offline=True)
     command, options = commands[0]
     assert "--tuf-force-cache" in command
