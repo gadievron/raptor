@@ -11,20 +11,25 @@ import pytest
 from core.config import RaptorConfig
 from packages.codeql.temp_env import temporary_command
 
+
+import packages.codeql.temp_env as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux read-only /tmp steering")
 
 
 @pytest.fixture
 def readonly_tmp(monkeypatch, tmp_path):
     original = os.statvfs
-    monkeypatch.setattr(os, 'statvfs', lambda path: (
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'statvfs', lambda path: (
         SimpleNamespace(f_flag=os.ST_RDONLY) if str(path) == '/tmp' else original(path)))
     monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {'TMPDIR': str(tmp_path)}))
     return tmp_path
 
 
 def test_writable_system_tmp_keeps_original_command(monkeypatch):
-    monkeypatch.setattr(os, 'statvfs', lambda _: SimpleNamespace(f_flag=0))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'statvfs', lambda _: SimpleNamespace(f_flag=0))
     command = ['/tools/codeql', 'database', 'analyze', '/database']
     assert temporary_command(command) is command
 
@@ -37,7 +42,6 @@ def test_readonly_system_tmp_steers_shell_and_java_without_shell_evaluation(read
     assert wrapped[6:] == command
 
 
-
 def test_standalone_caller_uses_python_selected_tmp_without_launcher(readonly_tmp, monkeypatch):
     import tempfile
     monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {}))
@@ -46,7 +50,7 @@ def test_standalone_caller_uses_python_selected_tmp_without_launcher(readonly_tm
 
 
 def test_readonly_selected_tmp_refuses_instead_of_using_global_tmp(monkeypatch):
-    monkeypatch.setattr(os, 'statvfs', lambda _: SimpleNamespace(f_flag=os.ST_RDONLY))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'statvfs', lambda _: SimpleNamespace(f_flag=os.ST_RDONLY))
     monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {'TMPDIR': '/selected'}))
     with pytest.raises(OSError, match='writable TMPDIR'):
         temporary_command(['/tools/codeql', 'version'])
@@ -94,7 +98,7 @@ def test_steering_uses_current_python_if_system_python_is_absent(readonly_tmp, m
 
 
 def test_scoped_query_steers_java_even_with_writable_system_tmp(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, 'statvfs', lambda _: SimpleNamespace(f_flag=0))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'statvfs', lambda _: SimpleNamespace(f_flag=0))
     monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {'TMPDIR': str(tmp_path)}))
     command = [sys.executable, '-I', '-S', '-c', 'import os; print(os.environ["_JAVA_OPTIONS"])']
     wrapped = temporary_command(command, scoped=True)

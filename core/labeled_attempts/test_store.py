@@ -8,6 +8,11 @@ from pathlib import Path
 import pytest
 
 # parents[3] = repo root
+
+import core.labeled_attempts.store as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
@@ -745,8 +750,8 @@ def test_short_kernel_writes_do_not_truncate_record(
             return real_write(fd, bytes(memoryview(data)[:7]))
         return real_write(fd, data)
 
-    monkeypatch.setattr(os, "open", tracking_open)
-    monkeypatch.setattr(os, "write", short_write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", tracking_open)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", short_write)
 
     payload = '{"k": "' + "x" * 100 + '"}'
     out = _write_atomic(tmp_path / "sandbox-x-aaaaaa.json", payload)
@@ -787,8 +792,8 @@ def test_failed_write_leaves_no_partial_at_final_name(
             raise OSError(28, "No space left on device")
         return real_write(fd, data)
 
-    monkeypatch.setattr(os, "open", tracking_open)
-    monkeypatch.setattr(os, "write", dying_write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", tracking_open)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", dying_write)
 
     final = tmp_path / "sandbox-x-aaaaaa.json"
     with pytest.raises(OSError):

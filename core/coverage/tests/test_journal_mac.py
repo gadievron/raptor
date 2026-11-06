@@ -24,6 +24,9 @@ from core.testing.module_bindings import patch_module_attribute
 # ---------------------------------------------------------------------------
 
 
+import core.security.mac_key as _os_fault_consumer
+
+
 def test_chunked_key_read_loads_full_key(tmp_path: Path, monkeypatch) -> None:
     """os.read may legally return fewer bytes than requested; chunked
     delivery must not land a healthy key in the wrong-length refusal
@@ -34,7 +37,7 @@ def test_chunked_key_read_loads_full_key(tmp_path: Path, monkeypatch) -> None:
     key_file.write_bytes(data)
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     assert journal_mac._read_existing_key(key_file) == data
 
 
@@ -47,7 +50,7 @@ def test_truncated_key_file_reads_exact_length(
     key_file.write_bytes(os.urandom(10))
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     got = journal_mac._read_existing_key(key_file)
     assert isinstance(got, bytes)
     assert len(got) == 10
@@ -79,7 +82,7 @@ def _lose_creation_race(monkeypatch, tmp_path):
             raise FileExistsError(path)
         return real_open(path, flags, mode)
 
-    monkeypatch.setattr(os, "open", fake_open)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", fake_open)
     patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
 

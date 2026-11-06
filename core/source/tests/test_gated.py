@@ -18,6 +18,10 @@ from core.source.gated import (
 )
 
 
+import core.source.gated as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestReadTextGated:
     def test_reads_full_text(self, tmp_path):
         p = tmp_path / "a.txt"
@@ -71,7 +75,7 @@ class TestReadTextGated:
                 fh.write("Z" * 64)
             return st
 
-        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", grow_after_fstat)
         with pytest.raises(ReadBudgetExceededError, match="grew"):
             read_text_gated(p, 4)
 
@@ -176,7 +180,7 @@ class TestReadBytesGated:
                 fh.write(b"Z" * 64)
             return st
 
-        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", grow_after_fstat)
         with pytest.raises(ReadBudgetExceededError, match="grew"):
             read_bytes_gated(p, 4)
 
@@ -351,7 +355,7 @@ class TestReadAllocationAndGrowth:
             p.write_bytes(grown)
             return st
 
-        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", grow_after_fstat)
         assert read_bytes_gated(p, len(grown) + budget_extra) == grown
 
     def test_shrink_after_fstat(self, tmp_path, monkeypatch):
@@ -364,7 +368,7 @@ class TestReadAllocationAndGrowth:
             p.write_bytes(b"short")
             return st
 
-        monkeypatch.setattr(os, "fstat", shrink_after_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", shrink_after_fstat)
         assert read_bytes_gated(p, 1000) == b"short"
 
     @pytest.mark.parametrize("initial", [b"", b"ab"])
@@ -381,7 +385,7 @@ class TestReadAllocationAndGrowth:
             p.write_bytes(initial + b"Z" * (2 * 1024 * 1024))
             return st
 
-        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", grow_after_fstat)
         with pytest.raises(CustomBudget, match="grew past max_bytes=1048576"):
             read_bytes_gated(p, 1024 * 1024, budget_error=CustomBudget)
 

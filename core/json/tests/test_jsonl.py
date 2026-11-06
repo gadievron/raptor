@@ -15,6 +15,10 @@ import pytest
 from core.json import append_jsonl, load_jsonl
 
 
+import core.json.jsonl as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestAppendJsonl:
 
     def test_round_trip(self, tmp_path: Path):
@@ -90,7 +94,7 @@ class TestAppendJsonl:
         def one_byte_writes(fd, data):
             return real_write(fd, bytes(data[:1]))
 
-        monkeypatch.setattr(os, "write", one_byte_writes)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", one_byte_writes)
         append_jsonl(trail, {"k": "value-long-enough-to-span-writes"})
         monkeypatch.undo()
         assert load_jsonl(trail) == [
@@ -101,7 +105,7 @@ class TestAppendJsonl:
         (and instead of silently succeeding)."""
         trail = tmp_path / "trail.jsonl"
 
-        monkeypatch.setattr(os, "write", lambda fd, data: 0)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", lambda fd, data: 0)
         with pytest.raises(OSError, match="short write"):
             append_jsonl(trail, {"k": 1})
 

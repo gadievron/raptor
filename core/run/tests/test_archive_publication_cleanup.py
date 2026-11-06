@@ -14,6 +14,10 @@ from core.run.provenance import archive_snapshot
 from core.testing.restricted_tree import restricted_tree
 
 
+import raptor as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def archive_run(tmp_path):
     archive = tmp_path / "source.zip"
@@ -44,7 +48,7 @@ def test_failed_publication_is_not_success(archive_run, monkeypatch, error):
             raise OSError(error, "publication failed")
         return replace(src, dst)
 
-    monkeypatch.setattr(os, "replace", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", fail)
     assert unpack(archive, out) is None
     assert not cache.exists()
     assert not (out / "_source").is_symlink()
@@ -140,7 +144,7 @@ def test_completed_legacy_publisher_collision_is_reused(
             raise OSError(collision, "another publisher won")
         return replace(src, dst)
 
-    monkeypatch.setattr(os, "replace", publish)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", publish)
     assert unpack(archive, out) is not None
     assert (cache / "winner").read_text() == "complete"
     assert not list(cache.parent.glob(".extract-*"))
@@ -179,7 +183,7 @@ def test_cancelled_publication_reclaims_staging(archive_run, monkeypatch, error)
             raise failure
         return replace(src, dst)
 
-    monkeypatch.setattr(os, "replace", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", fail)
     with pytest.raises(error) as caught:
         unpack(archive, out)
     assert caught.value is failure

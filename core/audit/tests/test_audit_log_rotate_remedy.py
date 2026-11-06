@@ -28,6 +28,10 @@ from core.audit.audit_log_rotate import (
 )
 
 
+import core.audit.audit_log_rotate as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _shrink_budgets(monkeypatch, *, max_bytes: int = 2048) -> None:
     """Shrink the per-shard budgets consistently in BOTH modules
     (each imported the constants by value)."""
@@ -420,7 +424,7 @@ class TestHostileShardSet:
                 shard2.symlink_to(victim)
             return res
 
-        monkeypatch.setattr(os, "lstat", _swapping_lstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "lstat", _swapping_lstat)
         with pytest.raises(RotateRefused, match="without following"):
             rotate_audit_log(tmp_path)
         monkeypatch.undo()
@@ -464,7 +468,7 @@ class TestConcurrentAppendDetection:
                 return _InflatedStat(res)
             return res
 
-        monkeypatch.setattr(os, "lstat", _lying_lstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "lstat", _lying_lstat)
         with pytest.raises(RotateRefused, match="accounting"):
             rotate_audit_log(tmp_path)
         monkeypatch.undo()
@@ -504,7 +508,7 @@ class TestConcurrentAppendDetection:
                 })
             real_fsync(fd)
 
-        monkeypatch.setattr(os, "fsync", _racing_fsync)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fsync", _racing_fsync)
         with pytest.raises(RotateRefused, match="changed during"):
             rotate_audit_log(tmp_path)
         monkeypatch.undo()
@@ -541,7 +545,7 @@ def test_rotation_swap_failure_restores_trail(tmp_path, monkeypatch, fail_at, ca
             raise OSError("failed swap")
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail_once)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail_once)
     with pytest.raises(KeyboardInterrupt if cancel else OSError):
         rotate_audit_log(tmp_path)
     assert source.read_bytes() == before
@@ -605,7 +609,7 @@ def test_stream_setup_failure_closes_fd_and_removes_temp(tmp_path, monkeypatch, 
             raise OSError("stream setup failed")
         return fdopen(fd, requested_mode)
 
-    monkeypatch.setattr(os, "fdopen", fail_setup)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fdopen", fail_setup)
     with pytest.raises(OSError, match="stream setup failed"):
         rotate_audit_log(tmp_path)
     for fd in failed_fds:
@@ -639,7 +643,7 @@ def test_cleanup_failure_does_not_mask_primary_or_skip_remaining_temps(tmp_path,
         return unlink(path, *args, **kwargs)
 
     with monkeypatch.context() as faults:
-        faults.setattr(os, "fsync", fail_fsync)
+        patch_module_attribute(faults, _os_fault_consumer, "os", "fsync", fail_fsync)
         faults.setattr(Path, "unlink", fail_unlink)
         with pytest.raises(OSError, match="primary flush failure"):
             rotate_audit_log(tmp_path)
@@ -664,7 +668,7 @@ def test_failed_restore_keeps_recovery_backup(tmp_path, monkeypatch, caplog):
             raise OSError("publication and restore failure")
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail_publish_and_restore)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail_publish_and_restore)
     with pytest.raises(OSError, match="publication and restore failure"):
         rotate_audit_log(tmp_path)
     backup = source.with_name(source.name + ".pre-rotate")
@@ -691,7 +695,7 @@ def test_swap_failure_restores_multiple_original_shards(tmp_path, monkeypatch, f
             raise OSError("multiple shard swap failure")
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail_once)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail_once)
     with pytest.raises(OSError, match="multiple shard swap failure"):
         rotate_audit_log(tmp_path)
     assert {p: p.read_bytes() for p in originals} == originals
