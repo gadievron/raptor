@@ -120,7 +120,7 @@ def test_old_clean_model_receipts_require_fresh_review(tmp_path, verb, suffix):
 def test_tool_chain_retains_only_diagnostic_model_evidence(c_parser, tmp_path, monkeypatch, verb, source, hypothesis, feasible):
     pytest.importorskip("z3")
     (tmp_path / "record.c").write_text(source)
-    monkeypatch.setattr(orch, "run_smt_verb_direct", sweep._run_smt_verb_inner)
+    monkeypatch.setattr(sweep, "_smt_verb_in_subprocess", sweep._run_smt_verb_inner)
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out", integer_abi="ilp32")
     scope = dict(file="record.c", function="Read", line_start=1, hypothesis=hypothesis)
     result = orch._run_tool_chain(

@@ -126,7 +126,7 @@ def test_tool_chain_memo_is_partitioned_by_integer_abi(c_grammar, tmp_path, monk
         seen.append((kwargs["integer_abi"], result.outcome))
         return result
 
-    monkeypatch.setattr(orch, "run_smt_verb_direct", run)
+    monkeypatch.setattr(sweep, "_smt_verb_in_subprocess", run)
     request = dict(config=config, file_path="record.c", function_name="Read", line_start=1,
                    source=SOURCE, hypothesis=HYPOTHESIS)
     chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
@@ -147,7 +147,7 @@ def test_hypothesis_tool_config_cannot_select_the_target_abi(c_grammar, tmp_path
         seen.append(kwargs["integer_abi"])
         return sweep._run_smt_verb_inner(**kwargs)
 
-    monkeypatch.setattr(orch, "run_smt_verb_direct", run)
+    monkeypatch.setattr(sweep, "_smt_verb_in_subprocess", run)
     result = orch._run_tool_chain(
         [{"type": "smt", "config": {"verb": "check-overflow", "integer_abi": "lp64"}}],
         config=config, file_path="record.c", function_name="Read", line_start=1,
