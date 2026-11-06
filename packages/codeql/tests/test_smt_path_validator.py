@@ -2390,3 +2390,16 @@ class TestSignedProfileHexLiteralPromotion:
             PathCondition("x != 0x0", step_index=1),
         ])  # default 64-bit unsigned
         assert r.feasible is False
+
+
+@_requires_z3
+@pytest.mark.parametrize('reduce', [False, True])
+def test_pinned_signed_profile_keeps_unsigned_type_inside_compound_guard(reduce):
+    from core.smt_solver import BV_C_INT32
+
+    result = check_path_feasibility([
+        PathCondition('Value == 0', 0),
+        PathCondition('(Value + 0x80000000) > 0', 1),
+    ], profile=BV_C_INT32, reduce_constraints=reduce)
+    assert result.feasible is True
+    assert result.model['Value'] == 0

@@ -118,13 +118,11 @@ Other limitations of the uniform-profile model:
     when the C reading isn't what was meant.
   - **Bitmask form** requires both ``MASK`` and ``VAL`` to be integer
     literals; variables on either side go to ``unknown``.
-  - **Profile-level signedness conflates** two concerns: comparison
-    signedness (``<``/``<=``/``>``/``>=`` routed through ``lt``/``le``)
-    AND ``>>`` arithmetic-vs-logical shift.  In real C these can
-    decouple (``(int)x >> 1`` is always arithmetic regardless of the
-    comparison's signedness).  Single-profile-per-path is the
-    first-cut design; per-variable typing is the next step when a
-    real case demands it.
+  - **Variables still share one profile.** High-bit hex literals carry
+    unsigned expression type through arithmetic, comparisons, and shifts.
+    Shift results preserve the left operand's type. This is not general C
+    typing: per-variable types, ranks, casts, and target ABI conversions
+    remain outside this path model.
   - **Z3 picks the smallest satisfying witness by default**, which is
     often the trivial assignment (``x = 0``).  To drive the witness
     into the dangerous range, pass ``prefer_witness=("count", "max")``
@@ -271,10 +269,9 @@ _HEX_RE = re.compile(r'^0x[0-9a-f]+$', re.IGNORECASE)
 def _hex_literal_forces_unsigned(tok: str, profile: "BVProfile") -> bool:
     """True when *tok* is a bare hex literal whose value exceeds the
     profile's signed max — in C such a literal has UNSIGNED type and
-    forces the enclosing comparison unsigned (usual arithmetic
-    conversions). Only exact-literal operands are recognised;
-    compound expressions keep the profile's signedness (conservative:
-    unchanged behaviour)."""
+    contributes unsigned type at its expression leaf. The parser carries
+    that type through arithmetic conversions and left-operand shift rules.
+    This remains a uniform-width convention, not a target ABI type resolver."""
     if not profile.signed or not _HEX_RE.fullmatch(tok):
         return False
     return int(tok, 16) >= (1 << (profile.width - 1))
@@ -325,9 +322,23 @@ _MAX_CONDITIONS_PER_CALL = 64
 _CONDITION_LEVEL_OPS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
 
 
-def _parse_expr(
+@dataclass(frozen=True)
+class _TypedExpression:
+    """An expression's bits and signedness within the selected uniform width."""
+
+    value: Any
+    signed: bool
+
+
+def _parse_expr(text: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any | Rejection:
+    """Compatibility view returning only bits; typed consumers keep metadata."""
+    result = _parse_typed_expr(text, vars_, profile=profile)
+    return result if isinstance(result, Rejection) else result.value
+
+
+def _parse_typed_expr(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
-) -> Any | Rejection:
+) -> _TypedExpression | Rejection:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
     Handles: identifier, NULL, hex literal, decimal literal, parenthesised
@@ -335,7 +346,9 @@ def _parse_expr(
     bind by C precedence (``*`` > ``+ -`` > ``<< >>`` > ``|``), all
     left-associative.  Right-shift is routed through ``csem.ashr`` /
     ``csem.lshr`` by signedness so the same ``>>`` source form encodes
-    differently for signed vs unsigned path conditions.
+    differently for signed vs unsigned expression operands. High-bit hex
+    literals contribute unsigned type through arithmetic; shifts preserve
+    the left operand's type regardless of the shift count's signedness.
 
     Returns a :class:`Rejection` — rather than a partial Z3 expression —
     when something can't be encoded, so the whole condition falls through
@@ -365,7 +378,7 @@ def _parse_expr(
     pos = [0]
     paren_depth = [0]
 
-    def _atom() -> Any | Rejection:
+    def _atom() -> _TypedExpression | Rejection:
         if pos[0] >= len(tokens):
             return Rejection(
                 text, RejectionKind.UNRECOGNIZED_OPERAND,
@@ -378,7 +391,7 @@ def _parse_expr(
             if isinstance(value, Rejection):
                 return _propagate(text, value)
             pos[0] += 2
-            return _mk_val(value, profile.width)
+            return _TypedExpression(_mk_val(value, profile.width), profile.signed)
         if tok == '(':
             paren_depth[0] += 1
             if paren_depth[0] > _MAX_PAREN_DEPTH:
@@ -417,7 +430,7 @@ def _parse_expr(
             )
         if _NULL_RE.match(tok):
             pos[0] += 1
-            return _mk_val(0, profile.width)
+            return _TypedExpression(_mk_val(0, profile.width), profile.signed)
         if _HEX_RE.match(tok) or _INT_RE.match(tok):
             v = _parse_literal_value(tok, profile)
             if isinstance(v, Rejection):
@@ -426,34 +439,36 @@ def _parse_expr(
                 # can match it back to the original condition.
                 return _propagate(text, v)
             pos[0] += 1
-            return _mk_val(v, profile.width)
+            return _TypedExpression(_mk_val(v, profile.width),
+                                    profile.signed and not _hex_literal_forces_unsigned(tok, profile))
         if _IDENT_RE.match(tok):
             pos[0] += 1
-            return make_var(tok, vars_, profile=profile)
+            return _TypedExpression(make_var(tok, vars_, profile=profile), profile.signed)
         return Rejection(
             text, RejectionKind.UNRECOGNIZED_OPERAND,
             f"token {tok!r} is not an identifier, NULL, or numeric literal",
         )
 
-    def _apply(op: str, lhs: Any, rhs: Any) -> Any:
+    def _apply(op: str, lhs: _TypedExpression, rhs: _TypedExpression) -> _TypedExpression:
+        a, b = lhs.value, rhs.value
+        signed = lhs.signed and rhs.signed
         if op == '+':
-            return lhs + rhs
-        if op == '-':
-            return lhs - rhs
-        if op == '*':
-            return lhs * rhs
-        if op == '|':
-            return lhs | rhs
-        if op == '<<':
-            return lhs << rhs
-        if op == '>>':
-            # Route right-shift through csem so signedness picks the
-            # correct arithmetic vs logical variant.
-            return _ashr(lhs, rhs) if profile.signed else _lshr(lhs, rhs)
-        # _PRECEDENCE keys are exhaustive; reaching here is a bug, not user
-        # input.  Raise so the invariant survives under ``python -O``.
-        msg = f"unhandled operator {op!r}"
-        raise RuntimeError(msg)
+            value = a + b
+        elif op == '-':
+            value = a - b
+        elif op == '*':
+            value = a * b
+        elif op == '|':
+            value = a | b
+        elif op == '<<':
+            value, signed = a << b, lhs.signed
+        elif op == '>>':
+            value = _ashr(a, b) if lhs.signed else _lshr(a, b)
+            signed = lhs.signed
+        else:
+            # Keep the operator-table invariant effective under python -O.
+            raise RuntimeError(f"unhandled operator {op!r}")
+        return _TypedExpression(value, signed)
 
     # Recursion depth bound for `_climb`. Pre-fix the recursive
     # precedence-climber unwound through Python's call stack one
@@ -468,7 +483,7 @@ def _parse_expr(
     _MAX_CLIMB_DEPTH = 256
     _climb_depth = [0]
 
-    def _climb(min_prec: int) -> Any | Rejection:
+    def _climb(min_prec: int) -> _TypedExpression | Rejection:
         if _climb_depth[0] >= _MAX_CLIMB_DEPTH:
             return Rejection(
                 ' '.join(tokens),
@@ -1079,27 +1094,15 @@ def _parse_condition(
         t,
     )
     if m:
-        lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
+        lhs = _parse_typed_expr(m.group(1).strip(), vars_, profile=profile)
         if isinstance(lhs, Rejection):
             return _propagate(text, lhs)
-        rhs = _parse_expr(m.group(3).strip(), vars_, profile=profile)
+        rhs = _parse_typed_expr(m.group(3).strip(), vars_, profile=profile)
         if isinstance(rhs, Rejection):
             return _propagate(text, rhs)
         op = m.group(2)
-        signed_cmp = profile.signed
-        if signed_cmp and (
-            _hex_literal_forces_unsigned(m.group(1).strip(), profile)
-            or _hex_literal_forces_unsigned(m.group(3).strip(), profile)
-        ):
-            # C's usual arithmetic conversions: a hex literal that
-            # does not fit the signed type has UNSIGNED type, so the
-            # whole comparison is unsigned in the source semantics.
-            # Encoding ``x <= 0x80000000`` as signed at an int32
-            # profile read the literal as INT_MIN and made ``<=``
-            # equivalent to ``== INT_MIN`` — a false unsat that
-            # bypassed the dual safety net entirely for
-            # signed-pinned callers (they skip the dual check).
-            signed_cmp = False
+        signed_cmp = lhs.signed and rhs.signed
+        lhs, rhs = lhs.value, rhs.value
         if op == '==':
             return lhs == rhs
         if op == '!=':
