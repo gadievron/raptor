@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
 
 from core.cve import EpssClient, KevClient
 
@@ -359,16 +358,10 @@ def test_sarif_golden(tmp_path: Path) -> None:
     )
 
 
-def test_report_markdown_golden(tmp_path: Path,
-                                monkeypatch: pytest.MonkeyPatch) -> None:
+def test_report_markdown_golden(tmp_path: Path) -> None:
     _out, rows = _build_rows(tmp_path)
-
-    class _FrozenDatetime:
-        @staticmethod
-        def now(tz: Any = None) -> datetime:
-            return _GENERATED
-
-    monkeypatch.setattr("packages.sca.render.datetime", _FrozenDatetime)
+    # Row-only regeneration has no captured execution timestamp; it must
+    # report that absence rather than invent a fresh scan date.
     md = _render_report_markdown(rows, target=Path("/repo"))
     _check_golden("report.md", md)
 
