@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +14,7 @@ from cve_env.tools.image_resolve import (
     reset_rate_limit_budget,
 )
 
+from core.container.proc import RunOutcome
 from core.testing.module_bindings import patch_module_attribute
 
 
@@ -126,14 +127,14 @@ def _descriptor_entry(
     return out
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_picks_first_native(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_picks_first_native(mock_cli: Any) -> None:
     manifest = _descriptor_entry(
         "linux/amd64",
         "linux/arm64",
         digest="sha256:" + "a" * 64,
     )
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -147,10 +148,10 @@ def test_resolve_picks_first_native(mock_run: Any) -> None:
     )
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_rosetta_when_arm_host_amd_manifest(mock_cli: Any) -> None:
     manifest = _descriptor_entry("linux/amd64", digest="sha256:" + "b" * 64)
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(
@@ -160,10 +161,10 @@ def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
     assert r.decision == "rosetta_ok"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_arch_incompatible_when_no_platform_matches(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_arch_incompatible_when_no_platform_matches(mock_cli: Any) -> None:
     manifest = _descriptor_entry("linux/ppc64le")
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -171,9 +172,9 @@ def test_resolve_arch_incompatible_when_no_platform_matches(mock_run: Any) -> No
     assert r.decision == "arch_incompatible"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_not_found_when_all_candidates_miss(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+@patch("core.container.registry.run_cli")
+def test_resolve_not_found_when_all_candidates_miss(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="not found")
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert r.ok is False
     assert r.decision == "not_found"
@@ -181,9 +182,9 @@ def test_resolve_not_found_when_all_candidates_miss(mock_run: Any) -> None:
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_resolve_rate_limited_surfaces_pivot_signal(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 12.1: when ALL candidates hit Docker Hub anon rate-limit, the
@@ -197,7 +198,7 @@ def test_resolve_rate_limited_surfaces_pivot_signal(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()  # don't inherit prior test's counter
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="toomanyrequests: You have reached your unauthenticated pull rate limit",
@@ -210,15 +211,15 @@ def test_resolve_rate_limited_surfaces_pivot_signal(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_resolve_transport_surfaces_retry_or_pivot(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 12.1: transport errors get a retry-or-pivot hint (separate from
     rate_limited which is more aggressive about pivoting since it persists
     for hours)."""
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1, stdout="", stderr="error: i/o timeout"
     )
     r = image_resolve(product="some-obscure-app", version="1.0", host_arch="arm64")
@@ -231,18 +232,18 @@ def test_resolve_transport_surfaces_retry_or_pivot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")  # skip 10s retry backoff in tests
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_rate_limit_budget_short_circuits_after_two_hits(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 13.2: 3rd rate_limited call for same product short-circuits to
-    decision='rate_limited_persistent' — no subprocess invocation, immediate pivot.
+    decision='rate_limited_persistent' — no CLI invocation, immediate pivot.
     """
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="toomanyrequests: pull rate limit",
@@ -251,20 +252,20 @@ def test_rate_limit_budget_short_circuits_after_two_hits(
     image_resolve(product="wordpress", version="5.6", host_arch="arm64")
     image_resolve(product="wordpress", version="5.7", host_arch="arm64")
 
-    # 3rd call must short-circuit without firing subprocess.
-    mock_run.reset_mock()
+    # 3rd call must short-circuit without invoking the CLI.
+    mock_cli.reset_mock()
     r = image_resolve(product="wordpress", version="5.8", host_arch="arm64")
     assert r.ok is False
     assert r.decision == "rate_limited_persistent"
     assert r.reason_class == "rate_limited"
     assert "STOP probing" in r.reason or "PIVOT" in r.reason
-    mock_run.assert_not_called()
+    mock_cli.assert_not_called()
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_rate_limit_budget_per_product_isolated(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 13.2: rate-limit budget is per-product. Different product
@@ -272,21 +273,21 @@ def test_rate_limit_budget_per_product_isolated(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="wordpress", version="5.6", host_arch="arm64")
     image_resolve(product="wordpress", version="5.7", host_arch="arm64")
     # Different product, different counter.
-    mock_run.reset_mock()
+    mock_cli.reset_mock()
     r = image_resolve(product="drupal", version="9.4", host_arch="arm64")
-    # NOT short-circuited at call entry — subprocess called.
+    # NOT short-circuited at call entry — CLI called.
     assert r.decision != "rate_limited_persistent"
-    assert mock_run.called
+    assert mock_cli.called
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 35.1: CVE-level cumulative counter catches cross-product
@@ -303,30 +304,30 @@ def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
     )
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
     # Burn cumulative budget across DIFFERENT products (each increments
     # cumulative by 1). After 3 calls we should be at the threshold.
     image_resolve(product="text4shell", version="1.0", host_arch="arm64")
     image_resolve(product="maven", version="3.8", host_arch="arm64")
     image_resolve(product="eclipse-temurin", version="17", host_arch="arm64")
     # The 4th call across a NEW product should be short-circuited.
-    mock_run.reset_mock()
+    mock_cli.reset_mock()
     r = image_resolve(product="tomcat", version="9.0", host_arch="arm64")
     # Cumulative threshold should have tripped → short-circuit.
     assert r.ok is False
     assert r.decision == "rate_limited_persistent"
     assert "across multiple products" in r.reason
     assert "per-IP" in r.reason
-    # Subprocess NOT called — short-circuited at function entry.
-    mock_run.assert_not_called()
+    # CLI NOT called — short-circuited at function entry.
+    mock_cli.assert_not_called()
     # Sanity check on the threshold constant.
     assert _RATE_LIMIT_TOTAL_THRESHOLD >= 3, "threshold too tight"
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase37_2_rate_limit_cooldown_retry_one_shot(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 37.2: when ALL candidates rate-limited, image_resolve sleeps
@@ -336,7 +337,7 @@ def test_phase37_2_rate_limit_cooldown_retry_one_shot(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     # Sleep was called (at least once for the cooldown).
     assert mock_sleep.called
@@ -358,9 +359,9 @@ def test_phase37_2_rate_limit_cooldown_retry_one_shot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase37_2_cooldown_resets_per_cve(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 37.2: reset_rate_limit_budget() (called per-CVE by the bench
@@ -370,7 +371,7 @@ def test_phase37_2_cooldown_resets_per_cve(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert _state._RATE_LIMIT_COOLDOWN_DONE is True
     reset_rate_limit_budget()
@@ -413,11 +414,11 @@ def test_reset_rate_limit_budget_clears_counters() -> None:
 # Phase 9.5: next_step_hint on failure --------------------------------
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_arch_incompatible_emits_next_step_hint(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_arch_incompatible_emits_next_step_hint(mock_cli: Any) -> None:
     """Phase 9.5: arch_incompatible decision tells agent to source_build."""
     manifest = _descriptor_entry("linux/ppc64le")
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -425,25 +426,25 @@ def test_resolve_arch_incompatible_emits_next_step_hint(mock_run: Any) -> None:
     assert "source_build" in r.next_step_hint
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_not_found_emits_next_step_hint(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_not_found_emits_next_step_hint(mock_cli: Any) -> None:
     """Phase 9.5: not_found decision tells agent to source_build or compose."""
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="not found")
     r = image_resolve(product="missing-app", version="1.0", host_arch="arm64")
     assert r.decision == "not_found"
     assert "source_build" in r.next_step_hint or "ubuntu" in r.next_step_hint
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_resolve_rate_limited_persistent_emits_pivot_hint(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="wp-x", version="1", host_arch="arm64")
     image_resolve(product="wp-x", version="2", host_arch="arm64")
     r = image_resolve(product="wp-x", version="3", host_arch="arm64")
@@ -452,13 +453,13 @@ def test_resolve_rate_limited_persistent_emits_pivot_hint(
     assert "ubuntu" in hint_lower or "pivot" in hint_lower
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_native_has_empty_next_step_hint(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_native_has_empty_next_step_hint(mock_cli: Any) -> None:
     """Phase 9.5: success path leaves next_step_hint empty (no pivot needed)."""
     manifest = _descriptor_entry(
         "linux/amd64", "linux/arm64", digest="sha256:" + "c" * 64
     )
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -480,14 +481,14 @@ def _manifest_entry_unknown() -> dict[str, Any]:
     }
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_cli: Any) -> None:
     """BuildKit cache entries advertise a platform that lies -- filter them."""
     manifest = [
         _descriptor_entry("linux/amd64", digest="sha256:" + "a" * 64)[0],
         _manifest_entry_unknown(),
     ]
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -496,15 +497,15 @@ def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_run: Any) -> None:
     assert r.decision in {"arch_incompatible", "not_found"}
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_skips_platform_without_arch_digest(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_skips_platform_without_arch_digest(mock_cli: Any) -> None:
     """The core bug fix: platform listed but no per-arch digest -> don't pick it."""
     # An entry claiming arm64 but with NO digest -> skipped.
     manifest = [
         _manifest_entry_no_digest("linux/arm64"),
         _descriptor_entry("linux/amd64", digest="sha256:" + "b" * 64)[0],
     ]
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -514,8 +515,8 @@ def test_resolve_skips_platform_without_arch_digest(mock_run: Any) -> None:
     assert r.decision != "native"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_resolve_picks_arch_matching_digest_not_last(mock_cli: Any) -> None:
     """Multiarch manifest: we must return the arm64 digest, not whichever came last."""
     arm64_digest = "sha256:" + "a" * 64
     amd64_digest = "sha256:" + "b" * 64
@@ -524,7 +525,7 @@ def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
         _descriptor_entry("linux/arm64", digest=arm64_digest)[0],
         _descriptor_entry("linux/amd64", digest=amd64_digest)[0],
     ]
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -537,9 +538,9 @@ def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
 # Phase 38.4: arch_incompatible cumulative cross-product short-circuit ---
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase38_4_arch_incompatible_persistent_after_threshold(
-    mock_run: Any,
+    mock_cli: Any,
 ) -> None:
     """Phase 38.4: after _ARCH_INCOMPATIBLE_THRESHOLD products fail
     arch_incompatible in the same CVE, the next image_resolve call
@@ -556,7 +557,7 @@ def test_phase38_4_arch_incompatible_persistent_after_threshold(
     reset_rate_limit_budget()  # also clears arch counter (Phase 38.4)
     # Manifest with only ppc64le → arch_incompatible on arm64 host.
     manifest = _descriptor_entry("linux/ppc64le")
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(manifest), stderr=""
     )
     # Burn the threshold across DIFFERENT products.
@@ -564,18 +565,18 @@ def test_phase38_4_arch_incompatible_persistent_after_threshold(
         r = image_resolve(product=f"product{i}", version="1.0", host_arch="arm64")
         assert r.decision == "arch_incompatible"
     # Next call (3rd product) should short-circuit.
-    mock_run.reset_mock()
+    mock_cli.reset_mock()
     r = image_resolve(product="weblogic", version="12.2", host_arch="arm64")
     assert r.ok is False
     assert r.decision == "arch_incompatible_persistent"
     assert "arch_incompatible image_resolve calls" in r.reason
     assert "source_build" in r.next_step_hint
-    # Subprocess NOT called — short-circuited at function entry.
-    mock_run.assert_not_called()
+    # CLI NOT called — short-circuited at function entry.
+    mock_cli.assert_not_called()
 
 
-@patch("core.container.proc.subprocess.run")
-def test_phase38_4_arch_counter_resets_per_cve(mock_run: Any) -> None:
+@patch("core.container.registry.run_cli")
+def test_phase38_4_arch_counter_resets_per_cve(mock_cli: Any) -> None:
     """Phase 38.4: reset_rate_limit_budget() (called per-CVE) clears
     the arch_incompatible cumulative counter so the next CVE starts fresh.
     """
@@ -626,9 +627,9 @@ def test_phase45_mirror_gcr_io_is_high_priority_candidate() -> None:
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase46_2_transport_cooldown_retry_one_shot(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 46.2 (2026-04-30): when ALL candidates hit transport-class
@@ -644,7 +645,7 @@ def test_phase46_2_transport_cooldown_retry_one_shot(
     reset_rate_limit_budget()
     # Simulate every candidate returning a 5xx-class transport error
     # (returncode=1 with "received unexpected HTTP status: 503").
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="received unexpected HTTP status: 503 Service Unavailable",
@@ -661,9 +662,9 @@ def test_phase46_2_transport_cooldown_retry_one_shot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.proc.subprocess.run")
+@patch("core.container.registry.run_cli")
 def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown(
-    mock_run: Any,
+    mock_cli: Any,
     mock_sleep: Any,
 ) -> None:
     """Phase 46.2: if the rate_limit cooldown was already taken this CVE
@@ -678,7 +679,7 @@ def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown(
     # Manually mark rate-limit cooldown as taken (simulating a prior call
     # in this same CVE that already burned the rate-limit budget).
     _state._RATE_LIMIT_COOLDOWN_DONE = True
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="received unexpected HTTP status: 503 Service Unavailable",
@@ -847,7 +848,6 @@ def test_off_allowlist_authority_never_probed(monkeypatch) -> None:
     probed: list[str] = []
 
     def spy(cmd: list[str], **_kw: Any):
-        from core.container.proc import RunOutcome
         probed.append(cmd[-1])  # the image ref
         return RunOutcome(returncode=1, stdout="",
                           stderr="manifest unknown", timed_out=False)
