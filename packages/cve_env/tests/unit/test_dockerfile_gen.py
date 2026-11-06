@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
+from core.container.proc import RunOutcome
 
 
 from cve_env.tools.dockerfile_gen import render_dockerfile
@@ -312,12 +314,12 @@ def test_render_payload_includes_p20_issues_for_cve_named_pkg() -> None:
 
 # b1 (2026-05-23): fuse dockerfile_gen → docker_build -----------------------
 
-@patch("core.container.proc.subprocess.run")
-def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
+@patch("core.container.build.run_cli")
+def test_b1_fuse_autobuilds_when_no_copy_ops(mock_cli: object) -> None:
     """A clean FROM+RUN render auto-builds (fuse render→build), closing the
     render→build gap that had 0% prompt follow-through (loop.py:992). No
     copy_ops + build omitted → build immediately."""
-    mock_run.return_value = MagicMock(  # type: ignore[attr-defined]
+    mock_cli.return_value = RunOutcome(timed_out=False,   # type: ignore[attr-defined]
         returncode=0, stdout="Successfully built abc123\n", stderr=""
     )
     from cve_env.agent.tools import _maybe_fuse_build
@@ -332,8 +334,8 @@ def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
     assert out["build"]["ok"] is True
     assert "docker_run" in out["next_step_hint"]
 
-@patch("core.container.proc.subprocess.run")
-def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
+@patch("core.container.build.run_cli")
+def test_b1_fuse_skips_when_copy_ops(mock_cli: object) -> None:
     """copy_ops present → no auto-build (the agent must stage the COPY context
     first); stays render-only unless build=True is explicit."""
     from cve_env.agent.tools import _maybe_fuse_build
@@ -345,10 +347,10 @@ def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
     )
     out = _maybe_fuse_build(payload, {"copy_ops": copy_ops})
     assert "build" not in out
-    mock_run.assert_not_called()  # type: ignore[attr-defined]
+    mock_cli.assert_not_called()  # type: ignore[attr-defined]
 
-@patch("core.container.proc.subprocess.run")
-def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
+@patch("core.container.build.run_cli")
+def test_b1_fuse_opt_out_build_false(mock_cli: object) -> None:
     """build=False is an explicit opt-out even without copy_ops."""
     from cve_env.agent.tools import _maybe_fuse_build
     from cve_env.tools.dockerfile_gen import render_to_payload
@@ -356,12 +358,12 @@ def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
     payload = render_to_payload(base_image=_DIGEST, install_steps=["echo hi"])
     out = _maybe_fuse_build(payload, {"build": False})
     assert "build" not in out
-    mock_run.assert_not_called()  # type: ignore[attr-defined]
+    mock_cli.assert_not_called()  # type: ignore[attr-defined]
 
-@patch("core.container.proc.subprocess.run")
-def test_b1_fuse_surfaces_build_failure(mock_run: object) -> None:
+@patch("core.container.build.run_cli")
+def test_b1_fuse_surfaces_build_failure(mock_cli: object) -> None:
     """A failed fused build is SURFACED (agent sees it + retries), not hidden."""
-    mock_run.return_value = MagicMock(  # type: ignore[attr-defined]
+    mock_cli.return_value = RunOutcome(timed_out=False,   # type: ignore[attr-defined]
         returncode=1, stdout="", stderr="E: build broke"
     )
     from cve_env.agent.tools import _maybe_fuse_build

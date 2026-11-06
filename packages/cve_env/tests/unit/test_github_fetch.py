@@ -7,10 +7,24 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from core.container.proc import RunOutcome
+
 import pytest
 
 from cve_env.tools.github_fetch import github_fetch
 from cve_env.tools.web_fetch import FetchResult
+
+
+@pytest.fixture(autouse=True)
+def _owned_github_auth(monkeypatch):
+    """Keep cached credentials and incidental CLI discovery inside this test."""
+    import cve_env.tools.github_fetch as consumer
+    import cve_env.utils.run as runner
+
+    monkeypatch.setattr(consumer, "_TOKEN_CACHE", {"resolved": False, "value": ""})
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    missing = RunOutcome(returncode=1, stdout="", stderr="owned CLI unavailable", timed_out=False)
+    monkeypatch.setattr(runner, "run_cli", lambda *args, **kwargs: missing)
 
 
 def _fetch_ok(body: str) -> FetchResult:
@@ -111,10 +125,10 @@ def test_github_fetch_auth_header_when_token_set(
     assert "Bearer ghp_test_token_abc" in headers["Authorization"]
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("cve_env.utils.run.run_cli")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_no_auth_header_when_no_token_anywhere(
-    mock_fetch: Any, mock_run: Any, monkeypatch: Any
+    mock_fetch: Any, mock_cli: Any, monkeypatch: Any
 ) -> None:
     """Phase 17.1: with no GITHUB_TOKEN env AND `gh auth token` failing,
     the request goes out anonymously."""
@@ -123,24 +137,24 @@ def test_github_fetch_no_auth_header_when_no_token_anywhere(
     reset_token_cache()
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     # Simulate `gh` not installed / not logged in.
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not logged in")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="not logged in")
     mock_fetch.return_value = _fetch_ok(json.dumps([]))
     github_fetch(owner="vulhub", repo="vulhub", path="drupal")
     headers = mock_fetch.call_args.kwargs["headers"]
     assert "Authorization" not in headers
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("cve_env.utils.run.run_cli")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_uses_gh_cli_token_when_env_unset(
-    mock_fetch: Any, mock_run: Any, monkeypatch: Any
+    mock_fetch: Any, mock_cli: Any, monkeypatch: Any
 ) -> None:
     """Phase 17.1: when GITHUB_TOKEN is unset, fall back to `gh auth token`."""
     from cve_env.tools.github_fetch import reset_token_cache
 
     reset_token_cache()
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout="gho_from_gh_cli_xyz\n", stderr=""
     )
     mock_fetch.return_value = _fetch_ok(json.dumps([]))
@@ -150,23 +164,23 @@ def test_github_fetch_uses_gh_cli_token_when_env_unset(
     assert "Bearer gho_from_gh_cli_xyz" in headers["Authorization"]
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("cve_env.utils.run.run_cli")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_env_token_takes_precedence_over_gh_cli(
-    mock_fetch: Any, mock_run: Any, monkeypatch: Any
+    mock_fetch: Any, mock_cli: Any, monkeypatch: Any
 ) -> None:
     """Phase 17.1: explicit GITHUB_TOKEN env var beats gh CLI token."""
     from cve_env.tools.github_fetch import reset_token_cache
 
     reset_token_cache()
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_explicit_env_var")
-    mock_run.return_value = MagicMock(returncode=0, stdout="gho_should_not_be_used\n")
+    mock_cli.return_value = RunOutcome(timed_out=False, stderr="", returncode=0, stdout="gho_should_not_be_used\n")
     mock_fetch.return_value = _fetch_ok(json.dumps([]))
     github_fetch(owner="vulhub", repo="vulhub", path="drupal")
     headers = mock_fetch.call_args.kwargs["headers"]
     assert "Bearer ghp_explicit_env_var" in headers["Authorization"]
     # `gh auth token` should NOT have been invoked when env var is set.
-    mock_run.assert_not_called()
+    mock_cli.assert_not_called()
 
 
 @patch("cve_env.tools.github_fetch.web_fetch")
