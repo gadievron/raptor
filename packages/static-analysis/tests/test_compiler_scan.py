@@ -1415,11 +1415,12 @@ def test_review_candidates_deduplicate_across_translation_units(tmp_path, monkey
     assert not result.findings
 
 
+@pytest.mark.slow
 @needs_analyzer
 def test_native_aliasing_pipeline_separates_proof_from_candidates(tmp_path, sandbox_spy):
     if not compiler_sweep._gcc_analyzer() or not compiler_sweep._clang_path():
         pytest.skip("GCC and Clang required for scalar aliasing corroboration")
-    (tmp_path / "a.c").write_text(
+    source = (
         "int direct(float value) { return *(int*)&value; }\n"
         "int indirect(float value) { int *p=(int*)&value; return *p; }\n"
         "int unused(float value) { int *p=(int*)&value; return 0; }\n"
@@ -1450,10 +1451,43 @@ def test_native_aliasing_pipeline_separates_proof_from_candidates(tmp_path, sand
         "int negated_access(float value) { return !*(int*)&value; }\n"
         "int complement_only(int value) { return ~value; }\n"
         "int unused_character_initializer(void) { int value='x'; float *p=(float*)&value; return 0; }\n")
+    extra_cases = []
+
+    def extra(name, body, outcome, returns="int"):
+        extra_cases.append((f"{returns} {name}(float value) {{ {body} }}\n", outcome))
+
+    for index, operator in enumerate(("&", "|", "^", "==", "!=", "<", "<=", ">", ">=")):
+        extra(f"binary_read_{index}", f"return (*(int*)&value) {operator} 1;", "proof")
+        extra(f"binary_value_{index}", f"return ((int)value) {operator} 1;", "none")
+    for index, operator in enumerate(("+", "-", "*")):
+        extra(f"unsigned_read_{index}", f"return (*(unsigned int*)&value) {operator} 1u;", "proof", "unsigned int")
+        extra(f"unsigned_value_{index}", f"return ((unsigned int)value) {operator} 1u;", "none", "unsigned int")
+    for index, operator in enumerate(("&=", "|=", "^=")):
+        extra(f"compound_read_{index}", f"int *p=(int*)&value; *p {operator} 1; return 0;", "proof")
+        extra(f"compound_local_{index}", f"int local=1; local {operator} 1; return *(int*)&value;", "proof")
+        extra(f"compound_unused_{index}", f"int *p=(int*)&value; int local=1; local {operator} 1; return 0;", "review")
+        extra(f"compound_uninitialized_{index}", f"int local; local {operator} 1; return *(int*)&value;", "review")
+    for name, body in (
+        ("and_false", "return 0 && *(int*)&value;"),
+        ("and_true", "return 1 && *(int*)&value;"),
+        ("or_true", "return 1 || *(int*)&value;"),
+        ("or_false", "return 0 || *(int*)&value;"),
+        ("conditional", "return 0 ? *(int*)&value : 0;"),
+        ("signed_add", "return (*(int*)&value) + 1;"),
+        ("shift", "return (*(int*)&value) << 1;"),
+        ("nested_update", "int local=1; local ^= (local ^= 1); return *(int*)&value;"),
+    ):
+        extra("unsupported_" + name, body, "review")
+    base_lines = source.count("\n")
+    (tmp_path / "a.c").write_text(source + "".join(text for text, _ in extra_cases))
     result = _cs.scan_target(tmp_path)
     proofs = [f for f in result.findings if f["rule_id"] == "raptor.compiler.incompatible-scalar-access"]
-    assert {f["line"] for f in proofs} == {1, 2, 5, 6, 7, 9, 10, 12, 13, 14, 17, 18, 21, 22, 26, 27, 28}
-    assert {c["line"] for c in result.review_candidates} == {3, 4, 8, 11, 15, 19, 20, 23, 24, 25, 30}
+    expected_proofs = {1, 2, 5, 6, 7, 9, 10, 12, 13, 14, 17, 18, 21, 22, 26, 27, 28}
+    expected_review = {3, 4, 8, 11, 15, 19, 20, 23, 24, 25, 30}
+    expected_proofs.update(base_lines + index for index, (_, outcome) in enumerate(extra_cases, 1) if outcome == "proof")
+    expected_review.update(base_lines + index for index, (_, outcome) in enumerate(extra_cases, 1) if outcome == "review")
+    assert {f["line"] for f in proofs} == expected_proofs
+    assert {c["line"] for c in result.review_candidates} == expected_review
     sarif = _cs.to_sarif(result)
     assert all(r["ruleId"] != "-Wstrict-aliasing" for r in sarif["runs"][0]["results"])
     assert all(f["aliasing_proof"]["object"] == "value" for f in proofs)

@@ -160,6 +160,24 @@ class _Function:
                 if opcode == "~" and value.ctype not in _INTEGER_TYPES:
                     raise _Unsupported("non-integer bitwise complement")
                 return _Scalar(_scalar_type(node))
+        if kind == "BinaryOperator" and len(children) == 2:
+            opcode = node.get("opcode")
+            target = _scalar_type(node)
+            bitwise = opcode in ("&", "|", "^") and target in _INTEGER_TYPES
+            comparison = opcode in ("==", "!=", "<", "<=", ">", ">=") and target == "int"
+            unsigned_arithmetic = (opcode in ("+", "-", "*") and target in _INTEGER_TYPES
+                                   and target.startswith("unsigned "))
+            if not (bitwise or comparison or unsigned_arithmetic):
+                # Do not evaluate short-circuit/conditional operands or assume
+                # signed overflow, division, or shift preconditions are met.
+                raise _Unsupported("unsupported scalar binary operation")
+            left = self.expression(children[0], depth + 1)
+            right = self.expression(children[1], depth + 1)
+            if not isinstance(left, _Scalar) or not isinstance(right, _Scalar):
+                raise _Unsupported("non-scalar binary operand")
+            if not comparison and (left.ctype not in _INTEGER_TYPES or right.ctype not in _INTEGER_TYPES):
+                raise _Unsupported("non-integer binary operand")
+            return _Scalar(target)
         raise _Unsupported("unsupported expression")
 
     def run(self):
@@ -231,6 +249,15 @@ class _Function:
                     # type or the object provenance held by existing pointers.
                 else:
                     raise _Unsupported("unsupported assignment")
+            elif kind == "CompoundAssignOperator" and stmt.get("opcode") in ("&=", "|=", "^=") and len(nodes) == 2:
+                place = self.expression(nodes[0])
+                value = self.expression(nodes[1])
+                if (not isinstance(place, _Place) or not isinstance(value, _Scalar)
+                        or place.ctype not in _INTEGER_TYPES or value.ctype not in _INTEGER_TYPES):
+                    raise _Unsupported("unsupported compound assignment")
+                # Read/modify/write requires an initialized object. Only model
+                # standalone updates: nested side effects remain unsupported.
+                self.access(place, nodes[0])
             else:
                 raise _Unsupported("non-straight-line function")
         return self.proofs
