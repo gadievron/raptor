@@ -104,9 +104,9 @@ def refine_cargo_verdicts(
     if inventory is None:
         try:
             from core.inventory.builder import build_inventory
-            import tempfile
-            with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target), td)
+            from core.run.scratch import scratch_dir
+            with scratch_dir("raptor-sca-reachability-") as td:
+                inventory = build_inventory(str(target), str(td))
         except Exception:                           # noqa: BLE001
             logger.warning(
                 "sca.reachability.cargo_function_level: inventory "
