@@ -106,6 +106,36 @@ def minimal_rule(
     return rule
 
 
+def source_region(line: Any, *, end_line: Any = None, column: Any = None,
+                  end_column: Any = None, repeat_end_line: bool = False) -> dict[str, int]:
+    """Preserve known source coordinates without inventing an unknown start.
+
+    Invalid optional coordinates are omitted. End columns belong to their
+    original end line, so a backwards end line cannot donate a column to the
+    start line. Explicit multi-line spans may end before the start column.
+    """
+    from .parser import _coerce_line
+
+    start = _coerce_line(line)
+    if start is None or start <= 0:
+        return {}
+    region = {"startLine": start}
+    end = _coerce_line(end_line)
+    backwards_end = end is not None and end != 0 and end < start
+    if end is not None and end >= start:
+        region["endLine"] = end
+    elif repeat_end_line and not backwards_end:
+        region["endLine"] = start
+    start_col, end_col = _coerce_line(column), _coerce_line(end_column)
+    if start_col is not None and start_col > 0:
+        region["startColumn"] = start_col
+    if end_col is not None and end_col > 0 and not backwards_end:
+        multiline = end is not None and end > start
+        if multiline or start_col is None or start_col <= 0 or end_col >= start_col:
+            region["endColumn"] = end_col
+    return region
+
+
 def location(uri: str, region: dict[str, Any]) -> dict[str, Any]:
     """A ``locations[*]`` entry with one physical location.
 

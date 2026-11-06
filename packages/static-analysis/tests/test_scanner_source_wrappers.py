@@ -170,3 +170,14 @@ def test_generated_export_does_not_invent_line_one_for_unknown_coordinates():
     region = document['runs'][0]['results'][0]['locations'][0]['physicalLocation']['region']
     assert region == {}
     assert parse_sarif_data(document)[0].line == 0
+
+
+def test_generated_source_export_does_not_rebind_backwards_end_column():
+    document = _scanner._stage_findings_to_sarif(
+        [('wrapper', {'file': 'App.java', 'line': 8, 'line_end': 7,
+                      'column': 9, 'column_end': 12, 'message': 'finding'})],
+        tool_name='raptor-source-wrappers', rule_prefix='source-wrapper',
+    )
+    rows = document['runs'][0]['results']
+    assert len(rows) == 1
+    assert rows[0]['locations'][0]['physicalLocation']['region'] == {'startLine': 8, 'startColumn': 9}

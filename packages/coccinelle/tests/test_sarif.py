@@ -11,6 +11,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 # parents[3] climbs:
 #   [0] packages/coccinelle/tests/  (this file's directory)
@@ -194,3 +196,60 @@ def test_optional_region_fields_omitted_when_zero(tmp_path):
     assert "endLine" not in region
     assert "startColumn" not in region
     assert "endColumn" not in region
+
+
+@pytest.mark.parametrize('line', [0, -3, True], ids=['unknown', 'negative', 'boolean'])
+def test_unlocated_match_remains_a_finding_without_line_one(tmp_path, line):
+    result = SpatchResult(rule='r', matches=[SpatchMatch(file='a.c', line=line, column=5)])
+    run = _run0(results_to_sarif([result], tmp_path))
+    assert len(run['results']) == 1
+    assert run['results'][0]['locations'][0]['physicalLocation']['region'] == {}
+
+
+def test_converter_resolves_only_target_root_and_keeps_source_spelling(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    link = root / 'link.c'
+    link.symlink_to(root.parent / 'outside.c')
+    outside = str(root.parent / 'header.h')
+    original = Path.resolve
+    resolved = []
+    def resolve(path, *args, **kwargs):
+        assert path == root, 'formatting must not resolve source files'
+        resolved.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'resolve', resolve)
+    paths = [str(root / 'missing.c')] * 100 + ['src/../missing.c', str(link), outside]
+    result = SpatchResult(rule='r', matches=[SpatchMatch(file=path, line=5) for path in paths])
+    rows = _run0(results_to_sarif([result], root))['results']
+    assert resolved == [root]
+    uris = [row['locations'][0]['physicalLocation']['artifactLocation']['uri'] for row in rows]
+    assert uris[:101] == ['missing.c'] * 101
+    assert uris[-2:] == ['link.c', outside]
+
+
+def test_cocci_export_drops_backwards_end_without_dropping_match(tmp_path):
+    result = SpatchResult(rule='r', matches=[
+        SpatchMatch(file='a.c', line=8, line_end=7, column=9, column_end=12),
+    ])
+    rows = _run0(results_to_sarif([result], tmp_path))['results']
+    assert len(rows) == 1
+    assert rows[0]['locations'][0]['physicalLocation']['region'] == {'startLine': 8, 'startColumn': 9}
+
+
+@pytest.mark.parametrize('failure', [OSError, RuntimeError], ids=['root-unavailable', 'root-cycle'])
+def test_root_resolution_failure_preserves_findings_with_original_paths(tmp_path, monkeypatch, failure):
+    def unavailable(*args, **kwargs):
+        raise failure('root cannot be resolved')
+    monkeypatch.setattr(Path, 'resolve', unavailable)
+    result = SpatchResult(rule='r', matches=[SpatchMatch(file='src/a.c', line=8)])
+    rows = _run0(results_to_sarif([result], tmp_path))['results']
+    assert len(rows) == 1
+    physical = rows[0]['locations'][0]['physicalLocation']
+    assert physical['artifactLocation']['uri'] == 'src/a.c'
+    assert physical['region'] == {'startLine': 8}
+
+
+def test_uri_looking_source_path_does_not_rebind_to_a_local_basename(tmp_path):
+    result = SpatchResult(rule='r', matches=[SpatchMatch(file='file://literal.c', line=8)])
+    rows = _run0(results_to_sarif([result], tmp_path))['results']
+    assert rows[0]['locations'][0]['physicalLocation']['artifactLocation']['uri'] == 'file://literal.c'
