@@ -18,6 +18,10 @@ from core.coverage.store import (
 )
 
 
+import core.coverage.store as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _store_doc(n_files: int = 3) -> dict:
     return {
         "version": 1,
@@ -244,7 +248,7 @@ def test_source_replaced_after_backup_keeps_recovery_copy(tmp_path, monkeypatch)
         alternate.write_bytes(replacement)
         alternate.replace(path)
 
-    monkeypatch.setattr(os, "link", replace_after_link)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "link", replace_after_link)
     with pytest.raises(ValueError, match="changed"):
         compact_store_file(path)
     assert path.read_bytes() == replacement

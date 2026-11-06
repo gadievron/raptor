@@ -12,6 +12,10 @@ from core.sandbox import summary
 from core.sandbox import telemetry_mac
 
 
+import core.atomic_fs as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def sidecar(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry_mac, 'mint', lambda fields: 'test-token')
@@ -30,7 +34,7 @@ def test_partial_writes_publish_full_sidecar(tmp_path, monkeypatch, sidecar, siz
         calls.append(len(data))
         return original(fd, data[:size])
 
-    monkeypatch.setattr(os, 'write', write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
     context._write_proxy_count_sidecar(tmp_path, 12, {'flag'}, 'run-binding')
     assert json.loads(path.read_text()) == {'count': 12, 'flags': ['flag'], 'mac': 'test-token'}
     assert len(calls) > 1
@@ -42,7 +46,7 @@ def test_partial_writes_publish_full_sidecar(tmp_path, monkeypatch, sidecar, siz
 def test_no_progress_preserves_previous_sidecar(tmp_path, monkeypatch, sidecar, caplog):
     path, mirror = sidecar
     path.write_bytes(b'previous')
-    monkeypatch.setattr(os, 'write', lambda fd, data: 0)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', lambda fd, data: 0)
     context._write_proxy_count_sidecar(tmp_path, 12, set(), 'run-binding')
     assert path.read_bytes() == b'previous'
     assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
@@ -72,7 +76,7 @@ def test_cancellation_cleans_owned_temp_and_preserves_old_file(tmp_path, monkeyp
             return original(fd, data[:5])
         raise KeyboardInterrupt()
 
-    monkeypatch.setattr(os, 'write', cancel)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', cancel)
     with pytest.raises(KeyboardInterrupt):
         context._write_proxy_count_sidecar(tmp_path, 12, set(), 'run-binding')
     assert path.read_bytes() == b'previous'

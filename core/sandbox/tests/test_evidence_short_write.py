@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import evidence
 
 
+import core.sandbox.evidence as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("written", [0, 1, 5])
 @pytest.mark.parametrize("record", [False, True])
 def test_short_append_reports_failure(tmp_path, monkeypatch, caplog, written, record):
@@ -22,7 +26,7 @@ def test_short_append_reports_failure(tmp_path, monkeypatch, caplog, written, re
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(os, "write", short_write)
+            patch_module_attribute(patch, _os_fault_consumer, "os", "write", short_write)
             with caplog.at_level(logging.WARNING, logger=evidence.__name__):
                 if record:
                     result = handle.write_record({"event": "denied"})

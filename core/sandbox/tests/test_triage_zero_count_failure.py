@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import context, proxy, summary, telemetry_mac, triage
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def isolate_state(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'keys'))
@@ -48,7 +52,7 @@ def test_failed_first_append_and_sidecar_still_produce_report(tmp_path, monkeypa
         raise OSError(errno.ENOSPC, 'key creation unavailable')
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'open', refuse_log)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'open', refuse_log)
         scoped.setattr(telemetry_mac, 'mint', fail_key)
         context._persist_proxy_events([{'host': 'example.test'}], output=tmp_path)
     assert not log.exists()

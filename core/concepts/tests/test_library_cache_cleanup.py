@@ -10,6 +10,10 @@ import pytest
 from core.concepts import library_detect as ld
 
 
+import core.concepts.library_detect as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 def write_archive(path, value=b"new", roots=("library",)):
     with tarfile.open(path, "w") as tar:
         for root in roots:
@@ -204,7 +208,7 @@ def test_failed_cache_publication_restores_previous_tree(
         return rename(src, dst, *args, **kwargs)
 
     with monkeypatch.context() as fault:
-        fault.setattr(os, "rename", move)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "rename", move)
         if error is KeyboardInterrupt:
             with pytest.raises(KeyboardInterrupt):
                 ld._extract_tarball(archive, cache)
@@ -229,7 +233,7 @@ def test_failed_rollback_preserves_recovery_tree(tmp_path, archive, monkeypatch)
             raise OSError("cannot publish or roll back")
         return rename(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", move)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", move)
     assert ld._extract_tarball(archive, cache) is None
     recovery = list(cache.glob(".library-stale-*"))
     assert len(recovery) == 1

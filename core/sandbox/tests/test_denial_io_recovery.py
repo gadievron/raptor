@@ -9,6 +9,10 @@ import pytest
 from core.sandbox import evidence, summary, telemetry_mac, triage
 
 
+import core.sandbox.evidence as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def isolated_run(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'keys'))
@@ -123,7 +127,7 @@ def test_append_failure_keeps_surviving_record_and_mac_binding(tmp_path, monkeyp
         return fail_open() if current == fd else original(current, data)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'write', fail_append)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'write', fail_append)
         deny('lost append')
     result = summary.summarize_and_write(tmp_path)
     assert result['total_denials'] == 1

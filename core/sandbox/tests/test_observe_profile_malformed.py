@@ -11,6 +11,10 @@ import pytest
 from core.sandbox import observe_profile as observe
 
 
+import core.security.capped_read as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 def record(path_value, **fields):
     return {
         "syscall": "openat", "path": path_value, "observe": True,
@@ -103,8 +107,8 @@ def test_stat_failure_closes_descriptor_and_returns_no_records(tmp_path, monkeyp
         return fd
 
     with monkeypatch.context() as patch:
-        patch.setattr(os, "open", open_fd)
-        patch.setattr(os, "fstat", Mock(side_effect=OSError("stat failed")))
+        patch_module_attribute(patch, _os_fault_consumer, "os", "open", open_fd)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "fstat", Mock(side_effect=OSError("stat failed")))
         assert list(observe._iter_records(path)) == []
     assert len(opened) == 1
     with pytest.raises(OSError) as exc:

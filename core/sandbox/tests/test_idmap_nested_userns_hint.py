@@ -17,6 +17,11 @@ import pytest
 
 from core.sandbox import _spawn
 
+
+import core.sandbox._spawn as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="Linux-only sandbox internals (user-namespace id maps)",
@@ -35,7 +40,7 @@ class TestDetector:
     def test_root_invoker_is_never_nested(self, monkeypatch) -> None:
         # Root owns the init userns: owner==uid holds trivially there,
         # so the detector must not classify root as nested.
-        monkeypatch.setattr(os, "getuid", lambda: 0)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "getuid", lambda: 0)
         assert _spawn._idmap_denied_in_self_owned_userns(
             "newuidmap: write to uid_map failed: Operation not "
             "permitted") is False
@@ -45,7 +50,7 @@ class TestDetector:
         # not openable — that refusal IS the foreign-init evidence.
         def _deny(*_a, **_k):
             raise PermissionError("Operation not permitted")
-        monkeypatch.setattr(os, "open", _deny)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", _deny)
         assert _spawn._idmap_denied_in_self_owned_userns(
             "newuidmap: write to uid_map failed: Operation not "
             "permitted") is False
@@ -67,7 +72,7 @@ class TestDetector:
             buf[0] = os.getuid()
             return 0
 
-        monkeypatch.setattr(os, "open", _fake_open)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", _fake_open)
         monkeypatch.setattr(fcntl, "ioctl", _fake_ioctl)
         assert _spawn._idmap_denied_in_self_owned_userns(
             "newuidmap: write to uid_map failed: Operation not "

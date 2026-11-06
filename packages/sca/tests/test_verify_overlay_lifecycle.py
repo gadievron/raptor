@@ -8,6 +8,10 @@ from core.json import JsonCache
 from packages.sca import verify
 
 
+import packages.sca.verify as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize(
     "relative", ["overlay", "reports/overlay", "reports/deep/overlay"]
 )
@@ -208,7 +212,7 @@ def test_publication_failure_restores_previous_overlay(
             raise failure
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     if error is OSError:
         assert run_verify(target, proposed, output, tmp_path) == 3
     else:
@@ -235,7 +239,7 @@ def test_failed_rollback_keeps_recovery_copy(inputs, tmp_path, monkeypatch):
             raise OSError("cannot publish or restore")
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     assert run_verify(target, proposed, output, tmp_path) == 3
     retained = list(output.glob(".verify-retired-*"))
     assert len(retained) == 1

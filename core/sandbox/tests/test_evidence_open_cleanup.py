@@ -10,6 +10,10 @@ import pytest
 from core.sandbox import evidence
 
 
+import core.sandbox.evidence as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("existing,stage", [
     (False, "fstat"), (True, "fstat"),
     (True, "getfl"), (True, "setfl"),
@@ -51,9 +55,9 @@ def test_open_failure_closes_descriptors(tmp_path, monkeypatch, existing, stage)
         raise failure
 
     with monkeypatch.context() as patch:
-        patch.setattr(os, "open", track_open)
-        patch.setattr(os, "close", track_close)
-        patch.setattr(os, "fstat", fail_fstat)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "open", track_open)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "close", track_close)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "fstat", fail_fstat)
         patch.setattr(fcntl, "fcntl", fail_fcntl)
         if stage == "construct":
             patch.setattr(evidence.EvidenceFile, "__init__", fail_construct)

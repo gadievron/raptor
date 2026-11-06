@@ -24,6 +24,19 @@ from core.project.cli import (
 
 import pytest
 
+
+import core.project.cli as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_fault_patches(monkeypatch):
+    """Keep process and path simulations on the module under test."""
+    import core.project.cli as consumer
+
+    patch_module_attribute(monkeypatch, consumer, "os", "isatty", consumer.os.isatty)
+
+
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
@@ -472,7 +485,7 @@ class TestEditorGuard(unittest.TestCase):
     def _run_notes_edit(self, editor):
         buf = io.StringIO()
         with patch("core.project.cli.ProjectManager") as MockMgr, \
-                patch.object(os, "isatty", lambda fd: True), \
+                patch.object(_os_fault_consumer.os, "isatty", lambda fd: True), \
                 patch.dict(os.environ, {"EDITOR": editor}), \
                 patch("subprocess.run") as run_mock, \
                 contextlib.redirect_stdout(buf), \
@@ -531,7 +544,6 @@ class TestGetActiveProject(unittest.TestCase):
                 with patch.dict(os.environ, {}, clear=True):
                     result = _get_active_project()
             self.assertIsNone(result)
-
 
 
 if __name__ == "__main__":

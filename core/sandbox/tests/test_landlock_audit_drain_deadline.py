@@ -15,7 +15,6 @@ loop so it fires regardless of pipe readiness.
 """
 from __future__ import annotations
 
-import os
 import time
 
 import pytest
@@ -24,17 +23,21 @@ from core.sandbox import _landlock_audit as mod
 from core.testing.wallclock import wall_deadline
 
 
+import core.sandbox._landlock_audit as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def saturated_pipe(monkeypatch):
     """Simulate a permanently-readable fd: select always reports it ready
     and os.read always returns data (never EOF)."""
     monkeypatch.setattr(mod, "_readable_fds", lambda fds, timeout: list(fds))
-    monkeypatch.setattr(os, "read", lambda fd, n: b"x" * n)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: b"x" * n)
     # Pin the target ALIVE: the liveness probe runs on every wake
     # (waitid WNOWAIT), and the fake target_pid=1 would probe as
     # "exited" (ECHILD), routing the loop into the bounded final
     # sweep instead of the deadline path these tests exist to pin.
-    monkeypatch.setattr(os, "waitid", lambda *a, **k: None)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "waitid", lambda *a, **k: None)
     # A large per-fd cap would still be hit, but the loop keeps draining
     # past it ("still draining to keep the child unblocked") — that is the
     # unbounded path the deadline must cut.

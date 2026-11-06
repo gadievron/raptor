@@ -6,6 +6,10 @@ import pytest
 from core.sandbox import context
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('limit', [0, 1, 31, 1 << 20])
 @pytest.mark.parametrize('short_reads', [False, True])
 def test_recount_reads_at_most_limit_plus_one(tmp_path, monkeypatch, limit, short_reads):
@@ -19,7 +23,7 @@ def test_recount_reads_at_most_limit_plus_one(tmp_path, monkeypatch, limit, shor
         consumed.append(len(chunk))
         return chunk
 
-    monkeypatch.setattr(os, 'read', read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', read)
     assert context._count_lines_bounded(path, max_bytes=limit) == (limit + 1, True)
     assert sum(consumed) == limit + 1
 
@@ -46,7 +50,7 @@ def test_close_error_preserves_result(tmp_path, monkeypatch, read_fails):
     if read_fails:
         def failed_read(*args):
             raise OSError('read failed')
-        monkeypatch.setattr(os, 'read', failed_read)
-    monkeypatch.setattr(os, 'close', close)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', failed_read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'close', close)
     assert context._count_lines_bounded(path) == ((0, False) if read_fails else (2, False))
     assert len(closed) == 1

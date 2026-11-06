@@ -9,6 +9,27 @@ import pytest
 from core.sandbox import context, proxy, summary, telemetry_mac
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_delegated_os_faults(monkeypatch):
+    """Forward delegated syscalls while preserving each borrowed OS view."""
+    import core.sandbox.context as primary0
+    import core.atomic_fs as delegated0
+    patch_module_attribute(monkeypatch, delegated0, "os", "fsync",
+                           lambda *args, **kwargs: primary0.os.fsync(*args, **kwargs))
+    import core.sandbox.context as primary1
+    import core.atomic_fs as delegated1
+    patch_module_attribute(monkeypatch, delegated1, "os", "fstat",
+                           lambda *args, **kwargs: primary1.os.fstat(*args, **kwargs))
+    import core.sandbox.context as primary2
+    import core.atomic_fs as delegated2
+    patch_module_attribute(monkeypatch, delegated2, "os", "close",
+                           lambda *args, **kwargs: primary2.os.close(*args, **kwargs))
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch):
     monkeypatch.setattr(context, '_PROXY_STREAM_STATE', {})
@@ -38,7 +59,7 @@ def test_events_are_fsynced_before_count_sidecar(tmp_path, monkeypatch):
             order.append('events' if (current.st_dev, current.st_ino) == (source.st_dev, source.st_ino) else 'sidecar')
         return original(fd)
 
-    monkeypatch.setattr(os, 'fsync', fsync)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'fsync', fsync)
     context._persist_proxy_events([event()], output=tmp_path)
     assert order.index('events') < order.index('sidecar')
     assert json.loads(sidecar.read_text())['count'] == 1
@@ -56,7 +77,7 @@ def test_event_fsync_failure_is_recorded_and_stays_sticky(tmp_path, monkeypatch,
         return original(fd)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'fsync', fail_event_sync)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'fsync', fail_event_sync)
         context._persist_proxy_events([event()], output=tmp_path)
     failed = json.loads(sidecar.read_text())
     assert failed['count'] == 1
@@ -93,7 +114,7 @@ def test_metadata_failure_preserves_existing_sidecar_anchor(tmp_path, monkeypatc
             raise OSError('metadata failed')
         return original(fd)
 
-    monkeypatch.setattr(os, 'fstat', fail_once)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'fstat', fail_once)
     context._persist_proxy_events([event()], output=tmp_path)
     payload = json.loads(sidecar.read_text())
     assert payload['count'] == 7
@@ -141,8 +162,8 @@ def test_nonregular_close_error_does_not_retry_a_released_fd(tmp_path, monkeypat
             failed_close = True
             raise OSError('close failed after descriptor release')
 
-    monkeypatch.setattr(os, 'fstat', fake_stat)
-    monkeypatch.setattr(os, 'close', close)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'fstat', fake_stat)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'close', close)
     context._persist_proxy_events([event()], output=tmp_path)
     assert invalid_closes == []
     assert log.read_bytes() == b''

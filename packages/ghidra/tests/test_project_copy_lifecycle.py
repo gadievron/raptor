@@ -5,6 +5,10 @@ import pytest
 from packages.ghidra import project_util as util
 
 
+import packages.ghidra.project_util as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def project(tmp_path):
     source = tmp_path / "source"
@@ -131,7 +135,7 @@ def test_publication_failure_restores_old_pair_and_lock(
             raise failure
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     with pytest.raises(error) as caught:
         util.prepare_working_copy(project, out)
     assert caught.value is failure
@@ -159,7 +163,7 @@ def test_failed_rollback_keeps_previous_database_available(
             raise OSError("publication and restore unavailable")
         return rename(src, dst)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     with pytest.raises(OSError):
         util.prepare_working_copy(project, out)
     assert (out / "p.gpr").read_bytes() == b"old header"

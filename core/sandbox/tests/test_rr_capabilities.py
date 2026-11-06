@@ -1,6 +1,5 @@
 """rr must not confuse namespace setup capabilities with host perf authority."""
 import ctypes
-import os
 import subprocess
 import sys
 
@@ -8,6 +7,11 @@ import pytest
 
 from core.sandbox._rr_caps import _Header, make_capability_drop
 from core.sandbox.seccomp import _make_seccomp_preexec, check_seccomp_available
+
+
+import core.sandbox._rr_caps as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux capabilities')
 
@@ -61,7 +65,7 @@ def test_drop_clears_all_sets_and_locks_fixups_before_clear(monkeypatch, root):
         capset = Function(put)
     lib = Lib()
     lib.prctl = prctl
-    monkeypatch.setattr(os, 'geteuid', lambda: 0 if root else 65534)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'geteuid', lambda: 0 if root else 65534)
     make_capability_drop(lib)()
     assert events == [(27, 0), (28, 15), 'clear']
 
@@ -75,7 +79,7 @@ def test_failed_drop_refuses_execution(monkeypatch):
     def stop(code):
         assert code == 126
         raise Refused
-    monkeypatch.setattr(os, '_exit', stop)
-    monkeypatch.setattr(os, 'write', lambda *args: None)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", '_exit', stop)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', lambda *args: None)
     with pytest.raises(Refused):
         make_capability_drop(Lib())()

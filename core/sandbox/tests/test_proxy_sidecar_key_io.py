@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import context, proxy, summary, telemetry_mac
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch):
     monkeypatch.setattr(summary, '_proxy_persist_state', {})
@@ -44,7 +48,7 @@ def test_append_refusal_and_key_failure_do_not_break_caller(tmp_path, monkeypatc
     def key_failure(fields):
         raise OSError(errno.ENOSPC, 'key unavailable')
 
-    monkeypatch.setattr(os, 'open', refused)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'open', refused)
     monkeypatch.setattr(telemetry_mac, 'mint', key_failure)
     context._persist_proxy_events([{'host': 'example.test'}], output=tmp_path)
     state = summary.get_proxy_persist_state(tmp_path)
