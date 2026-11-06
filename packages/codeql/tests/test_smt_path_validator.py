@@ -1910,7 +1910,7 @@ class TestWeakestPrecondition:
     @_requires_z3
     def test_solver_timeout_keeps_conjunct(self):
         """When a redundancy check returns ``unknown`` (e.g. solver
-        timeout), the conjunct is conservatively kept."""
+        timeout), keep the conjunct and mark reduction incomplete."""
         from core.smt_solver.path_feasibility import _extract_wp
         import z3
 
@@ -1919,8 +1919,7 @@ class TestWeakestPrecondition:
             ("x > 5", z3.UGT(x, z3.BitVecVal(5, 32))),
             ("x > 0", z3.UGT(x, z3.BitVecVal(0, 32))),
         ]
-        # Patch solver.check to return unknown for the first call,
-        # forcing the conjunct to be kept even though it's redundant.
+        # Every redundancy query returns unknown; none can justify deletion.
         real_extract = _extract_wp
         with patch("core.smt_solver.path_feasibility._new_solver") as mock_ns:
             mock_solver = mock_ns.return_value
@@ -1928,9 +1927,9 @@ class TestWeakestPrecondition:
             mock_solver.__enter__ = lambda s: s
             mock_solver.__exit__ = lambda s, *a: None
             wp, conj, complete = real_extract(exprs)
-        # Both kept because every check returned unknown
-        assert len(conj) == 2
-        assert complete is True
+        assert set(conj) == {text for text, _ in exprs}
+        assert wp is not None
+        assert complete is False
 
 
 # ---------------------------------------------------------------------------
