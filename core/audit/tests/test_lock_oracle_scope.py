@@ -102,7 +102,7 @@ def test_dispatcher_retains_observation_without_verdict_authority(tmp_path, monk
     (tmp_path / "record.c").write_text(BALANCED)
     monkeypatch.setattr(condition_smt, "check_lock_discipline", lambda *a:
                         condition_smt.LockDisciplineResult(violation_found=found, witness={"enabled": 0}))
-    monkeypatch.setattr(orch, "run_smt_verb_direct", sweep._run_smt_verb_inner)
+    monkeypatch.setattr(sweep, "_smt_verb_in_subprocess", sweep._run_smt_verb_inner)
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
     result = orch._run_tool_chain([{"type": "smt", "config": {"verb": "check-lock-discipline"}}],
                                   config=config, file_path="record.c", function_name="Read",
