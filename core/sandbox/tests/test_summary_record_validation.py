@@ -8,12 +8,21 @@ from core.sandbox import summary
 
 
 @pytest.fixture(autouse=True)
-def isolated_state(tmp_path, monkeypatch):
+def isolated_state(tmp_path):
+    from core.testing.sandbox_state_scope import isolated_sandbox_state
     from core.testing.state_isolation import pin_user_state_dirs
-    pin_user_state_dirs(monkeypatch, tmp_path)
-    summary.set_active_run_dir(None)
-    yield
-    summary.set_active_run_dir(None)
+    with isolated_sandbox_state(()):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+            pin_user_state_dirs(patch, tmp_path)
+            yield
+
+
+@pytest.fixture
+def monkeypatch(isolated_state):
+    """Undo body patches before restoring fixture-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.mark.parametrize("bad", [

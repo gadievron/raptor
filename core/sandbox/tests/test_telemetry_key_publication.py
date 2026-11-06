@@ -10,13 +10,21 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture
-def key(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
-    path = tmp_path / 'key'
-    monkeypatch.setattr(mac, '_key_path', lambda: path)
-    monkeypatch.setattr(mac, '_warned_paths', set())
-    return path
+def key(tmp_path):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        pin_user_state_dirs(monkeypatch, tmp_path / 'state')
+        monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+        path = tmp_path / 'key'
+        monkeypatch.setattr(mac, '_key_path', lambda: path)
+        monkeypatch.setattr(mac, '_warned_paths', set())
+        yield path
+
+
+@pytest.fixture
+def monkeypatch(key):
+    """Undo body patches before restoring fixture-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.mark.parametrize('phase', ['write', 'close'])

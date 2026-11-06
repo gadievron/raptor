@@ -8,22 +8,20 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture(autouse=True)
-def owned_run_state(tmp_path, monkeypatch):
-    pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
-    # Borrow bindings without closing an inherited evidence handle.
-    monkeypatch.setattr(summary, '_evidence_handle', None)
-    monkeypatch.setattr(summary, '_active_run_dir', None)
-    monkeypatch.setattr(summary, '_denial_count', 0)
-    monkeypatch.setattr(summary, '_evidence_open_failed', False)
-    monkeypatch.setattr(summary, '_evidence_next_open_attempt', 0.0)
-    monkeypatch.setattr(summary, '_active_run_generation', summary._active_run_generation)
-    monkeypatch.setattr(summary, '_evidence_write_failures', dict(summary._evidence_write_failures))
-    monkeypatch.setattr(summary, '_evidence_inode_mismatches', dict(summary._evidence_inode_mismatches))
-    try:
-        yield
-    finally:
-        summary.set_active_run_dir(None)
+def owned_run_state(tmp_path):
+    from core.testing.sandbox_state_scope import isolated_sandbox_state
+    with isolated_sandbox_state(()):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+            pin_user_state_dirs(patch, tmp_path / 'state')
+            yield
+
+
+@pytest.fixture
+def monkeypatch(owned_run_state):
+    """Undo body patches before restoring fixture-owned state."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def deny(count):

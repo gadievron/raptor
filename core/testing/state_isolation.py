@@ -21,11 +21,21 @@ IN-FILE, via one thin autouse fixture::
     from core.testing.state_isolation import pin_user_state_dirs
 
     @pytest.fixture(autouse=True)
-    def _user_state_in_tmp(tmp_path, monkeypatch):
-        pin_user_state_dirs(monkeypatch, tmp_path)
+    def _user_state_in_tmp(tmp_path):
+        with pytest.MonkeyPatch.context() as patch:
+            pin_user_state_dirs(patch, tmp_path)
+            yield
 
-Autouse fixtures wrap ``unittest.TestCase`` methods too, so the same
-three lines protect unittest-style files. The root conftest's own
+    @pytest.fixture
+    def monkeypatch(_user_state_in_tmp):
+        with pytest.MonkeyPatch.context() as patch:
+            yield patch
+
+The registry owner must outlive the test body's monkeypatch stack:
+``monkeypatch.undo()`` must not expose the caller's registry, and body
+patches must unwind before the caller's bindings are restored.
+Autouse fixtures wrap ``unittest.TestCase`` methods too, so this pattern
+also protects unittest-style files. The root conftest's own
 redirect (when present) simply layers underneath — both point into
 scratch, the innermost wins.
 """
