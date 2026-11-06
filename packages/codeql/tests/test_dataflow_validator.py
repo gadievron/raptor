@@ -396,8 +396,11 @@ def _sarif_two_flows() -> dict:
 
 
 def _smt(feasible, reasoning="r", unsatisfied=()):
-    return SimpleNamespace(
+    from core.smt_solver.path_feasibility import PathSMTResult
+
+    return PathSMTResult(
         feasible=feasible,
+        satisfied=[], unknown=[],
         reasoning=reasoning,
         unsatisfied=list(unsatisfied),
         model={},
@@ -898,4 +901,61 @@ def test_alternative_path_with_unbound_callee_reaches_analysis(tmp_path, hint):
         result = validator.validate_dataflow_path(path, tmp_path)
     assert result.is_exploitable is True
     assert result.smt_path_index == 1 and result.smt_paths_checked == 2
+    assert validator.llm.generate_structured.call_count == 1
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('hint', [{}, {'width': 32, 'signed': True}, {'width': 32, 'signed': False}],
+                         ids=['guessed', 'signed', 'unsigned'])
+@pytest.mark.parametrize('ordinary_contradiction', [False, True])
+def test_untyped_wide_call_return_cannot_refute_source_path(tmp_path, hint, ordinary_contradiction):
+    texts = ['Value == 0', 'Value == 1', 'fetch_width() >= 0'] if ordinary_contradiction else [
+        'fetch_width() > 0xffffffff',
+    ]
+    # The wide return satisfies its guard; neither 32-bit signedness does.
+    guard = ' && '.join(texts)
+    source = ('unsigned long long fetch_width(void) { return 0x100000000ULL; }\n'
+              f'int Read(int Value) {{ if({guard}) return 1; return 0; }}\n')
+    for name in ('a.c', 'b.c'):
+        (tmp_path / name).write_text(source)
+    validator = _validator()
+    validator.read_source_context.return_value = source
+    validator._extract_path_conditions.return_value = ([PathCondition(text, i) for i, text in enumerate(texts)], hint)
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    path.rule_id = 'cpp/integer-overflow'
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is (not ordinary_contradiction)
+    assert validator.llm.generate_structured.call_count == (0 if ordinary_contradiction else 1)
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('missing_core', [False, True], ids=['call-dependent', 'missing-native-core'])
+def test_untyped_signed_call_is_not_an_unsigned_source_refutation(tmp_path, missing_core):
+    from core.smt_solver import path_feasibility as paths
+
+    validator = _validator()
+    validator._extract_path_conditions.return_value = (
+        [PathCondition('read_signed() < 0', 0)], {'width': 32, 'signed': False},
+    )
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    real = paths._new_solver
+
+    def solver_factory(*args, **kwargs):
+        solver = real(*args, **kwargs)
+        if missing_core:
+            solver.unsat_core = lambda: []
+        return solver
+
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ), patch.object(paths, '_new_solver', side_effect=solver_factory):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is True
     assert validator.llm.generate_structured.call_count == 1

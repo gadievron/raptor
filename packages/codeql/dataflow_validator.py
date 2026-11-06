@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
 
@@ -913,7 +913,7 @@ class DataflowValidator:
             # as ``ULT(ret, 0)`` — unsat — so one signedness-mismatched
             # guard anywhere in the path would refute the whole finding
             # pre-LLM. When signedness is a guess, a refutation is only
-            # honored only after the dual-profile contradiction checks;
+            # honored after the dual-profile contradiction checks;
             # a pinned hint keeps the cheaper single-profile check.
             signed_pinned = isinstance(profile_hint.get("signed"), bool)
             check = (
@@ -927,6 +927,17 @@ class DataflowValidator:
                 # math assumptions and must not suppress source findings.
                 use_call_summaries=False,
             )
+            # A profile hint does not establish the return width or signedness
+            # of opaque calls. Even dual signedness checks can refute a narrow
+            # encoding of a perfectly feasible wider return. Honor only an
+            # owned native core independent of these untyped call terms.
+            if (smt_result.feasible is False and smt_result.anon_var_map
+                    and smt_result.refutation_uses_call_terms is not False):
+                smt_result = replace(
+                    smt_result, feasible=None, wp_complete=False,
+                    reasoning=(smt_result.reasoning + "; unbound call return types: "
+                               "encoded contradiction cannot refute the source path"),
+                )
             if smt_result.feasible is False:
                 self.logger.info(
                     "SMT: path %d/%d infeasible — %s",
