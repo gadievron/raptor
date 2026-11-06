@@ -62,6 +62,7 @@ from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact, dumps_canonical
+from core.sandbox.evidence import _unique_evidence_object
 
 logger = logging.getLogger(__name__)
 
@@ -156,12 +157,14 @@ class SandboxProfile:
         normalised at construction time so two probes of the same
         binary produce identical JSON modulo timestamp)."""
         d = asdict(self)
-        return dumps_artifact(d)
+        # Filesystem paths and argv may contain surrogate-escaped bytes.
+        # JSON escapes retain them without producing invalid UTF-8 text.
+        return dumps_artifact(d, ensure_ascii=True)
 
     @classmethod
     def from_json(cls, raw: str) -> SandboxProfile:
         try:
-            d = json.loads(raw)
+            d = json.loads(raw, object_pairs_hook=_unique_evidence_object)
         except RecursionError as exc:
             raise ValueError("SandboxProfile JSON is too deeply nested") from exc
         if not isinstance(d, dict):
@@ -257,7 +260,11 @@ def _env_signature(env_keys: Iterable[str]) -> str:
         # "FOOBAR=baz" — a synthetic edge case in practice but
         # cheap to defend.
         parts.append(f"{len(k)}:{k}={len(v)}:{v}")
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    # POSIX environ decodes non-UTF-8 bytes with surrogateescape. Recover
+    # those bytes while retaining the historical encoding for valid text.
+    return hashlib.sha256(
+        "\n".join(parts).encode("utf-8", errors="surrogateescape")
+    ).hexdigest()
 
 
 def _fingerprint(bin_sha: str, env_sig: str,
