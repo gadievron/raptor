@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -21,21 +22,26 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    script = REPO_ROOT / "libexec" / "raptor-review"
-    spec = importlib.util.spec_from_file_location(
-        "raptor_review_cli", script, submodule_search_locations=[],
-    )
-    if spec is None:
-        # Extensionless script — no default loader; exec it by hand.
-        mod = types.ModuleType("raptor_review_cli")
-        mod.__file__ = str(script)
-        code = compile(script.read_text(), str(script), "exec")
-        exec(code, mod.__dict__)
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            patch.object(sys, "path", sys.path.copy()):
+        # The review CLI rejects interpreter startup overrides. Restore the
+        # caller's exact environment when this import scope exits.
+        for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+            os.environ.pop(name, None)
+        script = REPO_ROOT / "libexec" / "raptor-review"
+        spec = importlib.util.spec_from_file_location(
+            "raptor_review_cli", script, submodule_search_locations=[],
+        )
+        if spec is None:
+            # Extensionless script — no default loader; exec it by hand.
+            mod = types.ModuleType("raptor_review_cli")
+            mod.__file__ = str(script)
+            code = compile(script.read_text(), str(script), "exec")
+            exec(code, mod.__dict__)
+            return mod
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
         return mod
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 _cli = _load_cli()
