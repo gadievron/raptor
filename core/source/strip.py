@@ -72,6 +72,9 @@ def blank_c_noncode(content: str, *, allow_digit_separators: bool = False) -> st
     The default preserves the inventory scanner's behavior. Expanded C may
     contain C23 digit separators, which are pp-number content, not quotes.
     """
+    if (type(content) is str and '"' not in content and "'" not in content
+            and "/*" not in content and "//" not in content):
+        return content
     out = list(content)
     i = 0
     n = len(out)
@@ -149,11 +152,25 @@ def _strip_c_comment_spans(text: str, comment_replacement: str) -> str:
     # Replacement contents must not depend on a str subclass's truthiness.
     has_replacement = str.__len__(comment_replacement) > 0
     n = len(text)
+    has_escapes = None
     while match := _C_NONCODE_START_RE.search(text, i):
         start = match.start()
         marker = match.group()
         if marker in ("\"", "'"):
             end = start + 1
+            # Probe once, only when quotes occur. Escaped text keeps its walk.
+            if has_escapes is None:
+                has_escapes = "\\" in text
+            if not has_escapes:
+                if end >= n:
+                    i = n
+                    continue
+                if text[end] == marker:
+                    i = end + 1
+                    continue
+                closing = text.find(marker, end)
+                i = n if closing < 0 else closing + 1
+                continue
             while end < n:
                 character = text[end]
                 if character == "\\":
