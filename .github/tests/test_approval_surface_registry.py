@@ -152,6 +152,10 @@ def _bash_read_has_prompt(line: str) -> bool:
     fail the ``read``-at-head test and never false-positive; a
     ``read`` whose own prompt string contains a connector is still
     caught via the pre-connector segment."""
+    # Every accepted spelling contains this literal builtin name. Avoid
+    # shell tokenization for unrelated Python lines in the tree-wide scan.
+    if "read" not in line:
+        return False
     for segment in _BASH_CMD_CONNECTOR_RE.split(line):
         words = segment.split()
         while words and (
@@ -586,26 +590,30 @@ def _may_carry_python_prompt(text: str) -> bool:
     scopes out — and the nightly full enumeration owns it (see
     test_full_enumeration_matches_smoke).
     """
+    if "input" not in text and "confirm" not in text:
+        return False
     return _PY_PROMPT_MENTION.search(text) is not None
 
 
-def _python_prompt_count(tree: ast.AST) -> int:
+def _python_prompt_count(tree: ast.AST, *, stop_after_first: bool = False) -> int:
     count = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
-        if isinstance(fn, ast.Name) and fn.id in ("input", "confirm"):
+        if ((isinstance(fn, ast.Name) and fn.id in ("input", "confirm"))
+                or (isinstance(fn, ast.Attribute) and fn.attr == "confirm"
+                    and isinstance(fn.value, ast.Name)
+                    and fn.value.id in _CONFIRM_OWNERS)):
             count += 1
-        elif (isinstance(fn, ast.Attribute) and fn.attr == "confirm"
-                and isinstance(fn.value, ast.Name)
-                and fn.value.id in _CONFIRM_OWNERS):
-            count += 1
+            if stop_after_first:
+                return count
     return count
 
 
 def _python_prompts(tree: ast.AST) -> bool:
-    return _python_prompt_count(tree) > 0
+    # Enumeration needs presence; registry count pins still inspect every call.
+    return _python_prompt_count(tree, stop_after_first=True) > 0
 
 
 def _prompt_call_count(path: Path) -> int:
@@ -717,6 +725,11 @@ def _enumerated(full: bool = False) -> frozenset[str]:
 
 
 class TestApprovalSurfaceRegistry(unittest.TestCase):
+    def test_prompt_presence_keeps_full_count_checks_intact(self):
+        tree = ast.parse('input("first"); typer.confirm("second"); click.confirm("third")')
+        self.assertTrue(_python_prompts(tree))
+        self.assertEqual(_python_prompt_count(tree), 3)
+
     def test_every_prompt_surface_is_adjudicated(self):
         missing = sorted(_enumerated() - set(REGISTRY))
         self.assertFalse(

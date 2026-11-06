@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 from contextlib import nullcontext as _path_nullcontext
@@ -88,6 +89,15 @@ def _none_default_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]
 
 def census_offenders(rel: str, source: str) -> list[str]:
     """Unbounded loader spellings in *source* lacking the marker."""
+    # Every AST spelling we flag requires one of these identifiers. Normalize
+    # like Python's parser so Unicode identifier spellings cannot evade the
+    # prescreen. Imports and ordinary default-budget calls need no AST walk.
+    normalized = unicodedata.normalize("NFKC", source)
+    if _UNBOUNDED_NAME not in normalized and (
+        "max_bytes" not in normalized
+        or not any(name in normalized for name in _LOADER_NAMES)
+    ):
+        return []
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -103,6 +113,10 @@ def census_offenders(rel: str, source: str) -> list[str]:
             offenders.append(f"{rel}:{node.lineno}: {why}")
 
     def _visit(node: ast.AST, none_params: frozenset[str]) -> None:
+        # Neither leaf can contain a loader call or change function scope;
+        # visiting their scalar fields / Name contexts adds no evidence.
+        if isinstance(node, (ast.Name, ast.Constant)):
+            return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             none_params = frozenset(_none_default_params(node))
         if isinstance(node, ast.Call):
@@ -143,8 +157,6 @@ def test_no_unjustified_unbounded_reads_in_runtime_source() -> None:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "load_json" not in source:
-            continue
         rel = path.relative_to(repo).as_posix()
         offenders.extend(census_offenders(rel, source))
     assert not offenders, (
@@ -156,6 +168,26 @@ def test_no_unjustified_unbounded_reads_in_runtime_source() -> None:
 
 class TestCensusMechanics:
     """The census's own failure directions, on planted sources."""
+
+    def test_calls_nested_among_leaf_values_are_still_found(self):
+        src = (
+            "items = [name, 'literal', wrap(load_json_unbounded(p)),\n"
+            "         load_json(p, max_bytes=None)]\n"
+        )
+        assert len(census_offenders("x.py", src)) == 2
+
+    def test_nested_function_defaults_keep_separate_budgets(self):
+        src = (
+            "def outer(p, max_bytes=None):\n"
+            "    load_json(p, max_bytes=max_bytes)\n"
+            "    def inner(p, max_bytes=1024):\n"
+            "        return load_json(p, max_bytes=max_bytes)\n"
+            "    return load_json_with_comments(p, max_bytes=max_bytes)\n"
+        )
+        offenders = census_offenders("x.py", src)
+        assert len(offenders) == 2
+        assert offenders[0].startswith("x.py:2:")
+        assert offenders[1].startswith("x.py:5:")
 
     def test_unbounded_call_without_marker_flagged(self):
         src = "from core.json import load_json_unbounded\n" \
@@ -207,3 +239,26 @@ class TestCensusMechanics:
 
     def test_unparseable_source_skipped(self):
         assert census_offenders("x.py", "def broken(:\n") == []
+
+    def test_normalized_identifiers_cannot_evade_the_prescreen(self):
+        def wide(name):
+            return "".join(chr(ord(char) + 0xFEE0) if char.isalpha() else char
+                           for char in name)
+
+        sources = (
+            f"data = {wide('load_json_unbounded')}(p)\n",
+            f"data = load_json(p, {wide('max_bytes')}=None)\n",
+            f"data = {wide('load_json')}(p, max_bytes=None)\n",
+            f"def read(p, {wide('max_bytes')}=None):\n"
+            f"    return load_json(p, {wide('max_bytes')}={wide('max_bytes')})\n",
+        )
+        for source in sources:
+            assert len(census_offenders("x.py", source)) == 1, source
+
+    def test_whole_file_scan_includes_normalized_loader_names(self, tmp_path, monkeypatch):
+        source = tmp_path / "wide.py"
+        source.write_text("data = ｌｏａｄ_ｊｓｏｎ_ｕｎｂｏｕｎｄｅｄ(p)\n", encoding="utf-8")
+        monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+        monkeypatch.setitem(globals(), "runtime_file_universe", lambda *args, **kwargs: [source])
+        with _path_pytest.raises(AssertionError, match="wide.py:1: load_json_unbounded call"):
+            test_no_unjustified_unbounded_reads_in_runtime_source()

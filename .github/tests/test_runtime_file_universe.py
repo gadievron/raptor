@@ -14,6 +14,7 @@ pinned on a planted synthetic tree AND on the real checkout:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -52,6 +53,36 @@ def _plant(root: Path, rel: str, text: str = "x = 1\n") -> Path:
 
 
 class TestSyntheticTree:
+    @_path_pytest.mark.parametrize("excluded", [
+        "core/pkg/tests", "core/pkg/fixtures", "core/.venv",
+        "core/testing", "packages/pkg/scripts", "plugins/node_modules",
+    ])
+    def test_excluded_subtrees_are_not_walked(self, tmp_path, monkeypatch, excluded):
+        live = _plant(tmp_path, "core/pkg/mod.py")
+        _plant(tmp_path, excluded + "/deep/ignored.py")
+        real_scandir = os.scandir
+
+        def scandir(path):
+            assert Path(path) != tmp_path / excluded, "descended into excluded subtree"
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", scandir)
+        assert runtime_file_universe(tmp_path) == [live]
+
+    def test_file_symlinks_remain_members_but_directory_links_are_not_followed(self, tmp_path):
+        target = _plant(tmp_path, "outside/target.py")
+        live = _plant(tmp_path, "core/pkg/mod.py")
+        link = live.parent / "linked.py"
+        link.symlink_to(target)
+        (live.parent / "directory").symlink_to(target.parent, target_is_directory=True)
+        (live.parent / "broken.py").symlink_to(tmp_path / "missing")
+        assert runtime_file_universe(tmp_path) == sorted([live, link])
+
+    def test_extra_exclusion_can_name_a_runtime_root(self, tmp_path):
+        _plant(tmp_path, "core/pkg/mod.py")
+        live = _plant(tmp_path, "packages/pkg/mod.py")
+        assert runtime_file_universe(tmp_path, extra_excluded_parts=("core",)) == [live]
+
     def test_planted_runtime_files_appear(self, tmp_path):
         expected = {
             _plant(tmp_path, "core/newpkg/mod.py"),
