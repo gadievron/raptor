@@ -30,7 +30,6 @@ import os
 import re
 from pathlib import Path
 
-from core.http.egress_backend import EgressClient
 from typing import NoReturn, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -148,6 +147,9 @@ def default_client(
     """
     if offline:
         return _NoopHttpClient()
+    # Offline inventory/report consumers must not load the HTTP backend.
+    from core.http.egress_backend import EgressClient
+
     hosts = compose_proxy_hosts(target)
     return EgressClient(tuple(hosts), user_agent=SCA_USER_AGENT)
 

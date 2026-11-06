@@ -19,6 +19,20 @@ sys.modules[SPEC.name] = tool
 SPEC.loader.exec_module(tool)
 
 
+
+def test_report_import_requires_only_the_standard_library():
+    result = subprocess.run(
+        [sys.executable, '-I', '-S', '-c',
+         'import runpy, sys; sys.path.insert(0, sys.argv[1]); '
+         'runpy.run_path(sys.argv[2], run_name="sbom_report_import_check"); '
+         'assert "core.http.egress_backend" not in sys.modules; '
+         'assert "urllib3" not in sys.modules',
+         str(ROOT), str(ROOT / '.github/scripts/report_sbom_licenses.py')],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def sha(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
