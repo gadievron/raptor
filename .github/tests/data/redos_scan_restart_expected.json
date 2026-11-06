@@ -753,6 +753,13 @@
    "exp": null,
    "verdict": "noattack"
   },
+  "core/audit/expanded_semgrep.py\u001f_MACRO_COMMENT_RE": {
+   "digests": [
+    "d72e0a44b2a8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/expanded_semgrep.py\u001f_MACRO_USE_RE": {
    "digests": [
     "340c470c0081"

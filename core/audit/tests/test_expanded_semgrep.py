@@ -795,3 +795,39 @@ def test_corpus_input_failures_are_counted_without_losing_good_tus(tmp_path, mon
     assert set(corpus.tus) == {'good.c'}
     assert corpus.skipped_budget == 0
     assert '1 failed preparation' in corpus.summary_line()
+
+
+@pytest.mark.parametrize('source', [
+    'BIG_MACRO/**/(value);',
+    'BIG_MACRO /* explanatory comment */ (value);',
+    'BIG_MACRO /* line one\nline two */ (value);',
+    'BIG_MACRO // explanatory comment\n(value);',
+    'BIG_\\\nMACRO(value);',
+    'BIG_\\\r\nMACRO(value);',
+    'BIG_\\\nMACRO/**/(value);',
+    '#if FEATURE\nBIG_MACRO/**/(value);\n#endif',
+])
+def test_macro_gate_recovers_preprocessor_token_spelling(source):
+    assert has_macro_invocation(source)
+
+
+@needs_cpp
+def test_corpus_expands_spliced_macro_call_with_comment_before_arguments(tmp_path, sandbox_spy):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    (target / 'macros.h').write_text('#define BIG_MACRO(value) int answer = value;\n')
+    (target / 'main.c').write_text('#include "macros.h"\nvoid f(void) { BI\\\nG_MACRO/**/(42) }\n')
+    corpus = build_expanded_corpus(target, tmp_path / 'scratch')
+    assert corpus.candidates_total == corpus.expanded == 1
+    view = corpus.tus['main.c'].view
+    skip_if_expanded_view_transport_degraded(view)
+    assert 'int answer = 42;' in view.text
+
+
+def test_plain_macro_gate_does_not_need_lexical_fallback(monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail('ordinary negative inputs must keep the cheap macro gate')
+
+    monkeypatch.setattr('core.audit.source_view.sanitized_view', unexpected)
+    assert not has_macro_invocation('/* ordinary comment */\nint value;\n' * 10_000)
+    assert has_macro_invocation('BIG_MACRO(value);')
