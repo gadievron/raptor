@@ -273,6 +273,7 @@ _DIRECTIVE_RE = re.compile(r"^[ \t]*#[ \t]*(\w+)(.*)$")
 _DEFINE_DIRECTIVE_RE = re.compile(r"#[ \t]*define(?!\w)(.*)")
 _DIRECTIVE_INDENT_RE = re.compile(r"[ \t]*")
 _CONTINUATION_BULK_MIN_CHARS = 512
+_DECLARATION_CURSOR_MIN_CHARS = 4096
 
 
 @dataclass(frozen=True)
@@ -489,13 +490,32 @@ def _iter_include_closure(
                 unresolved.append(spec)
 
 
-def _declared_function_names(text: str, parser: Any) -> set[str]:
+def _declared_function_names(
+    text: str, parser: Any, *, into: set[str] | None = None,
+) -> set[str]:
     """Function names a file declares or defines (best-effort parse)."""
-    names: set[str] = set()
+    names: set[str] = set() if into is None else into
     try:
         tree = parser.parse(text.encode("utf-8", errors="replace"))
     except Exception:
         return names
+    if type(text) is str and len(text) >= _DECLARATION_CURSOR_MIN_CHARS:
+        walk = getattr(tree, "walk", None)
+        if callable(walk):
+            # Names are used as a set: cursor order preserves membership
+            # without materializing a children list for every visited node.
+            cursor = walk()
+            while True:
+                node = cursor.node
+                if node.type == "function_declarator":
+                    declarator = node.child_by_field_name("declarator")
+                    if declarator is not None and declarator.type == "identifier":
+                        names.add(_node_text(declarator))
+                if cursor.goto_first_child():
+                    continue
+                while not cursor.goto_next_sibling():
+                    if not cursor.goto_parent():
+                        return names
     stack = [tree.root_node]
     while stack:
         n = stack.pop()
@@ -514,7 +534,7 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
     for path, text in _iter_include_closure(target_path, rel_file, unresolved=unresolved):
         table.files_scanned += 1
         if parser is not None:
-            table.function_names |= _declared_function_names(text, parser)
+            _declared_function_names(text, parser, into=table.function_names)
         for rest in _iter_define_directives(text):
             parsed = _parse_define(rest, str(path))
             if parsed is None:
