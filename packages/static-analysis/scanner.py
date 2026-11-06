@@ -2047,6 +2047,36 @@ def run_compiler_scan_stage(
 # ---------------------------------------------------------------------------
 
 
+def _stage_diagnostic(message: str, *, failed: bool = False) -> dict:
+    """A failed invocation or explicit coverage limitation, never a finding."""
+    from core.security.log_sanitisation import escape_nonprintable
+    note = {
+        "level": "error" if failed else "warning",
+        "message": {"text": escape_nonprintable(message[:500])},
+    }
+    if not failed:
+        note["properties"] = {"coverage_limitation": "partial_analysis"}
+    return {"executionSuccessful": not failed, "toolExecutionNotifications": [note]}
+
+
+def _semgrep_stage_diagnostic(result, label: str) -> dict | None:
+    if result.errors or getattr(result, "returncode", 0) not in (0, 1):
+        reason = str(result.errors[0])[:200] if result.errors else f"exit code {result.returncode}"
+        return _stage_diagnostic(f"{label}: Semgrep execution failed ({reason}); recovered findings retained",
+                                 failed=True)
+    if (getattr(result, "files_failed", ()) or getattr(result, "skipped_rules", ())
+            or (getattr(result, "skipped_summary", None) or {}).get("total", 0)):
+        return _stage_diagnostic(f"{label}: files or rules were not fully analysed")
+    return None
+
+
+def _write_stage_report(path: Path, document: dict, diagnostics: list[dict]) -> list[str]:
+    if diagnostics:
+        document["runs"][0].setdefault("invocations", []).extend(diagnostics)
+    save_json(path, document)
+    return [str(path)]
+
+
 def run_expanded_semgrep_stage(
     repo_path: Path,
     out_dir: Path,
@@ -2090,7 +2120,8 @@ def run_expanded_semgrep_stage(
             "⚠️  expanded-semgrep did not run: semgrep not installed",
             file=sys.stderr,
         )
-        return []
+        return _write_stage_report(out_dir / "expanded_semgrep.sarif", es.findings_to_sarif([]),
+                                   [_stage_diagnostic("Semgrep not installed", failed=True)])
 
     scratch = Path(tempfile.mkdtemp(prefix="expanded_semgrep_", dir=str(out_dir)))
     try:
@@ -2104,7 +2135,16 @@ def run_expanded_semgrep_stage(
         logger.info(summary)
         if corpus.skipped_budget:
             print(f"⚠️  {summary}", file=sys.stderr)
+        diagnostics = []
+        if corpus.failed or corpus.skipped_budget:
+            diagnostics.append(_stage_diagnostic(
+                f"expanded-semgrep: {corpus.failed} TU(s) failed preparation; "
+                f"{corpus.skipped_budget} TU(s) skipped by the expansion budget",
+            ))
         if corpus.expanded == 0:
+            if diagnostics:
+                return _write_stage_report(out_dir / "expanded_semgrep.sarif",
+                                           es.findings_to_sarif([]), diagnostics)
             return []
 
         # Same config set the plain stage ran: local rule dirs +
@@ -2151,9 +2191,12 @@ def run_expanded_semgrep_stage(
                 else:
                     logger.debug("expanded-semgrep: pack %s errors: %s", name, state.errors[:3])
                 failed_packs += 1
+                diagnostics.append(_stage_diagnostic(f"{name}: expanded Semgrep execution failed", failed=True))
                 continue
             if execution.status == "partial":
                 logger.warning("expanded-semgrep: pack %s coverage is partial: %s", name, execution.reason)
+                diagnostics.append(_stage_diagnostic(f"{name}: expanded Semgrep analysis is partial",
+                                                     failed=bool(state.errors)))
             translated, dropped = state.matches, state.dropped
             total_dropped += dropped
             for f in translated:
@@ -2164,22 +2207,10 @@ def run_expanded_semgrep_stage(
                 all_findings.append(f)
 
         if configs and failed_packs == len(configs):
-            # Every pack failed: writing a zero-finding SARIF here
-            # would read downstream as a clean expanded-semgrep run.
-            # Surface the failure and emit nothing (mirrors the
-            # graduated-rules stage's stderr failure tally).
-            print(
-                f"⚠️  expanded-semgrep stage FAILED: all "
-                f"{len(configs)} pack(s) failed to run — no SARIF "
-                f"emitted (a zero-finding result would be "
-                f"indistinguishable from a clean scan)",
-                file=sys.stderr,
-            )
-            logger.error(
-                "expanded-semgrep: all %d packs failed; no SARIF emitted",
-                len(configs),
-            )
-            return []
+            print(f"⚠️  expanded-semgrep stage FAILED: all {len(configs)} pack(s) failed; "
+                  "execution errors retained in SARIF", file=sys.stderr)
+        if not configs:
+            diagnostics.append(_stage_diagnostic("expanded-semgrep: no rule configurations available"))
         if failed_packs:
             print(
                 f"⚠️  expanded-semgrep: {failed_packs}/{len(configs)} "
@@ -2188,13 +2219,13 @@ def run_expanded_semgrep_stage(
             )
 
         sarif_path = out_dir / "expanded_semgrep.sarif"
-        save_json(sarif_path, es.findings_to_sarif(all_findings))
+        paths = _write_stage_report(sarif_path, es.findings_to_sarif(all_findings), diagnostics)
         logger.info(
             "expanded-semgrep: %d finding(s) at original coordinates "
             "(%d expanded-region matches dropped as noise); SARIF at %s",
             len(all_findings), total_dropped, sarif_path,
         )
-        return [str(sarif_path)]
+        return paths
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -2363,15 +2394,20 @@ def run_graduated_rules_stage(
         from packages.semgrep.runner import is_available as semgrep_available
         from packages.semgrep.runner import run_rule as semgrep_run_rule
     except ImportError:
-        return []
+        return _write_stage_report(Path(out_dir) / "graduated.sarif",
+                                   _graduated_findings_to_sarif([]),
+                                   [_stage_diagnostic("Semgrep runner unavailable", failed=True)])
     if not semgrep_available():
         print(
             "⚠️  graduated-rules stage did not run: semgrep not installed",
             file=sys.stderr,
         )
-        return []
+        return _write_stage_report(Path(out_dir) / "graduated.sarif",
+                                   _graduated_findings_to_sarif([]),
+                                   [_stage_diagnostic("Semgrep not installed", failed=True)])
 
     all_findings: list[tuple[str, dict]] = []
+    diagnostics = []
     failed = 0
     for rule_file in rule_files:
         rule_id = rule_file.stem
@@ -2385,38 +2421,23 @@ def run_graduated_rules_stage(
         except Exception as exc:  # noqa: BLE001 — one rule must not kill the stage
             logger.warning("graduated-rules: %s failed: %s", rule_id, exc)
             failed += 1
+            diagnostics.append(_stage_diagnostic(f"{rule_id}: graduated Semgrep invocation failed", failed=True))
             continue
-        if res.errors and not res.findings:
-            logger.debug(
-                "graduated-rules: %s errors: %s", rule_id, res.errors[:3],
-            )
-            failed += 1
-            continue
+        diagnostic = _semgrep_stage_diagnostic(res, rule_id)
+        if res.errors:
+            logger.debug("graduated-rules: %s errors: %s", rule_id, res.errors[:3])
+        if diagnostic:
+            diagnostics.append(diagnostic)
+            if diagnostic["executionSuccessful"] is False:
+                failed += 1
         all_findings.extend((rule_id, f.to_dict()) for f in res.findings)
 
     if rule_files and failed == len(rule_files):
-        # Every rule failed: writing a zero-finding SARIF here would
-        # read downstream as a clean graduated run — the on-disk
-        # artifact is byte-indistinguishable from one for the SARIF
-        # merge, coverage records and later readers, silently retiring
-        # every precision-gated graduated detector. Surface the
-        # failure and emit nothing (mirrors the expanded-semgrep
-        # stage's all-packs-failed refusal).
-        print(
-            f"⚠️  graduated-rules stage FAILED: all {len(rule_files)} "
-            f"graduated rule(s) failed to run — no SARIF emitted (a "
-            f"zero-finding result would be indistinguishable from a "
-            f"clean run)",
-            file=sys.stderr,
-        )
-        logger.error(
-            "graduated-rules: all %d rules failed; no SARIF emitted",
-            len(rule_files),
-        )
-        return []
+        print(f"⚠️  graduated-rules stage FAILED: all {len(rule_files)} rule(s) failed; "
+              "execution errors retained in SARIF", file=sys.stderr)
 
     sarif_path = Path(out_dir) / "graduated.sarif"
-    save_json(sarif_path, _graduated_findings_to_sarif(all_findings))
+    paths = _write_stage_report(sarif_path, _graduated_findings_to_sarif(all_findings), diagnostics)
     logger.info(
         "graduated-rules: %d rule(s) ran (%d failed), %d finding(s); "
         "SARIF at %s",
@@ -2428,7 +2449,7 @@ def run_graduated_rules_stage(
             "rule(s) failed to run",
             file=sys.stderr,
         )
-    return [str(sarif_path)]
+    return paths
 
 
 def run_source_wrapper_stage(
@@ -2448,6 +2469,12 @@ def run_source_wrapper_stage(
     silently when the tree yields no summaries or tree-sitter java
     is unavailable.
     """
+    def failed_report(reason):
+        document = _stage_findings_to_sarif([], tool_name="raptor-source-wrappers",
+                                            rule_prefix="source-wrapper")
+        return _write_stage_report(Path(out_dir) / "source-wrappers.sarif", document,
+                                   [_stage_diagnostic(reason, failed=True)]), []
+
     try:
         from core.analysis.java_source_summaries import scan_tree
         from packages.semgrep.source_wrapper_rules import generate_rules_yaml
@@ -2457,7 +2484,7 @@ def run_source_wrapper_stage(
         summaries, refusals, scanned = scan_tree(Path(repo_path))
     except Exception as exc:  # noqa: BLE001 — stage must not kill the scan
         logger.warning("source-wrappers: scan failed: %s", exc)
-        return [], []
+        return failed_report("source-wrapper summary analysis failed")
     if not summaries:
         logger.debug(
             "source-wrappers: no qualifying wrappers "
@@ -2475,13 +2502,13 @@ def run_source_wrapper_stage(
         from packages.semgrep.runner import is_available as semgrep_available
         from packages.semgrep.runner import run_rule as semgrep_run_rule
     except ImportError:
-        return [], []
+        return failed_report("source-wrapper Semgrep runner unavailable")
     if not semgrep_available():
         print(
             "⚠️  source-wrapper stage did not run: semgrep not installed",
             file=sys.stderr,
         )
-        return [], []
+        return failed_report("source-wrapper Semgrep not installed")
     try:
         res = semgrep_run_rule(
             Path(repo_path), str(rules_file),
@@ -2491,23 +2518,10 @@ def run_source_wrapper_stage(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("source-wrappers: run failed: %s", exc)
-        return [], []
-    if res.errors and not res.findings:
-        # Same all-failed-looks-clean refusal as the graduated-rules /
-        # expanded-semgrep stages: the stage's single semgrep run
-        # errored without producing findings, so a zero-finding SARIF
-        # would be indistinguishable from a clean source-wrapper run.
-        print(
-            f"⚠️  source-wrapper stage FAILED: semgrep run errored "
-            f"({len(res.errors)} error(s)) — no SARIF emitted",
-            file=sys.stderr,
-        )
-        logger.error(
-            "source-wrappers: run errored with no findings; no SARIF "
-            "emitted (first error: %s)", res.errors[0],
-        )
-        return [], []
-
+        return failed_report("source-wrapper Semgrep invocation failed")
+    diagnostic = _semgrep_stage_diagnostic(res, "source-wrapper")
+    if diagnostic:
+        print("⚠️  source-wrapper stage incomplete; execution diagnostics retained in SARIF", file=sys.stderr)
     findings = [("wrapper", f.to_dict()) for f in res.findings]
     sarif_path = Path(out_dir) / "source-wrappers.sarif"
     doc = _stage_findings_to_sarif(
@@ -2524,7 +2538,7 @@ def run_source_wrapper_stage(
             ".xpath": "CWE-643",
         },
     )
-    save_json(sarif_path, doc)
+    paths = _write_stage_report(sarif_path, doc, [diagnostic] if diagnostic else [])
     # The qualified wrapper names are run-scoped learned vocabulary:
     # the sanitizer-cut post-pass's source locator only knows the
     # direct servlet getters, so a finding whose taint enters via
@@ -2540,7 +2554,7 @@ def run_source_wrapper_stage(
         len(summaries), len(findings), sarif_path,
         sorted(refusals.items(), key=lambda kv: -kv[1])[:3],
     )
-    return [str(sarif_path)], wrapper_names
+    return paths, wrapper_names
 
 
 def _stage_findings_to_sarif(

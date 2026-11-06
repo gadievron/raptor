@@ -517,6 +517,9 @@
   "artifacts:write_only_artifact::source-binary-map.json": {
    "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
   },
+  "artifacts:write_only_artifact::source-wrappers.sarif": {
+   "note": "False positive through a returned-path helper: run_source_wrapper_stage writes both normal and failed source-wrappers.sarif reports via _write_stage_report, returns those paths in source_wrapper_sarifs, and main concatenates them into sarif_inputs for merge_sarif and generate_scan_metrics. The artifact indexer does not connect the helper return/list composition to these production consumers."
+  },
   "artifacts:write_only_artifact::stderr.log": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },

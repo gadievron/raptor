@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+
+import pytest
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,15 +219,10 @@ class TestRunGraduatedRulesStage:
         assert len(doc["runs"][0]["results"]) == 1
         assert "failed to run" in capsys.readouterr().err
 
-    def test_all_rules_failed_refuses_to_write_clean_sarif(
+    def test_all_rules_failed_retains_diagnostic_sarif(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """When EVERY graduated rule failed the stage must not emit a
-        zero-finding graduated.sarif — on disk it is
-        byte-indistinguishable from a genuinely clean graduated run
-        for the SARIF merge and every later reader, silently retiring
-        every precision-gated detector (mirrors the expanded-semgrep
-        sibling's refusal)."""
+        """Persist failed invocations so zero findings cannot imply success."""
         project = tmp_path / "project"
         out_dir = project / "run_001"
         out_dir.mkdir(parents=True)
@@ -240,11 +237,12 @@ class TestRunGraduatedRulesStage:
         sarifs = _scanner.run_graduated_rules_stage(
             repo, out_dir, rules_dir=rules_dir,
         )
-        assert sarifs == []
-        assert not (out_dir / "graduated.sarif").exists()
-        err = capsys.readouterr().err
-        assert "FAILED" in err
-        assert "no SARIF" in err
+        assert sarifs == [str(out_dir / "graduated.sarif")]
+        run = json.loads(Path(sarifs[0]).read_text())["runs"][0]
+        assert run["results"] == []
+        assert len(run["invocations"]) == 2
+        assert all(inv["executionSuccessful"] is False for inv in run["invocations"])
+        assert "FAILED" in capsys.readouterr().err
 
     def test_no_rules_dir_silently_skips(self, tmp_path, monkeypatch):
         out_dir = tmp_path / "project" / "run_001"
@@ -281,9 +279,9 @@ class TestRunGraduatedRulesStage:
         monkeypatch.setattr(
             "packages.semgrep.runner.is_available", lambda: False,
         )
-        assert _scanner.run_graduated_rules_stage(
-            repo, out_dir, rules_dir=rules_dir,
-        ) == []
+        paths = _scanner.run_graduated_rules_stage(repo, out_dir, rules_dir=rules_dir)
+        assert paths == [str(out_dir / "graduated.sarif")]
+        assert json.loads(Path(paths[0]).read_text())["runs"][0]["invocations"][0]["executionSuccessful"] is False
         assert "semgrep not installed" in capsys.readouterr().err
 
 
@@ -303,3 +301,50 @@ def test_agentic_forwards_opt_out():
     src = (Path(_REPO_ROOT) / "raptor_agentic.py").read_text(encoding="utf-8")
     assert '"--no-graduated-rules"' in src
     assert 'semgrep_cmd.append("--no-graduated-rules")' in src
+
+
+@pytest.mark.parametrize('damage', [
+    {'errors': ['another file failed']},
+    {'files_failed': [{'path': 'other.c', 'reason': 'parse error'}]},
+    {'skipped_rules': ['incompatible']},
+    {'returncode': 2},
+])
+def test_graduated_partial_findings_retain_saved_execution_diagnostics(tmp_path, monkeypatch, damage):
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    project = tmp_path / 'project'
+    out = project / 'run'
+    out.mkdir(parents=True)
+    rules = _mk_rules_dir(project, 'partial')
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    _fake_runner(monkeypatch, {'partial': SemgrepResult(
+        findings=[SemgrepFinding('a.c', 1, rule_id='inner')], **damage,
+    )})
+    paths = _scanner.run_graduated_rules_stage(repo, out, rules_dir=rules)
+    metrics = generate_scan_metrics(paths)
+    assert metrics['total_findings'] == 1
+    assert scan_execution_status(metrics) == 'partial'
+    assert metrics['tool_execution_failures'] or metrics['tool_coverage_limitations']
+
+
+
+def test_graduated_diagnostic_escapes_rule_names_and_tool_error_controls(tmp_path, monkeypatch):
+    from packages.semgrep.models import SemgrepResult
+
+    project = tmp_path / 'project'
+    out = project / 'run'
+    out.mkdir(parents=True)
+    rule_name = 'bad\nrule'
+    rules = _mk_rules_dir(project, rule_name)
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    _fake_runner(monkeypatch, {rule_name: SemgrepResult(errors=['parse error\x1b[2J'])})
+    paths = _scanner.run_graduated_rules_stage(repo, out, rules_dir=rules)
+    note = json.loads(Path(paths[0]).read_text())['runs'][0]['invocations'][0]['toolExecutionNotifications'][0]
+    text = note['message']['text']
+    assert 'parse error' in text
+    assert '\n' not in text and '\x1b' not in text
+    assert len(text) < 1000

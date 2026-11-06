@@ -176,7 +176,10 @@ def test_stage_reports_budget_skips_on_stderr(tmp_path, monkeypatch, capsys):
             skipped_budget=3,
         ),
     )
-    assert _scanner.run_expanded_semgrep_stage(repo, out, [], []) == []
+    paths = _scanner.run_expanded_semgrep_stage(repo, out, [], [])
+    from core.sarif.parser import generate_scan_metrics
+    from core.reporting.scan_coverage import scan_execution_status
+    assert scan_execution_status(generate_scan_metrics(paths)) == "partial"
     assert "SKIPPED" in capsys.readouterr().err
 
 
@@ -222,11 +225,10 @@ def test_stage_one_pack_failure_is_not_fatal(tmp_path, monkeypatch, capsys):
     assert "1/2 pack(s) failed" in capsys.readouterr().err
 
 
-def test_stage_all_packs_failed_surfaces_error_no_sarif(
+def test_stage_all_packs_failed_retains_diagnostic_sarif(
     tmp_path, monkeypatch, capsys,
 ):
-    """All packs failing must not silently write a zero-finding SARIF —
-    that reads downstream as a clean scan."""
+    """A failed invocation distinguishes zero findings from a clean run."""
     repo = _c_repo(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
@@ -247,11 +249,11 @@ def test_stage_all_packs_failed_surfaces_error_no_sarif(
     rules = tmp_path / "rules"
     rules.mkdir()
     paths = _scanner.run_expanded_semgrep_stage(repo, out, [str(rules)], [])
-    assert paths == []
-    assert not (out / "expanded_semgrep.sarif").exists()
-    err = capsys.readouterr().err
-    assert "FAILED" in err
-    assert "no SARIF emitted" in err
+    assert paths == [str(out / "expanded_semgrep.sarif")]
+    report = json.loads(Path(paths[0]).read_text())
+    assert report["runs"][0]["results"] == []
+    assert report["runs"][0]["invocations"][0]["executionSuccessful"] is False
+    assert "FAILED" in capsys.readouterr().err
 
 
 def test_stage_requires_semgrep(tmp_path, monkeypatch, capsys):
@@ -259,7 +261,9 @@ def test_stage_requires_semgrep(tmp_path, monkeypatch, capsys):
     out = tmp_path / "out"
     out.mkdir()
     monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: False)
-    assert _scanner.run_expanded_semgrep_stage(repo, out, [], []) == []
+    paths = _scanner.run_expanded_semgrep_stage(repo, out, [], [])
+    assert paths == [str(out / "expanded_semgrep.sarif")]
+    assert json.loads(Path(paths[0]).read_text())["runs"][0]["invocations"][0]["executionSuccessful"] is False
     assert "semgrep not installed" in capsys.readouterr().err
 
 
@@ -354,6 +358,11 @@ def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, caps
     assert len(json.loads(Path(paths[0]).read_text())["runs"][0]["results"]) == 1
     assert "pack(s) failed" not in capsys.readouterr().err
     assert "coverage is partial" in caplog.text
+    from core.sarif.parser import generate_scan_metrics
+    from core.reporting.scan_coverage import scan_execution_status
+    metrics = generate_scan_metrics(paths)
+    assert sum(metrics["tool_execution_failures"].values()) == 1
+    assert scan_execution_status(metrics) == "partial"
 
 
 def test_expanded_stage_forwards_run_setup(tmp_path, monkeypatch):
