@@ -134,14 +134,21 @@ def runtime_file_universe(
         base = root / sub
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*")):
-            if not p.is_file():
+        # Prune excluded subtrees before descending. Filtering the results
+        # of rglob still walked every fixture, venv and cache directory.
+        for directory, dirs, files in base.walk():
+            parts = directory.relative_to(root).parts
+            if _is_excluded((*parts, ""), excluded):
+                dirs.clear()
                 continue
-            rel_parts = p.relative_to(root).parts
-            if _is_excluded(rel_parts, excluded):
-                continue
-            if is_runtime_python_file(p):
-                out.append(p)
+            dirs[:] = [name for name in dirs
+                       if not _is_excluded((*parts, name, ""), excluded)]
+            for name in files:
+                if name == "conftest.py":
+                    continue
+                p = directory / name
+                if p.is_file() and is_runtime_python_file(p):
+                    out.append(p)
     # Repo-root entry modules (raptor.py, raptor_agentic.py, ...),
     # derived from the tree — never a name list. conftest.py is
     # pytest infrastructure and stays out via _is_excluded.

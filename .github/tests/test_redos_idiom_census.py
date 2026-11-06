@@ -857,8 +857,11 @@ def _extract_sites(path: Path) -> list[_Site]:
     assign_of: dict[ast.Call, str] = {}
     calls: list[tuple[ast.Call, str | None, str | None]] = []
     tables: list[tuple[str, ast.expr]] = []
+    classes: list[ast.ClassDef] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
+        if isinstance(node, ast.ClassDef):
+            classes.append(node)
+        elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "re":
                     re_names.add(alias.asname or "re")
@@ -919,9 +922,7 @@ def _extract_sites(path: Path) -> list[_Site]:
     # order is outer-to-inner, so the innermost class wins for nested
     # classes).
     class_attr_consts: dict[ast.Call, dict[str, str]] = {}
-    for cls_node in ast.walk(tree):
-        if not isinstance(cls_node, ast.ClassDef):
-            continue
+    for cls_node in classes:
         attrs: dict[str, str] = {}
         for stmt in cls_node.body:
             if not isinstance(stmt, (ast.Assign, ast.AnnAssign)):
@@ -3326,6 +3327,33 @@ class RedosIdiomCensus(unittest.TestCase):
 class TrailingSpanCensus(unittest.TestCase):
     """Two-stage arms: Rule C / Rule R propose, the pinned oracle
     verdicts dispose.  The default tier never runs the oracle."""
+
+    def test_class_pattern_constants_keep_nested_and_sibling_scopes(self):
+        import tempfile
+
+        source = (
+            "import re\n"
+            "class Outer:\n"
+            "    PATTERN = 'outer'\n"
+            "    def scan(self, text):\n"
+            "        return re.search(self.PATTERN, text)\n"
+            "    class Inner:\n"
+            "        PATTERN = 'inner'\n"
+            "        def scan(self, text):\n"
+            "            return re.search(self.PATTERN, text)\n"
+            "class Sibling:\n"
+            "    PATTERN = 'sibling'\n"
+            "    def scan(self, text):\n"
+            "        return re.search(self.PATTERN, text)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / "probe.py"
+            probe.write_text(source, encoding="utf-8")
+            sites = _extract_sites(probe)
+        self.assertEqual(
+            {site.lineno: site.pattern for site in sites if site.origin == "call"},
+            {5: "outer", 9: "inner", 13: "sibling"},
+        )
 
     def test_rule_c_catches_known_spellings(self) -> None:
         """Detector self-check on the arm's founding members and
