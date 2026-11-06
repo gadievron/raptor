@@ -23,6 +23,10 @@ class CompilerDiagnosticError(ValueError):
     """Compiler output is unavailable or cannot establish a diagnostic census."""
 
 
+class CompilerExecutionError(CompilerDiagnosticError):
+    """Well-formed diagnostics report an unsuccessful compiler execution."""
+
+
 class CompilerInvocationError(Exception):
     """Distinguish tool invocation failures from parser/analysis failures."""
 
@@ -94,6 +98,13 @@ def _parse(state: CompilerAnalysis) -> StageResult:
     request = state.request
     try:
         diags = request.parse(state._workdir, state._stderr)
+    except CompilerExecutionError:
+        if state._returncode == 0:
+            raise
+        # A failed compile can mark its SARIF invocation unsuccessful.
+        # Preserve the owned process exit; no diagnostic evidence or analysis
+        # may be produced from that run.
+        diags = []
     except CompilerDiagnosticError:
         if state._returncode >= 0:
             raise

@@ -146,3 +146,28 @@ def test_malformed_diagnostics_preserve_signal_death(tmp_path, returncode):
     else:
         with pytest.raises(CompilerDiagnosticError, match="truncated diagnostics"):
             run_compiler_analysis(req, run)
+
+
+@pytest.mark.parametrize("returncode", [-9, 0, 1, 2])
+def test_unsuccessful_execution_preserves_owned_nonzero_exit(tmp_path, returncode):
+    from core.detectors.compiler import CompilerExecutionError
+
+    def unsuccessful(workdir, stderr):
+        raise CompilerExecutionError("compiler reported unsuccessful execution")
+
+    req = replace(request(tmp_path), parse=unsuccessful,
+                  analyze=lambda *args: pytest.fail("failed execution reached analysis"))
+    directories = []
+
+    def run(*args, **kwargs):
+        directories.append(kwargs["output"])
+        return SimpleNamespace(returncode=returncode, stderr="compile failure")
+
+    if returncode == 0:
+        with pytest.raises(CompilerExecutionError):
+            run_compiler_analysis(req, run)
+    else:
+        execution = run_compiler_analysis(req, run)
+        assert execution.status == "error"
+        assert execution.value.record == {"returncode": returncode, "diags": [], "raw": ""}
+    assert directories and all(not Path(path).exists() for path in directories)

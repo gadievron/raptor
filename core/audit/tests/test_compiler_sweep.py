@@ -3781,7 +3781,8 @@ def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monke
     assert len([c for c in calls if '-E' not in c]) == 2
 
 
-def test_failed_sarif_invocation_is_not_cached_as_refutation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("compile_exit", [0, 1])
+def test_failed_sarif_invocation_is_not_cached_as_refutation(tmp_path, monkeypatch, compile_exit):
     import json
 
     target = tmp_path / "repo"
@@ -3798,7 +3799,7 @@ def test_failed_sarif_invocation_is_not_cached_as_refutation(tmp_path, monkeypat
         attempts.append(command)
         report = {"runs": [{"results": [], "invocations": [{"executionSuccessful": len(attempts) > 1}]}]}
         (Path(kwargs["cwd"]) / "a.c.sarif").write_text(json.dumps(report))
-        return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, compile_exit if len(attempts) == 1 else 0, "", "")
 
     monkeypatch.setattr("core.sandbox.context.run", run)
     def sweep():
@@ -3807,7 +3808,15 @@ def test_failed_sarif_invocation_is_not_cached_as_refutation(tmp_path, monkeypat
             cwe="CWE-416", hypothesis="memory misuse", line_start=1, line_end=1,
             out_dir=tmp_path,
         )
-    assert sweep().outcome == "error"
+    first = sweep()
+    assert first.outcome == ("inconclusive" if compile_exit else "error"), vars(first)
+    if compile_exit:
+        assert "compile failed" in first.errors[0]
+        assert sweep().outcome == "inconclusive"
+        assert len(attempts) == 1
+        # An ordinary failed compile may be memoized, but a changed TU must
+        # retry and can then earn a real refutation from successful output.
+        source.write_text("void f(void) { return; }\n")
     assert sweep().outcome == "refuted"
     assert len(attempts) == 2
 
