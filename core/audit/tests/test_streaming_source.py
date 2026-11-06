@@ -77,7 +77,7 @@ def test_callee_windows_preserve_total_budget_and_empty_ranges(tmp_path):
         callees = [{"file": "a.c", "name": f"f{i}", "line_start": first}
                    for i, first in enumerate(starts)]
         checklist = {"files": [{"path": "a.c", "items": [
-            {"name": callee["name"], "line_end": final} for callee in callees]}]}
+            {"name": callee["name"], "line_start": callee["line_start"], "line_end": final} for callee in callees]}]}
         expected = deepcopy(callees)
         used = 0
         for callee in expected:
