@@ -331,8 +331,8 @@ class TestShardedWriter(unittest.TestCase):
 
     def _tiny(self, name: str, value: int) -> None:
         real = getattr(inv, name)
-        setattr(inv, name, value)
         self.addCleanup(setattr, inv, name, real)
+        setattr(inv, name, value)
 
     def _big_checklist(self) -> dict[str, Any]:
         files = []
@@ -523,23 +523,47 @@ class TestReadSideEffectFree:
         assert tmp_path.stat().st_mtime == 1e9
         assert not (tmp_path / "checklist.lock").exists()
 
-    def test_reader_still_locks_when_writer_lock_exists(self, tmp_path):
+    def test_reader_still_locks_when_writer_lock_exists(self, tmp_path, monkeypatch):
         import fcntl
         import threading
-        import time as _time
+        import core.atomic_fs.fs_lock as fs_lock
         from core.inventory import read_checklist, save_checklist
+
         save_checklist(tmp_path, {"files": [], "target_path": "/t"})
         lock = tmp_path / "checklist.lock"
         assert lock.exists()  # writer created it
-        held = open(lock, "w")
-        fcntl.flock(held, fcntl.LOCK_EX)
-        got: list = []
-        t = threading.Thread(
-            target=lambda: got.append(read_checklist(tmp_path)))
-        t.start()
-        _time.sleep(0.2)
-        assert not got  # reader is blocked on the writer's lock
-        fcntl.flock(held, fcntl.LOCK_UN)
-        held.close()
-        t.join(timeout=10)
+        contended = threading.Event()
+        real_try = fs_lock._try_flock_nb
+
+        def observe_contention(fd):
+            acquired = real_try(fd)
+            if not acquired:
+                contended.set()
+            return acquired
+
+        monkeypatch.setattr(fs_lock, "_try_flock_nb", observe_contention)
+        got = []
+        errors = []
+
+        def read():
+            try:
+                got.append(read_checklist(tmp_path))
+            except BaseException as error:
+                errors.append(error)
+
+        t = threading.Thread(target=read)
+        with lock.open("w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            try:
+                t.start()
+                assert contended.wait(timeout=5), "reader never contended on writer lock"
+                assert not got, "reader returned while writer still held the lock"
+            finally:
+                try:
+                    fcntl.flock(held, fcntl.LOCK_UN)
+                finally:
+                    if t.ident is not None:
+                        t.join(timeout=10)
+                        assert not t.is_alive(), "checklist reader leaked"
+        assert not errors, errors
         assert got and got[0].get("target_path") == "/t"

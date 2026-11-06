@@ -175,7 +175,7 @@ def test_mark_unreachable_concurrent_writer_markers_survive(
     between its read and its write was silently clobbered.
     """
     import threading
-    import time
+    import core.atomic_fs.fs_lock as fs_lock
 
     import core.orchestration.reachability_enrichment as re_mod
     from core.inventory import update_checklist
@@ -189,13 +189,23 @@ def test_mark_unreachable_concurrent_writer_markers_survive(
     })
 
     inside_transform = threading.Event()
+    release_transform = threading.Event()
+    contended = threading.Event()
+    real_try = fs_lock._try_flock_nb
+
+    def observe_contention(fd):
+        acquired = real_try(fd)
+        if not acquired:
+            contended.set()
+        return acquired
+
+    monkeypatch.setattr(fs_lock, "_try_flock_nb", observe_contention)
 
     def fake_mark(checklist, target, *, inventory=None,
                   allow_unreachable=False):
         checklist["files"][0]["items"][0]["priority"] = "low"
         inside_transform.set()
-        # Give the competing writer a window while the flock is held.
-        time.sleep(0.3)
+        assert release_transform.wait(timeout=10), "transform was never released"
         return 1
 
     monkeypatch.setattr(
@@ -203,24 +213,43 @@ def test_mark_unreachable_concurrent_writer_markers_survive(
     )
 
     results = {}
+    errors = []
 
     def run_mark():
-        results["marked"] = _mark_unreachable_low_priority(
-            out_dir, tmp_path,
-        )
+        try:
+            results["marked"] = _mark_unreachable_low_priority(out_dir, tmp_path)
+        except BaseException as error:
+            errors.append(error)
 
-    t = threading.Thread(target=run_mark)
-    t.start()
-    assert inside_transform.wait(timeout=10)
-
-    # Competing writer — blocks on the flock until the transform's
-    # write completes, then sees the marker and adds its own.
     def add_marker(current):
         current["competing_marker"] = True
         return current
 
-    update_checklist(out_dir, add_marker)
-    t.join(timeout=30)
+    def run_competing():
+        try:
+            update_checklist(out_dir, add_marker)
+        except BaseException as error:
+            errors.append(error)
+
+    workers = [threading.Thread(target=run_mark), threading.Thread(target=run_competing)]
+    try:
+        workers[0].start()
+        assert inside_transform.wait(timeout=5), "marker transform never started"
+        workers[1].start()
+        # Release only after the other writer's REAL flock attempt failed.
+        # A missing accessor lock cannot pass by winning a scheduling race.
+        assert contended.wait(timeout=5), "competing writer never contended"
+        release_transform.set()
+        for worker in workers:
+            worker.join(timeout=10)
+            assert not worker.is_alive(), "checklist writer did not finish"
+        assert not errors, errors
+    finally:
+        release_transform.set()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(timeout=10)
+        assert not any(worker.is_alive() for worker in workers), "checklist writer leaked"
 
     data = json.loads((out_dir / "checklist.json").read_text())
     assert results["marked"] == 1
