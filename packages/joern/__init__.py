@@ -47,6 +47,32 @@ __all__ = [
 ]
 
 
+def _release_session_resources(srv, cpg, cache_dir, reach_token, *, preserve_error=False):
+    """Attempt every teardown without replacing a session's original error."""
+    actions = []
+    if reach_token is not None:
+        def reset_reach():
+            try:
+                from core.analysis.reach_audit import reset_joern_server
+            except ImportError:
+                return
+            reset_joern_server(reach_token)
+        actions.append(reset_reach)
+    actions.append(srv.stop)
+    if cpg is not None and (cache_dir is None or cpg.owned_dir is not None):
+        actions.append(lambda: cleanup_cpg(cpg))
+    first_error = None
+    for action in actions:
+        try:
+            action()
+        except BaseException as exc:
+            _logger.warning("Joern session teardown failed", exc_info=True)
+            if first_error is None:
+                first_error = exc
+    if first_error is not None and not preserve_error:
+        raise first_error
+
+
 @contextlib.contextmanager
 def joern_session(
     target_path: Path,
@@ -96,6 +122,7 @@ def joern_session(
 
     cpg = None
     reach_token = None
+    failed = False
     try:
         # Pin the joern-parse frontend from the curated per-language
         # profiles rather than trusting parse-side auto-detection.
@@ -157,13 +184,8 @@ def joern_session(
                 pass
 
         yield srv
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if reach_token is not None:
-            try:
-                from core.analysis.reach_audit import reset_joern_server
-                reset_joern_server(reach_token)
-            except ImportError:
-                pass
-        srv.stop()
-        if cache_dir is None and cpg is not None and cpg.exists():
-            cleanup_cpg(cpg)
+        _release_session_resources(srv, cpg, cache_dir, reach_token, preserve_error=failed)

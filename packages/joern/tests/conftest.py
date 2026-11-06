@@ -248,3 +248,31 @@ def _no_repo_root_workspace_debris() -> Iterator[None]:
             "(see packages/joern/runner.py cwd pins)",
             pytrace=False,
         )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_graph_keepalive():
+    """Own the graph ticker; assert owners release pins rather than reset leaks."""
+    import threading
+    from core.run import scratch
+    from packages.joern import runner
+
+    # Older path-cache fixtures explicitly undo the shared monkeypatch
+    # fixture. Give this owner a separate restoration lifetime.
+    with pytest.MonkeyPatch.context() as owner_patch:
+        stop = threading.Event()
+        paths = set()
+        owner_patch.setattr(scratch, "_keepalive_paths", paths)
+        owner_patch.setattr(scratch, "_keepalive_thread", None)
+        owner_patch.setattr(scratch, "_keepalive_loop", lambda: stop.wait())
+        try:
+            yield paths
+        finally:
+            stop.set()
+            thread = scratch._keepalive_thread
+            if thread is not None:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "owned graph keepalive did not stop"
+            prefixes = ("raptor-query-", "raptor-joern-cpg-", runner._CPG_BUILD_DIR_PREFIX)
+            leaked = [path for path in paths if Path(path).name.startswith(prefixes)]
+            assert not leaked, f"graph owner left scratch keepalives registered: {leaked}"

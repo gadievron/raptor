@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import packages.joern as joern_pkg
 from packages.joern.tunables import JoernTunables
+from packages.joern.models import JoernCPG
 
 
 def _run_session(tmp_path: Path, tunables: JoernTunables, use_cache: bool):
@@ -16,9 +17,7 @@ def _run_session(tmp_path: Path, tunables: JoernTunables, use_cache: bool):
 
     def fake_build(*args, **kwargs):
         captured.update(kwargs)
-        cpg = MagicMock()
-        cpg.exists.return_value = False
-        return cpg
+        return JoernCPG(path=tmp_path / "missing.bin", target=tmp_path, build_failed=True)
 
     server = MagicMock()
     with patch.object(joern_pkg, "is_available", return_value=True), \
