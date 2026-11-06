@@ -3512,6 +3512,7 @@ class TestBoundedResolutionEndToEnd:
         assert expect in text, text
 
 
+@pytest.mark.slow
 @needs_clang
 def test_constant_oob_remains_confirmed_with_clang(tmp_path, sandbox_spy, monkeypatch):
     monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: None)
