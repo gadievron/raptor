@@ -66,6 +66,20 @@ def validate_integer_witness(model, types, premises, integer_abi):
     return values
 
 
+def evaluate_integer_operation(operation, operands, op, values, integer_abi):
+    """Exact binary result and promoted range, or None for unsupported input."""
+    if len(operands) != 2 or op not in _ARITHMETIC or not operation.types:
+        return None
+    a, b = (_atom(atom, values) for atom in operands)
+    kind = integer_type(operation.types[0][1], integer_abi)
+    if type(a) is not int or type(b) is not int or kind is None:
+        return None
+    width, signed = kind.promoted_width, kind.promoted_signed
+    low = -(1 << (width - 1)) if signed else 0
+    high = (1 << (width - (1 if signed else 0))) - 1
+    return _ARITHMETIC[op](a, b), low, high
+
+
 def validate_overflow_result(result, operation, operands, op, integer_abi):
     """A SAT verdict must exhibit an actual out-of-range mathematical result."""
     checked = dict(result)
@@ -85,14 +99,10 @@ def validate_overflow_result(result, operation, operands, op, integer_abi):
     values = validate_integer_witness(result.get("model"), operation.types, operation.premises, integer_abi)
     if values is None:
         return decline("overflow witness violates a source guard or declared value domain")
-    a, b = (_atom(atom, values) for atom in operands)
-    if type(a) is not int or type(b) is not int:
+    evaluated = evaluate_integer_operation(operation, operands, op, values, integer_abi)
+    if evaluated is None:
         return decline("overflow witness does not bind the source operands")
-    kind = integer_type(operation.types[0][1], integer_abi)
-    width, signed = kind.promoted_width, kind.promoted_signed
-    low = -(1 << (width - 1)) if signed else 0
-    high = (1 << (width - (1 if signed else 0))) - 1
-    value = _ARITHMETIC[op](a, b)
+    value, low, high = evaluated
     if low <= value <= high:
         return decline("overflow witness produces an in-range mathematical result")
     checked.update(model=values, witness_validated=True, mathematical_result=value,
