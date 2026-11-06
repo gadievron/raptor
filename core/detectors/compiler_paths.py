@@ -50,7 +50,8 @@ def local_uri_path(uri: Any) -> str:
 
 
 def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None,
-                    *, resolve_uri: Callable[[dict[str, Any]], str | None] | None = None
+                    *, resolve_uri: Callable[[dict[str, Any]], str | None] | None = None,
+                    resolve_event: Callable[[Any], dict[str, Any] | None] | None = None
                     ) -> tuple[list[dict[str, Any]], list[str]]:
     """Copy bounded codeFlows; a bad event reference still omits its whole path."""
     if not raw:
@@ -79,6 +80,12 @@ def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None,
             size = 0
             try:
                 for event in events:
+                    if resolve_event is not None:
+                        event = resolve_event(event)
+                    elif isinstance(event, dict) and "index" in event:
+                        index = event["index"]
+                        if type(index) is not int or index != -1:
+                            raise ValueError("compiler event reference requires run context")
                     location = event["location"]
                     physical = location["physicalLocation"]
                     artifact = physical["artifactLocation"]

@@ -57,7 +57,7 @@ from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
-from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, rule_default_level
+from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, _thread_flow_location, rule_default_level
 from core.run.scratch import scratch_dir
 
 from ._util import safe_join
@@ -1769,6 +1769,9 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
                 return uri_resolver.resolve(artifact)
             return artifact.get("uri")
 
+        def resolve_event(event: Any) -> dict[str, Any] | None:
+            return _thread_flow_location(event, run.get("threadFlowLocations"))
+
         for result in run["results"]:
             if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
@@ -1800,7 +1803,8 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             reported = compiler_reported_cwe(result, run)
             if reported:
                 diags[-1]["cwe"] = reported
-            paths, notes = normalize_paths(result.get("codeFlows"), resolve_uri=resolve_uri)
+            paths, notes = normalize_paths(result.get("codeFlows"), resolve_uri=resolve_uri,
+                                           resolve_event=resolve_event)
             path_budget.retain(diags[-1], paths, notes)
     return diags
 
