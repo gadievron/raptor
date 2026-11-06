@@ -81,14 +81,15 @@ def test_new_call_placeholders_do_not_make_mutated_summary_arguments_ssa(reduce)
     assert result.summary_axioms == ["summary: abs(Value)"] * 2
 
 
+@pytest.mark.parametrize("entry", [paths.check_path_feasibility, paths.check_path_feasibility_dual])
 @pytest.mark.parametrize("reduce", [True, False])
 @pytest.mark.parametrize("texts,epoch", [
     (("Value == 1", "Value == 2", "Other = 3"), 0),
     (("Other = 3", "Value == 1", "Value == 2"), 1),
     (("Other = 3", "Other = 4", "Value == 1", "Value == 2"), 2),
 ], ids=["before-mutation", "after-mutation", "after-two-mutations"])
-def test_native_core_inside_one_segment_keeps_a_valid_refutation(texts, epoch, reduce):
-    result = paths.check_path_feasibility(conditions(*texts), profile=BV_C_UINT8, reduce_constraints=reduce)
+def test_native_core_inside_one_segment_keeps_a_valid_refutation(texts, epoch, reduce, entry):
+    result = entry(conditions(*texts), profile=BV_C_UINT8, reduce_constraints=reduce)
     assert result.feasible is False and result.unsatisfied
     assert f"mutation-free segment {epoch}" in result.reasoning
     assert result.unknown and result.wp_complete is False
@@ -223,3 +224,13 @@ def test_optimizer_uses_the_same_native_segment_ownership(within_segment, expect
     result = paths.check_path_feasibility(conditions(*texts), profile=BV_C_UINT8,
                                           prefer_witness=("Value", "max"), reduce_constraints=False)
     assert result.feasible is expected
+
+
+def test_dual_subset_cannot_erase_a_mutation_between_conflicting_guards():
+    result = paths._robust_contradiction_result(
+        frozenset({"Value == 1", "Value == 2"}),
+        conditions("Value == 1", "Value = 2", "Value == 2"),
+        (BV_C_UINT8, BV_C_INT8), None,
+        mutation_texts=frozenset({"Value = 2"}),
+    )
+    assert result is None

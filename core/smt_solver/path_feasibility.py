@@ -1773,6 +1773,7 @@ def _robust_contradiction_result(
     profiles: tuple[BVProfile, BVProfile],
     timeout_ms: int | None,
     *, use_call_summaries: bool = True,
+    mutation_texts: frozenset[str] = frozenset(),
 ) -> PathSMTResult | None:
     """Return a subset proof independent of the signedness guess.
 
@@ -1818,6 +1819,12 @@ def _robust_contradiction_result(
     }
     if len(idents) > 1:
         return None
+    # Re-solving a core must retain every unmodeled state transition. Dropping
+    # these inputs merges scalar epochs and loses native segment provenance.
+    # They are not predicates, so exclude them from the identifier check above.
+    subset = [c for c in conditions
+              if c.text in mutation_texts
+              or (f"NOT ({c.text})" if c.negated else c.text) in candidate]
     proofs = []
     for profile in profiles:
         proof = check_path_feasibility(
@@ -1955,6 +1962,10 @@ def check_path_feasibility_dual(
             proof = _robust_contradiction_result(
                 candidate, conditions, (profile, sibling_profile),
                 timeout_ms, use_call_summaries=use_call_summaries,
+                mutation_texts=frozenset(
+                    reason.text for reason in primary.unknown_reasons
+                    if reason.kind is RejectionKind.ASSIGNMENT_SHAPED
+                ),
             )
             if proof is not None:
                 primary.unsatisfied = proof.unsatisfied
