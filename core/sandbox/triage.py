@@ -1380,6 +1380,12 @@ def _cli_main(argv: list | None = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  raptor-sandbox-triage /path/to/run\n"
+            "  raptor-sandbox-triage /path/to/run --json --deep"
+        ),
         description="Rules-based triage of a completed run's sandbox "
                     "telemetry for escape/recon/credential-theft signatures.",
     )
@@ -1387,7 +1393,8 @@ def _cli_main(argv: list | None = None) -> int:
     parser.add_argument(
         "--json", action="store_true",
         help="print the full triage report as JSON on stdout "
-             "(the report is also written to sandbox-triage.json)",
+             "(the report is also written to sandbox-triage.json); "
+             "emit JSON null when no telemetry exists",
     )
     parser.add_argument(
         "--deep", action="store_true",
@@ -1420,7 +1427,10 @@ def _cli_main(argv: list | None = None) -> int:
     # a target that rewrote its own telemetry looks like.
     result = triage_run(target, allow_legacy=args.legacy)
     if result is None:
-        print(f"(no sandbox telemetry found for {sanitise_for_terminal(str(target))})")
+        if args.json:
+            print(dumps_artifact(None, ensure_ascii=True))
+        else:
+            print(f"(no sandbox telemetry found for {sanitise_for_terminal(str(target))})")
         return 0
 
     if args.json:
@@ -1439,7 +1449,8 @@ def _cli_main(argv: list | None = None) -> int:
             print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
     if args.deep:
         if result["verdict"] == VERDICT_CLEAN:
-            print("(clean verdict — deep pass has nothing to assess)")
+            if not args.json:
+                print("(clean verdict — deep pass has nothing to assess)")
         else:
             from core.sandbox.triage_deep import deep_analyse
             deep = deep_analyse(target)

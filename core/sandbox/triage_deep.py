@@ -51,7 +51,7 @@ from core.json import dumps_artifact
 from core.sandbox import telemetry_mac
 from core.sandbox.evidence import _unique_evidence_object
 from core.sandbox.triage import TRIAGE_FILE, verify_triage_report
-from core.security.log_sanitisation import escape_nonprintable
+from core.security.log_sanitisation import escape_nonprintable, sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -300,19 +300,21 @@ def deep_analyse(run_dir: Path, *, client=None,
     from core.sandbox.triage import _load_json
     report = _load_json(run_dir / TRIAGE_FILE)
     if report is None:
-        logger.warning("triage_deep: no %s in %s", TRIAGE_FILE, run_dir)
+        logger.warning("triage_deep: no %s in %s", TRIAGE_FILE,
+                       sanitise_for_terminal(str(run_dir)))
         return None
     integrity = verify_triage_report(report, run_dir)
     if integrity == "tampered":
         logger.warning(
             "triage_deep: %s fails provenance verification — refusing "
-            "to reason over forged telemetry", run_dir / TRIAGE_FILE)
+            "to reason over forged telemetry",
+            sanitise_for_terminal(str(run_dir / TRIAGE_FILE)))
         return None
     if integrity == "legacy" and not allow_legacy:
         logger.warning(
             "triage_deep: %s has no provenance token — refusing to "
             "reason over unstamped telemetry without allow_legacy=True",
-            run_dir / TRIAGE_FILE)
+            sanitise_for_terminal(str(run_dir / TRIAGE_FILE)))
         return None
     if not _known_signal_types(report):
         logger.info("triage_deep: no usable signal types to assess")
