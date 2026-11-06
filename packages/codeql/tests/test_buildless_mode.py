@@ -16,6 +16,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_probe_patch_targets(monkeypatch):
+    """Keep probe mocks local, including delegated discovery and execution."""
+    import packages.codeql.database_manager as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "subprocess", "run", consumer.subprocess.run,
+    )
+
+    import core.run.toolprobe as delegate
+
+    patch_module_attribute(
+        monkeypatch, delegate, "subprocess", "run",
+        lambda *args, **kwargs: consumer.subprocess.run(*args, **kwargs),
+    )
+
 
 @pytest.fixture(autouse=True)
 def _raptor_logger_propagates():
