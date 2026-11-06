@@ -806,3 +806,45 @@ class TestCodeQLStageTag:
         assert 'logging.getLogger("raptor").addFilter(_stage_tag)' in src
         assert 'logging.getLogger("raptor").removeFilter(_stage_tag)' in src
         assert "logging.getLogger().addFilter(_stage_tag)" not in src
+
+
+def test_parallel_scanner_and_runner_share_one_scope_warning(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import Mock
+    from packages.semgrep import runner
+
+    class StopBeforeExecution(BaseException):
+        pass
+
+    def stop(*args, **kwargs):
+        raise StopBeforeExecution
+
+    log = Mock()
+    monkeypatch.setattr(runner, "_scope_upgrade_warned", False)
+    monkeypatch.setattr(runner, "is_available", lambda: True)
+    monkeypatch.setattr(runner, "scope_isolation_available", lambda: False)
+    monkeypatch.setattr(runner, "version", lambda: "1.79.0")
+    monkeypatch.setattr(runner, "logger", log)
+    monkeypatch.setattr(_scanner_mod, "logger", log)
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "scope_isolation_available", lambda: False)
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "build_cmd", stop)
+    monkeypatch.setattr(runner, "build_cmd", stop)
+
+    def invoke(index):
+        with pytest.raises(StopBeforeExecution):
+            if index % 2:
+                _scanner_mod.run_single_semgrep(
+                    f"pack-{index}", "p/example", tmp_path, tmp_path, 1,
+                )
+            else:
+                runner.run_rule(
+                    tmp_path, "p/example", json_output_path=tmp_path / f"meta-{index}.json",
+                    subprocess_runner=stop,
+                )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(invoke, range(32)))
+    log.warning.assert_called_once()
+    message, version, _floor = log.warning.call_args.args
+    assert "--x-ignore-semgrepignore-files unavailable" in message
+    assert version == "1.79.0"

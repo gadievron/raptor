@@ -902,15 +902,8 @@ def run_single_semgrep(
     semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
     scope_ok = semgrep_pkg.scope_isolation_available()
     if not scope_ok:
-        from packages.semgrep.runner import _SCOPE_ISOLATION_MIN_VERSION
-        v = semgrep_pkg.version() or "unknown"
-        floor = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
-        logger.warning(
-            "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
-            "— .semgrepignore files in the scanned repo can hide findings "
-            "(upgrade: uv tool install --upgrade semgrep)",
-            v, floor,
-        )
+        from packages.semgrep.runner import _warn_scope_isolation_once
+        _warn_scope_isolation_once(logger)
     cmd = semgrep_pkg.build_cmd(
         repo_path,
         config,

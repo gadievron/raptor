@@ -119,3 +119,29 @@ class TestEnvWarningSilencedUnderStrictEnv:
             1 for m in msgs if "get_safe_env() not applied" in m
         )
         assert env_warning_count >= 1
+
+
+@_pytest.mark.parametrize("extra_env,expected_level", [
+    ({}, "debug"),
+    ({"LD_PRELOAD": "/caller-controlled-library.so"}, "info"),
+])
+def test_temp_cleanup_logging_preserves_strict_env_filter(extra_env, expected_level):
+    import json
+    from core.sandbox import context as ctx
+
+    inherited = {"TMPDIR": "/caller-temp"}
+    with patch.object(ctx.logger, "info") as info, patch.object(ctx.logger, "debug") as debug:
+        with ctx.sandbox(profile="none") as run:
+            proc = run(
+                [_sys.executable, "-S", "-c",
+                 "import json,os; print(json.dumps(dict(os.environ)))"],
+                env={**inherited, **extra_env}, strict_env=True,
+                text=True, capture_output=True,
+            )
+    assert proc.returncode == 0, proc.stderr
+    child = json.loads(proc.stdout)
+    assert all(child.get(key) != value for key, value in inherited.items())
+    assert "LD_PRELOAD" not in child
+    for level, calls in (("info", info.call_args_list), ("debug", debug.call_args_list)):
+        strips = [call for call in calls if "stripped DANGEROUS_ENV_VARS" in call.args[0]]
+        assert len(strips) == (1 if level == expected_level else 0)
