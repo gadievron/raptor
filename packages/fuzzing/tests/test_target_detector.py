@@ -12,6 +12,19 @@ from unittest.mock import patch
 
 from packages.fuzzing.target_detector import detect, TargetInfo
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import packages.fuzzing.target_detector as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
 
 # Magic byte fixtures
 ELF_MAGIC = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + b"\x02\x00" + b"\x3e\x00" + b"\x00" * 32

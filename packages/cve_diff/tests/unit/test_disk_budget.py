@@ -8,6 +8,18 @@ import pytest
 
 from cve_diff.infra import disk_budget
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import cve_diff.infra.disk_budget as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
 
 class _Usage:
     def __init__(self, used: int, total: int) -> None:

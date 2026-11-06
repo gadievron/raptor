@@ -20,6 +20,18 @@ import pytest
 
 from unittest.mock import patch
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import core.container.compose as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
 
 # ============================================================================
 # verify._inspect_state — returns {"_error": str} on any failure
