@@ -1295,7 +1295,7 @@ def _ollama_check_url() -> str:
     return f"{base}/api/tags"
 
 
-def _pinned_llm_config(model_name: str) -> 'LLMConfig':
+def _pinned_llm_config(model_name: str, *, offline: bool = False) -> 'LLMConfig':
     """Build a minimal :class:`LLMConfig` for a caller-pinned model.
 
     Bypasses the auto-resolution path entirely — no thinking-model
@@ -1312,11 +1312,15 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     authenticate by other means (e.g. Bedrock with AWS env credentials)
     can still construct a working request; pure-key-auth callers will
     hit the same auth error they would have at call time anyway.
+
+    ``offline=True`` skips network-probing builders for pre-spend UI.
+    It never constructs a provider or changes normal dispatch selection.
     """
     from dataclasses import replace
 
     from core.llm.config import (
         _PROVIDER_BUILDERS,
+        _NETWORK_PROBING_PROVIDERS,
         ModelConfig,
         _get_configured_models,
     )
@@ -1327,7 +1331,8 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
         # own model_name (e.g. the CC session sentinel) is the correct
         # pin. Without this the name falls through provider inference,
         # defaults to anthropic, and dies with a keyless-SDK auth error.
-        base = _PROVIDER_BUILDERS[model_name]()
+        base = (None if offline and model_name in _NETWORK_PROBING_PROVIDERS
+                else _PROVIDER_BUILDERS[model_name]())
         if base is None:
             raise ValueError(
                 f"pinned provider '{model_name}' is not available "
@@ -1373,7 +1378,8 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     max_context = limits.get("max_context", 32000)
 
     builder = _PROVIDER_BUILDERS.get(provider)
-    base = builder() if builder is not None else None
+    base = (builder() if builder is not None
+            and not (offline and provider in _NETWORK_PROBING_PROVIDERS) else None)
     if base is None:
         for entry in _get_configured_models():
             # Same non-dict tolerance as the shorthand resolution above.

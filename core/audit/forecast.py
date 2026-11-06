@@ -298,6 +298,7 @@ def forecast_audit_cost(
     seed_mass: int = 0,
     review_passes: int = 1,
     model_overrides: int = 0,
+    usd_estimate_available: bool = True,
 ) -> dict[str, Any]:
     """Forecast the LLM spend of the audit work described by the queue.
 
@@ -306,7 +307,9 @@ def forecast_audit_cost(
     result; ``seed_mass`` the :func:`seed_rereview_mass` count;
     ``model_overrides`` the number of explicit ``--model`` values (the
     coefficients price a default-model run — an override is NOTED as a
-    band caveat, never silently re-priced).
+    band caveat, never silently re-priced). ``usd_estimate_available=False``
+    retains workload counts while omitting USD values for non-metered or
+    unknown billing routes; the caller resolves that route offline.
     """
     passes = max(1, int(review_passes))
     queue_n = len(slocs)
@@ -388,7 +391,7 @@ def forecast_audit_cost(
     def _round_phase(p: dict[str, float]) -> dict[str, float]:
         return {k: round(v, 2) for k, v in p.items()}
 
-    return {
+    result = {
         "estimator": ESTIMATOR_VERSION,
         "queue_n": queue_n,
         "review_passes": passes,
@@ -402,6 +405,16 @@ def forecast_audit_cost(
         "usd_high": round(totals["usd_high"], 2),
         "drivers": drivers,
     }
+    result["usd_estimate_available"] = usd_estimate_available
+    if not usd_estimate_available:
+        # Retain the queue/call census, not API-equivalent dollar values.
+        for key in ("usd_low", "usd_central", "usd_high"):
+            result[key] = None
+        for phase in result["phases"].values():
+            for key in ("usd_low", "usd_central", "usd_high"):
+                if key in phase:
+                    phase[key] = None
+    return result
 
 
 def format_forecast_lines(fc: dict[str, Any]) -> list[str]:
@@ -411,6 +424,13 @@ def format_forecast_lines(fc: dict[str, Any]) -> list[str]:
     "limit" — ``--max-cost`` is the enforcement surface, these lines
     are a pre-spend estimate.
     """
+    if fc.get("usd_estimate_available") is False:
+        return [
+            f"Audit workload forecast: {fc['queue_n']} queue item(s), "
+            f"predicted suspicious density {fc['suspicious_density']:.2f} "
+            f"({fc['density_source']})",
+            "  USD estimate omitted: subscription, local, or unknown billing route.",
+        ]
     head = (
         f"Cost forecast: ${fc['usd_low']:.2f}-${fc['usd_high']:.2f} "
         f"(central ~${fc['usd_central']:.2f}) — {fc['queue_n']} queue "
@@ -573,7 +593,8 @@ def record_run_calibration(out_dir: Path) -> dict[str, Any] | None:
     out_dir = Path(out_dir)
     try:
         forecast = load_forecast(out_dir)
-        if not forecast or forecast.get("outcome") == "forecast_only":
+        if (not forecast or forecast.get("outcome") == "forecast_only"
+                or forecast.get("usd_estimate_available") is False):
             return None
         breakdown_path = out_dir / "cost-breakdown.json"
         if not breakdown_path.is_file():
