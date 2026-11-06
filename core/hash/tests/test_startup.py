@@ -84,7 +84,13 @@ def test_config_exports_defaults_and_reload_remain_compatible(tmp_path):
         expected = hashlib.sha256(b"sample bytes").hexdigest()
         assert hashes.sha256_file(sys.argv[1]) == expected
         from core.config import RaptorConfig
+        assert "core.llm.model_brokers" not in sys.modules
+        # Credential access, rather than metadata-only configuration, loads
+        # and validates the installed broker registry.
+        broker_keys = RaptorConfig._LLM_AGGREGATOR_KEYS
         assert "core.llm.model_brokers" in sys.modules
+        from core.llm.model_brokers import MODEL_BROKERS
+        assert broker_keys == tuple(broker.api_key_env for broker in MODEL_BROKERS)
         assert hashes.RaptorConfig is RaptorConfig
         assert vars(hashes)["RaptorConfig"] is RaptorConfig
         namespace = {}
