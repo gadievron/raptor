@@ -62,7 +62,7 @@ from .preprocessor_view import (
 
 logger = logging.getLogger(__name__)
 
-DETECTOR = define_semgrep_detector("expanded-semgrep", "1")
+DETECTOR = define_semgrep_detector("expanded-semgrep", "2")
 
 # C-family suffixes eligible for expansion. Headers included for the
 # audit-side second pass (a .h preprocesses fine as a lone TU); the
@@ -286,14 +286,34 @@ def _translate_finding(
         return None, True
     if (line_start and origin[1] < line_start) or (line_end and origin[1] > line_end):
         return None, False
-    return {
+    mapped = {
         "file": original_rel,
         "line": origin[1],
         "expanded_line": expanded_line,
         "rule_id": getattr(finding, "rule_id", "") or "",
         "message": getattr(finding, "message", "") or "",
         "expanded_view": True,
-    }, False
+    }
+    from core.sarif.parser import _coerce_line
+    for source, target in (("column", "expanded_column"), ("line_end", "expanded_line_end"),
+                           ("column_end", "expanded_column_end")):
+        value = _coerce_line(getattr(finding, source, None))
+        if value is not None and value > 0:
+            mapped[target] = value
+    return mapped, False
+
+
+def expanded_location_key(finding: dict[str, Any]) -> tuple[int, ...]:
+    """Identity in the expanded view, never coordinates in the original file."""
+    from core.sarif.parser import _coerce_line
+    return tuple(max(_coerce_line(finding.get(key)) or 0, 0) for key in (
+        "expanded_line", "expanded_column", "expanded_line_end", "expanded_column_end",
+    ))
+
+
+def expanded_finding_key(finding: dict[str, Any]) -> tuple[Any, ...]:
+    """Deduplicate repeated reports, retaining distinct expanded occurrences."""
+    return (finding["rule_id"], finding["file"], finding["line"], expanded_location_key(finding))
 
 
 def _translate_file_findings(
@@ -516,15 +536,26 @@ def translate_corpus_findings(
     ``expanded_line``, ``rule_id``, ``message`` and the
     ``expanded_view`` marker.  Matches in unattributable regions
     (system headers) or mapping into a different file than the TU that
-    pulled them in are dropped with a debug log.  Duplicate
-    (rule, file, line) hits are collapsed.
+    pulled them in are dropped with a debug log. Exact repeated expanded
+    occurrences collapse; distinct matches sharing an original line survive.
     """
     translated: list[dict[str, Any]] = []
     dropped = 0
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[tuple[Any, ...]] = set()
+    # The prepared corpus is immutable during this call. Bound both entries
+    # and key length; no filesystem result is reused by a later translation.
+    paths: dict[str, str | None] = {}
     for finding in findings:
         f_file = getattr(finding, "file", "") or ""
-        rel = _rel_in_corpus(corpus.root, f_file)
+        if not isinstance(f_file, str):
+            dropped += 1
+            continue
+        if f_file in paths:
+            rel = paths[f_file]
+        else:
+            rel = _rel_in_corpus(corpus.root, f_file)
+            if len(paths) < 256 and len(f_file) <= 4096:
+                paths[f_file] = rel
         tu = corpus.tus.get(rel) if rel else None
         if tu is None:
             dropped += 1
@@ -537,7 +568,7 @@ def translate_corpus_findings(
         dropped += noise
         if mapped is None:
             continue
-        key = (mapped["rule_id"], mapped["file"], mapped["line"])
+        key = expanded_finding_key(mapped)
         if key not in seen:
             seen.add(key)
             translated.append(mapped)
@@ -566,17 +597,24 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     for f in findings:
         rule_id = f.get("rule_id") or "(unnamed)"
         rule_index.add(emit.minimal_rule(rule_id))
-        results.append(emit.result(
+        point = expanded_location_key(f)
+        properties = {"expanded_view": True, "expanded_line": point[0]}
+        for key, value in zip(("expanded_column", "expanded_line_end", "expanded_column_end"), point[1:]):
+            if value:
+                properties[key] = value
+        result = emit.result(
             rule_id,
             f.get("message") or f"{rule_id} matched "
             "(fidelity-3 expanded view)",
             [emit.location(f.get("file", ""),
                            {"startLine": f.get("line", 0)})],
-            properties={
-                "expanded_view": True,
-                "expanded_line": f.get("expanded_line", 0),
-            },
-        ))
+            properties=properties,
+        )
+        if point[0]:
+            result["partialFingerprints"] = {
+                "raptor/expandedLocation/v1": ":".join(str(value) for value in point),
+            }
+        results.append(result)
     return emit.document(
         [emit.run(
             _TOOL_NAME, rule_index.rules(), results,

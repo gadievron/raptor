@@ -5,9 +5,9 @@ Same hyphenated-package importlib pattern as the other scanner tests.
 SARIF artifacts are written with ``save_json(sort_keys=False)``, so
 dict insertion order is the on-disk byte order. The golden files were
 captured from the emitters BEFORE they moved onto ``core.sarif.emit``;
-these tests pin that the shared-skeleton emitters reproduce the same
-bytes (member order included — hence serialized comparison, not dict
-equality).
+these tests pin the shared-skeleton output bytes, including member order.
+Intentional location fixes update only the affected expected regions;
+normal-location cases continue to pin their existing bytes.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def _stage_inputs() -> list[tuple[str, dict]]:
 def test_stage_findings_sarif_byte_identical_to_golden():
     """Covers: ruleId prefixing (present / re-prefixed / synthesized),
     cwe_by_suffix rule properties, file/path and line/start_line
-    fallbacks, level override, the all-defaults empty finding."""
+    aliases, level override, and unknown locations without invented lines."""
     sc = _load("scanner_golden_test", "scanner.py")
     doc = sc._stage_findings_to_sarif(
         _stage_inputs(), tool_name="raptor-srcwrap", rule_prefix="srcwrap",
@@ -105,7 +105,7 @@ def _graduated_inputs() -> list[tuple[str, dict]]:
 
 def test_graduated_findings_sarif_byte_identical_to_golden():
     """Covers: synthesized: rule-id prefix + dedup, default message,
-    zero line, semgrep-internal rule id preserved in properties."""
+    unknown line, semgrep-internal rule id preserved in properties."""
     sc = _load("scanner_golden_test", "scanner.py")
     doc = sc._graduated_findings_to_sarif(_graduated_inputs())
     assert _dumps(doc) == _golden("graduated_sarif_golden.json")

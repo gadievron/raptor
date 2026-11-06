@@ -379,3 +379,49 @@ def test_expanded_stage_forwards_run_setup(tmp_path, monkeypatch):
     monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
     assert _scanner.run_expanded_semgrep_stage(repo, out, [], [], setup=setup) == []
     assert len(seen) == 1 and seen[0] is setup
+
+
+def test_distinct_macro_occurrences_survive_cross_pack_dedup_and_merge(tmp_path, monkeypatch):
+    from core.audit import preprocessor_view as pv
+    from core.sarif.parser import deduplicate_findings, merge_sarif, parse_sarif_findings
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    repo = _c_repo(tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir()
+    paths_checked = []
+    resolve = es._rel_in_corpus
+
+    def track(root, path):
+        paths_checked.append(path)
+        return resolve(root, path)
+    monkeypatch.setattr(es, '_rel_in_corpus', track)
+
+    def build(target, scratch, **kwargs):
+        root = Path(scratch)
+        (root / 'main.c').write_text('copy(a); copy(b);\ncopy(c);\n')
+        view = pv.ExpandedView(ok=True, file_path='main.c', line_map=(('main.c', 1), ('main.c', 1)))
+        return es.ExpandedCorpus(root=root, expanded=1, candidates_total=1,
+                                 tus={'main.c': es.ExpandedTu('main.c', view)})
+    monkeypatch.setattr(es, 'build_expanded_corpus', build)
+    monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: True)
+
+    def run(target, config, **kwargs):
+        return SemgrepResult(findings=[SemgrepFinding(
+            str(target / 'main.c'), line, rule_id='copy', column=column,
+            line_end=line, column_end=column + 5,
+        ) for line, column in ((1, 1), (1, 10), (2, 1), (1, 1))])
+    monkeypatch.setattr('packages.semgrep.runner.run_rule', run)
+    configs = [tmp_path / 'rules-a', tmp_path / 'rules-b']
+    for config in configs:
+        config.mkdir()
+    paths = _scanner.run_expanded_semgrep_stage(repo, out, [str(config) for config in configs], [])
+    merged = merge_sarif(paths)
+    assert len(merged['runs'][0]['results']) == 3
+    assert len(paths_checked) == 2  # one file lookup per pack, not one per finding
+    combined = out / 'combined.sarif'
+    combined.write_text(json.dumps(merged))
+    findings = deduplicate_findings(parse_sarif_findings(combined))
+    assert len(findings) == 3
+    assert {finding['startLine'] for finding in findings} == {1}
+    assert all(not finding.get('startColumn') for finding in findings)

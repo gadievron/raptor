@@ -2200,7 +2200,7 @@ def run_expanded_semgrep_stage(
             translated, dropped = state.matches, state.dropped
             total_dropped += dropped
             for f in translated:
-                key = (f["rule_id"], f["file"], f["line"])
+                key = es.expanded_finding_key(f)
                 if key in seen:
                     continue
                 seen.add(key)
