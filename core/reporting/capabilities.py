@@ -37,6 +37,10 @@ CAPABILITIES = (
 )
 
 
-def command_capabilities() -> list[dict]:
+def _capability_row(capability: CommandCapability) -> dict:
     from .renderers import available_formats
-    return [{**asdict(c), "formats": list(available_formats()), "summary_independent": True} for c in CAPABILITIES]
+    return {**asdict(capability), "formats": list(available_formats()), "summary_independent": True}
+
+
+def command_capabilities() -> list[dict]:
+    return [_capability_row(capability) for capability in CAPABILITIES]
