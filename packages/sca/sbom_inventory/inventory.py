@@ -55,7 +55,10 @@ def _document_inventory(data, sha, name, *, known_refs=None):
             if package.get("primaryPackagePurpose") in {"OPERATING-SYSTEM", "CONTAINER"}:
                 row.scope = "subjects"
             row.evidence["license_concluded"] = package.get("licenseConcluded", "")
-            row.notices = [notice for key, notice in extracted.items() if key in re.findall(r"[A-Za-z0-9.+:-]+", declared)]
+            # Index only the identifiers actually named in this declaration.
+            # Scanning every extracted licence per package amplifies input work.
+            identifiers = dict.fromkeys(re.findall(r"[A-Za-z0-9.+:-]+", declared))
+            row.notices = [extracted[key] for key in identifiers if key in extracted]
             row.notice_status = "captured" if row.notices else "not_assessed"
             inventory.records.append(row)
         inventory.file_count = len(data.get("files", []))
@@ -177,8 +180,10 @@ def _bundle(source):
     return inventory, embedded
 
 
-def read_inventory(source, *, verify_notices=True):
+def read_inventory(source, *, verify_notices=True, require_scan_document=False):
     """Read one inventory, verify original notice bytes lazily one blob at a time."""
+    if require_scan_document and source.bundle:
+        raise ValueError("verification requires the original emitted CycloneDX or SPDX document, not an evidence bundle")
     forms = [source.contains("notice-index.json"), source.contains("inventory.json"),
              source.contains("syft.json") or source.contains("prepared/provenance.json")]
     if sum(forms) > 1:
@@ -200,6 +205,8 @@ def read_inventory(source, *, verify_notices=True):
         projection = CycloneProjection()
         document, sha = source.read_json(projectors={"components": projection.component, "files": spdx_file}, observe=projection.observe)
         if document.get("format") == FORMAT:
+            if require_scan_document:
+                raise ValueError("verification requires the original emitted CycloneDX or SPDX document, not an inventory snapshot")
             inventory = from_snapshot(document)
             inventory.diagnostics.append("Inventory snapshot contains recorded evidence metadata; original notice bytes were not re-verified.")
             return inventory, {}

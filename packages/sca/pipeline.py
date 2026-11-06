@@ -1210,6 +1210,15 @@ def _run_sca(
             source_bom=spdx_source,
         )
 
+    # Bind positive query coverage to the exact emitted artifacts. Verification
+    # must distinguish a checked empty result from missing or failed lookups.
+    from .sbom_inventory.advisory_coverage import write_coverage
+    coverage_artifacts = {"findings.json": findings_path, "sbom.cdx.json": sbom_path}
+    if options.emit_spdx_sbom or spdx_source is not None:
+        coverage_artifacts["sbom.spdx.json"] = output_dir / "sbom.spdx.json"
+    write_coverage(output_dir / "advisory-coverage.json", canonical, osv_client,
+                   osv_results, coverage_artifacts)
+
     # Re-read the rows we just wrote — SARIF emission consumes the
     # canonical row shape, including the suppression overlay.
     from core.json import load_json as _load_json

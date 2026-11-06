@@ -433,6 +433,70 @@ The JSON format is `raptor-sbom-upgrade-plan`, schema version 1.
 A successful recheck concerns the queried advisory coordinates only. It does
 not certify the complete SBOM or approve an upgrade automatically.
 
+## Verifying a rebuilt SBOM against an upgrade plan
+
+After applying reviewed changes in your project or image build, scan the rebuilt
+inventory and verify it against the saved plan:
+
+```bash
+raptor-sca ./project --sbom rebuilt.cdx.json --out rebuilt-scan
+raptor-sca sbom verify-plan upgrade-plan/upgrade-plan.json rebuilt-scan/sbom.cdx.json \
+  --findings rebuilt-scan/findings.json --out verification
+raptor-sca sbom verify-plan upgrade-plan/upgrade-plan.json rebuilt-scan/sbom.cdx.json \
+  --findings rebuilt-scan/findings.json --format json
+```
+
+`verify-plan` is offline and read-only. It compares the planned versions with
+observed package occurrences. Versions at or above the proposal meet its
+minimum-version target; compatibility is not established. Repeated
+versions are kept separate; ambiguous occurrence matching remains unavailable.
+Observed versions for each ambiguous identity are listed once in
+`ambiguous_groups`, rather than repeated for every baseline version.
+For distro packages, the planned source version is compared with the rebuilt
+package's explicitly declared source coordinates, separately from its binary
+version. A larger binary version without source coordinates cannot verify a
+source fix.
+
+New SCA scans emit `advisory-coverage.json` alongside their findings. This
+records which package coordinates received an available advisory result and
+hashes the emitted SBOM(s) and findings. Verification reads that receipt next
+to `--findings` by default; use `--coverage PATH` if you moved it. Supply the
+**SBOM emitted by that scan**, rather than a differently formatted copy of the
+input inventory. Inventory snapshots and evidence bundles are refused here:
+their recorded source fingerprints do not authenticate their current records.
+Any change to the bound SBOM or findings invalidates the
+receipt. These unsigned receipts establish local consistency, not authenticity;
+use scan outputs and saved plans from a trusted producer. Older scans without a receipt can still show observed versions, but
+cannot confirm advisory resolution; rescan to collect the required evidence.
+
+The report separates resolved, remaining and newly reported advisories from
+suppression changes. A previously reported advisory absent from current
+findings is confirmed resolved only when the same package identity remains
+listed and has matching positive query coverage. Otherwise it remains **not
+reported** or **not observed**, with an explanation. An unlisted package is not
+proof of file removal, and suppressing a finding is not resolving it. Feed
+updates can produce newly reported findings without the rebuild causing them.
+
+Coverage gaps, unmatched findings, unavailable queries and source/release
+identity changes remain explicit. Package-query coverage does not establish
+complete nested-payload inventory, complete advisory databases, build
+provenance or compatibility. Receipts check local artifact consistency; they
+are not signed attestations. File inventory and OS/container subjects remain
+outside package-advisory matching.
+
+`--out` requires a new directory and writes `upgrade-verification.json` and
+`upgrade-verification.md`. JSON and saved Markdown retain all outcomes;
+terminal text limits long sections to 50 entries. The JSON format is
+`raptor-sbom-plan-verification`, schema version 1.
+
+| Exit code | Meaning |
+|---:|---|
+| 0 | Planned targets met, with no outstanding active or newly reported advisory/suppression concerns within recorded package coverage |
+| 1 | Unmet targets, unobserved affected packages, remaining/new advisories or newly suppressed findings need review |
+| 2 | Coverage is unavailable, inconsistent or ambiguous; verification cannot conclude |
+
+The command does not run a new scan, apply upgrades or change image publication.
+
 ## Inspecting SBOM inventories and collected notices
 
 Use `raptor-sca sbom inspect` to examine an existing CycloneDX 1.5 or SPDX 2.3
@@ -491,7 +555,8 @@ raptor-sca sbom why inventory/inventory.json example --root application --out pa
 `why` keeps repeated package occurrences separate. It reports cycles, path/depth
 limits and whether a requested root was reached. A boundary with no recorded
 parents is not proof of a direct dependency. `--max-paths` and `--max-depth`
-control output size; traversal also has a fixed work budget.
+control output size; traversal also has a fixed budget of 10,000 node visits
+and parent references combined. Exhausted searches are marked truncated.
 
 Collect your own image's original notice bytes using a native **Syft 16.x**
 image catalogue with file hashes, embedded image metadata and layer identities.
@@ -1062,6 +1127,7 @@ Every scan run produces:
 
 | File | Format | Audience |
 |------|--------|----------|
+| `advisory-coverage.json` | Positive package-query availability bound to emitted SBOMs and findings | `sbom verify-plan` and CI coverage checks |
 | `findings.json` | RAPTOR findings schema | Other RAPTOR commands (`/validate`, `/patch`) |
 | `report.md` | Human-readable | Operators |
 | `sbom.cdx.json` | CycloneDX 1.5 + VEX | SBOM consumers, Dependency-Track, etc. |

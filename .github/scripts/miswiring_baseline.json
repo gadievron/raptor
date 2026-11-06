@@ -574,6 +574,12 @@
   "artifacts:write_only_artifact::upgrade-plan.md": {
    "note": "Deliberate user-facing output: sbom plan writes a sanitised Markdown upgrade report for operators and CI artifact viewers; no production reader reparses rendered prose."
   },
+  "artifacts:write_only_artifact::upgrade-verification.json": {
+   "note": "Deliberate operator-facing output: sbom verify-plan exports its versioned comparison and evidence-availability report for external CI and review consumers. Inputs are the saved plan and scan artifacts; the completed verification is not reparsed internally."
+  },
+  "artifacts:write_only_artifact::upgrade-verification.md": {
+   "note": "Deliberate operator-facing output: sbom verify-plan writes a sanitised Markdown report for humans and CI artifact viewers. Production comparisons use structured plan and scan inputs rather than reparsing rendered prose."
+  },
   "artifacts:write_only_artifact::validate-against.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },

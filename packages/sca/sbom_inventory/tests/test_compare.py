@@ -90,3 +90,11 @@ def test_source_candidates_from_different_tools_are_distinct():
     a = package(scope="source-candidates", purl="", evidence={"tool": "one"})
     b = package(scope="source-candidates", purl="", evidence={"tool": "two"})
     assert compare(sample(a), sample(b))["counts"] == {"added": 1, "removed": 1}
+
+
+def test_distro_source_version_bumps_preserve_identity_but_source_names_do_not():
+    a = package(purl="pkg:deb/debian/example@1?arch=amd64&distro=debian-12&upstream=source%401")
+    b = package(id="new", version="2", purl="pkg:deb/debian/example@2?arch=amd64&distro=debian-12&upstream=source%402")
+    assert compare(sample(a), sample(b))["counts"] == {"version_changed": 1}
+    changed = replace(b, purl=b.purl.replace("upstream=source", "upstream=different"))
+    assert compare(sample(a), sample(changed))["counts"] == {"added": 1, "removed": 1}

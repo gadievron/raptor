@@ -198,3 +198,23 @@ def test_compacted_file_values_keep_original_depth_validation(cdx, write_json):
     cdx["components"].append({"type": "file", "name": "file", "extra": nested})
     with pytest.raises(ValueError, match="nesting"):
         load(write_json(cdx))
+
+
+def test_spdx_notice_association_tokenises_each_declaration_once(spdx, write_json, monkeypatch):
+    from copy import deepcopy
+    from packages.sca.sbom_inventory import inventory as reader
+    spdx["hasExtractedLicensingInfos"] = [
+        {"licenseId": "LicenseRef-" + str(i), "extractedText": "Original notice " + str(i)} for i in range(8)]
+    spdx["relationships"] = []
+    original = spdx["packages"][0]
+    spdx["packages"] = [dict(deepcopy(original), SPDXID="SPDXRef-p" + str(i),
+                              licenseDeclared="LicenseRef-" + str(i)) for i in range(6)]
+    findall, declarations = reader.re.findall, []
+    def counted(pattern, value, *args, **kwargs):
+        if pattern == r"[A-Za-z0-9.+:-]+":
+            declarations.append(value)
+        return findall(pattern, value, *args, **kwargs)
+    monkeypatch.setattr(reader.re, "findall", counted)
+    inv, _ = load(write_json(spdx))
+    assert len(declarations) == len(spdx["packages"])
+    assert [row.notices[0].path for row in inv.records] == ["LicenseRef-" + str(i) for i in range(6)]

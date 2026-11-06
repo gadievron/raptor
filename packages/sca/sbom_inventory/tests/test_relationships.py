@@ -76,7 +76,7 @@ def test_why_fanout_has_a_total_work_budget():
     source = inventory(row("target", parents=[f"p{i}" for i in range(10010)]),
                        *(row(f"p{i}") for i in range(10010)))
     result = explain(source, "target", max_paths=1)["results"][0]
-    assert result["truncated"] and len(result["paths"]) == 1
+    assert result["truncated"] and len(result["paths"]) <= 1
 
 
 def test_dependency_aliases_do_not_cross_inventory_scopes():
@@ -87,3 +87,19 @@ def test_dependency_aliases_do_not_cross_inventory_scopes():
     after = inventory(replace(root, children=["new"]), replace(dep, id="new", purl="pkg:npm/dep@2"),
                       replace(source, id="source-new", purl="pkg:npm/dep@2"))
     assert compare(before, after)["dependencies"]["changes"] == []
+
+
+def test_path_budget_counts_repeated_parent_processing():
+    examined = [0]
+    class CountedParents(list):
+        def __iter__(self):
+            for ref in super().__iter__():
+                examined[0] += 1
+                yield ref
+    source = inventory(row("target", parents=CountedParents(["a", "b"] * 3000)),
+                       row("a", parents=CountedParents(["target"])),
+                       row("b", parents=CountedParents(["target"])))
+    report = explain(source, "target", max_paths=1000)
+    assert examined[0] <= report["work_budget"]["maximum"]
+    assert report["work_budget"]["used"] <= report["work_budget"]["maximum"]
+    assert report["work_budget"]["processed_edges"] == examined[0]

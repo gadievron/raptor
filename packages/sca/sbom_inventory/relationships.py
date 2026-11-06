@@ -91,21 +91,36 @@ def explain(inventory, package, *, root=None, max_paths=20, max_depth=32):
     roots = {p.id for p in selected(inventory, package=root)} if root else set()
     if root and not roots:
         raise ValueError("requested root not found")
-    results, total_visited, total_queued = [], 0, 0
+    results, total_visited, total_queued, total_edges = [], 0, 0, 0
     for target in matches:
-        if total_queued >= 10_000:
+        if total_queued >= 10_000 or total_visited + total_edges >= 10_000:
             break
         queue = deque([(target.id,)])
         total_queued += 1
         paths, truncated = [], False
-        while queue and len(paths) < max_paths and total_visited < 10_000:
+        while queue and len(paths) < max_paths and total_visited + total_edges < 10_000:
             path = queue.popleft()
             current = nodes[path[-1]]
             total_visited += 1
-            cycle = any(ref in path for ref in current.parents)
-            parents = [ref for ref in current.parents if ref in nodes and ref not in path]
+            cycle, exhausted = False, False
+            parents, seen = [], set()
+            if current.id not in roots and len(path) < max_depth:
+                ancestors = set(path)
+                for ref in current.parents:
+                    if total_visited + total_edges >= 10_000:
+                        exhausted = True
+                        break
+                    total_edges += 1
+                    if ref in ancestors:
+                        cycle = True
+                    elif ref in nodes and ref not in seen:
+                        parents.append(ref)
+                        seen.add(ref)
+            if exhausted:
+                truncated = True
+                break
             if current.id in roots or not parents or len(path) >= max_depth:
-                truncated |= bool(parents and len(path) >= max_depth)
+                truncated |= bool(current.parents and current.id not in roots and len(path) >= max_depth)
                 paths.append({"nodes": [{"id": nodes[ref].id, "name": nodes[ref].name, "version": nodes[ref].version,
                                           "scope": nodes[ref].scope} for ref in reversed(path)],
                               "requested_root_reached": current.id in roots, "cycle_boundary": cycle})
@@ -119,5 +134,7 @@ def explain(inventory, package, *, root=None, max_paths=20, max_depth=32):
                         "outgoing_data_supplied": target.graph_supplied})
     return {"format": "raptor-sbom-dependency-paths", "schema_version": 1, "source": inventory.source_sha256,
             "query": package, "requested_roots": sorted(roots), "results": results,
-            "work_budget": {"visited": total_visited, "maximum": 10_000, "unexamined_occurrences": len(matches) - len(results)},
+            "work_budget": {"visited": total_visited, "processed_edges": total_edges, "used": total_visited + total_edges,
+                            "maximum": 10_000, "unit": "node visits and parent references",
+                            "unexamined_occurrences": len(matches) - len(results)},
             "limitations": ["Paths use supplied relationships only; a boundary without parents does not prove a direct dependency."]}
