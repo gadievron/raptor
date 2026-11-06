@@ -70,3 +70,41 @@ def test_graph_fingerprint_accepts_non_utf8_filenames(tmp_path):
     name = Path(os.fsdecode(b'owned-\xff.py'))
     (tmp_path / name).write_text('import owned\n')
     assert test_impact._files_fingerprint([name], tmp_path)
+
+
+@pytest.mark.parametrize("diff_spec", [None, "HEAD"])
+def test_diff_preserves_changed_filename_bytes(tmp_path, monkeypatch, diff_spec):
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    names = ["space name.py", "café.py", "line\nname.py", "tab\tname.py",
+             'quote"name.py', "trailing-space "]
+    if os.name == "posix":
+        names.append(os.fsdecode(b"raw-\xff.py"))
+    for name in names:
+        (repo / name).write_text("before = 1\n")
+    git_run(repo, "add", "-A")
+    git_run(repo, "commit", "-qm", "base")
+    for name in names:
+        (repo / name).write_text("after = 2\n")
+    # Include staged and unstaged edits in the same diff.
+    git_run(repo, "add", "--", names[0])
+    monkeypatch.chdir(repo)
+    for quote_path in ("true", "false"):
+        git_run(repo, "config", "core.quotePath", quote_path)
+        actual = test_impact.get_changed_files_from_diff(diff_spec)
+        assert set(actual) == set(names)
+        assert len(actual) == len(names)
+
+
+def test_diff_failure_remains_fatal(tmp_path, monkeypatch, capsys):
+    from core.testing.gitrepo import init_scratch_repo
+
+    monkeypatch.chdir(init_scratch_repo(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        test_impact.get_changed_files_from_diff("missing-revision")
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    assert "git diff failed:" in error
+    assert "missing-revision" in error
+    assert "b'" not in error

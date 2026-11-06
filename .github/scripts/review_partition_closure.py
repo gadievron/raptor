@@ -68,11 +68,18 @@ def read_list_file(path: Path) -> list[str]:
     return entries
 
 
-def git_lines(tree: str, *args: str) -> list[str]:
+def git_paths(tree: str, *args: str) -> list[str]:
+    """Read Git path records without quoting or splitting filename bytes."""
     out = subprocess.run(
-        ["git", "-C", tree, *args], capture_output=True, text=True, check=True
+        ["git", "-C", tree, *args, "-z"], capture_output=True, check=True
     )
-    return [line for line in out.stdout.splitlines() if line]
+    return [raw.decode("utf-8", errors="surrogateescape")
+            for raw in out.stdout.split(b"\0") if raw]
+
+
+def display_path(path: str) -> str:
+    """Keep readable Unicode while escaping undecodable filesystem bytes."""
+    return path.encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
 def parse_map(path: Path) -> dict[str, list[str]]:
@@ -139,18 +146,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.files_from:
         all_files = read_list_file(Path(args.files_from))
     else:
-        all_files = git_lines(args.tree, "ls-files")
+        all_files = git_paths(args.tree, "ls-files")
     excluded = [
         f for f in all_files
         if any(fnmatch.fnmatch(f, pat) for pat in args.exclude)
     ]
-    files = [f for f in all_files if f not in set(excluded)]
+    excluded_set = set(excluded)
+    files = [f for f in all_files if f not in excluded_set]
 
     changed: list[str] = []
     if args.changed_from:
         changed = read_list_file(Path(args.changed_from))
     elif args.changed_since:
-        changed = git_lines(args.tree, "diff", "--name-only", args.changed_since)
+        changed = git_paths(args.tree, "diff", "--name-only", args.changed_since)
 
     units = parse_map(Path(args.map))
     claims: dict[str, list[str]] = collections.defaultdict(list)
@@ -166,10 +174,10 @@ def main(argv: list[str] | None = None) -> int:
 
     unclaimed = [f for f in files if f not in claims]
     for f in unclaimed:
-        errors.append(f"UNCLAIMED: {f}")
+        errors.append(f"UNCLAIMED: {display_path(f)}")
     for f, owners in sorted(claims.items()):
         if len(owners) > 1:
-            errors.append(f"MULTI-CLAIMED: {f} owned by {', '.join(sorted(owners))}")
+            errors.append(f"MULTI-CLAIMED: {display_path(f)} owned by {', '.join(sorted(owners))}")
 
     fileset = set(files)
     review_flags: list[tuple[str, str]] = []
@@ -180,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         elif f in claims:
             review_flags.append((claims[f][0], f))
         else:
-            errors.append(f"CHANGED-UNCLAIMED: {f} changed since base but owned by no unit")
+            errors.append(f"CHANGED-UNCLAIMED: {display_path(f)} changed since base but owned by no unit")
 
     print(
         f"reviewable {len(files)} (excluded {len(excluded)})  units {len(units)}  "
@@ -192,15 +200,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("== UNCLAIMED by top-2 dirs ==")
         for d, n in agg.most_common(40):
-            print(f"  {n:4d}  {d}")
+            print(f"  {n:4d}  {display_path(d)}")
     if review_flags:
         print("== changed since base — flagged for review ==")
         for unit, f in sorted(review_flags):
-            print(f"REVIEW {unit}\t{f}")
+            print(f"REVIEW {unit}\t{display_path(f)}")
     for f in changed_gone:
-        print(f"note: changed file not in reviewable set (deleted/excluded): {f}")
+        print(f"note: changed file not in reviewable set (deleted/excluded): {display_path(f)}")
     if args.claims_out:
-        with open(args.claims_out, "w", encoding="utf-8") as fh:
+        with open(args.claims_out, "w", encoding="utf-8", errors="surrogateescape") as fh:
             for f in sorted(claims):
                 fh.write(f"{f}\t{','.join(sorted(claims[f]))}\n")
     if errors:
