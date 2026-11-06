@@ -1837,6 +1837,7 @@ def _normalise_tool_name(driver_name: str) -> str:
 
 def generate_scan_metrics(
     sarif_paths: list[str], *, file_count_paths: list[str] | None = None,
+    on_source_report: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> dict[str, Any]:
     """
     Generate metrics from scan results.
@@ -1846,6 +1847,10 @@ def generate_scan_metrics(
         file_count_paths: Optional original reports for artifact-based file
             counts and execution diagnostics when merging has discarded or
             changed metadata. Their findings do not enter finding metrics.
+        on_source_report: Optional trusted observer for original reports (or
+            primary reports when no originals are supplied). Called before the
+            decoded input is released. Must not mutate or retain that input;
+            observer exceptions propagate to the caller.
 
     Returns:
         Dictionary containing scan metrics
@@ -1907,6 +1912,8 @@ def generate_scan_metrics(
 
     def accumulate_file(sarif_path: str, count_findings: bool, count_files: bool) -> None:
         sarif_data = load_sarif(Path(sarif_path))
+        if on_source_report is not None and (count_files or not file_count_paths):
+            on_source_report(sarif_path, sarif_data)
         if not sarif_data or not isinstance(sarif_data.get("runs"), list):
             metrics["sarif_input_errors"] += 1
             return

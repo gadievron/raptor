@@ -3645,10 +3645,21 @@ def main() -> None:
         # discard those tables, and canonical coverage records below may
         # replace the fallback with the union of files actually examined.
         logger.info("Generating scan metrics...")
+        codeql_coverage = None
+        codeql_report_paths = {Path(path) for path in codeql_sarifs}
+        if codeql_report_paths:
+            from core.coverage.record import CodeQLCoverageAccumulator
+            codeql_coverage = CodeQLCoverageAccumulator(repo_path)
+
+        def collect_codeql_coverage(path, data):
+            if codeql_coverage is not None and Path(path) in codeql_report_paths:
+                codeql_coverage.add_report(data)
+
+        metric_options = {"on_source_report": collect_codeql_coverage} if codeql_coverage is not None else {}
         if merge_completed:
-            metrics = generate_scan_metrics([str(merged)], file_count_paths=sarif_inputs)
+            metrics = generate_scan_metrics([str(merged)], file_count_paths=sarif_inputs, **metric_options)
         else:
-            metrics = generate_scan_metrics(sarif_inputs)
+            metrics = generate_scan_metrics(sarif_inputs, **metric_options)
         # Record per-engine failure surfaces so downstream readers
         # can distinguish a clean run from one where N packs silently
         # dropped. Empty list is intentional (positive marker — "we
@@ -3681,7 +3692,6 @@ def main() -> None:
         # Write coverage records and derive total_files_scanned from them
         try:
             from core.coverage.record import (
-                build_from_codeql,
                 read_semgrep_outputs,
                 load_records,
                 write_record,
@@ -3759,20 +3769,32 @@ def main() -> None:
             if semgrep_summary.record:
                 write_record(out_dir, semgrep_summary.record, tool_name="semgrep")
 
-            # CodeQL coverage — from SARIF artifacts
-            for sarif_path in codeql_sarifs:
-                record = build_from_codeql(Path(sarif_path))
+            # Reuse original reports decoded for metrics, covering every
+            # dispatched language without reopening the SARIF files.
+            if codeql_coverage is not None:
+                record = codeql_coverage.build_record()
                 if record:
                     write_record(out_dir, record, tool_name="codeql")
-                    break  # one record per run
 
             # Derive total_files_scanned from coverage records — these are
             # the canonical source of what was examined (not SARIF artifacts,
             # which Semgrep doesn't populate).
+            from core.paths import to_repo_relative
             all_covered = set()
+            has_file_coverage = False
             for rec in load_records(out_dir):
-                all_covered.update(rec.get("files_examined", []))
-            if all_covered:
+                examined = rec.get("files_examined")
+                if not isinstance(examined, list):
+                    continue
+                has_file_coverage = True
+                for file in examined:
+                    if not isinstance(file, str):
+                        continue
+                    relative = to_repo_relative(file, repo_path, outside_root="relative")
+                    normal = to_repo_relative(relative, repo_path) if relative is not None else None
+                    if normal is not None:
+                        all_covered.add(file if normal == file else normal)
+            if has_file_coverage:
                 metrics["total_files_scanned"] = len(all_covered)
         except Exception as e:  # noqa: BLE001
             logger.debug("Coverage record write failed (non-fatal): %s", e)

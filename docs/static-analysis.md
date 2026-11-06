@@ -525,6 +525,13 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+For multi-language CodeQL scans, coverage combines the files, query packs and
+rule inventories from every report produced by the current scan. Extraction
+warnings retain every affected file. Artifact references honor URI bases and
+indexes; remote references and paths outside the selected target do not count
+as local coverage. URI escapes are decoded once, and equivalent absolute and
+relative source paths count as one file across scanners.
+
 Semgrep coverage totals include the union of files examined by every pack;
 packs for different languages can examine different files. Missing or malformed
 JSON metadata makes execution partial, recorded as `semgrep_metadata_errors`,

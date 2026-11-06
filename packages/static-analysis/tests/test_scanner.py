@@ -615,7 +615,7 @@ class TestJoinCodeQLStage:
         )
 
 
-@pytest.mark.parametrize('merge_fails,removed_lines,failed_count,dropped,gaps,offline,codeql_empty,metadata_state', [
+@pytest.mark.parametrize('merge_fails,removed_lines,failed_count,dropped,gaps,offline,codeql_mode,metadata_state', [
     (merge_fails, removed_lines, 0, False, {}, False, False, None)
     for merge_fails in (False, True) for removed_lines in ([], [1], [1, 2])
 ] + [
@@ -624,12 +624,13 @@ class TestJoinCodeQLStage:
     (False, [], 1, False, {}, True, False, None),
     (False, [], 0, True, {}, False, False, None),
     (False, [], 0, False, {'timeout': 1}, False, False, None),
-    (False, [], 0, False, {}, False, True, None),
+    (False, [], 0, False, {}, False, 'empty', None),
+    (False, [], 0, False, {}, False, 'multi', None),
     (False, [], 0, False, {}, False, False, 'missing'),
     (False, [], 0, False, {}, False, False, 'partial'),
 ])
 def test_scan_metrics_follow_committed_report_or_raw_fallback(
-    tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, codeql_empty, metadata_state,
+    tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, codeql_mode, metadata_state,
 ):
     import json
     import core.project.trust
@@ -661,6 +662,30 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
             }]} if metadata_state == 'partial' else {}
             path.with_suffix('.json').write_text(json.dumps(metadata))
         inputs.append(str(path))
+    codeql_reports = []
+    if codeql_mode == 'multi':
+        (repo / 'Other.java').write_text('class Other {}')
+        for path in inputs:
+            Path(path).with_suffix('.json').write_text(json.dumps({
+                'paths': {'scanned': [str(repo / 'source.py')]},
+            }))
+        for language, file in [('python', 'source.py'), ('java', 'Other.java')]:
+            path = out / f'codeql_{language}.sarif'
+            path.write_text(json.dumps({'version': '2.1.0', 'runs': [{
+                'originalUriBaseIds': {'ROOT': {'uri': repo.as_uri() + '/'}},
+                'tool': {'driver': {'name': 'CodeQL', 'version': '2.16.0'},
+                         'extensions': [{'name': language, 'version': '1',
+                                         'rules': [{'id': f'{language}/example'}]}]},
+                'artifacts': [{'location': {'uri': file, 'uriBaseId': 'ROOT'}}],
+                'results': [],
+            }]}))
+            codeql_reports.append(str(path))
+        import core.coverage.record as coverage
+        original_load = coverage.load_json
+        def forbid_sarif_reopen(path, **kwargs):
+            assert Path(path).suffix != '.sarif', 'coverage must reuse decoded metrics inputs'
+            return original_load(path, **kwargs)
+        monkeypatch.setattr(coverage, 'load_json', forbid_sarif_reopen)
     # An earlier run's report must not become authoritative on merge failure.
     (out / 'combined.sarif').write_text(json.dumps({'version': '2.1.0', 'runs': []}))
     monkeypatch.setattr(core.sandbox, 'apply_cli_args', lambda *a, **kw: None)
@@ -675,7 +700,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     monkeypatch.setattr(_scanner_mod, '_dropped_registry_packs', ['uncached'] if dropped else [])
     monkeypatch.setattr(_scanner_mod.RaptorConfig, 'SEMGREP_OFFLINE', offline)
     monkeypatch.setattr(core.run.gaps, 'gap_summary', lambda *a: gaps)
-    monkeypatch.setattr(_scanner_mod, 'run_codeql', lambda *a, **kw: [])
+    monkeypatch.setattr(_scanner_mod, 'run_codeql', lambda *a, **kw: codeql_reports)
     monkeypatch.setattr(_scanner_mod, '_finalize_scan_artifacts', lambda *a, **kw: None)
     if merge_fails:
         def fail_merge(*a):
@@ -689,7 +714,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
                               for line in removed_lines],
     })
     monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
-                                     '--sequential', '--codeql' if codeql_empty else '--no-codeql', '--no-cocci',
+                                     '--sequential', '--codeql' if codeql_mode else '--no-codeql', '--no-cocci',
                                      '--no-source-wrappers', '--no-config-resolved',
                                      '--no-graduated-rules'])
     with pytest.raises(SystemExit) as exit_info:
@@ -697,14 +722,14 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     expected_exit = 4 if failed_count == 2 or (offline and failed_count) else 0
     assert exit_info.value.code == expected_exit
     metrics = json.loads((out / 'scan_metrics.json').read_text())
-    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or codeql_empty or metadata_state else 'ok'
+    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or codeql_mode == 'empty' or metadata_state else 'ok'
     assert metrics['execution_status'] == status
     stdout = capsys.readouterr().out
     result = json.loads(stdout[stdout.rfind('\n{') + 1:])
     assert result['status'] == result['metrics']['execution_status'] == status
     assert metrics['sarif_merge_failed'] is merge_fails
     assert metrics['analysis_gaps'] == gaps
-    assert metrics['codeql_no_output'] is codeql_empty
+    assert metrics['codeql_no_output'] is (codeql_mode == 'empty')
     assert metrics['semgrep_metadata_errors'] == (2 if metadata_state == 'missing' else 0)
     assert metrics['semgrep_partial_files'] == (1 if metadata_state == 'partial' else 0)
     expected_count = 4 if merge_fails else 2 - len(removed_lines)
@@ -712,7 +737,13 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert metrics['nosemgrep_suppressed_count'] == expected_suppressed
     assert metrics['total_files_scanned'] == 2
     assert metrics['total_findings'] == expected_count
-    assert metrics['findings_by_tool'] == {'semgrep': expected_count}
+    assert metrics['findings_by_tool'] == ({'semgrep': expected_count, 'codeql': 0}
+                                           if codeql_mode == 'multi' else {'semgrep': expected_count})
+    if codeql_mode == 'multi':
+        record = json.loads((out / 'coverage-codeql.json').read_text())
+        assert record['files_examined'] == ['Other.java', 'source.py']
+        assert record['packs'] == ['java@1', 'python@1']
+        assert record['rules_applied'] == ['java/example', 'python/example']
     assert metrics['findings_by_rule'] == ({'rule-a': expected_count} if expected_count else {})
     assert metrics['findings_by_severity']['error'] == expected_count
     if not merge_fails:
