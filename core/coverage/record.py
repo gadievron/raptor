@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import DEFAULT_JSON_MAX_BYTES, load_json, save_json
+from core.run.toolprobe import reported_version
 
 COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 
@@ -345,8 +346,11 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
                 has_files = True
             else:
                 damaged = True
-        if has_files and not version and isinstance(data.get("version"), str):
-            version = data["version"]
+        label = reported_version(data.get("version"))
+        if label is None:
+            damaged = True
+        elif has_files and not version:
+            version = label
         errors = data.get("errors", [])
         if not isinstance(errors, list):
             damaged = True

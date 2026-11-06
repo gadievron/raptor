@@ -50,7 +50,7 @@ from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ToolInfo", "probe", "reset_probe_cache"]
+__all__ = ["ToolInfo", "probe", "reported_version", "reset_probe_cache"]
 
 # (?<!\d) pins the match to the start of its digit run (a bare
 # leading \d+ re-scans a digit run from every position — quadratic);
@@ -64,6 +64,20 @@ _CAPTURE_RETAIN_CHARS = 64 * 1024
 
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[tuple[str, tuple[str, ...], bool], ToolInfo | None] = {}
+
+
+def reported_version(value: object) -> str | None:
+    """Bound an optional tool-reported label without parsing or probing it.
+
+    Empty/missing metadata is unknown (the empty string); malformed metadata
+    returns None. Printable labels up to 256 characters preserve development
+    and vendor suffixes without retaining arbitrary report payloads.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str) or len(value) > 256 or (value and not value.isprintable()):
+        return None
+    return value
 
 
 @dataclass(frozen=True)

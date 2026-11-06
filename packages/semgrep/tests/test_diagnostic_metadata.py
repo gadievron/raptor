@@ -130,7 +130,8 @@ def test_real_filesystem_names_and_optional_skip_fields_remain_supported(tmp_pat
     assert coverage.skipped_paths == {'unspecified': 1}
 
 
-def test_malformed_skips_preserve_runner_findings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("damage", ["skipped", "version-type", "version-size"])
+def test_malformed_metadata_preserves_runner_findings(tmp_path, monkeypatch, damage):
     monkeypatch.setattr(runner, "is_available", lambda: True)
     monkeypatch.setattr(runner, "scope_isolation_available", lambda: True)
     source = tmp_path / 'good.py'
@@ -143,7 +144,12 @@ def test_malformed_skips_preserve_runner_findings(tmp_path, monkeypatch):
 
     def execute(command, **kwargs):
         output = Path(command[command.index('--json-output') + 1])
-        output.write_text(json.dumps({'paths': {'scanned': [str(source)], 'skipped': {}}, 'errors': []}))
+        metadata = {'paths': {'scanned': [str(source)]}, 'errors': []}
+        if damage == 'skipped':
+            metadata['paths']['skipped'] = {}
+        else:
+            metadata['version'] = {'nested': 'payload'} if damage == 'version-type' else 'x' * 257
+        output.write_text(json.dumps(metadata))
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(sarif), stderr='')
 
     result = runner.run_rule(source, str(rule), subprocess_runner=execute)
@@ -164,3 +170,46 @@ def test_incompatible_rules_limit_coverage_without_inventing_failed_source_files
     assert parsed['files_failed'] == coverage.files_failed == []
     assert coverage.record['files_examined'] == ['good.py']
     assert models.SemgrepResult(skipped_rules=parsed['skipped_rules']).ok
+
+
+@pytest.mark.parametrize('version', [False, 123, [], {'nested': 'payload'}, 'x' * 257, '1.2.3\x00', '1.2.3\n'])
+def test_invalid_version_metadata_is_bounded_and_visible_in_both_consumers(tmp_path, version):
+    text = json.dumps({'paths': {'scanned': ['good.py']}, 'version': version})
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert parsed['semgrep_version'] == '' and parsed['errors']
+    assert coverage.input_errors == 1 and 'version' not in coverage.record
+    assert parsed['files_examined'] == coverage.record['files_examined'] == ['good.py']
+
+
+@pytest.mark.parametrize('version', [None, '', '1.177.0', '1.177.0-rc.1+vendor', 'x' * 256])
+def test_supported_version_labels_and_unknown_values_remain_compatible(tmp_path, version):
+    text = json.dumps({'paths': {'scanned': ['good.py']}, 'version': version})
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert parsed['semgrep_version'] == coverage.record.get('version', '') == (version or '')
+    assert not parsed['errors'] and coverage.input_errors == 0
+
+
+def test_structured_diagnostic_type_never_formats_variant_payload():
+    class UnrenderedPayload(dict):
+        def __repr__(self):
+            pytest.fail('diagnostic summaries must not format variant metadata')
+
+    entry = {'type': ['IncompatibleRule', UnrenderedPayload(rule_id='payload')],
+             'message': 'Rule requires a newer Semgrep'}
+    assert models._render_error(entry) == 'IncompatibleRule: Rule requires a newer Semgrep'
+    entry['type'] = UnrenderedPayload()
+    assert models._render_error(entry) == 'error: Rule requires a newer Semgrep'
+
+
+def test_diagnostic_rendering_is_bounded_and_keeps_actionable_message():
+    text = models._render_error({'type': 'x' * 100_000, 'message': 'actionable detail'})
+    assert len(text) <= 500 and text.endswith(': actionable detail')
+    text = models._render_error({'type': 'bad\x1b[2J', 'message': 'line one\nline two\x07'})
+    assert '\x1b' not in text and '\n' not in text and '\x07' not in text
+    assert 'line one' in text and 'line two' in text
