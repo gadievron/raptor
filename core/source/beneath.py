@@ -48,9 +48,8 @@ Siblings, deliberately not merged:
   object. Same walk doctrine, different substrate constraints — a
   reader helper importable at leisure cannot serve a preexec closure,
   so the two bodies stay separate with cross-references.
-- ``libexec/raptor-fetch-attachment._open_attachments_dir`` — the
-  write-side dir flavor (it mkdirs mid-walk); adopts a shared
-  ``open_dir_beneath`` when that flavor earns a second consumer.
+- ``open_dir_beneath`` — the write-side directory walk, promoted from
+  ``libexec/raptor-fetch-attachment`` for anchored atomic reporting writes.
 """
 
 from __future__ import annotations
@@ -64,7 +63,7 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import IO
 
-__all__ = ["open_regular_beneath"]
+__all__ = ["open_regular_beneath", "open_dir_beneath"]
 
 _O_DIR_FLAGS = (
     os.O_RDONLY
@@ -78,6 +77,34 @@ _O_FILE_FLAGS = (
     | getattr(os, "O_NONBLOCK", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
+
+
+def open_dir_beneath(root: Path, rel: Path, *, create: bool = False, mode: int = 0o700) -> int:
+    """Pin a directory with the attachment writer's anchored mkdir/open walk.
+
+    Returns an owned fd for the caller to close. Every component refuses
+    symlinks, including the root; mkdir and opens use the previous pinned fd.
+    """
+    rel = Path(rel)
+    if rel.is_absolute() or ".." in rel.parts or "\x00" in str(rel):
+        raise ValueError("Directory must remain beneath its root")
+    fd = os.open(root, _O_DIR_FLAGS)
+    try:
+        for component in rel.parts:
+            if create:
+                try:
+                    os.mkdir(component, mode, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            child = os.open(component, _O_DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.ENOTDIR, "not a directory")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 # openat2(2) — asm-generic syscall table (all post-2011 architectures;
 # same arch gate as the Landlock syscalls in core/sandbox/landlock.py:

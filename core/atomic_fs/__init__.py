@@ -181,6 +181,7 @@ def write_text_atomically(
     tmp_prefix: str = ".atomic-",
     mode: int | None = None,
     replace: bool = True,
+    root: Path | None = None,
 ) -> None:
     """Write ``content`` (str) to ``path`` atomically.
 
@@ -197,6 +198,7 @@ def write_text_atomically(
         tmp_prefix=tmp_prefix,
         mode=mode,
         replace=replace,
+        root=root,
     )
 
 
@@ -207,11 +209,16 @@ def write_bytes_atomically(
     tmp_prefix: str = ".atomic-",
     mode: int | None = None,
     replace: bool = True,
+    root: Path | None = None,
 ) -> None:
     """Write bytes or an iterable of byte chunks to ``path`` atomically.
 
     Chunks are consumed incrementally. If iteration or writing fails, the
     previous destination remains intact and the temporary file is removed.
+
+    With ``root``, directory creation and publication stay anchored beneath
+    that existing root without following symlinks. Streaming and no-clobber
+    publication retain the same semantics as ordinary atomic writes.
 
     See module docstring for full semantics. Binary variant so
     callers writing JSONL / images / archives don't have to double-
@@ -239,6 +246,9 @@ def write_bytes_atomically(
     """
     _validate_mode(mode)
     path = Path(path)
+    if root is not None:
+        _write_bytes_beneath(path, content, root=Path(root), tmp_prefix=tmp_prefix, mode=mode, replace=replace)
+        return
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
 
@@ -350,6 +360,79 @@ def write_bytes_atomically(
                 "atomic write temporary cleanup failed for %s", tmp, exc_info=True,
             )
         raise
+
+
+def _write_bytes_beneath(path: Path, content: Buffer | Iterable[Buffer], *, root: Path,
+                         tmp_prefix: str, mode: int | None, replace: bool) -> None:
+    """Use a pinned parent for creation, publication, and failure cleanup."""
+    from core.source.beneath import open_dir_beneath
+    relative = path.relative_to(root)
+    if not relative.name or "/" in tmp_prefix or "\x00" in tmp_prefix:
+        raise ValueError("Unsafe anchored atomic destination")
+    parent_fd = open_dir_beneath(root, relative.parent, create=True)
+    temporary = f"{tmp_prefix}{relative.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(8)}.tmp"
+    created = False
+    operation_failed = False
+    try:
+        effective_mode = mode if mode is not None else 0o644
+        if mode is None:
+            try:
+                previous = os.stat(relative.name, dir_fd=parent_fd, follow_symlinks=False)
+                if _stat.S_ISREG(previous.st_mode):
+                    effective_mode = _stat.S_IMODE(previous.st_mode) & 0o777
+            except FileNotFoundError:
+                pass
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
+                     effective_mode, dir_fd=parent_fd)
+        created = True
+        write_failed = False
+        try:
+            try:
+                os.fchmod(fd, effective_mode)
+            except (OSError, AttributeError):
+                pass
+            views = (memoryview(content),) if isinstance(content, Buffer) else (memoryview(chunk) for chunk in content)
+            for view in views:
+                view = view.cast("B")
+                written = 0
+                while written < len(view):
+                    count = os.write(fd, view[written:])
+                    if count <= 0:
+                        raise OSError("Atomic write made no progress")
+                    written += count
+            os.fsync(fd)
+        except BaseException:
+            write_failed = True
+            raise
+        finally:
+            _close_write_fd(fd, write_failed=write_failed)
+        if replace:
+            os.replace(temporary, relative.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            created = False
+        else:
+            os.link(temporary, relative.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+            os.unlink(temporary, dir_fd=parent_fd)
+            created = False
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+    except BaseException:
+        operation_failed = True
+        raise
+    finally:
+        try:
+            if created:
+                try:
+                    os.unlink(temporary, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    if not operation_failed:
+                        raise
+                    logging.getLogger(__name__).warning("anchored atomic temporary cleanup failed", exc_info=True)
+        finally:
+            _close_write_fd(parent_fd, write_failed=operation_failed)
 
 
 def open_exclusive_artifact(
