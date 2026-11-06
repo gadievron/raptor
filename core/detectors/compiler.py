@@ -50,8 +50,8 @@ class CompilerRequest:
 
 @dataclass
 class CompilerAnalysis:
-    request: CompilerRequest
-    sandbox_run: Callable[..., Any]
+    request: CompilerRequest | None
+    sandbox_run: Callable[..., Any] | None
     record: dict[str, Any] | None = None
     result: Any = None
     _resources: ExitStack = field(default_factory=ExitStack, repr=False)
@@ -62,6 +62,7 @@ class CompilerAnalysis:
 
 def _prepare(state: CompilerAnalysis) -> StageResult:
     request = state.request
+    assert request is not None
     state._workdir = state._resources.enter_context(
         scratch_dir(request.scratch_prefix, dir=request.scratch_root),
     )
@@ -70,7 +71,8 @@ def _prepare(state: CompilerAnalysis) -> StageResult:
 
 def _invoke(state: CompilerAnalysis) -> StageResult:
     request = state.request
-    assert state._workdir is not None
+    assert request is not None
+    assert state._workdir is not None and state.sandbox_run is not None
     try:
         proc = state.sandbox_run(
             list(request.command),
@@ -96,6 +98,7 @@ def _invoke(state: CompilerAnalysis) -> StageResult:
 def _parse(state: CompilerAnalysis) -> StageResult:
     assert state._workdir is not None
     request = state.request
+    assert request is not None
     try:
         diags = request.parse(state._workdir, state._stderr)
     except CompilerExecutionError:
@@ -123,8 +126,10 @@ def _parse(state: CompilerAnalysis) -> StageResult:
 
 def _analyze(state: CompilerAnalysis) -> StageResult:
     assert state.record is not None and state._workdir is not None
-    if state.request.analyze is not None:
-        state.result = state.request.analyze(state.record, state._workdir)
+    request = state.request
+    assert request is not None
+    if request.analyze is not None:
+        state.result = request.analyze(state.record, state._workdir)
     return StageResult()
 
 
@@ -150,3 +155,5 @@ def run_compiler_analysis(
             return run_detector(DETECTOR, state)
     finally:
         state._stderr = ""
+        state.request = None
+        state.sandbox_run = None
