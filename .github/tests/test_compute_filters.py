@@ -27,8 +27,23 @@ from unittest import mock
 
 # .github/tests/test_compute_filters.py → parents[2] = repo root
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / ".github" / "scripts"))
-import compute_filters  # noqa: E402
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
+
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(REPO / ".github" / "scripts"))
+    import compute_filters  # noqa: E402
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(REPO / '.github' / 'scripts'))
 
 
 class ReadChangedFilesTests(unittest.TestCase):

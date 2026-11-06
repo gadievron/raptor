@@ -65,34 +65,49 @@ import pytest
 from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_MARKER = "line-model:"
-# Must carry an actual justification — a bare marker is a rubber
-# stamp, not an adjudication record (same rule as the sibling census).
-_MARKER_RE = re.compile(r"#[ \t]*" + re.escape(_MARKER) + r"[ \t]*\S")
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-_GUIDANCE_SPLIT = (
-    'text.split("\\n") keeps a trailing \\r per element on CRLF '
-    "content, so exact-match guards and end-anchored per-line "
-    "matches false-miss. Route through core.source.lines.split_lines "
-    f"or justify inline with '# {_MARKER} <why>' on the call's first "
-    "line:\n"
-)
-_GUIDANCE_MULT = (
-    "re.MULTILINE pattern with a \\r-intolerant $ false-misses on "
-    "CRLF content. Use \\r?$ (or a tolerant preceding token), or "
-    f"justify with '# {_MARKER} <why>' within the call's span:\n"
-)
+    _MARKER = "line-model:"
+    # Must carry an actual justification — a bare marker is a rubber
+    # stamp, not an adjudication record (same rule as the sibling census).
+    _MARKER_RE = re.compile(r"#[ \t]*" + re.escape(_MARKER) + r"[ \t]*\S")
 
-_STREAM_NAMES = frozenset({"stdout", "stderr"})
+    _GUIDANCE_SPLIT = (
+        'text.split("\\n") keeps a trailing \\r per element on CRLF '
+        "content, so exact-match guards and end-anchored per-line "
+        "matches false-miss. Route through core.source.lines.split_lines "
+        f"or justify inline with '# {_MARKER} <why>' on the call's first "
+        "line:\n"
+    )
+    _GUIDANCE_MULT = (
+        "re.MULTILINE pattern with a \\r-intolerant $ false-misses on "
+        "CRLF content. Use \\r?$ (or a tolerant preceding token), or "
+        f"justify with '# {_MARKER} <why>' within the call's span:\n"
+    )
+
+    _STREAM_NAMES = frozenset({"stdout", "stderr"})
 
 
-# ---------------------------------------------------------------------------
-# Arm S — .split("\n")
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Arm S — .split("\n")
+    # ---------------------------------------------------------------------------
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _is_stream_receiver(expr: ast.AST) -> bool:

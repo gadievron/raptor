@@ -17,19 +17,34 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src.clients import git as git_mod
-from src.clients.git import (
-    GitClient,
-    _validate_ref,
-    _validate_revision,
-    _validate_sha,
-)
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
-# =============================================================================
-# VALUE-SHAPE VALIDATION (pure unit)
-# =============================================================================
+    from src.clients import git as git_mod
+    from src.clients.git import (
+        GitClient,
+        _validate_ref,
+        _validate_revision,
+        _validate_sha,
+    )
+
+    # =============================================================================
+    # VALUE-SHAPE VALIDATION (pure unit)
+    # =============================================================================
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class TestShaValidation:

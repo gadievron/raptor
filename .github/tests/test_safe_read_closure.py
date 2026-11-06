@@ -44,40 +44,55 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_MARKER = "raw-open:"
-# The marker must carry an actual justification — a bare
-# "# raw-open:" is a rubber stamp, not an adjudication record.
-_MARKER_RE = re.compile(re.escape(_MARKER) + r"[ \t]*\S")
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-#: The ratchet: directories whose runtime source is under closure.
-#: Grows one line per fix series as adoption/marker sweeps land —
-#: never shrink it.
-_COVERED_PREFIXES = (
-    "core/audit/",
-    "packages/source_intel/",
-)
+    _MARKER = "raw-open:"
+    # The marker must carry an actual justification — a bare
+    # "# raw-open:" is a rubber stamp, not an adjudication record.
+    _MARKER_RE = re.compile(re.escape(_MARKER) + r"[ \t]*\S")
 
-#: The chokepoint family's own homes — the only files allowed to
-#: carry the raw open/fstat idiom without a per-site marker. Fixed
-#: here by design (shrinks as hardened local copies collapse onto
-#: core.source; never grows without a series landing the new home).
-_HELPER_HOMES = frozenset({
-    "core/source/beneath.py",
-    "core/source/contained.py",
-    "core/source/gated.py",
-    "core/json/utils.py",
-    "core/json/bounded.py",
-    "core/security/capped_read.py",
-    "core/sandbox/_pathpin.py",
-    "packages/sca/parsers/_safe_read.py",
-    "packages/sca/resolvers/_safe_io.py",
-})
+    #: The ratchet: directories whose runtime source is under closure.
+    #: Grows one line per fix series as adoption/marker sweeps land —
+    #: never shrink it.
+    _COVERED_PREFIXES = (
+        "core/audit/",
+        "packages/source_intel/",
+    )
 
-_READ_ATTRS = ("read_text", "read_bytes")
+    #: The chokepoint family's own homes — the only files allowed to
+    #: carry the raw open/fstat idiom without a per-site marker. Fixed
+    #: here by design (shrinks as hardened local copies collapse onto
+    #: core.source; never grows without a series landing the new home).
+    _HELPER_HOMES = frozenset({
+        "core/source/beneath.py",
+        "core/source/contained.py",
+        "core/source/gated.py",
+        "core/json/utils.py",
+        "core/json/bounded.py",
+        "core/security/capped_read.py",
+        "core/sandbox/_pathpin.py",
+        "packages/sca/parsers/_safe_read.py",
+        "packages/sca/resolvers/_safe_io.py",
+    })
+
+    _READ_ATTRS = ("read_text", "read_bytes")
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _mode_is_read(node: ast.Call, *, builtin: bool) -> bool:

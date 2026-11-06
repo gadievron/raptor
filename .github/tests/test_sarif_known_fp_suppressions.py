@@ -17,8 +17,23 @@ from pathlib import Path
 
 # .github/tests/test_sarif_known_fp_suppressions.py → parents[2] = repo root
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / ".github" / "scripts"))
-import sarif_known_fp_suppressions as mod  # noqa: E402
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
+
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(REPO / ".github" / "scripts"))
+    import sarif_known_fp_suppressions as mod  # noqa: E402
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(REPO / '.github' / 'scripts'))
 
 
 def _make_result(rule_id: str, uri: str | None) -> dict:

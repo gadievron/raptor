@@ -247,65 +247,80 @@ try:  # Python 3.11+
 except ImportError:  # pragma: no cover - older interpreters
     import sre_parse  # type: ignore[no-redef]
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-# The census sre-parses every EXTRACTED candidate string, including
-# literal alias spellings that runtime code re.escape()s before
-# compiling (e.g. the C++ attribute forms ``[[nodiscard]]``). Parsing
-# those raw trips Python 3.14's nested-set forward-compat
-# FutureWarning; the census only inspects parse structure, so the
-# warning is noise here (and would break the sweep under a -W error
-# policy) while the runtime compile sites stay warning-clean.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:Possible nested set:FutureWarning")
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-_REPO = repo_root()
+    # The census sre-parses every EXTRACTED candidate string, including
+    # literal alias spellings that runtime code re.escape()s before
+    # compiling (e.g. the C++ attribute forms ``[[nodiscard]]``). Parsing
+    # those raw trips Python 3.14's nested-set forward-compat
+    # FutureWarning; the census only inspects parse structure, so the
+    # warning is noise here (and would break the sweep under a -W error
+    # policy) while the runtime compile sites stay warning-clean.
+    pytestmark = pytest.mark.filterwarnings(
+        "ignore:Possible nested set:FutureWarning")
 
-# (posix-relative path, pattern variable/first-40-chars key) -> justification.
-# Empty on purpose: every historic member was fixed, not allowlisted.
-_ALLOWLIST: dict[tuple[str, str], str] = {}
+    _REPO = repo_root()
 
-_RE_FUNCS = {
-    "compile", "search", "match", "fullmatch", "findall",
-    "finditer", "split", "sub", "subn",
-}
+    # (posix-relative path, pattern variable/first-40-chars key) -> justification.
+    # Empty on purpose: every historic member was fixed, not allowlisted.
+    _ALLOWLIST: dict[tuple[str, str], str] = {}
 
-# Raw-text gate applied before the AST pass: EVERY census arm needs a
-# ``re`` binding in the file, which the parser can only produce from
-# ``import re [as name]`` or ``from re import ...`` — a file whose
-# NFKC-normalized text spells neither cannot produce a member, so the
-# census skips its parse+walk.  (NFKC because Python normalizes
-# identifiers at parse time, so a fullwidth spelling is the same
-# binding to the AST and must be to the gate.)  This gate replaced
-# the earlier MULTILINE-token gate when the trailing-span arms joined
-# the census: those arms census EVERY pattern, not only MULTILINE
-# ones, so the necessary condition is the import itself — and the
-# broader gate also closes the two resolver blind spots the previous
-# gate design carried (a ``from re import compile, MULTILINE`` file
-# spells no ``re.``-attribute token; a numeric-literal flags operand
-# — ``re.compile(p, 8)`` — spells no flag token at all).  Declared
-# blind spot, same doctrine as ``_const_str_parts``'s
-# spell-anchors-literally rule: an ``importlib``/``getattr``-smuggled
-# ``re`` binding is invisible — bind ``re`` with a plain import.
-# ``test_scan_catches_every_multiline_spelling`` plants every
-# supported spelling through ``_scan_file`` so a gate regression
-# fails the census's own tests, not the closure.
-_RE_BINDING_GATE = re.compile(
-    r"\bimport\s+re\b"        # import re [as name]
-    r"|\bfrom\s+re\s+import\b",  # from re import compile, M, ...
-)
+    _RE_FUNCS = {
+        "compile", "search", "match", "fullmatch", "findall",
+        "finditer", "split", "sub", "subn",
+    }
 
-# Flag names a ``from re import ...`` statement can bind bare, and
-# the bit each contributes when it appears in a flags operand.
-_FLAG_NAME_BITS: dict[str, int] = {
-    "MULTILINE": re.MULTILINE, "M": re.MULTILINE,
-    "DOTALL": re.DOTALL, "S": re.DOTALL,
-    "IGNORECASE": re.IGNORECASE, "I": re.IGNORECASE,
-    "VERBOSE": re.VERBOSE, "X": re.VERBOSE,
-    "ASCII": re.ASCII, "A": re.ASCII,
-}
+    # Raw-text gate applied before the AST pass: EVERY census arm needs a
+    # ``re`` binding in the file, which the parser can only produce from
+    # ``import re [as name]`` or ``from re import ...`` — a file whose
+    # NFKC-normalized text spells neither cannot produce a member, so the
+    # census skips its parse+walk.  (NFKC because Python normalizes
+    # identifiers at parse time, so a fullwidth spelling is the same
+    # binding to the AST and must be to the gate.)  This gate replaced
+    # the earlier MULTILINE-token gate when the trailing-span arms joined
+    # the census: those arms census EVERY pattern, not only MULTILINE
+    # ones, so the necessary condition is the import itself — and the
+    # broader gate also closes the two resolver blind spots the previous
+    # gate design carried (a ``from re import compile, MULTILINE`` file
+    # spells no ``re.``-attribute token; a numeric-literal flags operand
+    # — ``re.compile(p, 8)`` — spells no flag token at all).  Declared
+    # blind spot, same doctrine as ``_const_str_parts``'s
+    # spell-anchors-literally rule: an ``importlib``/``getattr``-smuggled
+    # ``re`` binding is invisible — bind ``re`` with a plain import.
+    # ``test_scan_catches_every_multiline_spelling`` plants every
+    # supported spelling through ``_scan_file`` so a gate regression
+    # fails the census's own tests, not the closure.
+    _RE_BINDING_GATE = re.compile(
+        r"\bimport\s+re\b"        # import re [as name]
+        r"|\bfrom\s+re\s+import\b",  # from re import compile, M, ...
+    )
+
+    # Flag names a ``from re import ...`` statement can bind bare, and
+    # the bit each contributes when it appears in a flags operand.
+    _FLAG_NAME_BITS: dict[str, int] = {
+        "MULTILINE": re.MULTILINE, "M": re.MULTILINE,
+        "DOTALL": re.DOTALL, "S": re.DOTALL,
+        "IGNORECASE": re.IGNORECASE, "I": re.IGNORECASE,
+        "VERBOSE": re.VERBOSE, "X": re.VERBOSE,
+        "ASCII": re.ASCII, "A": re.ASCII,
+    }
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _iter_python_files() -> list[Path]:
