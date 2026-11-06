@@ -57,6 +57,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.security.capped_read import CappedReadRefused, path_may_exist, read_capped
 
 from .evidence import _unique_evidence_object
@@ -191,7 +192,7 @@ def _warn_darwin_connect_gap(run_dir, unparsed: int) -> None:
         "derivation for this run are missing ALL macOS egress "
         "evidence; extend _parse_macos_connect_destination in "
         "core/sandbox/observe_profile.py to cover the new shape.",
-        unparsed, run_dir,
+        unparsed, sanitise_for_terminal(str(run_dir)),
     )
 
 
@@ -490,12 +491,12 @@ def _iter_records(path: Path, *, profile: ObserveProfile | None = None) -> Itera
             logger.warning(
                 "observe log %s is not a regular file "
                 "(mode=%o) — planted object? Refusing to parse.",
-                path, exc.st_mode)
+                sanitise_for_terminal(str(path)), exc.st_mode)
         else:
             logger.warning(
                 "observe log %s exceeds the %d byte cap — "
                 "refusing to parse oversized or growing artifact.",
-                path, _MAX_OBSERVE_BYTES)
+                sanitise_for_terminal(str(path)), _MAX_OBSERVE_BYTES)
         return
     except OSError:
         if profile is not None:
@@ -615,10 +616,11 @@ def parse_observe_log(run_dir, *,
             logger.warning(
                 "parse_observe_log: refusing nonce-based trust for %s "
                 "— run lacks a recorded isolated backend and the "
-                "nonce delivery channel (%r) is not recorded as "
+                "nonce delivery channel (%s) is not recorded as "
                 "protected. Records are parsed but the profile is "
                 "marked unauthenticated (nonce_trusted=False).",
-                run_dir, _delivery,
+                sanitise_for_terminal(str(run_dir)),
+                sanitise_for_terminal(repr(_delivery)),
             )
             profile.nonce_trusted = False
     if current_run and expected_nonce is None:
@@ -633,7 +635,7 @@ def parse_observe_log(run_dir, *,
             ".audit location (legacy run-root fallback refused: it is "
             "target-writable) and marking the profile unauthenticated "
             "(nonce_trusted=False).",
-            run_dir,
+            sanitise_for_terminal(str(run_dir)),
         )
         profile.nonce_trusted = False
         log_path = _evidence_write_path(run_dir, filename)
@@ -839,7 +841,7 @@ def parse_observe_log(run_dir, *,
         logger.warning(
             "parse_observe_log: %d tamper-suspect (parse_ambiguous) "
             "record(s) in %s excluded from profile derivation",
-            ambiguous_skipped, run_dir,
+            ambiguous_skipped, sanitise_for_terminal(str(run_dir)),
         )
 
     return profile
