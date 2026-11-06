@@ -231,6 +231,9 @@ class TestBatchMatrixDurationAware:
         json.dumps({"a.py": -3.0}),       # negative value
         json.dumps({"a.py": True}),       # bool masquerading as number
         '{"a.py": NaN}',                  # non-finite value
+        pytest.param(json.dumps({"a.py": 10 ** 400}), id="oversized-integer"),
+        pytest.param(json.dumps({"a.py": -(10 ** 400)}), id="oversized-negative-integer"),
+        pytest.param(json.dumps({"a.py": 1e308, "b.py": 1e308}), id="overflowing-total"),
     ])
     def test_bad_map_falls_back_to_count_based(
             self, monkeypatch, tmp_path, payload):

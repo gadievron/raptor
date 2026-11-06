@@ -620,8 +620,9 @@ def _load_duration_map() -> dict[str, float] | None:
             not isinstance(key, str)
             or isinstance(val, bool)
             or not isinstance(val, (int, float))
-            or not math.isfinite(val)
             or val < 0
+            or val > sys.float_info.max
+            or not math.isfinite(val)
         ):
             print(
                 f"::warning::{DURATIONS_ENV}={env_val} has a malformed "
@@ -630,6 +631,10 @@ def _load_duration_map() -> dict[str, float] | None:
             )
             return None
         out[key] = float(val)
+    if not math.isfinite(sum(out.values())):
+        print(f"::warning::{DURATIONS_ENV}={env_val} has an overflowing total "
+              "— falling back to count-based round-robin batching")
+        return None
     return out
 
 
