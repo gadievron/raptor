@@ -49,9 +49,10 @@ def local_uri_path(uri: Any) -> str:
     return path
 
 
-def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None
+def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None,
+                    *, resolve_uri: Callable[[dict[str, Any]], str | None] | None = None
                     ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Copy a small SARIF codeFlows subset, validating every retained event."""
+    """Copy bounded codeFlows; a bad event reference still omits its whole path."""
     if not raw:
         return [], []
     if not isinstance(raw, list):
@@ -80,7 +81,8 @@ def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None
                 for event in events:
                     location = event["location"]
                     physical = location["physicalLocation"]
-                    uri = physical["artifactLocation"]["uri"]
+                    artifact = physical["artifactLocation"]
+                    uri = resolve_uri(artifact) if resolve_uri is not None else artifact["uri"]
                     region = physical["region"]
                     line = region["startLine"]
                     message = location.get("message", {}).get("text", "")

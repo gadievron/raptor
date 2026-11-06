@@ -1760,6 +1760,15 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             raise CompilerDiagnosticError("GCC SARIF run requires a result array")
         rule_resolver: ResultRuleResolver | None = None
         uri_resolver: ArtifactUriResolver | None = None
+
+        def resolve_uri(artifact: dict[str, Any]) -> str | None:
+            nonlocal uri_resolver
+            if "index" in artifact or "uriBaseId" in artifact:
+                if uri_resolver is None:
+                    uri_resolver = ArtifactUriResolver(run)
+                return uri_resolver.resolve(artifact)
+            return artifact.get("uri")
+
         for result in run["results"]:
             if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
@@ -1767,11 +1776,7 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             phys = (locs[0] or {}).get("physicalLocation", {}) if locs else {}
             region = phys.get("region", {})
             artifact = phys.get("artifactLocation", {})
-            uri = artifact.get("uri", "") or ""
-            if "index" in artifact or "uriBaseId" in artifact:
-                if uri_resolver is None:
-                    uri_resolver = ArtifactUriResolver(run)
-                uri = uri_resolver.resolve(artifact) or ""
+            uri = resolve_uri(artifact) or ""
             try:
                 filename = local_uri_path(uri) if uri else ""
             except ValueError as exc:
@@ -1795,7 +1800,7 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
             reported = compiler_reported_cwe(result, run)
             if reported:
                 diags[-1]["cwe"] = reported
-            paths, notes = normalize_paths(result.get("codeFlows"))
+            paths, notes = normalize_paths(result.get("codeFlows"), resolve_uri=resolve_uri)
             path_budget.retain(diags[-1], paths, notes)
     return diags
 
