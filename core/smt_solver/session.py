@@ -7,6 +7,8 @@ per-call via ``new_solver(timeout_ms=...)``.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
+from time import monotonic
 from typing import Any, TYPE_CHECKING
 
 from .availability import z3
@@ -23,13 +25,70 @@ DEFAULT_TIMEOUT_MS = 5000
 _MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 
+_QUERY_DEADLINE: ContextVar[float | None] = ContextVar("smt_query_deadline", default=None)
+
+
+@contextmanager
+def query_budget(timeout_ms: int) -> Iterator[None]:
+    """Share a soft query budget across path/verb checks and their subqueries.
+
+    Time spent parsing or between queries also consumes the budget. Nested
+    scopes cannot extend an outer deadline. This is not a process wall-time
+    limit: native solver timeouts are cooperative. Use check_solver with
+    factory-created solvers; direct native check() calls are outside it.
+    """
+    if type(timeout_ms) is not int or timeout_ms < 0:
+        raise ValueError("query budget must be a nonnegative integer in milliseconds")
+    deadline = monotonic() + min(timeout_ms, _MAX_TIMEOUT_MS) / 1000
+    outer = _QUERY_DEADLINE.get()
+    token = _QUERY_DEADLINE.set(min(deadline, outer) if outer is not None else deadline)
+    try:
+        yield
+    finally:
+        _QUERY_DEADLINE.reset(token)
+
+
+def check_solver(solver: Any) -> Any:
+    """Check once, capping the native query by its shared remaining budget.
+
+    Expiry returns unknown without consulting stale native query state.
+    Preserve the factory's per-query cap and restore it after the query.
+    Native models/cores survive timeout-parameter changes. A restoration
+    failure propagates instead of presenting a cleanly completed query.
+    """
+    deadline = _QUERY_DEADLINE.get()
+    if deadline is None:
+        if getattr(solver, "_raptor_budget_exhausted", False) is True:
+            solver._raptor_budget_exhausted = False
+        return solver.check()
+    timeout = getattr(solver, "_raptor_timeout_ms", None)
+    if type(timeout) is not int or timeout <= 0:
+        raise ValueError("budgeted checks require a core SMT factory solver")
+    remaining = int((deadline - monotonic()) * 1000)
+    solver._raptor_budget_exhausted = remaining <= 0
+    if remaining <= 0:
+        return z3.unknown
+    solver.set("timeout", min(timeout, remaining))
+    try:
+        return solver.check()
+    finally:
+        solver.set("timeout", timeout)
+
+
+def solver_reason_unknown(solver: Any) -> str:
+    """Reason for the last managed check, including skipped expired queries."""
+    if getattr(solver, "_raptor_budget_exhausted", False) is True:
+        return "shared query budget exhausted (timeout)"
+    return solver.reason_unknown()
+
+
 def _timeout_value(timeout_ms):
     if type(timeout_ms) is not int:
         raise ValueError("timeout_ms must be an integer")
     return min(_MAX_TIMEOUT_MS, max(1, timeout_ms))
 
 
-def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
+def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS, *, ctx: Any = None) -> Any:
     """Return a fresh ``z3.Solver()`` with the given timeout applied.
 
     Caller-supplied ``timeout_ms`` must be an integer and is clamped to
@@ -51,12 +110,15 @@ def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     becomes a usable per-call timeout.
     """
     timeout_ms = _timeout_value(timeout_ms)
-    s = z3.Solver()
+    if ctx is not None and (z3 is None or not isinstance(ctx, z3.Context)):
+        raise ValueError("ctx must be a Z3 context or None")
+    s = z3.Solver() if ctx is None else z3.Solver(ctx=ctx)
     s.set("timeout", timeout_ms)
+    s._raptor_timeout_ms = timeout_ms
     return s
 
 
-def new_optimizer(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
+def new_optimizer(timeout_ms: int = DEFAULT_TIMEOUT_MS, *, ctx: Any = None) -> Any:
     """Return a fresh ``z3.Optimize()`` with the given timeout applied.
 
     Same clamping behaviour as :func:`new_solver`.  Use when the caller
@@ -74,8 +136,11 @@ def new_optimizer(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     we ship.
     """
     timeout_ms = _timeout_value(timeout_ms)
-    o = z3.Optimize()
+    if ctx is not None and (z3 is None or not isinstance(ctx, z3.Context)):
+        raise ValueError("ctx must be a Z3 context or None")
+    o = z3.Optimize() if ctx is None else z3.Optimize(ctx=ctx)
     o.set("timeout", timeout_ms)
+    o._raptor_timeout_ms = timeout_ms
     return o
 
 

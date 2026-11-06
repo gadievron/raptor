@@ -10,7 +10,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -421,9 +420,9 @@ class TestParseConditions:
         assert c[0].text == "size == 0"
         assert not c[1].negated
 
-    def test_negation_with_no_text_skipped(self):
-        c = _parse_conditions("!\n!  \n")
-        assert c == []
+    def test_negation_with_no_text_is_rejected(self):
+        with pytest.raises(ValueError, match="negation requires a condition"):
+            _parse_conditions("!\n!  \n")
 
     def test_step_indices_preserved(self):
         c = _parse_conditions("size > 0\nlen < 1024\n")
@@ -797,10 +796,11 @@ class TestSMTAdapterDualSignedness:
         import packages.hypothesis_validation.adapters.smt as smt_mod
         calls: list[str] = []
 
-        def _fake(conditions, profile=None):
+        def _fake(conditions, profile=None, *, use_call_summaries):
+            assert use_call_summaries is False
             calls.append("dual")
-            return SimpleNamespace(
-                feasible=True, model={}, unknown=[], reasoning="sat")
+            from core.smt_solver.path_feasibility import PathSMTResult
+            return PathSMTResult(True, [], [], [], {}, True, "sat")
 
         monkeypatch.setattr(smt_mod, "check_path_feasibility_dual", _fake)
         monkeypatch.setattr(
@@ -814,10 +814,11 @@ class TestSMTAdapterDualSignedness:
         import packages.hypothesis_validation.adapters.smt as smt_mod
         calls: list[str] = []
 
-        def _fake(conditions, profile=None):
+        def _fake(conditions, profile=None, *, use_call_summaries):
+            assert use_call_summaries is False
             calls.append("single")
-            return SimpleNamespace(
-                feasible=True, model={}, unknown=[], reasoning="sat")
+            from core.smt_solver.path_feasibility import PathSMTResult
+            return PathSMTResult(True, [], [], [], {}, True, "sat")
 
         monkeypatch.setattr(smt_mod, "check_path_feasibility", _fake)
         monkeypatch.setattr(

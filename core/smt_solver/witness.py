@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .availability import z3
-from ._validation import require_bool, require_width
+from ._validation import require_bool, require_bv, require_width
 
 
 def bv_to_int(raw: int, width: int, signed: bool) -> int:
@@ -108,6 +108,8 @@ def format_witness(
     expression registry, not infer identity from a generated alias.
     """
     signed = _signedness_context(signed)
+    if z3 is None or not isinstance(model, z3.ModelRef):
+        raise ValueError("model must be a Z3 model")
     declarations = model.decls()
     entries = [(decl, model[decl]) for decl in declarations]
     entries = [(decl, value) for decl, value in entries if z3.is_bv_value(value)]
@@ -133,53 +135,44 @@ def format_witness(
 
 def format_vars(
     model: Any,
-    vars_: dict[str, Any],
+    vars_: Mapping[str, Any],
     signed: bool | Mapping[str, bool],
     *,
     completion: bool = False,
 ) -> dict[str, int]:
-    """Render the caller's named variables from a Z3 model.
+    """Render named bitvector expressions from a model without mutating it.
 
-    Unlike ``format_witness``, this walks the caller's variable registry
-    rather than the model's top-level decls — useful when free variables
-    need ``model_completion=True`` to yield a concrete value.
+    Registry keys are output identities and signedness-map keys. Expressions
+    may be variables, constants, or derived terms in the model's context.
+    Unmapped signedness keys retain unsigned rendering.
 
-    `signed` accepts either a global `bool` (legacy) or a
-    `Mapping[str, bool]` per-decl signedness map. Per-decl is
-    preferred — see `_resolve_signedness`.
-
-    `completion` semantics (default False):
-      * False — `model[var]` returns None for variables Z3 didn't
-        constrain. The function silently skips them. Pre-fix
-        operators reading the resulting witness saw ONLY the
-        constrained vars but had no signal that OTHER vars
-        existed as unconstrained. A `pop_rdi_ret` solver model
-        with 8 free vars and 1 constrained showed only the 1
-        constrained — operators concluded the witness was
-        complete and tried to apply it, missing the 7 free
-        slots.
-      * True — Z3 fills any unconstrained variable with an
-        arbitrary concrete value (model completion). The
-        returned dict is then complete but the values for
-        unconstrained vars are arbitrary (a single satisfying
-        assignment, not "any").
-
-    The default stays False for back-compat. A debug-level log
-    line on each silent skip lets operators investigate
-    suspicious witness gaps without changing the public API.
+    With completion=False, omit expressions that do not evaluate to concrete
+    values. With completion=True, evaluate using a private model copy so
+    arbitrary completion values cannot contaminate the caller's model.
+    Validate the complete registry before any evaluation or completion.
     """
     signed = _signedness_context(signed)
     require_bool(completion, argument="completion")
+    if z3 is None or not isinstance(model, z3.ModelRef):
+        raise ValueError("model must be a Z3 model")
+    if not isinstance(vars_, Mapping):
+        raise ValueError("variable registry must be a mapping")
+    registry = tuple(vars_.items())
+    for name, expression in registry:
+        if not isinstance(name, str):
+            raise ValueError("variable registry names must be strings")
+        require_bv(expression, argument=f"expression for {name!r}")
+        if expression.ctx != model.ctx:
+            raise ValueError("variable expressions must share the model's Z3 context")
+    evaluation_model = model.translate(model.ctx) if completion else model
     out: dict[str, int] = {}
-    for name, var in vars_.items():
-        val = model.eval(var, model_completion=True) if completion else model[var]
+    for name, var in registry:
+        val = evaluation_model.eval(var, model_completion=completion)
         if val is None or not z3.is_bv_value(val):
             # Pre-fix this skip was silent. Log so operators
             # tailing debug see WHICH vars went unconstrained.
-            # `model[var] is None` (the unconstrained case) and
-            # "not a bv_value" (the corrupt-state case) are both
-            # surfaced via the same debug line — both indicate
-            # the witness will be incomplete.
+            # An unevaluated expression has no concrete bitvector value;
+            # do not replace it with an arbitrary completion silently.
             try:
                 from core.logging import get_logger
                 get_logger(__name__).debug(

@@ -32,9 +32,15 @@ The adapter feeds those into Z3 and reports satisfiability:
     unknown   — Z3 unavailable, all constraints unparseable, or solver
                 timed out. The runner converts to inconclusive.
 
+Call heads do not establish callee contracts. Opaque-call SAT assignments
+are conditional models, not verified call executions; call-dependent UNSAT
+cores likewise cannot supply conclusive path evidence. Independent scalar
+contradictions remain usable. Name-based call summaries are disabled.
+
 Different from the other adapters: there is no source code being scanned.
-The "matches" are Z3 model values (concrete input bytes that trigger the
-path). The `target` argument is informational only.
+The "matches" are values satisfying the supplied mathematical predicates;
+they do not establish source execution. The `target` argument is
+informational only.
 
 """
 
@@ -46,6 +52,8 @@ from core.smt_solver.path_feasibility import (
     check_path_feasibility,
     check_path_feasibility_dual,
 )
+
+from core.smt_solver.session import query_budget
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence
 
@@ -108,7 +116,7 @@ class SMTAdapter(ToolAdapter):
                 "Source-code scanning — SMT does not look at code",
                 "String/regex patterns",
                 "Pointer chasing or memory aliasing",
-                "Anything not expressible in linear bit-vector arithmetic",
+                "Unsupported predicate syntax or unmodeled source-language semantics",
             ],
             syntax_example=_SYNTAX_EXAMPLE,
             languages=[],  # language-agnostic
@@ -126,16 +134,25 @@ class SMTAdapter(ToolAdapter):
 
         The `target` and `env` arguments are accepted for protocol
         uniformity but ignored — SMT operates on the constraint text only.
-        `timeout` is also ignored at present (Z3 has its own internal
-        timeout via DEFAULT_TIMEOUT_MS in core.smt_solver).
+        `timeout` is a nonnegative integer in seconds. It shares a soft
+        query budget across both profiles and optional solver subqueries,
+        while retaining each factory solver's smaller per-query cap. It
+        is not a process wall-time limit.
         """
+        if type(timeout) is not int or timeout < 0:
+            return ToolEvidence(tool=self.name, rule=rule, success=False,
+                                error="timeout must be a nonnegative integer in seconds")
         if not self.is_available():
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
                 error="z3-solver is not installed",
             )
 
-        conditions = _parse_conditions(rule)
+        try:
+            conditions = _parse_conditions(rule)
+        except (ValueError, TypeError) as exc:
+            return ToolEvidence(tool=self.name, rule=rule, success=False,
+                                error=f"invalid SMT condition syntax: {exc}")
         if not conditions:
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
@@ -158,13 +175,30 @@ class SMTAdapter(ToolAdapter):
                 check_path_feasibility if self._bv_profile is not None
                 else check_path_feasibility_dual
             )
-            result: PathSMTResult = check(
-                conditions, profile=profile,
-            )
+            with query_budget(timeout * 1000):
+                result: PathSMTResult = check(
+                    conditions, profile=profile, use_call_summaries=False,
+                )
         except Exception as e:  # noqa: BLE001 — solver failure becomes tool-evidence error, never a crash
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
                 error=f"SMT solver error: {e}",
+            )
+
+        if result.feasible is True and result.anon_var_map:
+            return ToolEvidence(
+                tool=self.name, rule=rule, success=False,
+                error="unbound call results: a conditional model is not a verified call execution",
+            )
+
+        # A profile does not bind a callee's identity or return type. A
+        # conditional contradiction involving opaque call terms must not
+        # become conclusive evidence about the hypothesized path.
+        if (result.feasible is False and result.anon_var_map
+                and result.refutation_uses_call_terms is not False):
+            return ToolEvidence(
+                tool=self.name, rule=rule, success=False,
+                error="unbound call return types: encoded contradiction is conditional",
             )
 
         if result.feasible is None:
@@ -281,7 +315,7 @@ def _parse_conditions(rule: str) -> list[PathCondition]:
             negated = True
             line = line[1:].strip()
             if not line:
-                continue
+                raise ValueError("negation requires a condition")
         conditions.append(PathCondition(
             text=line, step_index=idx, negated=negated,
         ))

@@ -83,6 +83,11 @@ def evaluate_integer_operation(operation, operands, op, values, integer_abi):
 def validate_overflow_result(result, operation, operands, op, integer_abi):
     """A SAT verdict must exhibit an actual out-of-range mathematical result."""
     checked = dict(result)
+    # Proof metadata must describe this validation, never an earlier SAT
+    # attempt whose dictionary was reused for a negative/refused verdict.
+    checked.pop("mathematical_result", None)
+    checked.pop("result_range", None)
+    checked["witness_validated"] = False
 
     def decline(reason):
         checked.update(feasible=None, model={}, reasoning=reason, witness_validated=False)
@@ -93,6 +98,7 @@ def validate_overflow_result(result, operation, operands, op, integer_abi):
     if type(result.get("feasible")) is not bool:
         return decline("overflow obligation has no definitive solver verdict")
     if result["feasible"] is False:
+        checked["model"] = {}
         return checked  # UNSAT is not a counterexample and carries no model authority.
     if len(operands) != 2 or op not in _ARITHMETIC:
         return decline("unsupported source overflow witness expression")

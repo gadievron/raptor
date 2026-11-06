@@ -9,6 +9,7 @@ from core.logging import get_logger
 
 from .availability import z3
 from .explain import track
+from .session import check_solver
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class TrackedFrames:
         object.__setattr__(self, "_core", None)
         if not self._matches(self._solver):
             raise ValueError("tracked frame assertions changed before check")
-        result = self._solver.check()
+        result = check_solver(self._solver)
         if result == z3.unsat and self._matches(self._solver):
             try:
                 # Native AST identity includes context. Printed marker names

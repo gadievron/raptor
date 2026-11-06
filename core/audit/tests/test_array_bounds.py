@@ -182,3 +182,37 @@ def test_source_integer_terms_respect_the_reserved_literal_spelling(name, outcom
 def test_preceding_undefined_arithmetic_is_not_hidden_by_a_nonreaching_guard():
     text = source("if(Flag != 2147483647) return 0; if(Flag + 1 > 0) {} return Data[Index];")
     assert bounds.check_array_bounds(text, "Data[Index]", language="c", integer_abi="ilp32")["violation"] is None
+
+
+def test_zero_query_budget_cannot_become_a_bounds_verdict(monkeypatch):
+    pytest.importorskip('z3')
+    monkeypatch.setattr(bounds, 'DEFAULT_TIMEOUT_MS', 0)
+    result = bounds.check_array_bounds(source(), 'Data[Index] out-of-bounds read',
+                                       language='c', integer_abi='ilp32')
+    assert result['array_bounds_status'] == 'checked'
+    assert result['violation'] is None and 'model' not in result
+    assert 'not completely solved' in result['reason']
+
+
+def test_entry_and_access_probes_share_one_query_budget(monkeypatch):
+    pytest.importorskip('z3')
+    from core.smt_solver import session
+    from core.smt_solver import path_feasibility
+    now, checks = [10.0], []
+    monkeypatch.setattr(session, 'monotonic', lambda: now[0])
+    native_factory = path_feasibility._new_solver
+    def solver_factory(*args, **kwargs):
+        solver = native_factory(*args, **kwargs)
+        native_check = solver.check
+        def check():
+            result = native_check()
+            checks.append(1)
+            now[0] += 6
+            return result
+        monkeypatch.setattr(solver, 'check', check)
+        return solver
+    monkeypatch.setattr(path_feasibility, '_new_solver', solver_factory)
+    text = source('if(Index >= 0 && Index < 4) return Data[Index]; return 0;')
+    result = bounds.check_array_bounds(text, 'Data[Index] out-of-bounds read', language='c', integer_abi='ilp32')
+    assert result['violation'] is None and 'model' not in result
+    assert len(checks) == 1
