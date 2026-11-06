@@ -471,6 +471,19 @@ class ParserJail:
             raise _ProtocolError("ready frame is not valid JSON") from exc
         if not isinstance(obj, dict):
             raise _ProtocolError("ready frame is not a JSON object")
+        if type(obj.get("ready")) is not bool:
+            raise _ProtocolError("ready frame lacks a boolean ready status")
+        if obj["ready"]:
+            if type(obj.get("landlock")) is not bool:
+                raise _ProtocolError("ready frame lacks a boolean landlock status")
+            if "rlimits_failed" in obj:
+                failures = obj["rlimits_failed"]
+                if not isinstance(failures, list) or any(
+                    not isinstance(item, str) for item in failures
+                ):
+                    raise _ProtocolError("ready frame has invalid rlimit failures")
+        elif obj.get("error") is not None and not isinstance(obj["error"], str):
+            raise _ProtocolError("ready frame has an invalid refusal reason")
         return obj
 
     @staticmethod

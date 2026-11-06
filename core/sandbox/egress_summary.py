@@ -103,9 +103,9 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
     if not events:
         return None
 
-    by_host: dict[tuple[str, int | None], dict[str, Any]] = {}
+    by_host: dict[tuple[str | None, int | None], dict[str, Any]] = {}
     # Keep display order in reasons while avoiding repeated linear scans.
-    reasons_seen: dict[tuple[str, int | None], set[str]] = {}
+    reasons_seen: dict[tuple[str | None, int | None], set[str]] = {}
     total_allowed = 0
     total_denied = 0
     total_failed = 0
@@ -114,9 +114,11 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
 
     for ev in events:
         result = ev.get("result")
-        host = ev.get("host") or "<unknown>"
+        # Establish identity before formatting an absent host for display.
+        raw_host = ev.get("host") or None
+        host = raw_host if raw_host is not None else "<unknown>"
         port = ev.get("port")
-        key = (host, port)
+        key = (raw_host, port)
 
         if key not in by_host:
             reasons_seen[key] = set()
@@ -159,8 +161,7 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
         total_bytes_in += b_in
         total_bytes_out += b_out
 
-    unique_hosts = {e["host"] for e in by_host.values()
-                    if e["host"] != "<unknown>"}
+    unique_hosts = {host for host, _port in by_host if host is not None}
 
     total = total_allowed + total_denied + total_failed
     return {

@@ -378,7 +378,14 @@ def _decode_log_entry(line: str) -> dict | None:
     except (ValueError, RecursionError):
         # ValueError includes JSONDecodeError and oversized integers.
         return None
-    return entry if isinstance(entry, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    # Present fields consumed for attribution and parsing must be text.
+    # Missing fields and unrecognised string messages remain ordinary noise.
+    for field in ("senderImagePath", "eventMessage"):
+        if field in entry and not isinstance(entry[field], str):
+            return None
+    return entry
 
 
 def parse_log_entry(entry: dict, *,
