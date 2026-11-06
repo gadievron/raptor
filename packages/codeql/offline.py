@@ -13,7 +13,6 @@ import shlex
 import stat
 import subprocess
 import sys
-import tempfile
 
 if __name__ == "__main__":
     sys.path.insert(0, os.environ['RAPTOR_DIR'])
@@ -22,11 +21,16 @@ from core.atomic_fs import write_text_atomically  # noqa: E402
 from core.config import RaptorConfig  # noqa: E402
 from core.json import dumps_canonical  # noqa: E402
 from core.security.capped_read import read_capped  # noqa: E402
+from core.source import open_regular_beneath, open_regular_gated  # noqa: E402
+from core.run.scratch import scratch_dir  # noqa: E402
 
 ROOT = RaptorConfig.REPO_ROOT
 LANGUAGES = ('cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby', 'rust', 'swift')
 MODES = ('standard', 'iris', 'curated')
 MAX_FILES = 100_000
+MAX_DIRECTORIES = 100_000
+MAX_FILE_BYTES = 2 * 1024**3
+_COPY_CHUNK_BYTES = 1024 * 1024
 MAX_BYTES = 8 * 1024**3
 LOCK = 'codeql-pack.lock.yml'
 
@@ -39,11 +43,17 @@ def _offline():
     return RaptorConfig.CODEQL_OFFLINE
 
 
-def _record(source: Path, destination: Path | None = None):
-    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as stream:
+def _record(source: Path, destination: Path | None = None, *, max_bytes=None, root=None):
+    limit = MAX_FILE_BYTES if max_bytes is None else min(MAX_FILE_BYTES, max_bytes)
+    if limit < 0:
+        raise ValueError('transfer byte budget must be non-negative')
+    stream = (open_regular_beneath(root, source.relative_to(root), 'rb') if root is not None
+              else open_regular_gated(source, follow_symlinks=False))
+    if stream is None:
+        raise ValueError(f'not a confined regular file: {source}')
+    with stream:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024**3:
+        if info.st_size > limit:
             raise ValueError(f'not a bounded regular file: {source}')
         digest = hashlib.sha256()
         size = 0
@@ -52,9 +62,9 @@ def _record(source: Path, destination: Path | None = None):
             destination.parent.mkdir(parents=True, exist_ok=True)
             output = destination.open('xb')
         try:
-            while block := stream.read(1024 * 1024):
+            while block := stream.read(min(_COPY_CHUNK_BYTES, limit - size + 1)):
                 size += len(block)
-                if size > 2 * 1024**3:
+                if size > limit:
                     raise ValueError(f'file grew beyond limit: {source}')
                 digest.update(block)
                 if output is not None:
@@ -71,18 +81,25 @@ def _tree(root: Path, *, copy_to: Path | None = None, source=False):
         raise ValueError(f'not a real directory: {root}')
     records = {}
     total = 0
+    directory_count = 0
     for current, dirs, files in os.walk(root, followlinks=False):
         for name in dirs:
             if (Path(current) / name).is_symlink():
                 raise ValueError(f'symlink in transfer tree: {Path(current) / name}')
         if source:
             dirs[:] = [d for d in dirs if d not in ('.codeql', '.git')]
+        directory_count += len(dirs)
+        if directory_count > MAX_DIRECTORIES:
+            raise ValueError('transfer tree exceeds directory budget')
         for name in sorted(files):
             if source and (name == LOCK or name.endswith(('.qlx', '.bqrs'))):
                 continue
+            if len(records) >= MAX_FILES:
+                raise ValueError('transfer tree exceeds file budget')
             path = Path(current) / name
             rel = path.relative_to(root).as_posix()
-            record = _record(path, copy_to / rel if copy_to else None)
+            record = _record(path, copy_to / rel if copy_to else None,
+                             max_bytes=MAX_BYTES - total, root=root)
             records[rel] = record
             total += record['size']
             if len(records) > MAX_FILES or total > MAX_BYTES:
@@ -163,8 +180,7 @@ def prepare(output: Path, languages, modes):
     boot = _bootstrap()
     asset, digest, size = boot['_asset']()
     print(f"Preparing CodeQL {boot['VERSION']} for {','.join(languages)} ({','.join(modes)})", flush=True)
-    with tempfile.TemporaryDirectory(prefix='.codeql-offline-', dir=output.parent) as temporary:
-        work = Path(temporary)
+    with scratch_dir('raptor-codeql-offline-', dir=output.parent, keepalive=True) as work:
         kit = work / 'kit'
         kit.mkdir()
         bundle = kit / asset
@@ -282,10 +298,9 @@ def import_kit(kit: Path, expected: str):
 
 
 def _import_verified(kit, expected, boot, data, cache):
-    with tempfile.TemporaryDirectory(prefix='.offline-import-', dir=cache) as temporary:
-        staged = Path(temporary)
+    with scratch_dir('raptor-codeql-import-', dir=cache, keepalive=True) as staged:
         for name, expected_record in data['files'].items():
-            if _record(kit / name, staged / name) != expected_record:
+            if _record(kit / name, staged / name, root=kit, max_bytes=expected_record['size']) != expected_record:
                 raise ValueError(f'offline file changed during import: {name}')
         boot['ensure_installed'](force=True, local_archive=staged / data['asset'])
         # Import only immutable pack-version directories; never copy auth or
