@@ -18,6 +18,25 @@ from packages.describe.tool_readiness import (
     check_tool_readiness,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_probe_patches(monkeypatch):
+    """Keep host discovery and process mocks on consumer-owned bindings."""
+    import packages.describe.tool_readiness as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "shutil", "which", consumer.shutil.which,
+    )
+
+    import packages.describe.package_manager as delegate
+
+    patch_module_attribute(
+        monkeypatch, delegate, "shutil", "which",
+        lambda *args, **kwargs: consumer.shutil.which(*args, **kwargs),
+    )
+
 
 @pytest.fixture(autouse=True)
 def _isolated_package_manager_cache(monkeypatch):
@@ -64,7 +83,7 @@ class TestCheckCodeql:
         # Per the /describe scope boundary: host-level facts
         # belong in /doctor. /describe emits a deferral rather
         # than re-implementing install hints.
-        with patch("shutil.which", return_value=None):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value=None):
             result = _check_codeql(_shape())
         assert result.name == "CodeQL"
         assert result.status == "unknown"
@@ -75,7 +94,7 @@ class TestCheckCodeql:
         def _which(cmd):
             # codeql + every autotools dep present.
             return "/usr/bin/" + cmd
-        with patch("shutil.which", side_effect=_which):
+        with patch('packages.describe.tool_readiness.shutil.which', side_effect=_which):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="2.18.4",
@@ -99,7 +118,7 @@ class TestCheckCodeql:
             detect_package_manager,
         )
         detect_package_manager.cache_clear()
-        with patch("shutil.which", side_effect=_which):
+        with patch('packages.describe.tool_readiness.shutil.which', side_effect=_which):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="2.18.4",
@@ -157,7 +176,7 @@ class TestBuildDepUniverse:
         # "✓ build deps ok for gomod".
         def _which(cmd):
             return None if cmd == "go" else "/usr/bin/" + cmd
-        with patch("shutil.which", side_effect=_which):
+        with patch('packages.describe.tool_readiness.shutil.which', side_effect=_which):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="2.18.4",
@@ -173,7 +192,7 @@ class TestBuildDepUniverse:
 
     def test_unknown_build_system_reports_no_data_not_ok(self):
         # Honest "?" when there is no dep data — never "deps verified".
-        with patch("shutil.which", return_value="/usr/bin/x"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/x"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="2.18.4",
@@ -185,7 +204,7 @@ class TestBuildDepUniverse:
         assert "no dependency data" in result.detail
 
     def test_no_detected_build_system_is_honest(self):
-        with patch("shutil.which", return_value="/usr/bin/x"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/x"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="2.18.4",
@@ -203,14 +222,14 @@ class TestBuildDepUniverse:
 
 class TestCheckCoccinelle:
     def test_missing_binary_defers_to_doctor(self):
-        with patch("shutil.which", return_value=None):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value=None):
             result = _check_coccinelle(_shape())
         assert result.status == "unknown"
         assert "deferred" in result.detail
         assert result.hint and "raptor doctor" in result.hint
 
     def test_c_target_returns_ok(self):
-        with patch("shutil.which", return_value="/usr/bin/spatch"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/spatch"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.3.0",
@@ -223,7 +242,7 @@ class TestCheckCoccinelle:
         # primary_language=None means ZERO recognised source files —
         # a positive "applicable" claim there is unearned; an honest
         # applicability-unknown warning beats silent uselessness.
-        with patch("shutil.which", return_value="/usr/bin/spatch"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/spatch"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.3.0",
@@ -238,7 +257,7 @@ class TestCheckCoccinelle:
     def test_python_target_warns_about_zero_fire(self):
         # Cocci's shipped rule pack is C-only — honest "will
         # 0-fire" warning instead of pretending it works.
-        with patch("shutil.which", return_value="/usr/bin/spatch"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/spatch"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.3.0",
@@ -333,7 +352,7 @@ class TestNoLlmCheckByDesign:
         # The aggregate check list should NOT include any
         # "LLM dispatcher" entry — /describe focuses on target-
         # applicability only.
-        with patch("shutil.which", return_value="/usr/bin/mock"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/mock"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.0",
@@ -373,7 +392,7 @@ class TestCheckToolReadiness:
         # ToolCheck instances covering the target-applicability
         # surface (codeql build-deps + cocci language + binary
         # oracle). Per-tool semantics covered above.
-        with patch("shutil.which", return_value="/usr/bin/mock"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/mock"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.0",
@@ -393,7 +412,7 @@ class TestCheckToolReadiness:
     def test_python_target_omits_binary_oracle(self):
         # Binary oracle returns None for managed-runtime targets;
         # caller filters it out.
-        with patch("shutil.which", return_value="/usr/bin/mock"):
+        with patch('packages.describe.tool_readiness.shutil.which', return_value="/usr/bin/mock"):
             with patch(
                 "packages.describe.tool_readiness._bin_version",
                 return_value="1.0",

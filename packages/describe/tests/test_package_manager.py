@@ -12,6 +12,18 @@ from packages.describe.package_manager import (
     format_install_hint,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_probe_patches(monkeypatch):
+    """Keep host discovery and process mocks on consumer-owned bindings."""
+    import packages.describe.package_manager as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "shutil", "which", consumer.shutil.which,
+    )
+
 
 @pytest.fixture(autouse=True)
 def _isolated_package_manager_cache(monkeypatch):
@@ -45,19 +57,19 @@ class TestDetectPackageManager:
         detect_package_manager.cache_clear()
 
     def test_apt_detected(self):
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             assert detect_package_manager() == "apt"
 
     def test_dnf_detected(self):
-        with patch("shutil.which", side_effect=_which_only({"dnf"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"dnf"})):
             assert detect_package_manager() == "dnf"
 
     def test_pacman_detected(self):
-        with patch("shutil.which", side_effect=_which_only({"pacman"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"pacman"})):
             assert detect_package_manager() == "pacman"
 
     def test_brew_detected(self):
-        with patch("shutil.which", side_effect=_which_only({"brew"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"brew"})):
             assert detect_package_manager() == "brew"
 
     def test_first_wins_when_multiple_pms_present(self):
@@ -65,11 +77,11 @@ class TestDetectPackageManager:
         # Linux). Order in _KNOWN_PMS places apt first because
         # system tool deps typically come from the native PM,
         # not the user-local one.
-        with patch("shutil.which", side_effect=_which_only({"apt", "brew"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt", "brew"})):
             assert detect_package_manager() == "apt"
 
     def test_no_pm_returns_none(self):
-        with patch("shutil.which", side_effect=_which_only(set())):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only(set())):
             assert detect_package_manager() is None
 
 
@@ -78,47 +90,47 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
 
     def test_apt_hint(self):
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             assert format_install_hint(["libtool"]) == "sudo apt install libtool"
 
     def test_dnf_hint(self):
-        with patch("shutil.which", side_effect=_which_only({"dnf"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"dnf"})):
             assert format_install_hint(["libtool"]) == "sudo dnf install libtool"
 
     def test_yum_hint_uses_yum(self):
-        with patch("shutil.which", side_effect=_which_only({"yum"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"yum"})):
             assert format_install_hint(["libtool"]) == "sudo yum install libtool"
 
     def test_pacman_hint(self):
-        with patch("shutil.which", side_effect=_which_only({"pacman"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"pacman"})):
             assert format_install_hint(["libtool"]) == "sudo pacman -S libtool"
 
     def test_zypper_hint(self):
-        with patch("shutil.which", side_effect=_which_only({"zypper"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"zypper"})):
             assert (
                 format_install_hint(["libtool"])
                 == "sudo zypper install libtool"
             )
 
     def test_apk_hint(self):
-        with patch("shutil.which", side_effect=_which_only({"apk"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apk"})):
             assert format_install_hint(["libtool"]) == "sudo apk add libtool"
 
     def test_brew_hint_omits_sudo(self):
         # brew runs as the calling user — sudo would actually
         # cause problems with permissions on the cellar.
-        with patch("shutil.which", side_effect=_which_only({"brew"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"brew"})):
             assert format_install_hint(["libtool"]) == "brew install libtool"
 
     def test_multi_package_install(self):
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             assert (
                 format_install_hint(["autoconf", "automake", "libtool"])
                 == "sudo apt install autoconf automake libtool"
             )
 
     def test_no_pm_generic_fallback(self):
-        with patch("shutil.which", side_effect=_which_only(set())):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only(set())):
             hint = format_install_hint(["libtool"])
             assert "libtool" in hint
             assert "system package manager" in hint
@@ -137,7 +149,7 @@ class TestFormatInstallHint:
             return_value="Darwin",
         ):
             with patch(
-                "shutil.which",
+                'packages.describe.package_manager.shutil.which',
                 side_effect=_which_only({"brew"}),
             ):
                 hint = format_install_advice("gdb")
@@ -155,7 +167,7 @@ class TestFormatInstallHint:
             return_value="Linux",
         ):
             with patch(
-                "shutil.which",
+                'packages.describe.package_manager.shutil.which',
                 side_effect=_which_only({"apt"}),
             ):
                 hint = format_install_advice("gdb")
@@ -174,7 +186,7 @@ class TestFormatInstallHint:
             return_value="Darwin",
         ):
             with patch(
-                "shutil.which",
+                'packages.describe.package_manager.shutil.which',
                 side_effect=_which_only({"brew"}),
             ):
                 hint = format_install_advice("afl-fuzz")
@@ -191,7 +203,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.setenv("VIRTUAL_ENV", "/tmp/myvenv")
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             hint = format_install_advice("semgrep")
         assert hint.startswith("pip install semgrep")
 
@@ -202,7 +214,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.setenv("CONDA_DEFAULT_ENV", "myenv")
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             hint = format_install_advice("semgrep")
         assert "conda install -c conda-forge semgrep" in hint
 
@@ -213,7 +225,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"uv", "apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"uv", "apt"})):
             hint = format_install_advice("semgrep")
         assert hint.startswith("uv tool install semgrep")
 
@@ -224,7 +236,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"pipx", "apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"pipx", "apt"})):
             hint = format_install_advice("semgrep")
         assert hint.startswith("pipx install semgrep")
 
@@ -238,7 +250,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             hint = format_install_advice("semgrep")
         assert "sudo apt install pipx" in hint
         assert "pipx ensurepath" in hint
@@ -257,7 +269,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"brew"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"brew"})):
             hint = format_install_advice("semgrep")
         assert "brew install pipx" in hint
         assert "pipx install semgrep" in hint
@@ -274,7 +286,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only({"pacman"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"pacman"})):
             hint = format_install_advice("semgrep")
         assert "sudo pacman -S python-pipx" in hint
 
@@ -285,7 +297,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-        with patch("shutil.which", side_effect=_which_only(set())):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only(set())):
             hint = format_install_advice("semgrep")
         # Operator-readable prose check rather than a hostname
         # fragment — ``py/incomplete-url-substring-sanitization``
@@ -305,7 +317,7 @@ class TestFormatInstallHint:
         detect_package_manager.cache_clear()
         monkeypatch.setenv("VIRTUAL_ENV", "/tmp/v")
         monkeypatch.setenv("CONDA_DEFAULT_ENV", "myenv")
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             hint = format_install_advice("semgrep")
         assert hint.startswith("pip install semgrep")
 
@@ -321,7 +333,7 @@ class TestFormatInstallHint:
             return_value="Darwin",
         ):
             with patch(
-                "shutil.which",
+                'packages.describe.package_manager.shutil.which',
                 side_effect=_which_only({"brew"}),
             ):
                 hint = format_install_advice("libtoolize")
@@ -334,13 +346,13 @@ class TestFormatInstallHint:
         # renders exactly the names it is given (the second override
         # table it once consulted was dead-empty and removed).
         detect_package_manager.cache_clear()
-        with patch("shutil.which", side_effect=_which_only({"dnf"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"dnf"})):
             assert (
                 format_install_hint(["libtool-special"])
                 == "sudo dnf install libtool-special"
             )
         detect_package_manager.cache_clear()
-        with patch("shutil.which", side_effect=_which_only({"apt"})):
+        with patch('packages.describe.package_manager.shutil.which', side_effect=_which_only({"apt"})):
             assert (
                 format_install_hint(["libtool"])
                 == "sudo apt install libtool"

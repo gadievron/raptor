@@ -21,6 +21,19 @@ from packages.fuzzing.env_build import (
     env_build_for_fuzzing,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_probe_patches(monkeypatch):
+    """Keep host discovery and process mocks on consumer-owned bindings."""
+    import packages.fuzzing.env_build as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "shutil", "which", consumer.shutil.which,
+    )
+
 
 def _repo(tmp_path):
     repo = tmp_path / "repo"
@@ -56,13 +69,13 @@ class TestCandidacy:
         assert (ok, why) == (False, "")
 
     def test_no_docker_declines_with_hint(self, tmp_path):
-        with patch("shutil.which", return_value=None):
+        with patch('packages.fuzzing.env_build.shutil.which', return_value=None):
             ok, why = env_build_candidate(_repo(tmp_path))
         assert not ok
         assert "docker" in why
 
     def test_gate_denied_names_the_marker(self, tmp_path):
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
+        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=False):
             ok, why = env_build_candidate(_repo(tmp_path))
@@ -71,7 +84,7 @@ class TestCandidacy:
         assert "--env-build" in why
 
     def test_no_command_declines_with_hint(self, tmp_path):
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
+        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
@@ -81,7 +94,7 @@ class TestCandidacy:
         assert "build-command" in why
 
     def test_authorised_with_command_is_candidate(self, tmp_path):
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
+        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
@@ -96,7 +109,7 @@ class TestCandidacy:
             seen["explicit"] = explicit
             return bool(explicit)
 
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
+        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution", gate), \
              patch("core.build.resolve.resolve_build_command",
                    return_value=("make", "detected:make", "")):

@@ -11,6 +11,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_probe_patches(monkeypatch):
+    """Keep host discovery and process mocks on consumer-owned bindings."""
+    import packages.hypothesis_validation.adapters.codeql as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "subprocess", "run", consumer.subprocess.run,
+    )
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -289,7 +302,7 @@ class TestSafeEnvDefaults:
         a = CodeQLAdapter(
             database_path=db, codeql_bin="/usr/bin/codeql", sandbox=False,
         )
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=fake_run):
             a.run("import cpp\nselect 1\n", tmp_path)
 
         env = captured["env"]
@@ -808,7 +821,7 @@ class TestCodeQLTimeoutDefault:
         a = CodeQLAdapter(
             database_path=db, codeql_bin="/usr/bin/codeql", sandbox=False,
         )
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=fake_run):
             a.run("import cpp\nselect 1\n", tmp_path, timeout=900)
         assert captured["timeout"] == 900
 
@@ -879,6 +892,9 @@ class TestCodeQLSandboxGrantsCacheWriteAccess:
         with patch(
             "packages.hypothesis_validation.adapters.codeql.make_sandbox_runner",
             side_effect=spy,
+        ), patch(
+            "packages.hypothesis_validation.adapters.codeql.subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ):
             a.run("import cpp\nselect 1\n", tmp_path)
 
@@ -909,6 +925,9 @@ class TestCodeQLSandboxGrantsCacheWriteAccess:
         with patch(
             "packages.hypothesis_validation.adapters.codeql.make_sandbox_runner",
             side_effect=spy,
+        ), patch(
+            "packages.hypothesis_validation.adapters.codeql.subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ):
             a.run("import cpp\nselect 1\n", tmp_path)
         assert captured
