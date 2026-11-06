@@ -1260,3 +1260,14 @@ means no summary was requested, independently of the primary verdict. Generic
 SMT library callers retain constraint reduction by default. Necessary entry
 feasibility checks and dual-profile contradiction probes still run; this mode
 is not an overall wall-clock guarantee.
+
+Path and named numeric SMT checks share one guard-encoding frame. It keeps
+call placeholders, mutation boundaries, parser rejections, and background
+call-summary axioms together. Repeated identical call texts share the existing
+SSA-style identity within a mutation-free window; assignment-shaped steps
+start a new window and remain unencoded inputs. JSON path and numeric results
+report `summary_axioms` alongside the call-label map, including when optional
+constraint reduction is disabled. These are model assumptions, not verified
+callee definitions. Function-call operands in named numeric checks still use
+independent free placeholders; a SAT result involving them remains an
+approximation and cannot by itself establish a source bug.
