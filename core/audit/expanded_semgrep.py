@@ -379,7 +379,7 @@ class ExpandedCorpus:
             )
         ]
         if self.failed:
-            parts.append(f"{self.failed} failed to preprocess")
+            parts.append(f"{self.failed} failed preparation")
         if self.skipped_budget:
             parts.append(
                 f"⚠️  {self.skipped_budget} TU(s) SKIPPED by the expansion "
@@ -444,10 +444,13 @@ def build_expanded_corpus(
         raise ValueError(msg)
     corpus = ExpandedCorpus(root=scratch_root)
 
+    flags = tuple(_macro_flags(macro_config))
     budget = max_tus
     for rel in _iter_candidate_tus(target_path):
         resolved = safe_join(target_path, rel)
-        if resolved is None or not resolved.is_file():
+        if resolved is None:
+            corpus.failed += 1
+            logger.debug("expanded corpus: %s could not be confined to the target", rel)
             continue
         # Capped like every migrated core/audit sibling: the
         # candidate gate buffered whole files, so a planted
@@ -455,10 +458,12 @@ def build_expanded_corpus(
         # memory before being screened. An oversized file is not a
         # sensible expansion candidate — skip it.
         got = read_text_capped(resolved, errors="replace")
-        if got is None:
+        if got is None or got[1]:
+            corpus.failed += 1
+            logger.debug("expanded corpus: %s could not be read within the source budget", rel)
             continue
-        raw, truncated = got
-        if truncated or not has_macro_invocation(raw):
+        raw, _ = got
+        if not has_macro_invocation(raw):
             continue
         corpus.candidates_total += 1
         if budget <= 0:
@@ -468,7 +473,7 @@ def build_expanded_corpus(
         view = expand_translation_unit(
             target_path=target_path,
             file_path=rel,
-            macro_config=macro_config,
+            macro_config=flags,
             out_dir=out_dir,
             include_dirs_memo=setup.include_dirs_memo, setup=setup,
         )

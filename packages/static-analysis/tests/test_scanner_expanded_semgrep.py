@@ -426,3 +426,19 @@ def test_distinct_macro_occurrences_survive_cross_pack_dedup_and_merge(tmp_path,
     assert len(findings) == 3
     assert {finding['startLine'] for finding in findings} == {1}
     assert all(not finding.get('startColumn') for finding in findings)
+
+
+def test_real_corpus_input_refusal_marks_scan_partial(tmp_path, monkeypatch):
+    from core.sarif.parser import generate_scan_metrics
+    from core.reporting.scan_coverage import scan_execution_status
+
+    repo = _c_repo(tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir()
+    monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: True)
+    monkeypatch.setattr(es, 'read_text_capped', lambda *a, **kw: ('partial input', True))
+    paths = _scanner.run_expanded_semgrep_stage(repo, out, ['unused.yaml'], [])
+    assert paths
+    report = json.loads(Path(paths[0]).read_text())
+    assert report['runs'][0]['results'] == []
+    assert scan_execution_status(generate_scan_metrics(paths)) == 'partial'
