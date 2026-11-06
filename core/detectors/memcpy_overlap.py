@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from heapq import nsmallest
 from pathlib import Path
 from typing import Any
 import os
@@ -65,12 +66,29 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
     from core.audit.preprocessor_view import _AUGMENT_FILE_CAP, expand_translation_unit
 
     root = state.target.resolve()
-    files = tuple(sorted(path.relative_to(root).as_posix() for path in paths
-                         if path.relative_to(root).as_posix() not in state.candidates))
-    if not files:
+    eligible = 0
+
+    def remaining_files():
+        nonlocal eligible
+        for path in paths:
+            rel = path.relative_to(root).as_posix()
+            if rel not in state.candidates:
+                eligible += 1
+                yield rel
+
+    # Enumerate even at a zero cap so omitted-file counts remain exact.
+    files = nsmallest(max(1, _AUGMENT_FILE_CAP), remaining_files())
+    if _AUGMENT_FILE_CAP <= 0:
+        files = []
+    if not eligible:
         return False
     assert state.request_for is not None
-    failed = skipped = processed_bytes = 0
+    failed = processed_bytes = 0
+    skipped = eligible - len(files)
+    if not files:
+        _limited(state, f"memcpy macro preparation incomplete: 0 failed, "
+                 f"{skipped} skipped by preparation budget")
+        return True
     try:
         first = state.request_for(files[0])
         with scratch_dir("memcpy_candidates_", dir=first.scratch_root) as scratch:
@@ -78,8 +96,8 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
                 remaining = deadline - monotonic()
                 if state.budget is not None:
                     remaining = min(remaining, state.budget.remaining())
-                if index >= _AUGMENT_FILE_CAP or remaining <= 0:
-                    skipped = len(files) - index
+                if remaining <= 0:
+                    skipped = eligible - index
                     break
                 request = state.request_for(rel)
                 view = expand_translation_unit(
@@ -91,11 +109,11 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
                     failed += 1
                     continue
                 if deadline - monotonic() <= 0:
-                    skipped = len(files) - index
+                    skipped = eligible - index
                     break
                 processed_bytes += len(view.text.encode("utf-8", errors="replace"))
                 if processed_bytes > _EXPANDED_BYTE_BUDGET:
-                    skipped = len(files) - index
+                    skipped = eligible - index
                     break
                 # Reuse the C comment/string blanker. Preprocessing has already
                 # removed inactive arms and spliced escaped newlines. Do not
