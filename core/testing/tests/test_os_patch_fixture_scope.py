@@ -84,7 +84,8 @@ def test_native_fixture_owns_string_os_patch(file, module, index, target, borrow
         if borrowed:
             view = ModuleType(consumer.os.__name__)
             vars(view).update(vars(consumer.os))
-            inherited_scope.setitem(vars(consumer), "time", view)
+            inherited_scope.setitem(vars(consumer), "os", view)
+            assert consumer.os is view
         original = consumer.os
         raw = dict(vars(consumer))
         inherited = dict(vars(original))
@@ -131,7 +132,8 @@ def test_unmodified_os_control(borrowed):
         if borrowed:
             view = ModuleType(consumer.os.__name__)
             vars(view).update(vars(consumer.os))
-            inherited_scope.setitem(vars(consumer), "time", view)
+            inherited_scope.setitem(vars(consumer), "os", view)
+            assert consumer.os is view
         original = consumer.os
         before = dict(vars(original))
         with pytest.MonkeyPatch.context() as scope:

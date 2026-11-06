@@ -95,7 +95,8 @@ def test_native_fixture_owns_string_shutil_patch(file, module, index, target, bo
         if borrowed:
             view = ModuleType(consumer.shutil.__name__)
             vars(view).update(vars(consumer.shutil))
-            inherited_scope.setitem(vars(consumer), "time", view)
+            inherited_scope.setitem(vars(consumer), "shutil", view)
+            assert consumer.shutil is view
         original = consumer.shutil
         raw = dict(vars(consumer))
         inherited = dict(vars(original))
@@ -141,7 +142,8 @@ def test_unmodified_shutil_control(borrowed):
         if borrowed:
             view = ModuleType(consumer.shutil.__name__)
             vars(view).update(vars(consumer.shutil))
-            inherited_scope.setitem(vars(consumer), "time", view)
+            inherited_scope.setitem(vars(consumer), "shutil", view)
+            assert consumer.shutil is view
         original = consumer.shutil
         before = dict(vars(original))
         with pytest.MonkeyPatch.context() as scope:
