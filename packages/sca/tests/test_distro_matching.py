@@ -78,7 +78,9 @@ def test_source_query_preserves_binary_identity_and_compares_source_version(tmp_
     assert "source fix: 1.4" in _render_one_vuln(finding)
     html = render_html_report(target=tmp_path, deps_analysed=1, vuln_findings=[finding], hygiene_findings=[])
     assert "source fix:</em>" in html
-    assert "source source 1.4" in _render_markdown([row], target=tmp_path)
+    markdown = _render_markdown([row], target=tmp_path)
+    assert "Source package Debian:12:source@1.3: 1.4" in markdown
+    assert "Debian:12:binary@9.9" in markdown
 
 
 @pytest.mark.parametrize("ecosystem, purl", [
