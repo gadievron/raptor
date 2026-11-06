@@ -1225,3 +1225,28 @@ are validated before extraction, including unused entries. Generated
 witness aliases reserve all real declaration names; aliases for duplicate
 names are display labels, while source-sensitive consumers use a named
 expression registry through `format_vars`.
+
+SMT tracking labels are created in the solver's own Z3 context and kept
+disjoint from Boolean names in existing assertions, the complete incoming
+batch and prior label mappings. Native fresh-name counters can collide
+with explicit declarations, so fresh-name allocation alone is insufficient.
+Tracking must preserve the original formula's satisfiability. Later batches
+that reference an active tracking marker decline instead of reinterpreting
+that marker as a formula variable; removed markers are pruned from the
+solver's registry.
+
+Temporary solver scopes require successful rollback. Failed `pop()` raises
+an integrity error; it no longer permits normal continuation with temporary
+constraints still present. When body execution and cleanup both fail, an
+exception group retains both failures, including cancellation exceptions.
+Solver and optimizer timeout arguments require integer values; existing
+integer clamping limits are preserved.
+
+Signed witness preferences account for Z3's unsigned bitvector objective
+ordering. The legacy `wp_*` fields describe an implication-reduced summary
+of the supplied constraints, conditional on supplied background axioms.
+They do not prove program reachability or a program weakest precondition.
+Unencoded inputs, undecided redundancy checks and failed serialization
+prevent completeness. Errors in the separate reduction solver retain the
+primary SAT verdict and model while leaving the summary unavailable and
+incomplete.
