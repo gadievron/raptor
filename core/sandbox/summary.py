@@ -231,14 +231,16 @@ def _get_evidence_handle_locked(run_dir: Path):
     try:
         _evidence_handle = _evidence.EvidenceFile.open(  # raw-open: EvidenceFile opens O_WRONLY | O_APPEND, not a reader
             run_dir, DENIALS_FILE)
-    except OSError:
+    except OSError as exc:
         first_failure = not _evidence_open_failed
         _evidence_open_failed = True
         _evidence_next_open_attempt = now + _EVIDENCE_OPEN_RETRY_S
         if first_failure:
             logger.warning(
-                "record_denial: cannot open evidence file under %s",
-                run_dir, exc_info=True,
+                "record_denial: cannot open evidence file under %s: %s: %s",
+                sanitise_for_terminal(str(run_dir)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64),
+                sanitise_for_terminal(str(exc)),
             )
         return None
     _evidence_open_failed = False
@@ -255,9 +257,12 @@ def _record_evidence_write_failure(run_dir: Path) -> None:
     """Retain producer loss for the captured run, including budget drops."""
     try:
         failure_key = str(run_dir.resolve())
-    except (OSError, RuntimeError):
-        logger.warning("record_denial: could not retain evidence failure state",
-                       exc_info=True)
+    except (OSError, RuntimeError) as exc:
+        logger.warning(
+            "record_denial: could not retain evidence failure state: %s: %s",
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
     else:
         with _lock:
             _evidence_write_failures.setdefault(failure_key, True)
@@ -400,7 +405,7 @@ def record_denial(cmd_display: str, returncode: int,
             if not handle.write_line(line):
                 msg = f"evidence append failed under {run_dir}"
                 raise OSError(msg)
-    except Exception:
+    except Exception as exc:
         # Keep loss observable even when no disk artifact can be written.
         # Use the captured run, never a later active run.
         _record_evidence_write_failure(run_dir)
@@ -411,8 +416,14 @@ def record_denial(cmd_display: str, returncode: int,
         # the family-wide DEBUG -> WARNING convention from c5a4505
         # (`fix(scorecard): promote producer-error logs ...`) and 8edf0f6
         # (sibling F069 in core/sandbox/proxy.py).
-        logger.warning("record_denial: failed to append JSONL",
-                       exc_info=True)
+        if isinstance(exc, OSError):
+            logger.warning(
+                "record_denial: failed to append JSONL: %s: %s",
+                sanitise_for_terminal(type(exc).__name__, max_len=64),
+                sanitise_for_terminal(str(exc)),
+            )
+        else:
+            logger.warning("record_denial: failed to append JSONL", exc_info=True)
 
 
 def _suggested_fix(denial_type: str, **details: Any) -> str:
@@ -816,12 +827,18 @@ def record_floor_refusal(run_dir: Path, *, floor: str, achievable: str,
                         raise OSError(msg)
                 finally:
                     transient.close(verify=False)
-    except Exception:
+    except Exception as exc:
         # Parent memory above still carries the refusal for in-process
         # summary generation; warn so a persistent evidence-channel
         # failure is visible.
-        logger.warning("record_floor_refusal: failed to append JSONL",
-                       exc_info=True)
+        if isinstance(exc, OSError):
+            logger.warning(
+                "record_floor_refusal: failed to append JSONL: %s: %s",
+                sanitise_for_terminal(type(exc).__name__, max_len=64),
+                sanitise_for_terminal(str(exc)),
+            )
+        else:
+            logger.warning("record_floor_refusal: failed to append JSONL", exc_info=True)
 
 
 def record_audit_degraded(run_dir: Path, *, reason: str,
@@ -846,9 +863,12 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     out = run_dir / AUDIT_DEGRADED_FILE
     try:
         run_key = str(run_dir.resolve())
-    except (OSError, RuntimeError):
-        logger.warning("record_audit_degraded: cannot resolve run directory",
-                       exc_info=True)
+    except (OSError, RuntimeError) as exc:
+        logger.warning(
+            "record_audit_degraded: cannot resolve run directory: %s: %s",
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
         return
     with _lock:
         if run_key in _degraded_markers:
@@ -876,9 +896,12 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     # hiding the degradation signal we needed to surface.
     try:
         text = dumps_artifact(payload, ensure_ascii=True) + "\n"
-    except (ValueError, TypeError, RecursionError):
-        logger.warning("record_audit_degraded: marker serialization failed",
-                       exc_info=True)
+    except (ValueError, TypeError, RecursionError) as exc:
+        logger.warning(
+            "record_audit_degraded: marker serialization failed: %s: %s",
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
         return
     with _lock:
         # Claim once in parent memory, never by trusting the target-writable
@@ -890,10 +913,12 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         _degraded_markers[run_key] = entry
     try:
         write_text_atomically(out, text, tmp_prefix=".~audit-degraded-")
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as exc:
         logger.warning(
-            "record_audit_degraded: marker write failed; retaining state "
-            "for finalization retry under %s", run_dir, exc_info=True,
+            "record_audit_degraded: marker write failed; retaining state for finalization retry under %s: %s: %s",
+            sanitise_for_terminal(str(run_dir)),
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
         )
     else:
         with _lock:
