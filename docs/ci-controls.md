@@ -285,8 +285,11 @@ changes to their owning component. Sandbox backend, dependency or harness edits,
 deleted modules, missing history and unreadable dependencies retain full
 acceptance. Unresolved dynamic imports broaden selection for runtime edits.
 A wrapper-only change selects its contract cases and any native family whose
-dependencies include that wrapper. Scheduled/manual/merge-queue runs retain full
-coverage. The current shared root fixtures contain opaque dependencies, so
+dependencies include that wrapper. Merge-queue runs scope the complete group
+against its base SHA, retaining changes from every queued PR. Missing history
+still retains full acceptance; documentation-only groups can skip platform
+runners while keeping registration and the required result gate. Scheduled/manual
+runs retain full coverage. The current shared root fixtures contain opaque dependencies, so
 ordinary runtime edits still fall back to full acceptance; granular selection
 is used only when the dependency analysis can establish its bounds. The scope
 job logs its selection reasons and writes the changed paths, selected cases and
