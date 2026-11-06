@@ -6,16 +6,22 @@ from __future__ import annotations
 
 import subprocess
 from typing import Any, Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+
+from core.container.proc import RunOutcome
+from core.testing.module_bindings import patch_module_attribute
 
 from cve_env.tools.run_in_container import run_in_container
 
 
 @pytest.fixture(autouse=True)
-def _bypass_ownership_check() -> Generator[None, None, None]:
-    """All tests in this file assume a cve-env-owned container."""
+def _bypass_ownership_check(monkeypatch) -> Generator[None, None, None]:
+    """Assume an owned container and keep native subprocess mocks local."""
+    import core.container.proc as consumer
+
+    patch_module_attribute(monkeypatch, consumer, "subprocess", "run", consumer.subprocess.run)
     with patch(
         "cve_env.tools.run_in_container._is_owned_container", return_value=True
     ):
@@ -40,9 +46,9 @@ def test_rejects_whitespace_only_command() -> None:
     assert "command is empty" in r.reason
 
 
-@patch("core.container.proc.subprocess.run")
-def test_exec_success_returns_exit_code_zero(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
+@patch("core.container.exec.run_cli")
+def test_exec_success_returns_exit_code_zero(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="hello\n", stderr="")
     r = run_in_container(container_id="cid", command="echo hello")
     assert r.ok is True
     assert r.exit_code == 0
@@ -50,14 +56,16 @@ def test_exec_success_returns_exit_code_zero(mock_run: Any) -> None:
     assert r.reason == ""
 
 
-@patch("core.container.proc.subprocess.run")
-def test_exec_nonzero_exit_is_not_ok(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=42, stdout="", stderr="boom")
+
+@patch("core.container.exec.run_cli")
+def test_exec_nonzero_exit_is_not_ok(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=42, stdout="", stderr="boom")
     r = run_in_container(container_id="cid", command="false")
     assert r.ok is False
     assert r.exit_code == 42
     assert r.stderr.strip() == "boom"
     assert "exit_code=42" in r.reason
+
 
 
 @patch("core.container.proc.subprocess.run")
@@ -79,12 +87,12 @@ def test_docker_cli_not_found(mock_run: Any) -> None:
     assert "docker CLI not found" in r.reason
 
 
-@patch("core.container.proc.subprocess.run")
-def test_invocation_does_not_include_privileged(mock_run: Any) -> None:
+@patch("core.container.exec.run_cli")
+def test_invocation_does_not_include_privileged(mock_cli: Any) -> None:
     """P17 invariant: no privilege-escalation flags on docker exec."""
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="", stderr="")
     run_in_container(container_id="cid", command="id")
-    argv = mock_run.call_args.args[0]
+    argv = mock_cli.call_args.args[0]
     assert "--privileged" not in argv
     assert "-u" not in argv
     assert "--user" not in argv
@@ -94,56 +102,62 @@ def test_invocation_does_not_include_privileged(mock_run: Any) -> None:
     assert "-c" in argv
 
 
-@patch("core.container.proc.subprocess.run")
-def test_workdir_is_threaded_through(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="/app\n", stderr="")
+
+@patch("core.container.exec.run_cli")
+def test_workdir_is_threaded_through(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="/app\n", stderr="")
     run_in_container(container_id="cid", command="pwd", workdir="/app")
-    argv = mock_run.call_args.args[0]
+    argv = mock_cli.call_args.args[0]
     assert "--workdir" in argv
     assert "/app" in argv
 
 
-@patch("core.container.proc.subprocess.run")
-def test_stdout_is_capped(mock_run: Any) -> None:
+
+@patch("core.container.exec.run_cli")
+def test_stdout_is_capped(mock_cli: Any) -> None:
     big = "x" * (16 * 1024)
-    mock_run.return_value = MagicMock(returncode=0, stdout=big, stderr="")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout=big, stderr="")
     r = run_in_container(container_id="cid", command="spew")
     assert len(r.stdout) <= 8 * 1024
 
 
-@patch("core.container.proc.subprocess.run")
-def test_timeout_is_clamped_upward_to_max(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+@patch("core.container.exec.run_cli")
+def test_timeout_is_clamped_upward_to_max(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="", stderr="")
     run_in_container(container_id="cid", command="echo", timeout_seconds=10_000.0)
-    # subprocess.run was called with timeout kwarg; assert it was clamped.
-    called_timeout = mock_run.call_args.kwargs.get("timeout")
+    # run_cli was called with timeout kwarg; assert it was clamped.
+    called_timeout = mock_cli.call_args.kwargs.get("timeout")
     assert called_timeout is not None
     assert called_timeout <= 300.0
 
 
-@patch("core.container.proc.subprocess.run")
-def test_timeout_is_clamped_upward_from_zero(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+@patch("core.container.exec.run_cli")
+def test_timeout_is_clamped_upward_from_zero(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="", stderr="")
     run_in_container(container_id="cid", command="echo", timeout_seconds=0.0)
-    called_timeout = mock_run.call_args.kwargs.get("timeout")
+    called_timeout = mock_cli.call_args.kwargs.get("timeout")
     assert called_timeout is not None
     assert called_timeout >= 1.0
+
 
 
 # Phase 12.2: reason_class population --------------------------------
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_ok_on_zero_exit(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="hi", stderr="")
+@patch("core.container.exec.run_cli")
+def test_reason_class_ok_on_zero_exit(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="hi", stderr="")
     r = run_in_container(container_id="cid", command="echo hi")
     assert r.ok is True
     assert r.reason_class == "ok"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_command_not_found_on_127(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+@patch("core.container.exec.run_cli")
+def test_reason_class_command_not_found_on_127(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=127, stdout="", stderr="sh: 1: foobar: not found"
     )
     r = run_in_container(container_id="cid", command="foobar")
@@ -151,9 +165,10 @@ def test_reason_class_command_not_found_on_127(mock_run: Any) -> None:
     assert r.reason_class == "command_not_found"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_permission_denied_on_126(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+@patch("core.container.exec.run_cli")
+def test_reason_class_permission_denied_on_126(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=126, stdout="", stderr="sh: 1: ./script.sh: Permission denied"
     )
     r = run_in_container(container_id="cid", command="./script.sh")
@@ -161,17 +176,19 @@ def test_reason_class_permission_denied_on_126(mock_run: Any) -> None:
     assert r.reason_class == "permission_denied"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_oom_killed_on_137(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=137, stdout="", stderr="Killed")
+
+@patch("core.container.exec.run_cli")
+def test_reason_class_oom_killed_on_137(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=137, stdout="", stderr="Killed")
     r = run_in_container(container_id="cid", command="memhog")
     assert r.ok is False
     assert r.reason_class == "oom_killed"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+@patch("core.container.exec.run_cli")
+def test_reason_class_disk_full_via_stderr(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="cp: cannot create '/foo': No space left on device",
@@ -181,14 +198,16 @@ def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
     assert r.reason_class == "disk_full"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_unknown_for_generic_failure(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+@patch("core.container.exec.run_cli")
+def test_reason_class_unknown_for_generic_failure(mock_cli: Any) -> None:
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=42, stdout="", stderr="weird app error"
     )
     r = run_in_container(container_id="cid", command="myapp")
     assert r.ok is False
     assert r.reason_class == "unknown"
+
 
 
 @patch("core.container.proc.subprocess.run")

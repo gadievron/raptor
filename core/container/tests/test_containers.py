@@ -8,11 +8,20 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
+from core.testing.module_bindings import patch_module_attribute
+
 from core.container import containers as cc
 from core.container.proc import RunOutcome
 
 _CID = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 _PORTS_JSON = '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"49000"}]}'
+
+
+@pytest.fixture(autouse=True)
+def _owned_clock_patch_target(monkeypatch):
+    patch_module_attribute(monkeypatch, cc, "time", "sleep", cc.time.sleep)
 
 
 def _fake_run(captured: list[list[str]] | None = None):
