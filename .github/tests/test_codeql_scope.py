@@ -484,3 +484,54 @@ def test_import_passes_keep_late_aliases_exports_and_literal_references(tmp_path
     assert references == {
         "libexec/raptor-audit": {path}, "unrelated-script": set(),
     }
+
+
+@pytest.mark.parametrize("expression", [
+    "value = f\"{delayed('core.json.utils')}\"",
+    "value = [delayed('core.json.utils') for item in inputs]",
+    "value = lambda: delayed('core.json.utils')",
+    "def f(arg: delayed('core.json.utils')): pass",
+    "def f(arg=delayed('core.json.utils')): pass",
+    "class C(delayed('core.json.utils')): pass",
+    "value = {'module': delayed('core.json.utils')}",
+], ids=["fstring", "comprehension", "lambda", "annotation", "default", "class-base", "dict"])
+def test_import_collection_keeps_expression_children_and_borrowed_tree(tmp_path, expression):
+    import ast
+
+    source = (expression + "\nfrom importlib import import_module as delayed\n"
+              "def entry(script: 'libexec/raptor-session-init'): pass\n")
+    tree = ast.parse(source)
+    original = ast.dump(tree, include_attributes=True)
+    path = Path("core/consumer.py")
+    references = {"libexec/raptor-session-init": set(), "other-script": set()}
+    assert extract_imports(path, tmp_path, frozenset(), references, source_tree=tree) == [
+        "core.json.utils", "core.json.utils",
+    ]
+    assert references == {"libexec/raptor-session-init": {path}, "other-script": set()}
+    assert ast.dump(tree, include_attributes=True) == original
+
+
+def test_import_collection_preserves_kind_order(tmp_path):
+    import ast
+
+    source = ("value = (delayed('core.first.module'), delayed('core.second.module'))\n"
+              "from importlib import import_module as delayed\n")
+    assert extract_imports(Path("core/consumer.py"), tmp_path, frozenset(),
+                           source_tree=ast.parse(source)) == [
+        "core.first.module", "core.second.module",
+        "core.first.module", "core.second.module",
+    ]
+
+
+def test_import_filter_keeps_roots_and_rejects_lookalikes(tmp_path):
+    import ast
+
+    source = ("import core, packages, engine\n"
+              "import core.extra, packages.tool, engine.rule\n"
+              "import corex, packagesx, enginex\n"
+              "import root_entry, root_entry.child\n")
+    assert extract_imports(Path("consumer.py"), tmp_path, frozenset({"root_entry"}),
+                           source_tree=ast.parse(source)) == [
+        "core", "packages", "engine", "core.extra", "packages.tool",
+        "engine.rule", "root_entry",
+    ]
