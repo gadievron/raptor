@@ -2996,6 +2996,21 @@ def _format_study_answers(study_answers: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _bounded_hypothesis_entries(entries: Any, field: str, limit: int) -> list[dict]:
+    """Select a bounded prefix of nonblank textual hypotheses."""
+    try:
+        source = iter(entries)
+    except TypeError:
+        return []
+    usable = (
+        entry for entry in source
+        if isinstance(entry, dict)
+        and isinstance(text := entry.get(field), str)
+        and text.strip()
+    )
+    return list(islice(usable, limit))
+
+
 def _format_prior_hypotheses(prior_hypotheses: Any) -> str:
     """Render the compact 'previously considered' block for re-reviews.
 
@@ -3016,10 +3031,9 @@ def _format_prior_hypotheses(prior_hypotheses: Any) -> str:
         return ""
     from core.security.prompt_envelope import neutralize_tag_forgery
 
-    entries = [
-        h for h in prior_hypotheses
-        if isinstance(h, dict) and (h.get("mechanism") or "").strip()
-    ]
+    entries = _bounded_hypothesis_entries(
+        prior_hypotheses, "mechanism", _MAX_PRIOR_HYPOTHESES,
+    )
     if not entries:
         return ""
 
@@ -3032,7 +3046,7 @@ def _format_prior_hypotheses(prior_hypotheses: Any) -> str:
          "hand-wavy is worth attacking — say explicitly which counter "
          "you are contesting and what new evidence defeats it."),
     ]
-    for h in entries[:_MAX_PRIOR_HYPOTHESES]:
+    for h in entries:
         conf = _CONFIDENCE_SAFE_RE.sub(
             "", str(h.get("confidence", "") or "").lower(),
         )[:16] or "unstated"
@@ -3069,10 +3083,9 @@ def _format_injected_hypotheses(injected: Any) -> str:
     if not injected:
         return ""
 
-    entries = [
-        h for h in injected
-        if isinstance(h, dict) and (h.get("mechanism") or "").strip()
-    ]
+    entries = _bounded_hypothesis_entries(
+        injected, "mechanism", _MAX_INJECTED_HYPOTHESES,
+    )
     if not entries:
         return ""
 
@@ -3084,7 +3097,7 @@ def _format_injected_hypotheses(injected: Any) -> str:
          "counter-argument. Do not dismiss a hypothesis without stating "
          "what evidence rules it out."),
     ]
-    for h in entries[:_MAX_INJECTED_HYPOTHESES]:
+    for h in entries:
         conf = _CONFIDENCE_SAFE_RE.sub(
             "", str(h.get("confidence", "") or "").lower(),
         )[:16] or "unstated"
@@ -3129,15 +3142,14 @@ def _format_seed_hypotheses(seeds: Any) -> str:
     """
     if not seeds:
         return ""
-    entries = [
-        s for s in seeds
-        if isinstance(s, dict) and (s.get("claim") or "").strip()
-    ]
+    entries = _bounded_hypothesis_entries(
+        seeds, "claim", _MAX_SEED_HYPOTHESES,
+    )
     if not entries:
         return ""
 
     body: list[str] = []
-    for s in entries[:_MAX_SEED_HYPOTHESES]:
+    for s in entries:
         tier = _SOURCE_SAFE_RE.sub(
             "", str(s.get("tier", "") or "").lower(),
         )[:32] or "ungraded"
@@ -3149,7 +3161,10 @@ def _format_seed_hypotheses(seeds: Any) -> str:
         disproof = str(s.get("disproof", "") or "").strip()
         if disproof:
             body.append(f"  disproof recipe: {disproof[:_MAX_SEED_TEXT_CHARS]}")
-        for ref in (s.get("evidence") or [])[:_MAX_SEED_REFS]:
+        refs = s.get("evidence") or []
+        if not isinstance(refs, (list, tuple)):
+            refs = []
+        for ref in refs[:_MAX_SEED_REFS]:
             if not isinstance(ref, dict):
                 continue
             artifact = str(ref.get("artifact", "") or "")[:_MAX_SEED_REF_CHARS]
