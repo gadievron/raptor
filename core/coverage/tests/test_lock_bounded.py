@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.poll_clock import install_poll_clock
 
 import core.atomic_fs.fs_lock as fs_lock
 from core.coverage.journal import (
@@ -87,6 +88,7 @@ def test_store_lock_degrades_after_bounded_wait(
     """A wedged holder of the store sidecar degrades the snapshot
     writer loudly after the deadline instead of stalling it forever."""
     import fcntl
+    clock = install_poll_clock(monkeypatch, fs_lock)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
                         raising=False)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
@@ -112,7 +114,13 @@ def test_store_lock_degrades_after_bounded_wait(
         assert any("WITHOUT" in r.message for r in caplog.records)
     finally:
         os.close(holder_fd)
-        thread.join(timeout=10)
+        if thread.ident is not None:
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+
+    assert clock.seconds >= 0.5
+    assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
+
 
 
 def test_journal_append_fails_loudly_after_bounded_wait(
@@ -121,6 +129,7 @@ def test_journal_append_fails_loudly_after_bounded_wait(
     """The appender flocks the shard DATA file; a wedged holder makes
     the append raise (row NOT appended) instead of blocking forever."""
     import fcntl
+    clock = install_poll_clock(monkeypatch, fs_lock)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
                         raising=False)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
@@ -150,7 +159,13 @@ def test_journal_append_fails_loudly_after_bounded_wait(
         assert "row NOT appended" in str(errors[0])
     finally:
         os.close(holder_fd)
-        thread.join(timeout=10)
+        if thread.ident is not None:
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+
+    assert clock.seconds >= 0.5
+    assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
+
 
 
 def test_journal_append_expiry_warning_carries_row_loss(
@@ -160,6 +175,7 @@ def test_journal_append_expiry_warning_carries_row_loss(
     """The expiry warning (helper-emitted) states the row-loss fact —
     the raise alone can be swallowed by broad best-effort handlers on
     the producer side, turning a lost row silent."""
+    clock = install_poll_clock(monkeypatch, fs_lock)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
                         raising=False)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
@@ -180,3 +196,6 @@ def test_journal_append_expiry_warning_carries_row_loss(
         ), "expiry warning must carry the row-loss consequence"
     finally:
         os.close(holder_fd)
+
+    assert clock.seconds >= 0.5
+    assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
