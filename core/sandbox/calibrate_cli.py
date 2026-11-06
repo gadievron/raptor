@@ -28,6 +28,7 @@ modes:
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
 
 _USAGE_EX = 64       # EX_USAGE
 _SOFTWARE_EX = 70    # EX_SOFTWARE
+_TIMEOUT_EX = 124    # timeout(1) convention
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -279,6 +281,12 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
         )
         return _USAGE_EX
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(
+            f"raptor-sandbox-calibrate: probe did not finish within "
+            f"--timeout {args.timeout}s and was killed; no profile cached.\n"
+        )
+        return _TIMEOUT_EX
     except (RuntimeError, OSError) as exc:
         sys.stderr.write(
             f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
