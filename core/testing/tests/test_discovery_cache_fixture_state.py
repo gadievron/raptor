@@ -133,7 +133,7 @@ def _prepare(case, tmp_path, fail_at=None):
             return parents[name]
         return __import__(name, globals, locals, fromlist, level)
 
-    namespace = {"runner_mod": owner, "runner": owner, "prereqs": owner, "asan": owner, "hc": owner,
+    namespace = {"isolated_module_state": helper.isolated_module_state, "runner_mod": owner, "runner": owner, "prereqs": owner, "asan": owner, "hc": owner,
                  "_scan_cached": getattr(owner, "_scan_cached", None),
                  "set_trust_override": getattr(owner, "set_trust_override", None),
                  "__builtins__": dict(vars(import_module("builtins")), __import__=private_import)}
