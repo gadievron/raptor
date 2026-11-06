@@ -734,93 +734,39 @@ class TestFreeVariableFallback:
         assert r.feasible is True
 
     @_requires_z3
-    def test_identical_calls_share_placeholder_within_condition(self):
-        """Textually-identical calls within ONE condition string share
-        a placeholder.
-
-        Pre-fix every call match allocated a fresh anon var, so
-        ``strlen(s) != strlen(s)`` was satisfiable (two independent
-        unconstrained vars).  That contradicted the writer's intent:
-        an LLM emitting the same ``strlen(s)`` twice means "the same
-        value", and ``X != X`` is unsat for any single ``X``.  Post-
-        fix the two occurrences share one Z3 var so the equality
-        ``strlen(s) == strlen(s)`` is a tautology and the inequality
-        ``strlen(s) != strlen(s)`` is unsat.
-        """
-        sat_eq = check_path_feasibility([
-            PathCondition("strlen(s) == strlen(s)", step_index=0),
-        ])
-        unsat_ne = check_path_feasibility([
-            PathCondition("strlen(s) != strlen(s)", step_index=0),
-        ])
-        assert sat_eq.feasible is True
-        assert unsat_ne.feasible is False
+    def test_identical_call_occurrences_do_not_imply_equality(self):
+        """Text cannot establish call purity or unchanged pointed-to memory."""
+        for op in ("==", "!="):
+            result = check_path_feasibility([PathCondition(f"strlen(s) {op} strlen(s)", 0)])
+            assert result.feasible is True
+            assert len(result.anon_var_map) == 2
 
     @_requires_z3
-    def test_identical_calls_share_placeholder_across_conditions(self):
-        """Textually-identical calls in DIFFERENT condition strings
-        within one ``check_path_feasibility`` batch share a placeholder.
-
-        Pre-fix each condition's ``_substitute_calls`` call allocated
-        fresh anon vars, so the realistic Tier-4 path
-        ``[strlen(input) > 100, strlen(input) < 50]`` (two conditions,
-        one batch) encoded as ``_anon_0 > 100 AND _anon_1 < 50`` —
-        trivially sat, missing the obvious contradiction.  Post-fix
-        the second ``strlen(input)`` reuses the first's placeholder,
-        making the contradiction visible and refuting the path.
-        """
-        r = check_path_feasibility([
-            PathCondition("strlen(input) > 100", step_index=0),
-            PathCondition("strlen(input) < 50", step_index=1),
+    def test_identical_call_text_does_not_refute_different_evaluations(self):
+        result = check_path_feasibility([
+            PathCondition("strlen(input) > 100", 0),
+            PathCondition("strlen(input) < 50", 1),
         ])
-        assert r.feasible is False
-        # Refutation should name the conflicting conditions in the
-        # unsat core.
-        assert any("strlen(input)" in u for u in r.unsatisfied)
+        assert result.feasible is True
+        assert len(result.anon_var_map) == 2
+        assert result.unsatisfied == []
 
     @_requires_z3
-    def test_dedup_resets_between_batches(self):
-        """Dedup is scoped to one ``check_path_feasibility`` call.
-
-        Two separate batches that both mention ``strlen(input)`` get
-        independent anon vars — the conservative impure-call default
-        applies at batch boundaries because that's the only scope at
-        which the LLM can't textually express same-value intent.
-        """
-        # Batch 1: refuted because both conditions in one batch share
-        # the strlen(input) placeholder.
-        batch1 = check_path_feasibility([
-            PathCondition("strlen(input) > 100", step_index=0),
-            PathCondition("strlen(input) < 50", step_index=1),
-        ])
-        assert batch1.feasible is False
-        # Batch 2: re-running the SAME conditions gets fresh state and
-        # the same refutation — confirms the refutation isn't sticky
-        # process-global state from batch 1.
-        batch2 = check_path_feasibility([
-            PathCondition("strlen(input) > 100", step_index=0),
-            PathCondition("strlen(input) < 50", step_index=1),
-        ])
-        assert batch2.feasible is False
-        # Batch 3: one condition per batch — each batch allocates fresh
-        # vars, so neither batch alone has a contradiction.
-        b3a = check_path_feasibility([
-            PathCondition("strlen(input) > 100", step_index=0),
-        ])
-        b3b = check_path_feasibility([
-            PathCondition("strlen(input) < 50", step_index=0),
-        ])
-        assert b3a.feasible is True
-        assert b3b.feasible is True
+    def test_occurrence_labels_reset_between_batches(self):
+        conditions = [PathCondition("strlen(input) > 100", 0), PathCondition("strlen(input) < 50", 1)]
+        first = check_path_feasibility(conditions)
+        second = check_path_feasibility(conditions)
+        assert first.feasible is True and second.feasible is True
+        assert first.anon_var_map == second.anon_var_map == {
+            "_anon_0": "strlen(input)", "_anon_1": "strlen(input)",
+        }
 
     @_requires_z3
     def test_distinct_call_texts_remain_distinct(self):
         """Different call texts still get distinct placeholders.
 
-        Pins the existing ``first(x)`` vs ``second(y)`` contract: only
-        EXACT text matches dedup.  Different function names or
-        different arguments mean different placeholders even within
-        one batch.
+        Different function names and arguments retain their own result
+        labels, just as repeated text does.
         """
         r = check_path_feasibility([
             PathCondition("first(x) != 0", step_index=0),
@@ -830,22 +776,15 @@ class TestFreeVariableFallback:
         assert r.feasible is True
 
     @_requires_z3
-    def test_dedup_distinguishes_whitespace_and_argument_variations(self):
-        """Dedup is literal text equality — whitespace and argument
-        differences keep calls distinct.
-
-        ``strlen(s)`` vs ``strlen( s )`` differ in whitespace; treat as
-        distinct (we can't prove the whitespace is semantically
-        irrelevant without parsing the inner expression).  ``strlen(a)``
-        vs ``strlen(b)`` are distinct functions of distinct arguments.
-        """
-        # Whitespace-different forms in one batch shouldn't dedup —
+    def test_occurrences_with_whitespace_and_argument_variations_stay_distinct(self):
+        """Formatting and argument text never supply evaluation identity."""
+        # Whitespace-different forms remain separate occurrences —
         # the resulting two anon vars let the inequality be sat.
         r1 = check_path_feasibility([
             PathCondition("strlen(s) != strlen( s )", step_index=0),
         ])
         assert r1.feasible is True
-        # Different-argument forms shouldn't dedup either.
+        # Different-argument forms remain separate too.
         r2 = check_path_feasibility([
             PathCondition("strlen(a) != strlen(b)", step_index=0),
         ])
@@ -877,21 +816,14 @@ class TestFreeVariableFallback:
 
 
 # ---------------------------------------------------------------------------
-# D2: assignment-shape detection + mutation barrier on call dedup
+# Assignment-shape detection and unmodeled scalar value flow
 # ---------------------------------------------------------------------------
 
 class TestAssignmentShapeBarrier:
-    """Conditions that look like program statements (assignment,
-    compound assignment, increment/decrement) route to
-    ASSIGNMENT_SHAPED rejection and break the call-dedup window.
+    """Program effects remain rejected and visible as scalar state boundaries.
 
-    The motivating case: when the LLM emits the realistic path
-    [strlen(input) > 100, input = realloc(input, n), strlen(input) < 50]
-    the two strlen(input) references straddle a mutation. Pre-D2
-    dedup merged them under one Z3 var and refuted the (actually
-    feasible) path. Post-D2 the assignment-shaped middle step
-    clears the dedup window, so the second strlen(input) allocates
-    a fresh placeholder and the path remains feasible.
+    Call occurrences are independent on both sides of a mutation, and also
+    within a segment. A mutation warning must not be silently discarded.
     """
 
     @_requires_z3
@@ -948,16 +880,8 @@ class TestAssignmentShapeBarrier:
             )
 
     @_requires_z3
-    def test_realloc_mutation_breaks_dedup(self):
-        """The motivating case from PR review.
-
-        Two strlen(input) references straddle a realloc. Pre-D2
-        the dedup merged them into one Z3 var → unsat → false
-        refutation. Post-D2 the assignment-shaped step clears the
-        dedup window so the second strlen(input) allocates a fresh
-        placeholder → feasible. The middle step itself shows up in
-        unknown_reasons as ASSIGNMENT_SHAPED.
-        """
+    def test_realloc_marker_preserves_distinct_call_occurrences(self):
+        """Calls remain independent and the unmodeled effect stays visible."""
         r = check_path_feasibility([
             PathCondition("strlen(input) > 100", step_index=0),
             PathCondition("input = realloc(input, n)", step_index=1),
@@ -997,35 +921,16 @@ class TestAssignmentShapeBarrier:
         )
 
     @_requires_z3
-    def test_dedup_resumes_within_post_mutation_segment(self):
-        """Within a SINGLE segment between mutation barriers, dedup
-        still works.
-
-        Two strlen(input) calls AFTER one mutation must dedup with
-        each other (they're in the same post-mutation segment), even
-        though they don't dedup with the pre-mutation segment.
-        """
-        r = check_path_feasibility([
-            PathCondition("strlen(input) > 100", step_index=0),
-            PathCondition("input = realloc(input, n)", step_index=1),
-            # Both of these reference the post-mutation strlen(input);
-            # they should share a placeholder so the contradiction
-            # surfaces and the post-mutation sub-path is refuted.
-            PathCondition("strlen(input) > 200", step_index=2),
-            PathCondition("strlen(input) < 50", step_index=3),
+    def test_calls_stay_independent_inside_post_mutation_segment(self):
+        result = check_path_feasibility([
+            PathCondition("strlen(input) > 100", 0),
+            PathCondition("input = realloc(input, n)", 1),
+            PathCondition("strlen(input) > 200", 2),
+            PathCondition("strlen(input) < 50", 3),
         ])
-        # The post-mutation segment is internally contradictory
-        # (>200 AND <50), so the overall verdict is infeasible —
-        # even though the pre-mutation segment is independent.
-        assert r.feasible is False
-        # Two label entries for strlen(input): one pre-barrier
-        # (singleton in its segment) and one post-barrier (shared
-        # across the two post-barrier guards).
-        strlen_placeholders = [
-            p for p, t in r.anon_var_map.items()
-            if t == "strlen(input)"
-        ]
-        assert len(strlen_placeholders) == 2
+        assert result.feasible is True
+        assert len(result.anon_var_map) == 3
+        assert result.unknown == ["input = realloc(input, n)"]
 
     @_requires_z3
     def test_multiple_mutation_barriers(self):
@@ -1058,12 +963,7 @@ class TestAssignmentShapeBarrier:
 
     @_requires_z3
     def test_ssa_renamed_path_is_feasible_without_barrier(self):
-        """The preferred D1 form: caller SSA-renames the identifier.
-
-        With distinct text (input_pre / input_post), no dedup happens
-        and no mutation barrier is needed. The path is feasible and
-        no ASSIGNMENT_SHAPED rejection appears.
-        """
+        """Explicit SSA names keep scalar state separate without a marker."""
         r = check_path_feasibility([
             PathCondition("strlen(input_pre) > 100", step_index=0),
             PathCondition("strlen(input_post) < 50", step_index=1),
@@ -1254,7 +1154,7 @@ class TestAssignmentShapeCoverage:
 # distinct_calls` (above, in this same class) subsumes it: same input
 # shape (``first(x)`` / ``second(y)``), same feasibility verdict, plus
 # the stronger assertion that two distinct anon entries appear in the
-# model. Kept the dedup-aware variant; removed the older one to avoid
+# model. Keep this stronger occurrence assertion to avoid
 # encoding the same property twice.
 
 
@@ -2028,7 +1928,7 @@ class TestCallSummaries:
         assert r.feasible is True
         assert r.summary_axioms == []
 
-    def test_axiom_recorded_once_per_deduped_call(self):
+    def test_axiom_recorded_for_each_call_occurrence(self):
         from core.smt_solver import BV_C_INT32
         r = check_path_feasibility(
             [
@@ -2038,7 +1938,7 @@ class TestCallSummaries:
             profile=BV_C_INT32,
         )
         assert r.feasible is True
-        assert r.summary_axioms == ["summary: strlen(s)"]
+        assert r.summary_axioms == ["summary: strlen(s)"] * 2
 
     def test_wp_drops_axiom_implied_conjuncts(self):
         # Both conditions are implied by the min() ITE axiom, so the
@@ -2054,7 +1954,7 @@ class TestCallSummaries:
         assert r.feasible is True
         assert r.wp_conjuncts == []
         assert r.wp_predicate == "true"
-        assert r.summary_axioms == ["summary: min(a, b)"]
+        assert r.summary_axioms == ["summary: min(a, b)"] * 2
 
     def test_summary_reported_in_reasoning(self):
         from core.smt_solver import BV_C_INT32

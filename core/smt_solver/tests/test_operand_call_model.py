@@ -62,13 +62,15 @@ def test_impossible_background_theory_cannot_be_skipped(native):
 
 
 @pytest.mark.parametrize("text", ['min(Value, 4) == min(Value, 4)', 'strnlen("a)b", 4) == strnlen("a)b", 4)'])
-def test_tautological_guards_still_assert_their_reported_theory(native, text):
+def test_repeated_call_guards_keep_each_reported_theory(native, text):
     result = paths.check_path_feasibility([paths.PathCondition(text, 0)], profile=BV_C_UINT8)
-    assert result.feasible is True and result.satisfied == [text]
-    assert result.summary_axioms and result.model
+    assert result.feasible is True and result.satisfied == []
+    assert len(result.anon_var_map) == len(result.summary_axioms) == 2
+    assert result.model and result.wp_complete is True
+    assert result.wp_conjuncts == ([] if text.startswith("min(") else [text])
 
 
-def test_theory_only_witness_preference_is_honored(native):
+def test_summary_supported_guard_keeps_witness_preference(native):
     result = paths.check_path_feasibility([paths.PathCondition("min(Value, 4) == min(Value, 4)", 0)],
                                           profile=BV_C_UINT8, prefer_witness=("Value", "max"))
     assert result.feasible is True and result.model["Value"] == 255

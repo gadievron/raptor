@@ -101,7 +101,7 @@ def test_duplicate_summary_labels_use_native_marker_ownership(reduce):
     ), profile=BV_C_INT8, reduce_constraints=reduce)
     assert result.feasible is False
     assert "mutation-free segment 1" in result.reasoning
-    assert result.summary_axioms == ["summary: abs(Value)"] * 2
+    assert result.summary_axioms == ["summary: abs(Value)"] * 3
 
 
 @pytest.mark.parametrize("unknown_core", [False, True], ids=["empty-core", "unowned-marker"])

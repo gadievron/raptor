@@ -836,3 +836,21 @@ def test_codeql_steering_reaches_real_case_sensitive_solver(tmp_path):
     assert solved[0].feasible is True
     assert solved[0].model == {'count': 2, 'Count': 9}
     assert v.llm.generate_structured.call_count == 1
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('hint', [{}, {'width': 32, 'signed': True}], ids=['guessed', 'pinned'])
+def test_opaque_call_occurrences_do_not_short_circuit_analysis(tmp_path, hint):
+    validator = _validator()
+    conditions = [PathCondition('next_value() == 0', 0), PathCondition('next_value() == 1', 1)]
+    validator._extract_path_conditions = MagicMock(return_value=(conditions, hint))
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is True
+    assert validator.llm.generate_structured.call_count == 1
+    assert validator._extract_path_conditions.call_count == 1
