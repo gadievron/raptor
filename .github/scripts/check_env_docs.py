@@ -767,11 +767,18 @@ def scan_tree(root: Path) -> Inventory:
             continue
         if kind == "python":
             source = p.read_text(encoding="utf-8", errors="replace")
+            # Every supported Python form spells env in an identifier:
+            # direct APIs, imports establishing arbitrary aliases, child-env
+            # dict names, helpers, or *_ENV declarations. Normalise only
+            # this necessary-name filter, never the parsed source/literals.
+            spelling = unicodedata.normalize("NFKC", source)
+            if "env" not in spelling.casefold():
+                continue
             parsed: str | ast.Module = source
             facts = None
             # Python normalizes identifiers to NFKC. Normalize only this
             # conservative prefilter, never the source passed to the parser.
-            if "_ENV" in unicodedata.normalize("NFKC", source):
+            if "_ENV" in spelling:
                 try:
                     parsed = ast.parse(source)
                 except SyntaxError:
@@ -834,13 +841,16 @@ def scan_tree(root: Path) -> Inventory:
         # Reuse RAPTOR's config dialect, including // and # comments. Pin
         # the import to the checker installation, never the scanned root.
         checker_root = str(Path(__file__).resolve().parents[2])
-        if checker_root not in sys.path:
-            sys.path.insert(0, checker_root)
-        from core.json import load_json_with_comments
+        caller_path = sys.path
+        try:
+            sys.path = [checker_root, *caller_path]
+            from core.json import load_json_with_comments
 
-        # Python-owned environment variables outrank broker credentials.
-        # Reject catalog collisions before adding broker inventory entries.
-        catalog = load_json_with_comments(broker_path)
+            # Python-owned variables outrank broker credentials. Load with
+            # the checker installation while preserving the caller's list.
+            catalog = load_json_with_comments(broker_path)
+        finally:
+            sys.path = caller_path
         if catalog is None:
             raise ValueError(f"Invalid broker catalog: {broker_path}")
         for broker in catalog["brokers"]:
