@@ -17,6 +17,19 @@ from core.recall.owasp_manifest import (
     main as om_main,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import core.recall.pinned_clone as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
 _CSV = """\
 # test name, category, real vulnerability, cwe
 BenchmarkTest00001,cmdi,true,78

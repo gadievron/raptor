@@ -15,11 +15,24 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-# The tests below patch core.orchestration.skill_dispatch.subprocess.run
-# — that target resolves through the SHARED subprocess module object, so
-# the patch is global for its duration. The honest-fake sandboxes spawn
-# real child processes and must reach the genuine implementation, so it
-# is bound here at import time, before any patch is active.
+from core.testing.module_bindings import patch_module_attribute
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import core.orchestration.skill_dispatch as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
+# Keep an explicit real runner for the owned child-process fixtures below.
+# The autouse fixture scopes lifecycle mocks to the dispatch binding.
 _REAL_SUBPROCESS_RUN = subprocess.run
 
 from core.orchestration.skill_dispatch import (
@@ -30,7 +43,6 @@ from core.orchestration.skill_dispatch import (
     truncate_findings_by_signal,
 )
 
-import pytest
 
 # Dispatch here is mocked (run_untrusted_networked patched throughout)
 # — the gate/staging logic is under test, so the transport kill switch

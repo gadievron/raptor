@@ -23,6 +23,19 @@ import pytest
 
 from core.orchestration.skill_dispatch import build_checklist
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import core.orchestration.skill_dispatch as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
 _MIB = 1024 * 1024
 
 ENV = "RAPTOR_CHECKLIST_BUILD_TIMEOUT_S"
