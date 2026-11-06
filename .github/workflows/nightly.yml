@@ -339,7 +339,7 @@ jobs:
             --lane nightly-slow --full \
             --junit-xml "$RUNNER_TEMP/slow.xml"
 
-      - name: Run integration tests (retry once on external outage)
+      - name: Run integration tests (retry failed cases once)
         id: integration_tests
         # Preserve integration coverage after a slow-test or skip-budget
         # failure. Require the slow step to have run so setup failures
@@ -350,33 +350,46 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           rc=0
-          python -m pytest -m integration core packages engine \
+          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --cache-clear -m integration core packages engine \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
             || rc=$?
+          # Keep a full report even when retry is inappropriate or fails.
+          if [ -f "$RUNNER_TEMP/integration-attempt-1.xml" ]; then
+            cp "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration.xml"
+          fi
           if [ "$rc" -eq 0 ]; then
             exit 0
           fi
+          # Collection/internal/usage errors and session-level failures do
+          # not become another complete test run.
+          if [ "$rc" -ne 1 ] || ! python3 .github/scripts/pytest_retry_reports.py eligible "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration-pytest-cache"; then
+            exit "$rc"
+          fi
           echo ""
-          echo "::warning::Integration tests failed (exit $rc) — retrying in 60s"
+          echo "::warning::Integration tests failed (exit $rc) — retrying only failed cases in 60s"
           echo ""
           sleep 60
-          python -m pytest -m integration core packages engine \
+          retry_rc=0
+          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --lf --last-failed-no-failures=none -m integration core packages engine \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
-            --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
+            --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml" \
+            || retry_rc=$?
+          python3 .github/scripts/pytest_retry_reports.py merge \
+            "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration-attempt-2.xml" \
+            "$RUNNER_TEMP/integration.xml"
+          exit "$retry_rc"
 
-      # Budget over the attempt that produced the green: attempt 2
-      # exists only when attempt 1 failed and was retried.
+      # The effective report retains first-pass successes/skips and replaces
+      # only failed cases. Both raw attempts remain available as artifacts.
       - name: Check integration skip count against its recorded budget
         if: ${{ !cancelled() && (steps.integration_tests.outcome == 'success' || steps.integration_tests.outcome == 'failure') }}
         run: |
-          xml="$RUNNER_TEMP/integration-attempt-2.xml"
-          [ -f "$xml" ] || xml="$RUNNER_TEMP/integration-attempt-1.xml"
           python3 .github/scripts/check_skip_budget.py \
             --lane nightly-integration --full \
-            --junit-xml "$xml"
+            --junit-xml "$RUNNER_TEMP/integration.xml"
 
       # Backstop for the continue-on-error toolchain install above: the
       # r2 / llvm-cov test families skip-with-reason when their binaries
@@ -414,6 +427,7 @@ jobs:
           path: |
             ${{ runner.temp }}/slow.xml
             ${{ runner.temp }}/integration-attempt-*.xml
+            ${{ runner.temp }}/integration.xml
           retention-days: 14
           if-no-files-found: ignore
 
