@@ -1355,7 +1355,17 @@ def test_aliasing_candidates_are_retained_outside_findings(tmp_path):
     report = _cs.review_candidates_report(result)
     assert report["candidates"][0]["status"] == "needs_review"
     assert report["candidates"][0]["rule_id"] == "-Wstrict-aliasing"
-    assert not _cs.to_sarif(result)["runs"][0]["results"]
+    sarif = _cs.to_sarif(result)
+    assert not sarif["runs"][0]["results"]
+    notification = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]
+    assert notification["level"] == "note"
+    assert notification["properties"] == {"review_candidates": 1}
+    import json
+    from core.sarif.parser import generate_scan_metrics
+    from core.reporting.scan_coverage import scan_execution_status
+    path = tmp_path / "review.sarif"
+    path.write_text(json.dumps(sarif))
+    assert scan_execution_status(generate_scan_metrics([str(path)])) == "ok"
     assert "1 compiler review candidate" in result.summary_line()
 
 
@@ -1598,3 +1608,24 @@ def test_unlocated_warning_is_coverage_limitation_without_losing_valid_findings(
     assert len(result.diagnostics) == int(include_valid and rule_id != _cs.STACK_RETURN_ID)
     assert len(result.stack_return_candidates) == int(include_valid and rule_id == _cs.STACK_RETURN_ID)
     assert all(type(d['line']) is int for d in result.diagnostics)
+
+
+@pytest.mark.parametrize('counts,kind', [
+    ({'tus_failed': 1}, 'compiler_failed_tus'),
+    ({'tus_skipped_cap': 2}, 'compiler_tu_cap'),
+])
+def test_compiler_incomplete_tus_reach_saved_scan_status(tmp_path, counts, kind):
+    import json
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+
+    result = _cs.CompilerScanResult(ok=True, tus_total=3, **counts)
+    document = _cs.to_sarif(result)
+    assert document['runs'][0]['results'] == []
+    notes = document['runs'][0]['invocations'][0]['toolExecutionNotifications']
+    assert notes[0]['properties']['coverage_limitation'] == kind
+    path = tmp_path / 'compiler.sarif'
+    path.write_text(json.dumps(document))
+    metrics = generate_scan_metrics([str(path)])
+    assert sum(metrics['tool_coverage_limitations'].values()) == 1
+    assert scan_execution_status(metrics) == 'partial'

@@ -1844,8 +1844,8 @@ def generate_scan_metrics(
     Args:
         sarif_paths: Reports whose findings are counted.
         file_count_paths: Optional original reports for artifact-based file
-            counts when merging has discarded their artifact tables. Their
-            findings and tool names do not enter the metrics.
+            counts and execution diagnostics when merging has discarded or
+            changed metadata. Their findings do not enter finding metrics.
 
     Returns:
         Dictionary containing scan metrics
@@ -1863,33 +1863,80 @@ def generate_scan_metrics(
         "findings_by_rule": {},
         "findings_by_tool": {},
         "tools_used": [],
+        "tool_execution_failures": {},
+        "tool_coverage_limitations": {},
+        "sarif_input_errors": 0,
     }
 
-    inputs = [(path, True, file_count_paths is None) for path in sarif_paths]
+    # A report used for both findings and provenance is decoded only once.
+    inputs = {path: (True, file_count_paths is None) for path in sarif_paths}
     if file_count_paths is not None:
-        inputs.extend((path, False, True) for path in file_count_paths)
+        for path in file_count_paths:
+            inputs[path] = (inputs.get(path, (False, False))[0], True)
+
+    def execution_metrics(run: dict, tool_key: str) -> None:
+        invocations = run.get("invocations", [])
+        if not isinstance(invocations, list):
+            metrics["sarif_input_errors"] += 1
+            return
+        for invocation in invocations:
+            if not isinstance(invocation, dict):
+                metrics["sarif_input_errors"] += 1
+                continue
+            failed = invocation.get("executionSuccessful") is False
+            if "executionSuccessful" in invocation and type(invocation["executionSuccessful"]) is not bool:
+                metrics["sarif_input_errors"] += 1
+            notifications = invocation.get("toolExecutionNotifications", [])
+            if not isinstance(notifications, list):
+                metrics["sarif_input_errors"] += 1
+                notifications = []
+            for note in notifications:
+                if not isinstance(note, dict):
+                    metrics["sarif_input_errors"] += 1
+                    continue
+                failed |= note.get("level") == "error"
+                limitation = _as_dict(note.get("properties")).get("coverage_limitation")
+                # Older compiler reports used this marker for informational
+                # review candidates, which do not imply incomplete analysis.
+                if isinstance(limitation, str) and limitation and limitation != "review_candidates":
+                    counts = metrics["tool_coverage_limitations"]
+                    counts[tool_key] = counts.get(tool_key, 0) + 1
+            if failed:
+                counts = metrics["tool_execution_failures"]
+                counts[tool_key] = counts.get(tool_key, 0) + 1
 
     def accumulate_file(sarif_path: str, count_findings: bool, count_files: bool) -> None:
         sarif_data = load_sarif(Path(sarif_path))
-        if not sarif_data:
+        if not sarif_data or not isinstance(sarif_data.get("runs"), list):
+            metrics["sarif_input_errors"] += 1
             return
 
-        for run in (sarif_data.get("runs") or []):
+        for run in sarif_data["runs"]:
             if not isinstance(run, dict):
+                metrics["sarif_input_errors"] += 1
                 continue
+            if count_files or not file_count_paths:
+                execution_metrics(run, _normalise_tool_name(get_tool_name(run)))
             if count_files:
-                artifacts = run.get("artifacts") or []
-                metrics["total_files_scanned"] += len(artifacts)
+                artifacts = run.get("artifacts", [])
+                if isinstance(artifacts, list):
+                    metrics["total_files_scanned"] += len(artifacts)
+                elif artifacts is not None:
+                    metrics["sarif_input_errors"] += 1
+            results = run.get("results", [])
+            if not isinstance(results, list):
+                metrics["sarif_input_errors"] += 1
+                results = []
+            else:
+                metrics["sarif_input_errors"] += sum(not isinstance(row, dict) for row in results)
             if not count_findings:
                 continue
             tool_name = get_tool_name(run)
             if tool_name not in metrics["tools_used"]:
                 metrics["tools_used"].append(tool_name)
 
-            # Count findings
-            results = run.get("results") or []
-            if not isinstance(results, list):
-                results = []
+            # Preserve finding-count semantics; malformed rows are separately
+            # recorded so counts cannot imply successful analysis.
             metrics["total_findings"] += len(results)
 
             tool_key = _normalise_tool_name(tool_name)
@@ -1929,7 +1976,7 @@ def generate_scan_metrics(
                 )
 
     # Metrics retain only counts and names, never the decoded input or resolver.
-    for sarif_path, count_findings, count_files in inputs:
+    for sarif_path, (count_findings, count_files) in inputs.items():
         accumulate_file(sarif_path, count_findings, count_files)
 
     return metrics

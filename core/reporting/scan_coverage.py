@@ -97,6 +97,7 @@ def scan_execution_status(metrics: dict) -> str:
     if recorded == "partial" or any(metrics.get(key) for key in (
         "semgrep_failed_packs", "dropped_registry_packs", "sarif_merge_failed",
         "analysis_gaps", "semgrep_dropped_files", "codeql_no_output",
+        "tool_execution_failures", "tool_coverage_limitations", "sarif_input_errors",
     )):
         return "partial"
     return "ok"
@@ -107,7 +108,19 @@ def render_scan_execution(metrics: dict) -> str | None:
     status = scan_execution_status(metrics)
     if status == "ok" and "execution_status" not in metrics:
         return None
-    return f"Scan execution: {status}"
+    details = []
+    for key, label in (("tool_execution_failures", "failed tool invocation(s)"),
+                       ("tool_coverage_limitations", "coverage limitation(s)")):
+        counts = metrics.get(key)
+        if isinstance(counts, dict):
+            total = sum(value for value in counts.values() if type(value) is int and value > 0)
+            if total:
+                details.append(f"{total} {label}")
+    input_errors = metrics.get("sarif_input_errors")
+    if type(input_errors) is int and input_errors > 0:
+        details.append(f"{input_errors} report issue(s)")
+    suffix = f" ({'; '.join(details)})" if details else ""
+    return f"Scan execution: {status}{suffix}"
 
 
 def render_scan_coverage(out_dir: Path) -> str | None:

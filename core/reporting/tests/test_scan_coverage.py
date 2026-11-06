@@ -233,6 +233,9 @@ class TestRobustness:
     ({'analysis_gaps': {'timeout': 1}}, 'partial'),
     ({'semgrep_dropped_files': 1}, 'partial'),
     ({'codeql_no_output': True}, 'partial'),
+    ({'tool_execution_failures': {'coccinelle': 1}}, 'partial'),
+    ({'tool_coverage_limitations': {'compiler': 2}}, 'partial'),
+    ({'sarif_input_errors': 1}, 'partial'),
     ({'execution_status': 'ok', 'semgrep_failed_packs': ['a']}, 'partial'),
     ({'execution_status': 'error', 'sarif_merge_failed': True}, 'error'),
 ])
@@ -242,6 +245,19 @@ def test_known_execution_failures_prevent_success_summary(tmp_path, metrics, sta
     _write(tmp_path, 'scan_metrics.json', metrics)
     rendered = render_scan_coverage(tmp_path)
     if metrics:
-        assert rendered == f'Scan execution: {status}'
+        assert rendered.startswith(f'Scan execution: {status}')
     else:
         assert rendered is None
+
+
+
+def test_execution_summary_retains_diagnostics_without_coverage_files(tmp_path):
+    _write(tmp_path, 'scan_metrics.json', {
+        'tool_execution_failures': {'coccinelle': 1},
+        'tool_coverage_limitations': {'compiler': 2},
+        'sarif_input_errors': 3,
+    })
+    assert render_scan_coverage(tmp_path) == (
+        'Scan execution: partial (1 failed tool invocation(s); '
+        '2 coverage limitation(s); 3 report issue(s))'
+    )
