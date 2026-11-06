@@ -50,6 +50,8 @@ from core.analysis.binary_oracle import (  # noqa: F401  (re-export)
     _find_arglist_open,
     _qualified_from_demangled,
 )
+from core.inventory.binary_oracle_corpora._cache import prepared_corpus
+
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
     run_tool,
@@ -112,22 +114,21 @@ class _SnappyDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         sha_dir = work_dir / SNAPPY_SHA[:12]
-        sentinel = sha_dir / "sentinel.ok"
         build_dir = sha_dir / "build"
         profdata = sha_dir / "merged.profdata"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_and_run(sha_dir, build_dir, profdata)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
-
-        binary = build_dir / "snappy_unittest"
-        live, candidates = _liveness_from_llvm_cov(binary, profdata)
-        return {
-            "o2_binary":            binary,
-            "candidate_functions":  sorted(candidates),
-            "live_set":             live,
-        }
+        with prepared_corpus(
+            sha_dir, version=CACHE_VERSION, build=lambda: _build_and_run(sha_dir, build_dir, profdata),
+            persistent=(build_dir, profdata), required=(build_dir / "snappy_unittest", profdata),
+            transient=(sha_dir / "src",), profile_pattern="snappy_*.profraw",
+        ):
+            binary = build_dir / "snappy_unittest"
+            live, candidates = _liveness_from_llvm_cov(binary, profdata)
+            return {
+                "o2_binary":            binary,
+                "candidate_functions":  sorted(candidates),
+                "live_set":             live,
+            }
 
 
 def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
@@ -139,8 +140,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
     logger.info("snappy: cloning %s → %s", SNAPPY_URL, src)
     if not clone_repository(SNAPPY_URL, src, depth=1):
         msg = f"snappy: clone failed for {SNAPPY_URL}"
@@ -163,8 +162,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
         env=get_safe_git_env(preserve_proxy=True), check=True, timeout=300,
     )
 
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
 
     # ``-Wno-error=uninitialized-const-pointer``: clang-21 is stricter
@@ -221,7 +218,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
         timeout=120,
     )
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 def _strip_llvm_file_prefix(name: str) -> str:
