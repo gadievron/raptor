@@ -516,6 +516,12 @@ class TestSkipPathsReleaseGate:
 
     def _loop(self, config, queue, domain_model=None):
         shared = types.SimpleNamespace(domain_model=domain_model)
+        # These tests target batch skip/failure paths, not eager preparation.
+        # Resume at the supported prepared-state seam with an owned artifact.
+        study_list_path = None
+        if config.out_dir is not None:
+            study_list_path = config.out_dir / "study-list.json"
+            study_list_path.write_text("{}")
         _study_consumer_loop(
             queue, config, shared, lambda ctx, cfg: None,
             _LockedOutcomes(), OrchestratorResult(),
@@ -526,6 +532,7 @@ class TestSkipPathsReleaseGate:
             entry_points=set(),
             start_time=time.monotonic(),
             on_progress=None,
+            state={"study_list_built": True, "study_list_path": study_list_path},
         )
 
     @staticmethod
@@ -573,20 +580,19 @@ class TestSkipPathsReleaseGate:
     def test_study_run_failure_releases_gate(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch
 
-        def fake_prep(cmd, **kwargs):
-            (tmp_path / "study-list.json").write_text("{}")
-            return types.SimpleNamespace(returncode=0, stderr="")
+        calls = []
 
         def boom(config):
+            calls.append(config)
             raise RuntimeError("transport down")
 
-        monkeypatch.setattr(_orch, "_run_study_prep", fake_prep)
         monkeypatch.setattr(_orch, "_run_llm_client", boom)
         warnings = _capture_warnings(monkeypatch)
         q = self._queue("what is foo_ctx?")
         self._loop(self._config(tmp_path), q)
         assert q.pending_concepts() == frozenset()
         assert any("study-run failed" in m for m in warnings)
+        assert len(calls) == 1, "exercise the batch's study-run failure exactly once"
 
 
 class TestWithinBatchDuplicateKeepsHold:
