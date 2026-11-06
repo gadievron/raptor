@@ -1625,6 +1625,71 @@ def _stmt_occurrences(node: Any, names: frozenset[str]) -> list[_Occurrence]:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class _AliasFact:
+    lhs_name: str | None
+    rhs: Any
+    bare_rhs: str | None
+    compound: bool
+
+
+def _alias_facts(body: Any) -> list[_AliasFact]:
+    """Snapshot syntax once; alias-dependent decisions stay in the fixpoint.
+
+    Preserve tree-walk order, including unresolved declarator initializers:
+    their refusal depends on the aliases discovered at that point in a round.
+    Retain RHS nodes rather than all their identifier sets: nested assignments
+    can have overlapping RHS subtrees, so caching those sets could grow
+    quadratically.
+    """
+    facts: list[_AliasFact] = []
+    for n in _walk_nodes(body):
+        lhs_name: str | None = None
+        rhs: Any = None
+        compound = False
+        if n.type == "assignment_expression":
+            left = n.child_by_field_name("left")
+            op = n.child_by_field_name("operator")
+            if (
+                left is None or left.type != "identifier"
+                or op is None or _node_text(op) not in _ASSIGN_OPS
+            ):
+                continue
+            lhs_name = _node_text(left)
+            rhs = n.child_by_field_name("right")
+            compound = _node_text(op) != "="
+        elif n.type == "init_declarator":
+            d = n.child_by_field_name("declarator")
+            while d is not None and d.type in (
+                "pointer_declarator", "attributed_declarator",
+                "parenthesized_declarator",
+            ):
+                d = d.child_by_field_name("declarator") or (
+                    d.named_children[0] if d.named_children else None
+                )
+            if d is not None and d.type == "identifier":
+                lhs_name = _node_text(d)
+            # Array (or other unresolved) declarators can stash a tracked
+            # pointer through their initializer without an assignment.
+            rhs = n.child_by_field_name("value")
+        if rhs is None or next(_idents(rhs), None) is None:
+            # Identifier-free expressions cannot grow this monotone closure
+            # or hide a tracked name in an unresolved initializer.
+            continue
+        stripped = _strip_parens_casts(rhs) if lhs_name is not None else None
+        facts.append(_AliasFact(
+            lhs_name=lhs_name,
+            rhs=rhs,
+            bare_rhs=(
+                _node_text(stripped)
+                if stripped is not None and stripped.type == "identifier"
+                else None
+            ),
+            compound=compound,
+        ))
+    return facts
+
+
 class _Analysis:
     """Parsed function + CFG + tracked sets for one claimed pointer."""
 
@@ -1719,67 +1784,31 @@ class _Analysis:
         body = self.fn_node.child_by_field_name("body")
         aliases: set[str] = set(self.pointer_set)
         derived: set[str] = set()
+        facts = _alias_facts(body)
         for _round in range(_MAX_TRACK_ROUNDS):
             grew = False
-            for n in _walk_nodes(body):
-                lhs_name: str | None = None
-                rhs: Any = None
-                compound = False
-                if n.type == "assignment_expression":
-                    left = n.child_by_field_name("left")
-                    op = n.child_by_field_name("operator")
+            for fact in facts:
+                lhs_name = fact.lhs_name
+                rhs_idents = {_node_text(x) for x in _idents(fact.rhs)}
+                if lhs_name is None:
                     if (
-                        left is not None and left.type == "identifier"
-                        and op is not None
-                        and _node_text(op) in _ASSIGN_OPS
+                        not rhs_idents.isdisjoint(aliases)
+                        or not rhs_idents.isdisjoint(derived)
                     ):
-                        lhs_name = _node_text(left)
-                        rhs = n.child_by_field_name("right")
-                        compound = _node_text(op) != "="
-                elif n.type == "init_declarator":
-                    decl = n.child_by_field_name("declarator")
-                    d = decl
-                    while d is not None and d.type in (
-                        "pointer_declarator", "attributed_declarator",
-                        "parenthesized_declarator",
-                    ):
-                        d = d.child_by_field_name("declarator") or (
-                            d.named_children[0] if d.named_children
-                            else None
+                        raise ProofRefusal(
+                            "tracked pointer stored through a "
+                            "non-identifier declarator's "
+                            "initializer"
                         )
-                    if d is not None and d.type == "identifier":
-                        lhs_name = _node_text(d)
-                        rhs = n.child_by_field_name("value")
-                    else:
-                        # Array (or other unresolved) declarators can
-                        # stash a tracked pointer through their
-                        # initializer without any assignment
-                        # expression the closure would see.
-                        value = n.child_by_field_name("value")
-                        if value is not None and {
-                            _node_text(x) for x in _idents(value)
-                        } & (aliases | derived):
-                            raise ProofRefusal(
-                                "tracked pointer stored through a "
-                                "non-identifier declarator's "
-                                "initializer"
-                            )
-                if lhs_name is None or rhs is None:
                     continue
-                stripped = _strip_parens_casts(rhs)
-                rhs_idents = {
-                    _node_text(x) for x in _idents(rhs)
-                }
-                if (
-                    not compound
-                    and stripped is not None
-                    and stripped.type == "identifier"
-                    and _node_text(stripped) in aliases
-                ):
+                if not fact.compound and fact.bare_rhs in aliases:
                     if lhs_name not in aliases:
                         aliases.add(lhs_name)
                         grew = True
-                elif rhs_idents & (aliases | derived):
+                elif (
+                    not rhs_idents.isdisjoint(aliases)
+                    or not rhs_idents.isdisjoint(derived)
+                ):
                     # Compound spellings land here by construction:
                     # ``a |= p`` mixes p into a's prior value — a
                     # derived carrier, not a pure alias.
@@ -1799,7 +1828,7 @@ class _Analysis:
             for a in _call_args(n):
                 names = {_node_text(x) for x in _idents(a)}
                 argnames.append(names)
-                if names & aliases:
+                if not names.isdisjoint(aliases):
                     hit = True
             if hit:
                 for names in argnames:
