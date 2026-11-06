@@ -1778,6 +1778,11 @@
     "count": 16,
     "kind": "literal"
   },
+  "core/reporting/scan_coverage.py::_EXECUTION_FAILURE_FIELDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Closed scan_metrics.json execution-failure field manifest, including pack failures, partial source analysis, metadata failures and coverage limits. These are fixed infrastructure/report schema keys, not a learned target-name vocabulary."
+  },
   "core/reporting/scan_coverage.py::_findings_for_tool": {
     "count": 14,
     "kind": "literal"

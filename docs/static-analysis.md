@@ -525,6 +525,13 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Semgrep coverage totals include the union of files examined by every pack;
+packs for different languages can examine different files. Missing or malformed
+JSON metadata makes execution partial, recorded as `semgrep_metadata_errors`,
+while valid findings and coverage from other packs remain available. Files
+with parsing or analysis errors are counted in `semgrep_partial_files`; their
+recovered findings remain available.
+
 Expanded-source scans retain distinct matches within a macro expansion even
 when they share one original source line. Exact repeats from multiple packs
 still collapse. Expanded coordinates identify preprocessed occurrences;

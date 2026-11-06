@@ -5,6 +5,7 @@ Built from the reads manifest (populated by the PostToolUse hook),
 Semgrep JSON output, CodeQL SARIF, and findings.json.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -290,89 +291,130 @@ def cleanup_manifest(run_dir: Path) -> bool:
         return False
 
 
+@dataclass
+class SemgrepOutputSummary:
+    """Derived facts only; decoded tool reports are never retained."""
+
+    record: dict[str, Any] | None
+    dropped_files: dict[str, list[str]]
+    skipped_paths: dict[str, int]
+    input_errors: int
+    files_failed: list[dict[str, str]]
+
+
+def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None = None,
+                         *, max_bytes: int | None = None) -> SemgrepOutputSummary:
+    """Read each bounded pack output once and union its actual examined files.
+
+    Language-specific packs need not examine the same files. Errors and skips
+    also belong to individual packs; retain their union without retaining the
+    much larger result arrays. Duplicate paths are read once, with no cache
+    surviving this call. The shared run-artifact byte ceiling remains the
+    default; callers with a stricter existing ceiling can preserve it.
+    """
+    if max_bytes is None:
+        max_bytes = RUN_ARTIFACT_MAX_BYTES
+    scanned: set[str] = set()
+    failed: dict[tuple[str, str], dict[str, str]] = {}
+    dropped: dict[str, set[str]] = {}
+    skipped: dict[str, set[str]] = {}
+    version = ""
+    input_errors = 0
+
+    def consume(path: Path) -> None:
+        nonlocal version, input_errors
+        data = load_json(path, max_bytes=max_bytes)
+        if not isinstance(data, dict):
+            input_errors += 1
+            return
+        damaged = False
+        paths = data.get("paths", {})
+        if not isinstance(paths, dict):
+            damaged = True
+            paths = {}
+        examined = paths.get("scanned", [])
+        if not isinstance(examined, list):
+            damaged = True
+            examined = []
+        has_files = False
+        for item in examined:
+            if isinstance(item, str) and item:
+                scanned.add(item)
+                has_files = True
+            else:
+                damaged = True
+        if has_files and not version and isinstance(data.get("version"), str):
+            version = data["version"]
+        errors = data.get("errors", [])
+        if not isinstance(errors, list):
+            damaged = True
+            errors = []
+        for error in errors:
+            if not isinstance(error, dict):
+                damaged = True
+                continue
+            file = error.get("path")
+            if file is not None and not isinstance(file, str):
+                damaged = True
+            if not isinstance(file, str) or not file:
+                continue
+            reason = error.get("message")
+            reason = reason if isinstance(reason, str) and reason else "error"
+            failed.setdefault((file, reason), {"path": file, "reason": reason})
+            kind = error.get("type")
+            if isinstance(kind, list) and kind:
+                kind = kind[0]
+            if isinstance(kind, str) and kind in {
+                "Timeout", "OutOfMemory", "FixpointTimeout", "TimeoutDuringInterfile",
+            }:
+                dropped.setdefault(file, set()).add(kind)
+        exclusions = paths.get("skipped", [])
+        if not isinstance(exclusions, list):
+            damaged = True
+            exclusions = []
+        for exclusion in exclusions:
+            if not isinstance(exclusion, dict):
+                damaged = True
+                continue
+            file = exclusion.get("path")
+            if not isinstance(file, str) or not file:
+                continue
+            reason = exclusion.get("reason")
+            reason = reason if isinstance(reason, str) and reason else "unspecified"
+            skipped.setdefault(reason, set()).add(file)
+        input_errors += int(damaged)
+
+    for path in dict.fromkeys(Path(path) for path in json_paths):
+        consume(path)
+    failed_rows = list(failed.values())
+    record: dict[str, Any] | None = None
+    if scanned:
+        record = {"tool": "semgrep", "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "files_examined": sorted(scanned)}
+        if version:
+            record["version"] = version
+        if rules_applied:
+            record["rules_applied"] = rules_applied
+        if failed:
+            record["files_failed"] = failed_rows
+    return SemgrepOutputSummary(
+        record, {path: sorted(kinds) for path, kinds in sorted(dropped.items())},
+        {reason: len(files) for reason, files in skipped.items()}, input_errors, failed_rows,
+    )
+
+
 def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
                        rules_applied: list[str] | None = None,
                        extra_error_json_paths: list[Path] | None = None,
                        ) -> dict[str, Any] | None:
-    """Build a coverage record from Semgrep JSON output.
+    """Build tool coverage from the union of supplied Semgrep pack outputs.
 
-    Reads paths.scanned from Semgrep's JSON output for authoritative
-    file list, and errors for files_failed.
-
-    ``extra_error_json_paths``: the OTHER packs' JSON outputs.
-    ``paths.scanned`` is cumulative across packs (same tree walk), so
-    one file suffices for the examined list — but ``errors`` are
-    per-pack: a file dropped by rule timeouts under one pack's rules
-    is reported only in that pack's JSON. Merging every pack's errors
-    keeps files_failed from silently under-reporting coverage loss.
+    The historical ``extra_error_json_paths`` argument now contributes examined
+    files as well as errors: different rule languages can scan different files.
+    Single-output callers retain the existing record shape and byte ceiling.
     """
-    # Tool-written, but the run dir is sandbox-writable — every
-    # run-dir read pays the shared artifact budget (closure test
-    # derives the reader set).
-    data = load_json(semgrep_json_path, max_bytes=RUN_ARTIFACT_MAX_BYTES)
-    if not data or not isinstance(data, dict):
-        return None
-
-    # Container shapes are as attacker-writable as the file (run dir
-    # sits in the sandbox write grant): a list ``paths`` / dict
-    # ``errors`` crashed the builder — and raptor.py's shared
-    # try-block then silently dropped BOTH scanner records — while a
-    # STRING ``scanned`` iterated per-character, unioning single
-    # characters in as examined files. Same isinstance discipline as
-    # build_from_findings.
-    paths = data.get("paths", {})
-    if not isinstance(paths, dict):
-        paths = {}
-    scanned_raw = paths.get("scanned", [])
-    if not isinstance(scanned_raw, list):
-        scanned_raw = []
-    scanned = [s for s in scanned_raw if isinstance(s, str)]
-    if not scanned:
-        return None
-
-    def _error_rows(value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        return [e for e in value if isinstance(e, dict)]
-
-    errors = _error_rows(data.get("errors"))
-    for extra in (extra_error_json_paths or []):
-        if Path(extra) == Path(semgrep_json_path):
-            continue
-        extra_data = load_json(extra, max_bytes=RUN_ARTIFACT_MAX_BYTES)
-        if isinstance(extra_data, dict):
-            errors.extend(_error_rows(extra_data.get("errors")))
-    version = data.get("version", "")
-    if not isinstance(version, str):
-        version = ""
-
-    record: dict[str, Any] = {
-        "tool": "semgrep",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "files_examined": sorted(scanned),
-    }
-    if version:
-        record["version"] = version
-    if rules_applied:
-        record["rules_applied"] = rules_applied
-    seen: set = set()
-    failed = []
-    for e in errors:
-        path = e.get("path")
-        if not path or not isinstance(path, str):
-            continue
-        message = e.get("message")
-        if not isinstance(message, str) or not message:
-            message = "error"
-        key = (path, message)
-        if key in seen:
-            continue
-        seen.add(key)
-        failed.append({"path": path, "reason": message})
-    if failed:
-        record["files_failed"] = failed
-
-    return record
+    return read_semgrep_outputs([semgrep_json_path, *(extra_error_json_paths or [])],
+                                rules_applied=rules_applied).record
 
 
 def build_from_cocci(spatch_results: list[Any],
