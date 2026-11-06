@@ -1,6 +1,6 @@
 name: SCA PR gate
 
-# Runs raptor-sca against the PR merge result AND main, then diffs
+# Runs raptor-sca against the PR merge result AND its base tree, then diffs
 # the two findings.json sets. Fails the build when the PR introduces a new
 # vulnerability at the configured severity threshold (default: high).
 #
@@ -79,9 +79,8 @@ jobs:
         with:
           # Belt-and-braces: no step in this job needs git credentials.
           persist-credentials: false
-          # Need full history so we can check out main as the
-          # baseline below.
-          fetch-depth: 0
+          # The merge result and its parents are sufficient for both scans.
+          fetch-depth: 2
           # Default pull_request checkout = the PR merged into the
           # current base — the tree this gate actually judges. An
           # exact head.sha checkout breaks on PRs based on an older
@@ -115,16 +114,25 @@ jobs:
       - name: Scan PR merge result
         run: bin/raptor-sca . --out /tmp/sca-pr --no-image-scanning
 
-      - name: Scan main baseline
-        # We checkout main into a sibling dir so the merge-result working
-        # tree stays untouched (cleanup on workflow termination is
-        # automatic; this is just hygiene).
+      - name: Scan PR base tree
+        # The merge result's first parent is the exact base tree it includes.
+        # Fetching a moving branch here compares different snapshots when the
+        # base advances in the queue, and hardcoding main breaks other bases.
+        shell: bash
         run: |
-          git fetch origin main:refs/heads/_baseline
-          git worktree add /tmp/sca-baseline-tree _baseline
-          bin/raptor-sca /tmp/sca-baseline-tree --out /tmp/sca-base --no-image-scanning
-          git worktree remove --force /tmp/sca-baseline-tree
-          git branch -D _baseline
+          # Refuse an unexpected head-only checkout instead of silently
+          # treating the PR's previous commit as its comparison baseline.
+          git rev-parse --verify 'HEAD^2^{commit}' >/dev/null
+          baseline_commit=$(git rev-parse --verify 'HEAD^1^{commit}')
+          baseline_root=$(mktemp -d "$RUNNER_TEMP/sca-baseline.XXXXXX")
+          baseline_tree="$baseline_root/tree"
+          cleanup_baseline() {
+            git worktree remove --force "$baseline_tree" || true
+            rm -rf -- "$baseline_root"
+          }
+          trap cleanup_baseline EXIT
+          git worktree add --detach "$baseline_tree" "$baseline_commit"
+          bin/raptor-sca "$baseline_tree" --out /tmp/sca-base --no-image-scanning
 
       - name: Compute diff
         id: diff
@@ -174,10 +182,12 @@ jobs:
         # rather than touching reviewers'.
         run: |
           set -euo pipefail
-          MARKER="<!-- raptor-sca-pr-gate -->"
-          BODY="$MARKER
-
-          $(cat /tmp/sca-diff.md)"
+          comment_dir=$(mktemp -d "$RUNNER_TEMP/sca-comment.XXXXXX")
+          trap 'rm -rf -- "$comment_dir"' EXIT
+          {
+            printf '%s\n\n' '<!-- raptor-sca-pr-gate -->'
+            cat /tmp/sca-diff.md
+          } > "$comment_dir/body.md"
           # Read all pages and edit only a comment posted by this workflow's bot.
           EXISTING=$(gh api --paginate --slurp \
             "/repos/${REPO}/issues/${PR}/comments?per_page=100" \
@@ -189,13 +199,13 @@ jobs:
           if [ -n "$EXISTING" ]; then
             gh api -X PATCH \
               "/repos/${REPO}/issues/comments/$EXISTING" \
-              -f body="$BODY" || {
+              -F "body=@$comment_dir/body.md" || {
                 echo "::warning::sca-pr-gate: PATCH on existing comment failed; skipping. Diff is in the step summary."
                 echo "posted=false" >> "$GITHUB_OUTPUT"
                 exit 0
               }
           else
-            gh pr comment "$PR" --body "$BODY" || {
+            gh pr comment "$PR" --body-file "$comment_dir/body.md" || {
               echo "::warning::sca-pr-gate: gh pr comment failed (likely a fork PR with restricted GITHUB_TOKEN); skipping. Diff is in the step summary."
               echo "posted=false" >> "$GITHUB_OUTPUT"
               exit 0

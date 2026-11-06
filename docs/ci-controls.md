@@ -122,7 +122,7 @@ This page is split into:
   python3 .github/scripts/check_command_metadata.py
   ```
 
-- **Dependency regression gate** — [`sca-pr-gate.yml`](../.github/workflows/sca-pr-gate.yml) on manifest, lockfile, workflow, and container changes. Fails on new findings at `high` severity or above.
+- **Dependency regression gate** — [`sca-pr-gate.yml`](../.github/workflows/sca-pr-gate.yml) on manifest, lockfile, workflow, and container changes. Compares the PR merge result with its exact first-parent base tree using a shallow checkout; fails on new findings at `high` severity or above.
 
   **Run locally:** `bin/raptor-sca . --out /tmp/sca-pr`, then `bin/raptor-sca diff <base>/findings.json <pr>/findings.json --fail-on-severity high`.
 
