@@ -16,6 +16,19 @@ from cve_env.tools.docker_build import (
     reset_docker_build_state,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_container_run_patches(monkeypatch):
+    """Keep the container runner's subprocess mocks local to its binding."""
+    import core.container.proc as container_proc
+
+    patch_module_attribute(
+        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
+    )
+
 
 def _find_docker_build_cmd(mock_run: object) -> list[str]:
     """Among all subprocess.run calls, find the `docker build ...` invocation."""

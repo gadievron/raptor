@@ -24,6 +24,16 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
+def _isolate_container_run_patches(monkeypatch):
+    """Keep the container runner's subprocess mocks local to its binding."""
+    import core.container.proc as container_proc
+
+    patch_module_attribute(
+        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_shutil_patch_targets(monkeypatch):
     """Keep shutil patch decorators and contexts on consumer-owned views."""
     import core.container.compose as consumer_0

@@ -15,6 +15,19 @@ from unittest.mock import patch
 
 from cve_env.utils.run import RunOutcome, run_with_timeout
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_container_run_patches(monkeypatch):
+    """Keep the container runner's subprocess mocks local to its binding."""
+    import core.container.proc as container_proc
+
+    patch_module_attribute(
+        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
+    )
+
 
 def test_run_with_timeout_succeeds_for_fast_command() -> None:
     """A command that finishes in time returns RunOutcome(timed_out=False) with
