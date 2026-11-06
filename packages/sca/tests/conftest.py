@@ -23,6 +23,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from core.testing.module_state import isolated_module_state
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ import pytest
 # Tests that genuinely need a live LLM (e.g. a specific-model smoke
 # test) opt in with ``@pytest.mark.integration``, which the root
 # ``pytest.ini`` deselects by default anyway.
+
 
 
 @pytest.fixture(autouse=True)
@@ -92,29 +94,25 @@ def _stub_resolver_tool_probes_at_session_start():
     False for every resolver tool without spawning subprocess.
 
     Tests that exercise real-tool detection should depend on
-    ``unstub_check_tool_cache`` to clear the relevant entries.
+    ``unstub_check_tool_cache`` to install an empty test-owned cache.
     """
-    from packages.sca.resolvers import _CHECK_TOOL_CACHE
-    for cmd in _TOOL_PROBES:
-        _CHECK_TOOL_CACHE[cmd] = False
-    yield
-    # No cleanup — the cache is process-scoped and the next test run
-    # is a fresh process.
+    from packages.sca import resolvers
+    with isolated_module_state(
+            resolvers, {"_CHECK_TOOL_CACHE": dict.fromkeys(_TOOL_PROBES, False)}):
+        yield
 
 
 @pytest.fixture
-def unstub_check_tool_cache():
+def unstub_check_tool_cache(monkeypatch):
     """Opt-out fixture for tests that want to exercise the real
     ``_check_tool`` path (e.g. a regression test that the npm probe
-    is actually invoked end-to-end). Clears the cache for the test
-    and re-stubs it on teardown so neighbouring tests stay fast.
+    is actually invoked end-to-end). Installs an empty owned cache
+    and restores the session cache on teardown.
     """
-    from packages.sca.resolvers import _CHECK_TOOL_CACHE
-    saved = dict(_CHECK_TOOL_CACHE)
-    _CHECK_TOOL_CACHE.clear()
+    from packages.sca import resolvers
+    # Share the body's undo stack when it patches this same binding.
+    monkeypatch.setattr(resolvers, "_CHECK_TOOL_CACHE", {})
     yield
-    _CHECK_TOOL_CACHE.clear()
-    _CHECK_TOOL_CACHE.update(saved)
 
 
 @pytest.fixture(autouse=True)

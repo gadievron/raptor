@@ -18,12 +18,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.sage import rowmac
+from core.testing.module_state import isolated_module_state
 
 _FIELDS = {"kind": "test_row", "value": "x"}
 
 
+
 class _KeyDirCase(unittest.TestCase):
     def setUp(self):
+        self.enterContext(isolated_module_state(rowmac, {"_warned_paths": set()}))
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.key_path = Path(self._tmp.name) / "raptor" / "rowmac.key"
@@ -32,8 +35,6 @@ class _KeyDirCase(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        # warn-once state is per-path/per-process; isolate per test.
-        rowmac._warned_paths.clear()
 
     def _make_key(self, mode=0o600) -> bytes:
         self.key_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

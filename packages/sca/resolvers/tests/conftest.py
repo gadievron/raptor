@@ -7,7 +7,7 @@ every cascade attempt during a real scan. The tests monkeypatch
 tests, a tool's "available" verdict from one test leaks into the
 next and breaks every downstream assertion.
 
-This autouse fixture clears the cache before each resolver test.
+This autouse fixture installs a private cache for each resolver test.
 """
 
 from __future__ import annotations
@@ -15,12 +15,13 @@ from __future__ import annotations
 import pytest
 
 
+
 @pytest.fixture(autouse=True)
-def _clear_check_tool_cache():
-    from packages.sca.resolvers import _CHECK_TOOL_CACHE
-    _CHECK_TOOL_CACHE.clear()
+def _clear_check_tool_cache(monkeypatch):
+    from packages.sca import resolvers
+    # Share the body's undo stack when it patches this same binding.
+    monkeypatch.setattr(resolvers, "_CHECK_TOOL_CACHE", {})
     yield
-    _CHECK_TOOL_CACHE.clear()
 
 
 @pytest.fixture(autouse=True)

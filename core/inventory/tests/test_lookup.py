@@ -3,6 +3,7 @@
 
 import unittest
 from core.inventory.lookup import lookup_function, normalise_path
+from core.testing.module_state import isolated_module_state
 
 
 CHECKLIST = {
@@ -35,6 +36,7 @@ CHECKLIST = {
         },
     ]
 }
+
 
 
 class TestNormalisePath(unittest.TestCase):
@@ -189,8 +191,9 @@ class TestFileIndexCache(unittest.TestCase):
     def setUp(self):
         from core.inventory import lookup as lookup_mod
         self.lookup_mod = lookup_mod
-        lookup_mod._INDEX_CACHE.clear()
-        self.addCleanup(lookup_mod._INDEX_CACHE.clear)
+        self.enterContext(isolated_module_state(
+            lookup_mod, {"_INDEX_CACHE": type(lookup_mod._INDEX_CACHE)()},
+            lock=lookup_mod._INDEX_LOCK))
 
     @staticmethod
     def _checklist(tag):

@@ -25,6 +25,7 @@ import pytest
 
 from core.config import RaptorConfig
 from core.testing.logging_state import owned_log_handler
+from core.testing.module_state import isolated_module_state
 
 # The dispatchers under test resolve baseline registry packs via
 # ``RaptorConfig.get_semgrep_config`` and then drop unresolved
@@ -71,6 +72,7 @@ def _stub_run_single(name, config, repo_path, out_dir, timeout,
 # ---------------------------------------------------------------------------
 # semgrep_scan_parallel
 # ---------------------------------------------------------------------------
+
 
 class TestSemgrepScanParallel:
 
@@ -633,11 +635,10 @@ class TestDropUnreachableRegistryPacks:
         ("category_crypto", "/repo/engine/semgrep/rules/crypto"),
     ]
 
-    def setup_method(self):
-        _scanner_mod._dropped_registry_packs.clear()
-
-    def teardown_method(self):
-        _scanner_mod._dropped_registry_packs.clear()
+    @pytest.fixture(autouse=True)
+    def _owned_dropped_registry_packs(self):
+        with isolated_module_state(_scanner_mod, {"_dropped_registry_packs": []}):
+            yield
 
     def test_unreachable_drops_records_and_prints(self, capsys, monkeypatch):
         monkeypatch.setattr(

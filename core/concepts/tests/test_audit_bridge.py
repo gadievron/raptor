@@ -22,6 +22,8 @@ from core.concepts.audit_bridge import (
     invariants_contradicting_finding,
     queue_reading_list_item,
 )
+from core.testing.module_state import isolated_module_state
+
 
 
 @pytest.fixture
@@ -1564,7 +1566,6 @@ class TestGrepHintGuard:
         from core.concepts import audit_bridge as ab
         borrowed = ab._grep_hint_compilable
         fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
-        from core.testing.module_state import isolated_module_state
 
         with isolated_module_state(ab, {"_grep_hint_compilable": fresh, "_demoted_hints_logged": set()}):
             try:
@@ -2752,9 +2753,13 @@ class TestStudyListStructuralContext:
             json.dumps({"items": items, "target": "test"}),
         )
 
-    def setup_method(self) -> None:
-        from core.concepts.audit_bridge import _study_list_cache
-        _study_list_cache.clear()
+    @pytest.fixture(autouse=True)
+    def _owned_study_list_cache(self):
+        from core.concepts import audit_bridge
+        with isolated_module_state(
+                audit_bridge, {"_study_list_cache": {}},
+                lock=audit_bridge._study_list_lock):
+            yield
 
     def test_returns_callees_and_callers(self, tmp_path: Path) -> None:
         from core.concepts.audit_bridge import (
