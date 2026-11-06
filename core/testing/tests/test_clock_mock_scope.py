@@ -2,12 +2,9 @@
 from functools import lru_cache
 import ast
 import copy
-import importlib
 from pathlib import Path
-import sys
 import time
 from types import ModuleType
-from unittest.mock import patch
 
 import pytest
 
@@ -81,21 +78,16 @@ def _cases():
     return cases
 
 
-@lru_cache(maxsize=None)
-def _production_module(name):
-    with patch.object(sys, "path", sys.path.copy()):
-        return importlib.import_module(name)
-
-
 def _consumer(module, borrowed):
-    original = _production_module(module)
-    assert isinstance(original, ModuleType)
-    assert isinstance(original.time, ModuleType)
-    consumer = ModuleType(original.__name__)
-    vars(consumer).update(vars(original))
+    # Execute the real test's patch statement against an owned consumer. It
+    # only reads/writes this time binding; importing production modules here
+    # starts unrelated SDK imports without exercising their runtime code.
+    # The native tests retain that real behavior and import coverage.
+    consumer = ModuleType(module)
+    consumer.time = time
     if borrowed:
-        view = ModuleType(original.time.__name__)
-        vars(view).update(vars(original.time))
+        view = ModuleType(time.__name__)
+        vars(view).update(vars(time))
         consumer.time = view
     return consumer
 

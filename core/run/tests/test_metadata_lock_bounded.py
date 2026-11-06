@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.poll_clock import install_poll_clock
 
 import core.atomic_fs.fs_lock as fs_lock
 from core.run.metadata import _HAS_FCNTL, _metadata_lock
@@ -48,6 +49,7 @@ def test_wedged_holder_never_blocks_finalisers_unboundedly(
     caplog: pytest.LogCaptureFixture,
 ):
     import fcntl
+    clock = install_poll_clock(monkeypatch, fs_lock)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
                         raising=False)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
@@ -79,4 +81,9 @@ def test_wedged_holder_never_blocks_finalisers_unboundedly(
         )
     finally:
         os.close(holder_fd)
-        thread.join(timeout=10)
+        if thread.ident is not None:
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+
+    assert clock.seconds >= 0.5
+    assert len(clock.sleeps) > 1, "caller bypassed the polling wait"

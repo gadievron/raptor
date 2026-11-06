@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.poll_clock import install_poll_clock
 
 import core.atomic_fs.fs_lock as fs_lock
 from core.inventory import _checklist_lock
@@ -39,6 +40,7 @@ def test_wedged_holder_fails_the_update_after_bounded_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
     import fcntl
+    clock = install_poll_clock(monkeypatch, fs_lock)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
                         raising=False)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
@@ -69,7 +71,13 @@ def test_wedged_holder_fails_the_update_after_bounded_wait(
         assert "refusing to proceed unserialised" in str(errors[0])
     finally:
         os.close(holder_fd)
-        thread.join(timeout=10)
+        if thread.ident is not None:
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+
+    assert clock.seconds >= 0.5
+    assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
+
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"),
