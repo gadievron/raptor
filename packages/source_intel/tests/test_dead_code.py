@@ -29,6 +29,41 @@ from packages.source_intel.adapter import (
 )
 
 
+@pytest.fixture
+def _live_tool_probe_state():
+    """Give this live probe fresh caches and restore the borrowed state."""
+    from core.testing.module_state import isolated_module_state
+    import packages.coccinelle.runner as consumer
+
+    with isolated_module_state(consumer, {
+        "_spatch_resolved": False,
+        "_resolved_spatch": None,
+    }):
+        yield
+
+
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home, _live_tool_probe_state):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not _spatch_meets_min():
+        pytest.skip('spatch >= 1.3 required for prereqs E2E')
+
+
+
+
 def _finding(file_path: str, sink_line: int, rule_id: str) -> Finding:
     return Finding(
         finding_id="t",
@@ -170,10 +205,7 @@ def test_pointer_ref_searches_recursively(tmp_path):
 # =====================================================================
 
 
-@pytest.mark.skipif(
-    not _spatch_meets_min(),
-    reason="spatch >= 1.3 required for prereqs E2E",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 def test_dead_code_fires_on_static_unreferenced(tmp_path):
     """Static + zero callers + zero pointer-refs → dead-code."""
     f = tmp_path / "dead.c"
@@ -189,10 +221,7 @@ def test_dead_code_fires_on_static_unreferenced(tmp_path):
     assert _finding_in_dead_code(finding, tmp_path) is True
 
 
-@pytest.mark.skipif(
-    not _spatch_meets_min(),
-    reason="spatch >= 1.3 required for prereqs E2E",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 def test_dead_code_skipped_for_non_static(tmp_path):
     """Non-static function must not be flagged dead even with zero
     callers in the target — caller may live in another TU."""
@@ -209,10 +238,7 @@ def test_dead_code_skipped_for_non_static(tmp_path):
     assert _finding_in_dead_code(finding, tmp_path) is False
 
 
-@pytest.mark.skipif(
-    not _spatch_meets_min(),
-    reason="spatch >= 1.3 required for prereqs E2E",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 def test_dead_code_skipped_when_pointer_referenced(tmp_path):
     """Static, no calls, BUT registered as a vtable callback — NOT
     dead. This is the kernel struct ops shape (CVE-2017-7541)."""
@@ -235,10 +261,7 @@ def test_dead_code_skipped_when_pointer_referenced(tmp_path):
 # =====================================================================
 
 
-@pytest.mark.skipif(
-    not _spatch_meets_min(),
-    reason="spatch >= 1.3 required for prereqs E2E",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 @pytest.mark.slow  # genuine cost: full analyze()/spatch E2E through the sandbox exceeds the 10s default-tier budget; logic-level coverage stays default-tier
 def test_validator_verdict_dead_code_emits_not_exploitable(tmp_path):
     """Adapter integration: dead-code → NOT_EXPLOITABLE wins over
@@ -257,10 +280,7 @@ def test_validator_verdict_dead_code_emits_not_exploitable(tmp_path):
     assert v.validate(finding) == ValidatorVerdict.NOT_EXPLOITABLE
 
 
-@pytest.mark.skipif(
-    not _spatch_meets_min(),
-    reason="spatch >= 1.3 required for prereqs E2E",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 @pytest.mark.slow  # genuine cost: full analyze()/spatch E2E through the sandbox exceeds the 10s default-tier budget; logic-level coverage stays default-tier
 def test_validator_verdict_skips_dead_code_for_non_static(tmp_path):
     """A non-static unsafe function with no observed calls in the

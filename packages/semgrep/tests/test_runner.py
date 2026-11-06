@@ -11,6 +11,42 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not is_available():
+        pytest.skip('semgrep not installed')
+
+
+@pytest.fixture
+def _live_tool_prerequisite_1(_live_tool_home):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if is_available() and (not scope_isolation_available()):
+        pytest.skip('semgrep below scope-isolation floor')
+
+
+@pytest.fixture
+def _live_tool_prerequisite_2(_live_tool_home):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if shutil.which('git') is None:
+        pytest.skip('git not installed')
+
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate_probe_patch_targets(monkeypatch):
     """Keep probe mocks local, including delegated discovery and execution."""
@@ -819,7 +855,7 @@ class TestErrorTruth:
         assert result.ok
 
 
-@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestErrorTruthLive:
     """Real-semgrep regression for the errors=[] hardcode: a
     deliberately-invalid rule must produce an error result, never
@@ -851,11 +887,8 @@ class TestErrorTruthLive:
         assert result.findings == []
 
 
-@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
-@pytest.mark.skipif(
-    is_available() and not scope_isolation_available(),
-    reason="semgrep below scope-isolation floor",
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
+@pytest.mark.usefixtures('_live_tool_prerequisite_1')
 class TestScanScopeLive:
     """Real-semgrep regression for target-steered scan scope: semgrep
     honours the SCANNED repo's ``.semgrepignore`` by default, so a
@@ -894,7 +927,7 @@ class TestScanScopeLive:
             "target-shipped .semgrepignore suppressed the scan scope"
         )
 
-    @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+    @pytest.mark.usefixtures('_live_tool_prerequisite_2')
     def test_planted_gitignore_untracked_file_still_scanned(self, tmp_path):
         """--no-git-ignore semantic pin: inside a git repo, semgrep by
         default drops files matched by the TARGET's ``.gitignore`` —
@@ -957,7 +990,7 @@ class TestScanScopeLive:
 
 # Opt-in with ``pytest -m integration``.
 @pytest.mark.integration
-@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestIntegration:
     """Real-semgrep tests. Skipped when binary unavailable."""
 
@@ -1225,7 +1258,7 @@ def _diagnose_failed_semgrep(directory, execute, command, scope, failed):
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestSandboxMetadataIntegration:
     @pytest.mark.parametrize("external_output", [False, True])
     def test_positive_control_keeps_sidecar_inside_writable_output(self, tmp_path, monkeypatch, external_output):
