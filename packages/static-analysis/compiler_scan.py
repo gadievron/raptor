@@ -308,7 +308,7 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
                       *, review_candidates: bool = False):
     kept: list[dict[str, Any]] = []
     @lru_cache(maxsize=256)
-    def locate_event(name):
+    def locate_file(name):
         return _rel_under_target(name, target_path, full_path.parent)
     for d in raw:
         if "error" in str(d.get("kind", "")):
@@ -319,9 +319,7 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
             continue
         if not valid_diagnostic_location(d):
             continue
-        rel = _rel_under_target(
-            d.get("file", ""), target_path, full_path.parent,
-        )
+        rel = locate_file(d.get("file", ""))
         if rel is None:
             continue
         line = d.get("line", 0)
@@ -334,7 +332,7 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
             "compiler": compiler_name,
             "tu": rel_path,
         })
-        attach_paths(kept[-1], d, locate_event)
+        attach_paths(kept[-1], d, locate_file)
     return kept
 
 

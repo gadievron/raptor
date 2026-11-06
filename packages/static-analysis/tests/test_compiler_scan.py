@@ -1346,6 +1346,39 @@ print(json.dumps([{'kind':'warning','option':'-Wanalyzer-use-after-free','messag
     assert not list(out.glob('compiler_scan_*'))
 
 
+@pytest.mark.parametrize("review", [False, True])
+@pytest.mark.parametrize("outside", [False, True])
+def test_primary_and_flow_locations_share_bounded_per_call_resolution(tmp_path, monkeypatch, review, outside):
+    import copy
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    source = (tmp_path if outside else root) / "a.c"
+    source.write_text("void f(void) {}\n")
+    diagnostic = {"id": "-Wstrict-aliasing" if review else "-Wanalyzer-use-after-free",
+                  "file": str(source), "line": 1, "kind": "warning", "message": "warning",
+                  "code_flows": [{"threadFlows": [{"locations": [{"location": {
+                      "physicalLocation": {"artifactLocation": {"uri": source.as_uri()},
+                                           "region": {"startLine": 1}}}}]}]}]}
+    raw = [copy.deepcopy(diagnostic) for _ in range(50)]
+    calls = []
+    original = _cs._rel_under_target
+
+    def locate(name, target, directory):
+        calls.append((name, target, directory))
+        return original(name, target, directory)
+
+    monkeypatch.setattr(_cs, "_rel_under_target", locate)
+    for _ in range(2):
+        calls.clear()
+        findings = _cs._scan_diagnostics(raw, root, root / "a.c", "gcc", "a.c", review_candidates=review)
+        assert len(calls) == 1
+        assert len(findings) == (0 if outside else 50)
+        if findings:
+            assert all(finding["file"] == "a.c" and finding.get("code_flows") for finding in findings)
+        assert raw == [diagnostic] * 50
+
+
 def test_aliasing_candidates_are_retained_outside_findings(tmp_path):
     raw = [{"id": "-Wstrict-aliasing", "file": str(tmp_path / "a.c"),
             "line": 2, "message": "might break strict-aliasing", "kind": "warning"}]
