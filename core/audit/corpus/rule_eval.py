@@ -1584,7 +1584,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from .label import load_all_labels
     from .run_corpus import (
-        _build_excerpt_tree,
+        _excerpt_trees,
         _label_source_status,
         _resolve_source_dirs,
     )
@@ -1748,8 +1748,7 @@ def main(argv: list[str] | None = None) -> int:
         graduated_cocci_dir(graduated_base)
         if graduated_base is not None else None
     )
-    excerpt_dirs = _build_excerpt_tree(evaluable, source_dirs)
-    try:
+    with _excerpt_trees(evaluable, source_dirs) as excerpt_dirs:
         for repo_key, excerpt in excerpt_dirs.items():
             repo_labels = [
                 lb for lb in evaluable if lb.source.repo == repo_key
@@ -1834,9 +1833,6 @@ def main(argv: list[str] | None = None) -> int:
                         flush=True,
                     )
             repo_outcomes[repo_key] = outcomes
-    finally:
-        for d in excerpt_dirs.values():
-            shutil.rmtree(str(d), ignore_errors=True)
     wall_s = time.monotonic() - t0
 
     report = evaluate(evaluable, repo_outcomes, inventory, slop=args.slop,
