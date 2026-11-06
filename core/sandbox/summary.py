@@ -710,13 +710,16 @@ def read_cli_disable_annotation(run_dir: Path) -> str | None:
         raw = read_capped(Path(run_dir) / SUMMARY_FILE, _MARKER_MAX_BYTES)
         if raw is None:
             return None
-        # Keep load_json's strict UTF-8, single-BOM tolerance, and backend.
-        data = loads(raw.decode("utf-8"))
+        # Keep shared strict UTF-8/BOM and constant handling, while
+        # refusing ambiguous objects before members are overwritten.
+        data = loads(raw.decode("utf-8"), object_pairs_hook=_unique_evidence_object)
     except Exception:  # noqa: BLE001 — best-effort display annotation
         return None
-    if not isinstance(data, dict) or not data.get("cli_sandbox_disabled"):
+    if not isinstance(data, dict) or data.get("cli_sandbox_disabled") is not True:
         return None
-    label = str(data.get("disable_consent") or "unrecorded")
+    label = data.get("disable_consent")
+    if not isinstance(label, str) or not label:
+        label = "unrecorded"
     return escape_nonprintable(
         redact_secrets(label))[:_DISABLE_CONSENT_DISPLAY_MAX]
 
@@ -1844,19 +1847,21 @@ def _cli_main(argv: list | None = None) -> int:
         # argparse exits 2 on bad args; preserve that contract
         return e.code if isinstance(e.code, int) else 2
 
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
     target = Path(args.path)
     if not target.is_dir():
-        print(f"error: {target} is not a directory", file=sys.stderr)
+        print(f"error: {_sft(str(target))} is not a directory", file=sys.stderr)
         return 1
 
     if not args.sweep:
         # Single-run mode (original behaviour)
         result = summarize_and_write(target)
         if result is None:
-            print(f"(no denials recorded for {target})")
+            print(f"(no denials recorded for {_sft(str(target))})")
             return 0
-        print(f"Wrote {target / SUMMARY_FILE} ({result['total_denials']} denials, "
-              f"by_type={result['by_type']})")
+        print(f"Wrote {_sft(str(target / SUMMARY_FILE))} ({result['total_denials']} denials, "
+              f"by_type={_sft(str(result['by_type']))})")
         return 0
 
     # Sweep mode — iterate children, finalize anything with a stranded JSONL.
@@ -1866,7 +1871,7 @@ def _cli_main(argv: list | None = None) -> int:
     try:
         children = sorted(target.iterdir())
     except OSError as e:
-        print(f"error: cannot list {target}: {e}", file=sys.stderr)
+        print(f"error: cannot list {_sft(str(target))}: {_sft(str(e))}", file=sys.stderr)
         return 1
     for child in children:
         try:
@@ -1882,14 +1887,14 @@ def _cli_main(argv: list | None = None) -> int:
         if result is not None:
             written += 1
             total_denials += result.get("total_denials", 0)
-            print(f"  {child.name}: {result['total_denials']} denials → "
+            print(f"  {_sft(child.name)}: {result['total_denials']} denials → "
                   f"{SUMMARY_FILE}")
         else:
             # JSONL was present but summarize_and_write returned None
             # (empty file or write failure); summarize_and_write already
             # cleaned the empty JSONL. No per-dir line — keeps output tight.
             pass
-    print(f"Swept {swept} stranded run(s) under {target}: "
+    print(f"Swept {swept} stranded run(s) under {_sft(str(target))}: "
           f"{written} summary file(s) written, {total_denials} total denials.")
     return 0
 
