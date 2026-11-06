@@ -373,6 +373,7 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
                           "\n#undef strcpy\n#define strcpy(d, s) __builtin___strcpy_chk(d, s, 0)\n")
     budget = ExpansionBudget(1)
     executions = []
+    prepared_targets = []
     original = detector.run_detector
 
     def record(definition, state):
@@ -381,6 +382,7 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
         return result
 
     def match(path, config, **kwargs):
+        prepared_targets.append(path)
         assert path.exists()
         assert kwargs == {"timeout": 19}
         view = budget.view_for(target, "main.c")
@@ -400,7 +402,8 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
     assert budget.used == 1
     assert len(executions) == 1 and executions[0].status == "partial"
     assert "coverage is partial" in caplog.text
-    assert not executions[0].value._input.target.exists()
+    assert prepared_targets and all(not path.exists() for path in prepared_targets)
+    assert executions[0].value._input is None
 
 
 # ---------------------------------------------------------------------
