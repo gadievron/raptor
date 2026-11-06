@@ -195,9 +195,20 @@ class _Function:
             elif kind == "BinaryOperator" and stmt.get("opcode") == "=" and len(nodes) == 2:
                 value = self.expression(nodes[1])
                 place = self.expression(nodes[0])
-                if not isinstance(value, _Scalar) or not isinstance(place, _Place) or place.pointer is None:
+                if (isinstance(value, _Pointer) and isinstance(place, _Pointer)
+                        and nodes[0].get("kind") == "DeclRefExpr"
+                        and value.pointee == place.pointee):
+                    reference = nodes[0]["referencedDecl"]
+                    aliases = tuple(dict.fromkeys((*value.aliases, _name(reference))))
+                    if len(aliases) > 16:
+                        raise _Unsupported("pointer alias chain cap")
+                    # Replace this variable's immutable pointer value only;
+                    # aliases copied earlier retain their original provenance.
+                    self.variables[reference["id"]] = _Pointer(value.pointee, value.obj, value.cast, aliases)
+                elif isinstance(value, _Scalar) and isinstance(place, _Place) and place.pointer is not None:
+                    self.access(place, nodes[0])
+                else:
                     raise _Unsupported("unsupported assignment")
-                self.access(place, nodes[0])
             else:
                 raise _Unsupported("non-straight-line function")
         return self.proofs
