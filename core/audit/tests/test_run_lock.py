@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import subprocess
 import sys
 import textwrap
@@ -40,7 +41,7 @@ _HOLDER_SCRIPT = textwrap.dedent("""\
     acquire_run_lock(sys.argv[1], "run")
     # Drain simulation: SIGTERM does NOT release the lock — the real
     # orchestrator keeps it through salvage until actual exit.
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, lambda *_: os.write(1, b"DRAINING\\n"))
     print("READY", os.getpid(), flush=True)
     sys.stdin.read()          # exit (and release) when stdin closes
 """)
@@ -132,8 +133,12 @@ def test_sigterm_drain_keeps_the_lock_until_exit(tmp_path):
     run_dir.mkdir()
     proc = _spawn(_HOLDER_SCRIPT, str(run_dir), str(_REPO_ROOT))
     try:
-        proc.send_signal(15)               # SIGTERM — child ignores it
-        time.sleep(0.2)
+        proc.send_signal(15)               # SIGTERM — child acknowledges and keeps draining
+        with selectors.DefaultSelector() as ready:
+            ready.register(proc.stdout, selectors.EVENT_READ)
+            assert ready.select(timeout=5), "holder did not acknowledge SIGTERM"
+            message = os.read(proc.stdout.fileno(), 64)
+        assert message == b"DRAINING\n", f"unexpected drain response: {message!r}"
         assert proc.poll() is None         # still draining
         with pytest.raises(AuditRunLocked):
             acquire_run_lock(run_dir, "resume")
