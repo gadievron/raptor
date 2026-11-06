@@ -332,8 +332,15 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         _sbx_state._cli_sandbox_audit_budget = int(args.audit_budget)  # type: ignore[assignment]
 
     with contextlib.ExitStack() as stack:
-        run_dir, kept = _resolve_run_dir(args, stack)
-        target_dir = Path(args.target).resolve() if args.target else run_dir
+        try:
+            run_dir, kept = _resolve_run_dir(args, stack)
+            target_dir = Path(args.target).resolve() if args.target else run_dir
+        except OSError as exc:
+            sys.stderr.write(
+                "raptor-sandbox-observe: cannot prepare observe directory: "
+                f"{sanitise_for_terminal(str(exc))}\n"
+            )
+            return _SOFTWARE_EX
 
         # Capture the probed binary's stdout/stderr in --json mode
         # so they don't interleave with the JSON we write at the end
@@ -370,6 +377,9 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         except FileNotFoundError as exc:
             sys.stderr.write(f"raptor-sandbox-observe: {sanitise_for_terminal(str(exc))}\n")
             return _USAGE_EX
+        except OSError as exc:
+            sys.stderr.write(f"raptor-sandbox-observe: {sanitise_for_terminal(str(exc))}\n")
+            return _SOFTWARE_EX
         except subprocess.TimeoutExpired:
             # A first-class CLI flag must produce a diagnostic, not a
             # Python traceback. Render whatever observe records landed
