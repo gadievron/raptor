@@ -480,3 +480,47 @@ def test_path_budget_boundary_and_rejection_leave_capacity_for_later_paths(headr
         assert diagnostic["code_flows"] is paths
         assert budget.remaining == headroom
         assert "compiler_path_notes" not in diagnostic
+
+
+@pytest.mark.parametrize('field,at_limit,over_limit', [
+    ('message', '\x1b' * 512, '\x1b' * 513),
+    ('function', '\x1b' * 64, '\x1b' * 65),
+    ('uri', 'λ' * 682 + 'a' * 4, 'λ' * 682 + 'a' * 5),
+])
+def test_normalized_field_limits_are_stable_across_repeated_passes(field, at_limit, over_limit):
+    def input_path(value):
+        raw = flow()
+        location = raw['threadFlows'][0]['locations'][0]['location']
+        if field == 'message':
+            location['message']['text'] = value
+        elif field == 'function':
+            location['logicalLocations'][0]['name'] = value
+        else:
+            location['physicalLocation']['artifactLocation']['uri'] = value
+        return raw
+
+    paths, notes = normalize_paths([input_path(at_limit)])
+    assert paths and not notes
+    assert normalize_paths(paths) == (paths, [])
+    paths, notes = normalize_paths([input_path(over_limit)])
+    assert not paths and notes
+
+
+def test_merging_duplicate_paths_skips_redundant_normalization(monkeypatch):
+    from core.detectors import compiler_paths
+
+    paths, notes = normalize_paths([flow()])
+    destination = {'code_flows': paths}
+    source = {'code_flows': copy.deepcopy(paths)}
+    calls = []
+    original = compiler_paths.normalize_paths
+
+    def normalize(raw, *args, **kwargs):
+        calls.append(raw)
+        return original(raw, *args, **kwargs)
+
+    monkeypatch.setattr(compiler_paths, 'normalize_paths', normalize)
+    attach_paths(destination, source)
+    assert len(calls) == 2
+    assert destination == source == {'code_flows': paths}
+    assert not notes
