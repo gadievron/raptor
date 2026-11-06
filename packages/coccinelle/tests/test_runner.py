@@ -3310,6 +3310,55 @@ class TestDemuxResultByFile:
             assert any("input file set" in error for error in per.errors)
         assert result.ok  # Demultiplexing does not mutate its input.
 
+    def test_repeated_hits_resolve_each_spelling_once_per_batch(self, tmp_path, monkeypatch):
+        root = tmp_path / "src"
+        root.mkdir()
+        source = root / "a.c"
+        source.write_text("x")
+        alias = root / "alias.c"
+        alias.symlink_to(source)
+        original_resolve = Path.resolve
+        calls = []
+
+        def resolve(path, *args, **kwargs):
+            calls.append(str(path))
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+        result = self._batch(root, [source], matches=[
+            SpatchMatch(file=str(path), line=line, rule="r")
+            for line in range(1, 501) for path in (source, alias)
+        ])
+        for _ in range(2):
+            calls.clear()
+            out = demux_result_by_file(result, [source], root)
+            assert calls.count(str(source)) == calls.count(str(alias)) == 1
+            assert out["a.c"].ok
+            assert out["a.c"].files_examined == ["a.c"]
+            assert [match.line for match in out["a.c"].matches] == [
+                line for line in range(1, 501) for _ in range(2)
+            ]
+
+    def test_resolution_failure_is_reused_without_inventing_attribution(self, tmp_path, monkeypatch):
+        source = tmp_path / "a.c"
+        original_resolve = Path.resolve
+        calls = []
+
+        def resolve(path, *args, **kwargs):
+            if path == source:
+                calls.append(path)
+                raise OSError("unavailable")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+        result = self._batch(tmp_path, [source], matches=[
+            SpatchMatch(file=str(source), line=line, rule="r") for line in range(1, 11)
+        ])
+        out = demux_result_by_file(result, [source], tmp_path)
+        assert calls == [source]
+        assert out[str(source)].ok
+        assert len(out[str(source)].matches) == 10
+
     def test_match_free_file_is_verified_silent(self, tmp_path):
         root = tmp_path / "src"
         root.mkdir()

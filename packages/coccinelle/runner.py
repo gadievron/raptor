@@ -1875,15 +1875,23 @@ def demux_result_by_file(
     must never manufacture verified silence.
     """
     root = Path(target_root).resolve()
+    relative_paths: dict[str, str] = {}
 
     def _rel(spelling: str) -> str:
+        if spelling in relative_paths:
+            return relative_paths[spelling]
+        # A report may contain thousands of matches for one input. Resolve
+        # each spelling once per batch, including failed/outside-root paths.
+        relative = spelling
         p = Path(spelling)
-        if not p.is_absolute():
-            return spelling
-        try:
-            return str(p.resolve().relative_to(root))
-        except (ValueError, OSError):
-            return spelling
+        if p.is_absolute():
+            try:
+                relative = str(p.resolve().relative_to(root))
+            except (ValueError, OSError):
+                relative_paths[spelling] = spelling
+                return spelling
+        relative_paths[spelling] = relative
+        return relative
 
     by_file: dict[str, list[SpatchMatch]] = {}
     for m in result.matches:
