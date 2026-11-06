@@ -38,13 +38,14 @@ def local_uri_path(uri: Any) -> str:
     """
     if not isinstance(uri, str) or not uri or len(uri) > 4096:
         raise ValueError("invalid compiler location URI")
-    if uri.startswith(" ") or any(ord(char) < 32 for char in uri):
+    if uri.startswith(" ") or any(ord(char) < 32 or ord(char) == 127 for char in uri):
         raise ValueError("invalid compiler location URI")
     parsed = urlsplit(uri)
     if parsed.scheme not in ("", "file") or parsed.netloc not in ("", "localhost") or parsed.query or parsed.fragment:
         raise ValueError("non-local compiler location URI")
     path = unquote(parsed.path, errors="strict")
-    if not path or any(ord(char) < 32 for char in path):
+    if (not path or path.startswith(("//", "\\\\"))
+            or any(ord(char) < 32 or ord(char) == 127 for char in path)):
         raise ValueError("invalid compiler location path")
     return path
 
