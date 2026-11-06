@@ -1,11 +1,12 @@
 """Best-effort Claude session naming through documented hook output only."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
 
-from core.json import dumps_display, loads
+from core.json import loads
 from core.project import registry_home, sessions
 from core.project.session_titles import context_title, request_title
 
@@ -78,7 +79,7 @@ def main() -> int:
             return 0
         output = hook_output(loads(data, max_bytes=65536))
         if output:
-            print(dumps_display(output))
+            print(json.dumps(output, ensure_ascii=True))
     except (OSError, ValueError, TypeError, RuntimeError, RecursionError):
         # Naming is optional: corrupt state, a busy lock, disk pressure or a
         # missing project must never interrupt launch, resume or a user turn.
