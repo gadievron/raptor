@@ -217,3 +217,75 @@ def test_compiler_uri_resolver_is_lazy_and_reused(tmp_path, monkeypatch):
     report.write_text(json.dumps({'runs': [run]}))
     assert {row['file'] for row in compiler._parse_gcc_sarif(report)} == {'a.c'}
     assert len(builds) == 1
+
+
+@pytest.mark.parametrize('reference', [{'index': 0}, {'uri': 'space%20name%2520.c', 'uriBaseId': 'ROOT'}])
+def test_compiler_event_paths_resolve_artifacts_and_bases(tmp_path, reference):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    code_flow = flow()
+    event = code_flow['threadFlows'][0]['locations'][0]
+    event['location']['physicalLocation']['artifactLocation'] = reference
+    root = tmp_path / 'sources'
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'originalUriBaseIds': {'ROOT': {'uri': root.as_uri() + '/'}},
+        'artifacts': [{'location': {'uri': 'space%20name%2520.c', 'uriBaseId': 'ROOT'}}],
+        'results': [{'ruleId': '-Wanalyzer-use-after-free', 'message': {'text': 'warning'},
+                     'codeFlows': [code_flow]}]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    retained = diagnostic['code_flows'][0]['threadFlows'][0]['locations'][0]
+    uri = retained['location']['physicalLocation']['artifactLocation']['uri']
+    assert uri == (root / 'space name%20.c').as_uri().removeprefix('file://')
+    assert retained['executionOrder'] == 1 and retained['nestingLevel'] == 2
+    assert not diagnostic.get('compiler_path_notes')
+
+
+@pytest.mark.parametrize('reference, base', [
+    ({'index': True}, 'file:///local/'),
+    ({'index': False}, 'file:///local/'),
+    ({'index': 99}, 'file:///local/'),
+    ({'uri': 'a.c', 'uriBaseId': 'ROOT'}, 'https://example.test/'),
+    ({'uri': 'a.c', 'uriBaseId': 'ROOT'}, 'file://remote/source/'),
+])
+def test_bad_compiler_event_reference_drops_whole_path_but_keeps_warning(tmp_path, reference, base):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    code_flow = flow()
+    events = code_flow['threadFlows'][0]['locations']
+    events.extend([copy.deepcopy(events[0]), copy.deepcopy(events[0])])
+    events[1]['location']['physicalLocation']['artifactLocation'] = reference
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{
+        'originalUriBaseIds': {'ROOT': {'uri': base}},
+        'artifacts': [{'location': {'uri': 'a.c'}}, {'location': {'uri': 'b.c'}}],
+        'results': [{'ruleId': '-Wanalyzer-use-after-free', 'message': {'text': 'keep warning'},
+                     'codeFlows': [code_flow]}]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['id'] == '-Wanalyzer-use-after-free' and diagnostic['message'] == 'keep warning'
+    assert not diagnostic.get('code_flows') and diagnostic['compiler_path_notes']
+
+
+def test_primary_and_event_locations_share_one_compiler_uri_resolver(tmp_path, monkeypatch):
+    from core.audit import compiler_sweep as compiler
+    original = compiler.ArtifactUriResolver
+    builds = []
+
+    class MeasuredResolver(original):
+        def __init__(self, run):
+            builds.append(run)
+            super().__init__(run)
+
+    monkeypatch.setattr(compiler, 'ArtifactUriResolver', MeasuredResolver)
+    code_flow = flow()
+    code_flow['threadFlows'][0]['locations'][0]['location']['physicalLocation']['artifactLocation'] = {'index': 0}
+    result = {'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'warning'},
+              'locations': [{'physicalLocation': {'artifactLocation': {'index': 0}, 'region': {'startLine': 3}}}],
+              'codeFlows': [code_flow]}
+    report = tmp_path / 'compiler.sarif'
+    report.write_text(json.dumps({'runs': [{'artifacts': [{'location': {'uri': 'a.c'}}],
+                                          'results': [result] * 100}]}))
+    diagnostics = compiler._parse_gcc_sarif(report)
+    assert len(builds) == 1 and len(diagnostics) == 100
+    assert all(row['file'] == 'a.c' for row in diagnostics)
+    # The separate retained-path budget may omit later paths; the first one
+    # must survive and all resolutions still use the same run-owned cache.
+    assert diagnostics[0]['code_flows']
