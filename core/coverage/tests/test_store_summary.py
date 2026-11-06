@@ -625,3 +625,68 @@ def test_zero_reviewable_units_notice_and_gate_warning(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="raptor"):
         assert store_coverage_threshold_met(v, 95.0)
     assert any("vacuously" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize('empty', [False, True], ids=['current-records', 'explicit-empty'])
+def test_current_scan_view_ignores_prior_inventory_and_records(tmp_path, monkeypatch, empty):
+    from core.coverage import store_summary
+    import core.inventory
+    import core.coverage.record
+
+    (tmp_path / 'checklist.json').write_text('prior checklist')
+    (tmp_path / 'coverage-codeql.json').write_text('prior record')
+    def forbidden(*args, **kwargs):
+        pytest.fail('current scan rendering must not read historical coverage or inventory')
+    monkeypatch.setattr(core.inventory, 'read_checklist', forbidden)
+    monkeypatch.setattr(core.coverage.record, 'load_records', forbidden)
+    monkeypatch.setattr(store_summary, '_build_store', forbidden)
+    records = [] if empty else [{
+        'tool': 'codeql', 'files_examined': ['a.c', str(tmp_path / 'a.c'), '../outside.c', ''],
+        'versions': ['2.17.0', '2.16.0', '2.17.0', None, []],
+        'rules_applied': ['cpp/example'],
+    }]
+    consumed = []
+    def stream():
+        for record in records:
+            consumed.append(record)
+            yield record
+    text = store_summary.render_run_coverage(tmp_path, current_records=stream(), repo_root=tmp_path)
+    assert 'Coverage (current scan — file-level)' in text
+    assert consumed == records
+    if empty:
+        assert '(no coverage records found)' in text
+    else:
+        assert 'codeql 2.16.0, 2.17.0: 1 file(s) examined' in text
+        assert '    a.c' in text and 'outside.c' not in text
+    assert (tmp_path / 'checklist.json').read_text() == 'prior checklist'
+    assert (tmp_path / 'coverage-codeql.json').read_text() == 'prior record'
+
+
+def test_historical_file_view_preserves_plural_versions_and_skips_bad_tool_names(tmp_path, monkeypatch):
+    from core.coverage.store_summary import file_level_view
+    import core.coverage.record
+    monkeypatch.setattr(core.coverage.record, 'load_records', lambda path: [
+        {'tool': [], 'files_examined': ['bad.c']},
+        {'tool': 42, 'files_examined': ['bad.c']},
+        {'tool': 'codeql', 'files_examined': ['a.c', ''], 'version': '2.16.0',
+         'versions': ['2.17.0', '2.16.0', ''], 'rules_applied': ['', 'cpp/example']},
+    ])
+    view = file_level_view([tmp_path])
+    assert list(view['tools']) == ['codeql']
+    assert view['tools']['codeql']['files'] == ['a.c']
+    assert view['tools']['codeql']['versions'] == ['2.16.0', '2.17.0']
+    assert view['tools']['codeql']['rules'] == ['cpp/example']
+
+
+def test_file_and_rule_previews_are_bounded_without_dropping_view_data():
+    from core.coverage.store_summary import format_file_level_view
+    files = [f'file_{i:02}.c' for i in range(25)]
+    rules = [f'cpp/rule_{i:02}' for i in range(25)]
+    view = {'runs': [], 'tools': {'codeql': {'versions': [], 'files': files, 'rules': rules}}}
+    text = format_file_level_view(view)
+    assert '25 file(s) examined' in text
+    assert 'file_19.c' in text and 'file_20.c' not in text
+    assert 'cpp/rule_19' in text and 'cpp/rule_20' not in text
+    assert '(+5 more)' in text
+    assert view['tools']['codeql']['rules'] == rules
+    assert view['tools']['codeql']['files'] == files
