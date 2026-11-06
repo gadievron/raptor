@@ -1585,7 +1585,8 @@ class TestSemgrepSurfaceFences:
         calls = _function_call_map("test_expanded_semgrep.py")
         assert _callers_of(
             calls, "skip_if_expanded_view_transport_degraded",
-        ) == {"test_e2e_real_semgrep_finds_macro_hidden_strcpy"}
+        ) == {"test_e2e_real_semgrep_finds_macro_hidden_strcpy",
+              "test_corpus_expands_spliced_macro_call_with_comment_before_arguments"}
         # Placement: guard after the live run, before the first
         # assert.
         order = _stmt_order(
@@ -1796,6 +1797,7 @@ class TestCppSurfaceFences:
             "test_macro_functions_added_to_checklist",
             "test_prefilter_skips_files_without_macro_invocations",
             "test_idempotent",
+            "test_native_checklist_recovers_spliced_definition_macro",
         }
         # Placement: the probe runs BEFORE the collapsed-surface
         # adjudication it licenses.
@@ -1826,6 +1828,10 @@ class TestCppSurfaceFences:
             ),
             (
                 "test_idempotent",
+                "augment_checklist_with_macro_functions",
+            ),
+            (
+                "test_native_checklist_recovers_spliced_definition_macro",
                 "augment_checklist_with_macro_functions",
             ),
         ):

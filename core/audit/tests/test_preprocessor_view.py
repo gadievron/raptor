@@ -29,6 +29,8 @@ from typing import Any
 
 import pytest
 
+from core.testing.module_state import isolated_module_state
+
 from core.audit import preprocessor_view as pv
 from core.audit.preprocessor_view import (
     ExpandedView,
@@ -49,8 +51,8 @@ from core.audit.tests._live_transport import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "preprocessor_view"
 
-pv._reset_probe_cache()
-HAVE_CPP = pv._preprocessor_for(False) is not None
+with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+    HAVE_CPP = pv._preprocessor_for(False) is not None
 
 needs_cpp = pytest.mark.skipif(
     not HAVE_CPP, reason="no C preprocessor (gcc/cpp) installed",
@@ -87,9 +89,8 @@ def _probe_cpp(tmp_path: Path, spy_calls: list, *, context: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
-    pv._reset_probe_cache()
-    yield
-    pv._reset_probe_cache()
+    with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
+        yield
 
 
 @pytest.fixture
