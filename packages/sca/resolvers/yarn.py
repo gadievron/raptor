@@ -24,7 +24,7 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -100,7 +100,7 @@ class YarnResolver:
 
         # Copy manifest files into a writable tempdir — the sandbox
         # only allows writes to the output dir and /tmp, not cwd.
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-yarn-") as tmp:
+        with scratch_dir("raptor-sca-yarn-") as tmp:
             tmp_path = Path(tmp)
             # lstat-gated, size-bounded copies — a symlinked or
             # special-file manifest in the scanned (hostile) tree is

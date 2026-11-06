@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -62,7 +62,7 @@ class PnpmResolver:
 
         # Copy manifest files into a writable tempdir — the sandbox
         # only allows writes to the output dir and /tmp, not cwd.
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-pnpm-") as tmp:
+        with scratch_dir("raptor-sca-pnpm-") as tmp:
             tmp_path = Path(tmp)
             # lstat-gated, size-bounded copies — a symlinked or
             # special-file manifest in the scanned (hostile) tree is

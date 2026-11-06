@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -113,7 +113,7 @@ class GoResolver:
 
         # Copy minimum needed files (go.mod, go.sum, vendor/) to a temp
         # dir so the user's checkout is untouched.
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-go-") as tmp:
+        with scratch_dir("raptor-sca-go-") as tmp:
             tmp_path = Path(tmp)
             # lstat-gated, size-bounded copies — a symlinked or
             # special-file manifest in the scanned (hostile) tree is

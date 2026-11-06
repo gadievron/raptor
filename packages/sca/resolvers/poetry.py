@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
+from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
@@ -77,7 +77,7 @@ class PoetryResolver:
         # (hostile) directory, so symlinks are not followed and
         # FIFOs are never opened (a follow-happy copy would leak
         # operator files into the resolve, or hang on a FIFO).
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-poetry-") as tmp:
+        with scratch_dir("raptor-sca-poetry-") as tmp:
             tmp_path = Path(tmp)
             for fname in ("pyproject.toml", "poetry.lock"):
                 copy_regular_file(project_dir / fname, tmp_path / fname)
