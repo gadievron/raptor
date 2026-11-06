@@ -10083,7 +10083,6 @@ def _run_audit_body(
                         _r = str(reason)
                         if _r.startswith((
                             "[guarded-sink:",
-                            "[smt-infeasible:",
                             "[smt-disproof:",
                         )):
                             _sc_record_refutation(
@@ -28760,7 +28759,6 @@ _GATE_DEMOTION_BODY_PREFIXES = (
     "[gate violation:",
     "[sink-unreachability:",
     "[guarded-sink:",
-    "[smt-infeasible:",
     "[entry-unreachability:",
     "[self-contradiction:",
 )
@@ -33825,52 +33823,21 @@ def _smt_demotion_reason(
     config: OrchestratorConfig,
     checklist: dict[str, Any],
 ) -> str | None:
-    """Return a bracket-prefixed demotion reason if SMT proves overflow infeasible."""
-    review = outcome.review_result or {}
-    cwe = review.get("cwe_class") or review.get("cwe") or ""
-
+    """Resolve source scope, then ask the operation-bound disproof policy."""
     gap = _find_gap_in_checklist(checklist, outcome.file, outcome.function)
     if not gap:
         return None
-
     source = _read_raw_source(
-        config.target_path,
-        outcome.file,
-        gap.get("line_start", 0),
-        gap.get("line_end"),
+        config.target_path, outcome.file,
+        gap.get("line_start", 0), gap.get("line_end"),
     )
-    if not source:
-        return None
+    from .overflow_demotion import source_overflow_demotion_reason
 
-    try:
-        from core.smt_solver.bounds_feasibility import check_bounds_infeasible
-    except ImportError:
-        return None
-
-    if check_bounds_infeasible(source, cwe) is True:
-        return "[smt-infeasible: bounds conditions make overflow impossible (Z3 UNSAT)]"
-
-    # Fallback: hypothesis-driven overflow disproof via condition_smt.
-    hypothesis = _resolve_hypothesis(outcome)
-    if hypothesis:
-        try:
-            from .condition_smt import disprove_integer_overflow
-
-            smt_result = disprove_integer_overflow(
-                hypothesis, source, file_path=outcome.file,
-                function_name=outcome.function,
-                integer_abi=getattr(config, "integer_abi", None),
-            )
-            if smt_result.disproved is True:
-                return "[smt-disproof: integer overflow impossible (Z3 UNSAT)]"
-        except Exception:
-            logger.debug(
-                "disprove_integer_overflow fallback failed for %s:%s",
-                outcome.file,
-                outcome.function,
-                exc_info=True,
-            )
-    return None
+    return source_overflow_demotion_reason(
+        _resolve_hypothesis(outcome), source,
+        file_path=outcome.file, function_name=outcome.function,
+        integer_abi=getattr(config, "integer_abi", None),
+    )
 
 
 def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:

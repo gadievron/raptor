@@ -221,7 +221,7 @@ class TestScopeExclusions:
         calls: list[str] = []
         _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
         o = _outcome("fn0")
-        o.body = "[smt-infeasible: path condition unsat]\n\nlooks off"
+        o.body = "[guarded-sink: bound source guard]\n\nlooks off"
         result = _result([o])
         config = _config(tmp_path)
         _resweep_zero_dispatch_suspicious(result, config)
@@ -467,3 +467,18 @@ class TestNoPhantomCoverage:
             available_tools={"joern": True},
         )
         assert result.outcomes[0].status != "clean"
+
+
+def test_retired_bounds_demotion_can_be_reswept_and_promoted(tmp_path, monkeypatch):
+    calls = []
+    _patch_mechanical(monkeypatch, confirm={'fn0'}, calls=calls)
+    outcome = _outcome('fn0')
+    outcome.body = '[smt-infeasible: flat source guard unsat]\n\nprior review'
+    result = _result([outcome])
+    config = _config(tmp_path)
+    _resweep_zero_dispatch_suspicious(result, config)
+    assert calls == ['fn0']
+    assert result.outcomes[0].status == 'suspicious'
+    _promote_suspicious(result, config)
+    assert result.outcomes[0].status == 'finding'
+    assert result.outcomes[0].evidence_tool == 'smt:check'

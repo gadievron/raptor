@@ -913,9 +913,8 @@ class DataflowValidator:
             # as ``ULT(ret, 0)`` — unsat — so one signedness-mismatched
             # guard anywhere in the path would refute the whole finding
             # pre-LLM. When signedness is a guess, a refutation is only
-            # honored if BOTH signedness profiles agree (the
-            # bounds_feasibility agreement rule); a pinned hint keeps the
-            # cheaper single-profile check.
+            # honored only after the dual-profile contradiction checks;
+            # a pinned hint keeps the cheaper single-profile check.
             signed_pinned = isinstance(profile_hint.get("signed"), bool)
             check = (
                 check_path_feasibility if signed_pinned
