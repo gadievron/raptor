@@ -104,7 +104,7 @@ def _isolated_scorecard_sidecar(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_llm_egress_state(monkeypatch):
+def _reset_llm_egress_state():
     """Audit tests construct real LLMClients (llm_review, synthesis,
     budget suites), whose enable_llm_egress side effect swaps the
     HTTPS_PROXY family to a loopback in-process proxy. Without this
@@ -114,7 +114,14 @@ def _reset_llm_egress_state(monkeypatch):
     core/llm and core/dataflow conftests wrap."""
     from core.testing import reset_llm_egress_state
 
-    yield from reset_llm_egress_state(monkeypatch)
+    with pytest.MonkeyPatch.context() as patch:
+        yield from reset_llm_egress_state(patch)
+
+
+@pytest.fixture
+def monkeypatch(_reset_llm_egress_state, monkeypatch):
+    """Keep inherited process guards inside the egress owner's lifetime."""
+    yield monkeypatch
 
 
 @pytest.fixture(autouse=True)

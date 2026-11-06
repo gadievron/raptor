@@ -13,25 +13,31 @@ only 4 of the 8 conventional proxy vars, the other lost the
 Usage (per-directory conftest)::
 
     @pytest.fixture(autouse=True)
-    def _reset_llm_egress_state(monkeypatch):
-        yield from reset_llm_egress_state(monkeypatch)
+    def _reset_llm_egress_state():
+        with pytest.MonkeyPatch.context() as patch:
+            yield from reset_llm_egress_state(patch)
 
-Mechanics that are load-bearing (learned the hard way, see the
-core/llm/tests conftest history):
+    @pytest.fixture
+    def monkeypatch(_reset_llm_egress_state, monkeypatch):
+        yield monkeypatch
 
-* env mutations go through the SAME function-scoped ``monkeypatch``
-  the tests themselves use, so setup deletions, per-test setenv
-  calls, and the egress module's direct ``os.environ`` writes unwind
-  on one undo stack;
-* the ``setenv("")`` → ``delenv`` two-step records an undo entry even
-  for vars ABSENT from the real env — ``delenv(raising=False)`` on a
-  missing var records nothing, and the egress module's direct writes
-  during a test would then survive undo and leak process-wide.
+The fixture owns a private monkeypatch stack; the test body's stack must
+unwind before that owner exits. This keeps explicit body undo from removing
+proxy isolation and prevents late body cleanup from reinstalling private
+module state after the caller has been restored.
+
+The setenv("") / delenv two-step records absence too: deleting an already
+missing key alone does not register restoration of direct writes.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from contextlib import ExitStack, contextmanager
+import os
+
+
+from core.testing.module_state import isolated_module_state
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -53,6 +59,40 @@ PROXY_ENV_VARS = (
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 
+def _restore_environment(name, present, value):
+    if present:
+        os.environ[name] = value
+    else:
+        os.environ.pop(name, None)
+
+
+@contextmanager
+def isolated_egress_state() -> Iterator[None]:
+    """Own egress flags and env without changing the caller's proxy route.
+
+    Publish and restore state under the production lock, releasing it for
+    the body. Snapshot env without mutating it; register restoration before
+    any test-side publication. Body patches must unwind inside this scope.
+    """
+    from core.llm import egress
+
+    lock = egress._STATE_LOCK
+    with isolated_module_state(egress, {
+        "_enabled": False, "_original_proxy_env": None,
+    }, lock=lock):
+        restore = ExitStack()
+        try:
+            with lock:
+                for name in (*PROXY_ENV_VARS, "OLLAMA_HOST"):
+                    value = os.environ.get(name)
+                    restore.callback(_restore_environment, name,
+                                     value is not None, value)
+            yield
+        finally:
+            with lock:
+                restore.close()
+
+
 def reset_llm_egress_state(
     monkeypatch,
     *,
@@ -65,20 +105,22 @@ def reset_llm_egress_state(
     an autouse fixture so the teardown half runs at the right time.
     """
     from core.llm import egress
-    egress._reset_for_tests()
-    try:
-        for var in PROXY_ENV_VARS:
-            monkeypatch.setenv(var, "")
-            monkeypatch.delenv(var)
-        if pin_ollama_host:
-            monkeypatch.setenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
-        yield
-    finally:
-        egress._reset_for_tests()
+    with isolated_egress_state():
+        try:
+            egress._reset_for_tests()
+            for var in PROXY_ENV_VARS:
+                monkeypatch.setenv(var, "")
+                monkeypatch.delenv(var)
+            if pin_ollama_host:
+                monkeypatch.setenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
+            yield
+        finally:
+            egress._reset_for_tests()
 
 
 __all__ = [
     "DEFAULT_OLLAMA_HOST",
     "PROXY_ENV_VARS",
+    "isolated_egress_state",
     "reset_llm_egress_state",
 ]
