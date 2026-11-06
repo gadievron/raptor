@@ -78,6 +78,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
 from .evidence import _unique_evidence_object
 
 logger = logging.getLogger(__name__)
@@ -350,7 +352,7 @@ def _evaluate() -> "tuple[HostConsent | None, str]":
                 "ABSENT (untrusted floor keeps the fail-closed "
                 "default). Re-grant with `bin/raptor wsl-consent "
                 "grant` after fixing or removing the file.",
-                marker_path(), reason,
+                sanitise_for_terminal(str(marker_path())), reason,
             )
         return None, reason or "unreadable"
     if _landlock_available():
@@ -367,7 +369,7 @@ def _evaluate() -> "tuple[HostConsent | None, str]":
             "as ABSENT (untrusted floor keeps the fail-closed "
             "default). Re-grant with `bin/raptor wsl-consent grant` "
             "after fixing or removing the file.",
-            marker_path(), reason,
+            sanitise_for_terminal(str(marker_path())), reason,
         )
         return None, reason or "invalid"
     running_identity = _read_first_line(_OSRELEASE_PATH)
@@ -381,8 +383,9 @@ def _evaluate() -> "tuple[HostConsent | None, str]":
             "kernel (untrusted floor keeps the fail-closed default). "
             "Re-grant with `bin/raptor wsl-consent grant` if the "
             "ns-only consent should cover the new kernel.",
-            marker_path(), granted_family or "<none>",
-            running_family or "<none>",
+            sanitise_for_terminal(str(marker_path())),
+            sanitise_for_terminal(granted_family or "<none>"),
+            sanitise_for_terminal(running_family or "<none>"),
         )
         return None, "kernel-family-mismatch"
     return consent, "active"
