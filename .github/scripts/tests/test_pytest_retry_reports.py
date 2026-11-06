@@ -2,13 +2,14 @@
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 import xml.etree.ElementTree as ET
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / '.github/scripts/pytest_retry_reports.py'
@@ -143,14 +144,23 @@ def test_matching_failed_cache_authorizes_targeted_retry(tmp_path):
 
 
 def integration_step():
-    workflow = yaml.safe_load((ROOT / '.github/workflows/nightly.yml').read_text())
-    job = workflow['jobs']['slow-integration']
-    return next(step for step in job['steps'] if step.get('id') == 'integration_tests'), job
+    # This CI lane installs pytest only. Read the concrete literal shell block
+    # without importing a YAML parser (or evaluating workflow expressions).
+    source = (ROOT / '.github/workflows/nightly.yml').read_text()
+    jobs = source.split('\njobs:\n', 1)[1]
+    job = re.search(r'^  slow-integration:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)',
+                    jobs, re.M | re.S)
+    assert job is not None, 'slow-integration job missing'
+    steps = re.split(r'^      - ', job[1], flags=re.M)[1:]
+    integration = next(step for step in steps
+                       if re.search(r'^        id: integration_tests$', step, re.M))
+    body = re.search(r'^        run: \|\n((?:          .*\n|\n)+)', integration, re.M)
+    assert body is not None, 'integration command must remain a literal shell block'
+    return textwrap.dedent(body[1]), steps
 
 
 def test_workflow_uses_isolated_cache_and_complete_effective_report():
-    step, job = integration_step()
-    body = step['run']
+    body, steps = integration_step()
     assert body.count('cache_dir=$RUNNER_TEMP/integration-pytest-cache') == 2
     assert body.count('--cache-clear') == 1
     assert body.count('--lf --last-failed-no-failures=none') == 1
@@ -158,12 +168,12 @@ def test_workflow_uses_isolated_cache_and_complete_effective_report():
     assert 'pytest_retry_reports.py eligible' in body
     assert 'pytest_retry_reports.py merge' in body
     assert 'exit "$retry_rc"' in body
-    budget = next(step for step in job['steps'] if step['name'].startswith('Check integration skip count'))
-    assert '--junit-xml "$RUNNER_TEMP/integration.xml"' in budget['run']
-    assert "steps.integration_tests.outcome == 'failure'" in budget['if']
-    upload = next(step for step in job['steps'] if step['name'] == 'Upload test results')
-    assert 'integration-attempt-*.xml' in upload['with']['path']
-    assert '/integration.xml' in upload['with']['path']
+    budget = next(step for step in steps if step.startswith('name: Check integration skip count'))
+    assert '--junit-xml "$RUNNER_TEMP/integration.xml"' in budget
+    assert "steps.integration_tests.outcome == 'failure'" in budget
+    upload = next(step for step in steps if step.startswith('name: Upload test results\n'))
+    assert 'integration-attempt-*.xml' in upload
+    assert '/integration.xml' in upload
 
 
 @pytest.mark.slow
@@ -207,13 +217,13 @@ def test_existing_skip():
     sleep = tmp_path / 'bin/sleep'
     sleep.write_text('#!/bin/sh\nexit 0\n')
     sleep.chmod(0o700)
-    step, _ = integration_step()
+    body, _ = integration_step()
     env = dict(os.environ, VENV_PATH=str(Path(sys.executable).parent.parent),
                RUNNER_TEMP=str(tmp_path / 'artifacts'),
                PATH=str(tmp_path / 'bin') + os.pathsep + os.environ.get('PATH', ''),
                PYTHONPATH=str(ROOT), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
                PYTEST_ADDOPTS='-p core.testing.llm_tripwire')
-    process = subprocess.run(['/bin/bash', '-e', '-c', step['run']], cwd=tmp_path,
+    process = subprocess.run(['/bin/bash', '-e', '-c', body], cwd=tmp_path,
                              env=env, capture_output=True, text=True, timeout=60)
     assert process.returncode == (1 if session_failure else 0), process.stdout + process.stderr
     artifacts = tmp_path / 'artifacts'
