@@ -1,4 +1,5 @@
 """Version probes must work without writable operator state, including old CLIs."""
+
 import json
 import os
 from pathlib import Path
@@ -6,8 +7,11 @@ import sys
 
 import pytest
 
+from core.run import toolprobe
 from core.run.toolprobe import ToolInfo
 from packages.semgrep import runner
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.mark.parametrize('version,scope_supported', [
@@ -37,7 +41,9 @@ Path({str(record)!r}).write_text(json.dumps({{
 print({version!r})
 ''')
     binary.chmod(0o700)
-    monkeypatch.setattr(runner.shutil, 'which', lambda name: str(binary))
+    patch_module_attribute(monkeypatch, runner, "shutil", "which", lambda name: str(binary))
+    # Version execution delegates discovery to the shared probe adapter.
+    patch_module_attribute(monkeypatch, toolprobe, "shutil", "which", lambda name: str(binary))
     monkeypatch.setattr(runner, '_SCOPE_PROBE_CACHE', None)
     monkeypatch.setattr(runner, '_SCOPE_PROBE_PENDING', None)
 

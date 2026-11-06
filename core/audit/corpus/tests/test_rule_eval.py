@@ -8,6 +8,7 @@ cleanly otherwise.
 
 from __future__ import annotations
 
+
 import shutil
 from types import SimpleNamespace
 
@@ -29,6 +30,8 @@ from core.audit.corpus.rule_eval import (
     run_cocci_engine,
     run_semgrep_engine,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 HAVE_SEMGREP = shutil.which("semgrep") is not None
 HAVE_SPATCH = shutil.which("spatch") is not None
@@ -491,9 +494,7 @@ class TestEngineAbsentSkips:
     def test_codeql_absent(self, tmp_path, monkeypatch):
         import core.audit.corpus.rule_eval as rule_eval
 
-        monkeypatch.setattr(
-            rule_eval.shutil, "which", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, rule_eval, "shutil", "which", lambda name: None)
         outcome = rule_eval.run_codeql_engine(
             tmp_path, [_label()], tmp_path / "out",
         )
@@ -972,10 +973,7 @@ class TestCodeqlFeasibility:
     def _which_codeql(self, monkeypatch):
         import core.audit.corpus.rule_eval as rule_eval
 
-        monkeypatch.setattr(
-            rule_eval.shutil, "which",
-            lambda name: "/usr/bin/codeql" if name == "codeql" else None,
-        )
+        patch_module_attribute(monkeypatch, rule_eval, "shutil", "which", lambda name: "/usr/bin/codeql" if name == "codeql" else None)
         return rule_eval
 
     def test_python_repo_skipped(self, monkeypatch):
@@ -1266,7 +1264,7 @@ def test_standalone_codeql_sets_framework_root(tmp_path, monkeypatch):
     from core.audit.corpus import rule_eval
     monkeypatch.setenv("RAPTOR_DIR", "placeholder")
     monkeypatch.delenv("RAPTOR_DIR")
-    monkeypatch.setattr(rule_eval.shutil, "which", lambda name: "/mock/codeql")
+    patch_module_attribute(monkeypatch, rule_eval, "shutil", "which", lambda name: "/mock/codeql")
     monkeypatch.setattr(rule_eval, "codeql_feasibility", lambda labels: ("cpp", ""))
     monkeypatch.setattr(rule_eval, "codeql_query_dir", lambda language: tmp_path)
     manager = SimpleNamespace(create_database=lambda *a: SimpleNamespace(
@@ -1431,7 +1429,7 @@ def codeql_report_run(tmp_path, monkeypatch):
     from packages.codeql import database_manager, query_runner
 
     monkeypatch.setenv('RAPTOR_DIR', str(tmp_path))
-    monkeypatch.setattr(rule_eval.shutil, 'which', lambda name: '/mock/codeql')
+    patch_module_attribute(monkeypatch, rule_eval, "shutil", "which", lambda name: '/mock/codeql')
     monkeypatch.setattr(rule_eval, 'codeql_feasibility', lambda labels: ('cpp', ''))
     monkeypatch.setattr(rule_eval, 'codeql_query_dir', lambda language: tmp_path)
     db = database_manager.DatabaseResult(

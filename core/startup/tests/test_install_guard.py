@@ -1,6 +1,7 @@
 """Outer installation policy: real kernel enforcement, no model calls."""
 from __future__ import annotations
 
+
 import importlib.util
 import json
 import os
@@ -10,6 +11,8 @@ import subprocess
 import sys
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 # Keep kernel checks independent of the host's unrelated tool environment.
 KERNEL_PYTHON = '/usr/bin/python3' if Path('/usr/bin/python3').exists() else sys.executable
@@ -703,7 +706,7 @@ def test_external_python_environment_is_protected_without_sealing_home(tmp_path,
     (environment / 'pyvenv.cfg').write_text('home = /usr/bin\n')
     libraries = environment / 'lib/python3.14/site-packages'
     libraries.mkdir(parents=True)
-    monkeypatch.setattr(guard.shutil, 'which', lambda name: str(binary))
+    patch_module_attribute(monkeypatch, guard, "shutil", "which", lambda name: str(binary))
     paths = guard.protected_paths()
     assert binary.parent in paths
     assert environment / 'pyvenv.cfg' in paths

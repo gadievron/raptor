@@ -16,6 +16,7 @@ level, e.g. ``read_build_id``).
 
 from __future__ import annotations
 
+
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,8 @@ from core.analysis.binary_oracle import (
     enrich_inventory_with_binary_oracle,
     read_build_id,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 _GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
@@ -1336,7 +1339,7 @@ def test_fully_inlined_namespaced_function_classifies_inlined_under_bare_name(
 
     die = bo_mod._SubprogramDIE(name="Log2Floor", namespace_path="snappy::Bits")
     subs = {0x10: die}
-    monkeypatch.setattr(bo_mod.shutil, "which", lambda t: f"/usr/bin/{t}")
+    patch_module_attribute(monkeypatch, bo_mod, "shutil", "which", lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "cafebabe")
     monkeypatch.setattr(bo_mod, "_nm_symbols_status", lambda p: ({}, True))
     monkeypatch.setattr(bo_mod, "_parse_dwarf", lambda p: (subs, [0x10]))
@@ -1362,7 +1365,7 @@ def test_inline_marker_subprogram_also_indexes_bare_name(monkeypatch, tmp_path):
         name="tr_static_init", namespace_path="zng",
         has_inline_marker=True,
     )
-    monkeypatch.setattr(bo_mod.shutil, "which", lambda t: f"/usr/bin/{t}")
+    patch_module_attribute(monkeypatch, bo_mod, "shutil", "which", lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "")
     monkeypatch.setattr(bo_mod, "_nm_symbols_status", lambda p: ({}, True))
     monkeypatch.setattr(bo_mod, "_parse_dwarf", lambda p: ({0x20: die}, []))

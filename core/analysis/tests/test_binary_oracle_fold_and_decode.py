@@ -2,13 +2,16 @@
 for :mod:`core.analysis.binary_oracle`."""
 from __future__ import annotations
 
+
 from pathlib import Path
 
 import core.analysis.binary_oracle as bo_mod
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _stub_tools(monkeypatch, subs, demangled_map=None, nm=None):
-    monkeypatch.setattr(bo_mod.shutil, "which", lambda t: f"/usr/bin/{t}")
+    patch_module_attribute(monkeypatch, bo_mod, "shutil", "which", lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "cafebabe")
     monkeypatch.setattr(
         bo_mod, "_nm_symbols_status", lambda p: (dict(nm or {}), True),

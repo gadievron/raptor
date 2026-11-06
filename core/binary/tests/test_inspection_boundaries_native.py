@@ -1,4 +1,5 @@
 """Native parser read boundaries using disposable inputs and owned probes."""
+
 import os
 from pathlib import Path
 import shutil
@@ -7,6 +8,8 @@ import sys
 import uuid
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -128,7 +131,7 @@ def test_native_parser_cannot_read_or_modify_outside_scope(tmp_path, monkeypatch
     elif adapter == 'stream':
         assert list(oracle._stream(['objdump', str(binary)], 30, binary)) == ['owned stdout']
     else:
-        monkeypatch.setattr(oracle.shutil, 'which', lambda tool: '/usr/bin/c++filt')
+        patch_module_attribute(monkeypatch, oracle, "shutil", "which", lambda tool: '/usr/bin/c++filt')
         assert oracle._demangle_linkage_names(['_Z3foov']) == {'_Z3foov': 'owned stdout'}
     expected = 'mount-ns' if sys.platform == 'linux' else 'seatbelt'
     assert seen and seen[-1].sandbox_info['containment_tier'] == expected

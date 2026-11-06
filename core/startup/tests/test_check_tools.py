@@ -11,11 +11,14 @@ All probes are stubbed — no real subprocesses, no PATH dependence.
 
 from __future__ import annotations
 
+
 import json
 from unittest import mock
 
 from core.startup import init as startup_init
 from core.startup.init import check_tools
+
+from core.testing.module_bindings import patch_module_attribute
 
 _FAKE_DEPS = {
     "afl++":      {"binary": "afl-fuzz", "severity": "required", "affects": "/fuzz"},
@@ -195,10 +198,7 @@ class TestJoernVersion:
 class TestCachedCliVersion:
     def _env(self, tmp_path, monkeypatch, fake_bin):
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        monkeypatch.setattr(
-            startup_init.shutil, "which",
-            lambda b: str(fake_bin) if b == fake_bin.name else None,
-        )
+        patch_module_attribute(monkeypatch, startup_init, "shutil", "which", lambda b: str(fake_bin) if b == fake_bin.name else None)
 
     def test_probe_parses_and_caches(self, tmp_path, monkeypatch):
         fake_bin = tmp_path / "sometool"
@@ -258,7 +258,7 @@ class TestCachedCliVersion:
 
     def test_binary_not_on_path_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        monkeypatch.setattr(startup_init.shutil, "which", lambda b: None)
+        patch_module_attribute(monkeypatch, startup_init, "shutil", "which", lambda b: None)
         assert startup_init._cached_cli_version("sometool") is None
 
     def test_corrupt_cache_file_is_tolerated(self, tmp_path, monkeypatch):
@@ -412,7 +412,7 @@ class TestRuleCompatibilityDisplay:
         bootstrap.write_text("#!/bin/sh\nexit 99\n")
         link = tmp_path / "codeql"
         link.symlink_to(bootstrap)
-        monkeypatch.setattr(startup_init.shutil, "which", lambda name: str(link))
+        patch_module_attribute(monkeypatch, startup_init, "shutil", "which", lambda name: str(link))
         with mock.patch.object(startup_init, "_cached_cli_version") as probe:
             assert startup_init._tool_version("codeql") is None
         probe.assert_not_called()

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+
 from unittest.mock import patch
 
 import packages.joern.prereqs as prereqs
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 class TestIsAvailable:
@@ -141,10 +144,7 @@ class TestResolverRealpath:
         link = tmp_path / "bin" / "joern"
         link.parent.mkdir()
         link.symlink_to(real)
-        monkeypatch.setattr(
-            prereqs.shutil, "which",
-            lambda name: str(link) if name == "joern" else None,
-        )
+        patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: str(link) if name == "joern" else None)
         prereqs.reset_path_cache()
         try:
             assert prereqs._joern_path() == str(real.resolve())
@@ -159,10 +159,7 @@ class TestResolverRealpath:
         link = tmp_path / "bin" / "joern-parse"
         link.parent.mkdir()
         link.symlink_to(real)
-        monkeypatch.setattr(
-            prereqs.shutil, "which",
-            lambda name: str(link) if name == "joern-parse" else None,
-        )
+        patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: str(link) if name == "joern-parse" else None)
         prereqs.reset_path_cache()
         try:
             assert prereqs._joern_parse_path() == str(real.resolve())
@@ -186,7 +183,7 @@ def test_macos_system_stub_resolves_configured_real_jdk(tmp_path, monkeypatch):
     root, java = _mac_jdk(tmp_path)
     monkeypatch.setattr(prereqs, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setenv("JAVA_HOME", str(root))
-    monkeypatch.setattr(prereqs.shutil, "which", lambda name: "/usr/bin/java")
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock()
     monkeypatch.setattr(prereqs.subprocess, "run", launch)
     prereqs.reset_path_cache()
@@ -204,7 +201,7 @@ def test_macos_system_stub_resolves_default_jdk_once(tmp_path, monkeypatch):
     root, java = _mac_jdk(tmp_path)
     monkeypatch.setattr(prereqs, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.delenv("JAVA_HOME", raising=False)
-    monkeypatch.setattr(prereqs.shutil, "which", lambda name: "/usr/bin/java")
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock(return_value=SimpleNamespace(returncode=0, stdout=str(root) + "\n"))
     monkeypatch.setattr(prereqs.subprocess, "run", launch)
     prereqs.reset_path_cache()
@@ -223,7 +220,7 @@ def test_macos_invalid_explicit_jdk_is_not_silently_replaced(tmp_path, monkeypat
     from unittest.mock import Mock
     monkeypatch.setattr(prereqs, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setenv("JAVA_HOME", str(tmp_path / "missing-jdk"))
-    monkeypatch.setattr(prereqs.shutil, "which", lambda name: "/usr/bin/java")
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock()
     monkeypatch.setattr(prereqs.subprocess, "run", launch)
     prereqs.reset_path_cache()
@@ -240,7 +237,7 @@ def test_macos_real_java_on_path_does_not_probe_or_use_other_java_home(tmp_path,
     _, java = _mac_jdk(tmp_path)
     monkeypatch.setattr(prereqs, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setenv("JAVA_HOME", str(tmp_path / "other"))
-    monkeypatch.setattr(prereqs.shutil, "which", lambda name: str(java))
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: str(java))
     launch = Mock()
     monkeypatch.setattr(prereqs.subprocess, "run", launch)
     prereqs.reset_path_cache()
@@ -257,7 +254,7 @@ def test_macos_failed_default_jdk_probe_never_uses_system_stub(monkeypatch):
     import subprocess
     monkeypatch.setattr(prereqs, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.delenv("JAVA_HOME", raising=False)
-    monkeypatch.setattr(prereqs.shutil, "which", lambda name: "/usr/bin/java")
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", lambda name: "/usr/bin/java")
     launch = Mock(side_effect=subprocess.TimeoutExpired("java_home", 5))
     monkeypatch.setattr(prereqs.subprocess, "run", launch)
     prereqs.reset_path_cache()
@@ -309,7 +306,7 @@ def _brew_joern(tmp_path, monkeypatch, prefix_name='opt/homebrew', expose_parser
     choices = {'joern': str(prefix / 'bin/joern'),
                'joern-parse': str(prefix / 'bin/joern-parse') if expose_parser else None,
                'java': '/usr/bin/java'}
-    monkeypatch.setattr(prereqs.shutil, 'which', choices.get)
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which", choices.get)
     monkeypatch.setattr(prereqs, 'sys', SimpleNamespace(platform='darwin'))
     monkeypatch.delenv('JAVA_HOME', raising=False)
     prereqs.reset_path_cache()

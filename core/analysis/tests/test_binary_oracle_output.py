@@ -1,4 +1,5 @@
 """The binary oracle consumes bytes, never child-selected output paths."""
+
 import io
 import os
 from pathlib import Path
@@ -7,6 +8,8 @@ import subprocess
 import pytest
 
 from core.analysis import binary_oracle as oracle
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 def _writer(monkeypatch, payload, *, status=0, stderr=''):
@@ -110,7 +113,7 @@ def test_oversized_output_cannot_license_absent_suppression(tmp_path, monkeypatc
     binary = tmp_path / 'input'
     binary.write_bytes(b'owned input')
     monkeypatch.setattr(oracle, '_MAX_STREAM_LINE_CHARS', 128)
-    monkeypatch.setattr(oracle.shutil, 'which', lambda tool: '/usr/bin/' + tool)
+    patch_module_attribute(monkeypatch, oracle, "shutil", "which", lambda tool: '/usr/bin/' + tool)
     monkeypatch.setattr(oracle, 'read_build_id', lambda path: 'owned-build-id')
     monkeypatch.setattr(oracle, '_nm_symbols_status', lambda path: ({'present': 123}, True))
     monkeypatch.setattr(oracle, '_dynamic_nm_symbols', lambda path: {})

@@ -1,10 +1,13 @@
 """Parser inputs never grant the shared temporary base or account HOME."""
+
 from pathlib import Path
 import subprocess
 
 import pytest
 
 from core.binary._inspection_policy import inspection_command, inspection_options
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 def test_private_reads_and_runtime_are_explicit(tmp_path, monkeypatch):
@@ -96,7 +99,7 @@ def test_adapters_apply_shared_policy_and_cleanup(tmp_path, monkeypatch, adapter
     elif adapter == 'stream':
         assert list(oracle._stream(['objdump', str(binary)], 10, binary)) == ['owned stdout']
     else:
-        monkeypatch.setattr(oracle.shutil, 'which', lambda tool: '/usr/bin/c++filt')
+        patch_module_attribute(monkeypatch, oracle, "shutil", "which", lambda tool: '/usr/bin/c++filt')
         assert oracle._demangle_linkage_names(['_Z3foov']) == {'_Z3foov': 'owned stdout'}
     assert len(calls) == 1
     assert not Path(calls[0]['output']).exists()
@@ -119,5 +122,5 @@ def test_isolation_refusal_is_never_converted_to_empty_evidence(tmp_path, monkey
         elif adapter == 'stream':
             list(oracle._stream(['objdump', str(binary)], 10, binary))
         else:
-            monkeypatch.setattr(oracle.shutil, 'which', lambda tool: '/usr/bin/c++filt')
+            patch_module_attribute(monkeypatch, oracle, "shutil", "which", lambda tool: '/usr/bin/c++filt')
             oracle._demangle_linkage_names(['_Z3foov'])

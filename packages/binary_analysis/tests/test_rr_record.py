@@ -1,4 +1,5 @@
 """Record and pack must scope writes and never follow trace-derived host roots."""
+
 from pathlib import Path
 import subprocess
 
@@ -7,6 +8,8 @@ import pytest
 from core.sandbox import SandboxSetupError
 from packages.binary_analysis import rr_record as module
 from packages.binary_analysis import rr_cli
+
+from core.testing.module_bindings import patch_module_attribute
 
 _REAL_VERIFY = module._verify_recording
 
@@ -209,7 +212,7 @@ def test_recording_runtime_does_not_require_gdb(setup, monkeypatch):
     def which(name, **kwargs):
         calls.append(name)
         return '/usr/bin/rr' if name == 'rr' else None
-    monkeypatch.setattr(runtime.shutil, 'which', which)
+    patch_module_attribute(monkeypatch, runtime, "shutil", "which", which)
     binary, debugger, _ = runtime._runtime({'PATH': '/usr/bin:/bin'}, need_debugger=False)
     assert binary == Path('/usr/bin/rr')
     assert debugger is None
