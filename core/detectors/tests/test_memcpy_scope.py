@@ -217,6 +217,30 @@ def test_expanded_origin_lookup_only_visits_token_lines(macro_setup, monkeypatch
     assert not state.limitations
 
 
+@pytest.mark.parametrize("cap", [0, 1, 2, 5])
+def test_macro_file_cap_preserves_order_and_exact_skipped_count(macro_setup, monkeypatch, cap):
+    state, prepared, _, pv = macro_setup
+    monkeypatch.setattr(pv, "_AUGMENT_FILE_CAP", cap)
+    paths = {state.target / rel for rel in state.files}
+    assert overlap._expanded_candidates(state, paths, overlap.monotonic() + 30) is (cap < 2)
+    expected = ["clean.c", "macro.c"][:cap]
+    assert [call["file_path"] for call in prepared] == expected
+    assert "raw.c" in state.candidates
+    if cap < 2:
+        assert state.limitations == [{"tu": "", "reason":
+            f"memcpy macro preparation incomplete: 0 failed, {2 - cap} skipped by preparation budget"}]
+    else:
+        assert not state.limitations
+
+
+def test_zero_macro_file_cap_does_not_construct_requests(macro_setup, monkeypatch):
+    state, prepared, _, pv = macro_setup
+    monkeypatch.setattr(pv, "_AUGMENT_FILE_CAP", 0)
+    state.request_for = lambda rel: pytest.fail("zero file budget must not construct a request")
+    assert overlap._expanded_candidates(state, {state.target / "macro.c"}, overlap.monotonic() + 30)
+    assert not prepared and state.limitations
+
+
 def test_failed_macro_preparation_keeps_other_candidates(macro_setup, monkeypatch):
     state, prepared, _, pv = macro_setup
     expand = pv.expand_translation_unit
