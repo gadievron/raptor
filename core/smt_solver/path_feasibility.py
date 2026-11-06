@@ -243,27 +243,16 @@ class PathSMTResult:
     summary_axioms: list[str] = field(default_factory=list)
 
     # --- Phase 8: weakest-precondition predicate (additive) ---
-    # ``wp_predicate`` is the minimal sat-preserving subset of the pending
-    # path conjuncts, serialised as an SMTLIB s-expression (the conjunction
-    # over the path's symbolic variables).  It is the *weakest predicate
-    # over the current symbolic variables* whose solution set equals the
-    # full path condition's: every kept conjunct is load-bearing (dropping
-    # it would admit inputs that change reachability) and every dropped
-    # conjunct was implied by the kept ones.  ``/exploit`` (Phase 9)
-    # consumes it as a hard constraint on synthesised inputs.  ``None``
-    # when the path is not ``sat``, when there were no pending conjuncts,
-    # or when Z3 is unavailable.  See :func:`_extract_wp`.
+    # Legacy WP fields describe an implication-reduced constraint summary,
+    # not a program weakest precondition or source reachability proof.
+    # Equivalence is conditional on the supplied background axioms.
     wp_predicate: str | None = None
-    # The kept (minimal) conjunct texts, in the deterministic extraction
-    # order.  Empty whenever ``wp_predicate`` is ``None``.
+    # Retained conjuncts remain diagnostic if serialization is unavailable.
     wp_conjuncts: list[str] = field(default_factory=list)
-    # ``False`` when the deletion pass hit ``WP_MAX_SOLVER_CALLS`` before
-    # every conjunct was tested — ``wp_predicate`` is then a sound
-    # sat-preserving subset but possibly not minimal.
+    # For a present summary, False also covers undecided redundancy checks
+    # and original inputs that could not be encoded.
     wp_complete: bool = True
-    # Names the deterministic conjunct ordering so re-runs reproduce the
-    # same minimal subset.  Always ``WP_ORDERING`` for now; carried
-    # explicitly so a future ordering change is visible to consumers.
+    # Deterministic reduction order, retained for wire compatibility.
     wp_ordering: str = WP_ORDERING
 
 
@@ -1214,53 +1203,24 @@ def _extract_wp(
     axioms: list[tuple[str, Any]] | None = None,
     timeout_ms: int | None = None,
 ) -> tuple[str | None, list[str], bool]:
-    """Extract the weakest-precondition predicate for a *sat* path.
+    """Reduce a satisfiable conjunction by proved implication only.
 
-    ``pending`` is the list of ``(text, z3_expr)`` path conjuncts whose
-    conjunction has already been shown satisfiable (we are on the ``sat``
-    branch of :func:`_solve_pending`).  Returns
-    ``(wp_predicate, wp_conjuncts, complete)``:
+    Return its SMTLIB predicate, retained conjunct texts, and completeness.
+    Deleting an implied conjunct preserves the encoded solution set modulo
+    the supplied background axioms. This is not a program weakest
+    precondition and does not prove source execution or reachability.
 
-      * ``wp_predicate`` — SMTLIB s-expression of the conjunction of the
-        *minimal sat-preserving subset* ``W ⊆ pending``, or ``None`` when
-        there is nothing to extract (no conjuncts, Z3 unavailable) or the
-        serialisation fails.
-      * ``wp_conjuncts`` — the kept conjunct texts in extraction order.
-      * ``complete`` — ``False`` if the deletion pass hit ``cap`` before
-        testing every conjunct (``W`` is then sat-preserving but possibly
-        not minimal).
-
-    Primitive — *implication-based redundancy*.  A conjunct ``c_i`` is
-    redundant exactly when the other kept conjuncts already imply it:
-    ``(⋀(kept∖{c_i}) ∧ ¬c_i)`` is unsat.  Dropping only implied conjuncts
-    guarantees ``⋀W`` has the *same* solution set as the full path
-    condition, so ``W`` is the weakest predicate over the path's symbolic
-    variables whose every model reaches the sink.  A conjunct whose
-    negation is still consistent with the rest is load-bearing and kept.
-
-    This is not the literal weakest precondition (that needs symbolic
-    back-substitution through the program); it is the weakest predicate
-    over the *current* symbolic variables, which is what ``/exploit`` PoC
-    synthesis needs because those variables are the attacker-controlled
-    inputs.
-
-    Greedy + deterministic.  Conjuncts are visited in lexicographic order
-    of canonicalised text (:data:`WP_ORDERING`); a conjunct dropped
-    earlier is excluded from later tests, so the result is minimal with
-    respect to that order.  Z3 ``unknown`` (timeout / undecidable) on a
-    redundancy test is treated conservatively as "keep" — a conjunct we
-    cannot *prove* redundant is never dropped, keeping ``W`` sound.
+    Visit conjuncts deterministically. Keep a conjunct when redundancy is
+    undecided; the result remains equivalent, but minimality is incomplete.
+    Limits, unavailable solvers, and serialization failures also prevent a
+    complete summary. Background axioms are not themselves deleted.
     """
     n = len(pending)
-    if n == 0 or not _z3_available():
+    if n == 0:
         return None, [], True
+    if not _z3_available():
+        return None, [text for text, _ in pending], False
 
-    # Call-summary axioms are background theory for the redundancy
-    # tests: never deletable themselves, but a path conjunct implied by
-    # an axiom (e.g. ``strlen(x) >= 0`` under the strlen summary) is
-    # correctly dropped.  The serialised wp_predicate stays a
-    # conjunction over PATH conjuncts only — it is minimal modulo the
-    # applied summaries, which the result names in ``summary_axioms``.
     _axioms = axioms or []
 
     order = sorted(range(n), key=lambda i: (_canonicalise(pending[i][0]), i))
@@ -1291,6 +1251,8 @@ def _extract_wp(
             verdict = solver.check()
         if verdict == z3.unsat:
             kept[idx] = False  # implied by the rest → redundant, drop it
+        elif verdict != z3.sat:
+            complete = False  # an undecided test cannot certify minimality
 
     # Serialise + list the kept conjuncts in the deterministic visit order
     # so the predicate and the conjunct list line up across re-runs.
@@ -1308,6 +1270,7 @@ def _extract_wp(
         wp_predicate = expr.sexpr()
     except (z3.Z3Exception, AttributeError):
         wp_predicate = None
+        complete = False
     return wp_predicate, wp_conjuncts, complete
 
 
@@ -1355,10 +1318,13 @@ def _solve_pending(
         var_name, direction = prefer_witness
         target = vars_.get(var_name)
         if target is not None:
+            # Optimize orders bitvectors as unsigned. Flipping the sign
+            # bit maps signed order monotonically into unsigned order.
+            objective = target ^ z3.BitVecVal(1 << (target.size() - 1), target.size(), ctx=target.ctx) if profile.signed else target
             if direction == "max":
-                solver.maximize(target)
+                solver.maximize(objective)
             elif direction == "min":
-                solver.minimize(target)
+                solver.minimize(objective)
             # Any other direction value is silently ignored — the
             # caller's API (validate_path / shim) is responsible for
             # vetting; defensive ignore avoids partial-objective
@@ -1406,9 +1372,16 @@ def _solve_pending(
         # Phase 8: on sat, extract the weakest predicate over the path's
         # symbolic variables (minimal sat-preserving conjunct subset). Its
         # own fresh solver — the verdict above is unaffected.
-        wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
-            pending, axioms=_axioms, timeout_ms=wp_timeout_ms,
-        )
+        try:
+            wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
+                pending, axioms=_axioms, timeout_ms=wp_timeout_ms,
+            )
+        except Exception:
+            # Reduction owns a separate solver. Its diagnostic failure
+            # cannot erase a definitive primary verdict and checked model.
+            _get_logger().debug("SMT conjunct reduction unavailable", exc_info=True)
+            wp_predicate, wp_conjuncts, wp_complete = None, [text for text, _ in pending], False
+        wp_complete = wp_complete and not unknown
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,

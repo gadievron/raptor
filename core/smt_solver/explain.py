@@ -15,7 +15,6 @@ Usage::
 """
 from __future__ import annotations
 
-import uuid
 from typing import Any, TYPE_CHECKING
 
 from .availability import z3
@@ -24,67 +23,61 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+def _boolean_names(expressions) -> set[str]:
+    """Visit a formula DAG once; bound variables cannot alias free labels."""
+    names, seen, pending = set(), set(), list(expressions)
+    while pending:
+        expr = pending.pop()
+        identity = expr.get_id()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if z3.is_const(expr) and z3.is_bool(expr):
+            names.add(str(expr.decl().name()))
+        pending.extend(expr.children())
+    return names
+
+
 def track(
         solver: Any,
         labeled: Sequence[tuple[str, Any]],
         rev: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Assert each labelled expression via ``assert_and_track``.
+    """Track a complete batch without changing its formula's meaning.
 
-    Returns a mapping from the generated Z3 label identifier back to the
-    caller's human-readable name, used by ``core_names`` to translate
-    ``solver.unsat_core()`` output.  Existing (non-tracked) assertions on
-    the solver are unaffected and will not appear in the unsat core.
-
-    Pass an existing ``rev`` dict to chain multiple batches on
-    the same solver safely — the label counter is derived from
-    ``len(rev)`` so new labels never collide with previously
-    tracked ones.  When ``rev`` is ``None`` (default) a fresh
-    dict is created, matching the original single-call behaviour.
-
-    Per-call UUID prefix on label names: Z3 maintains a process-wide
-    hash-cons table for symbolic constants, so two ``track`` calls
-    against *different* solver instances that both name a label
-    ``_c0`` actually share the same z3 ``BoolRef`` — solver B's
-    `assert_and_track(expr_B, label)` poisons solver A's tracking
-    (the underlying label object is shared; solver A's `unsat_core()`
-    then surfaces a label name from solver B's call, and `rev.get(...)`
-    returns the wrong human-readable name or ``None``). Pre-fix this
-    only manifested when two solvers ran concurrently or when a test
-    re-used label names across solver instances. The UUID prefix
-    makes every ``track`` call mint fresh, collision-free labels
-    regardless of how many solver instances exist in the process.
+    Labels use the solver's context and are disjoint from Boolean names
+    in existing assertions, incoming expressions, and the reverse map.
+    Native fresh symbols alone are insufficient: an explicit declaration
+    can already have the name the native fresh-name counter will choose.
+    Invalid expression sorts or contexts decline before any assertion is
+    added. Later batches may not use active tracking labels as formula
+    variables. Pass an existing reverse map to retain display names.
     """
-
     if rev is None:
         rev = {}
-    # 8 hex chars from a uuid4 = ~4 billion-call collision-resistance,
-    # which is overkill for one process but cheap.
-    call_prefix = uuid.uuid4().hex[:8]
-    # Per-call counter starts at zero. Pre-fix `offset = len(rev)`
-    # then `offset + i`. With the UUID prefix already guaranteeing
-    # cross-call collision-freedom, the `len(rev)` offset added no
-    # protection but introduced two correctness gaps:
-    #
-    # * If a caller mutated `rev` between batches (deleted some
-    #   entries to drop them from the tracked set), `len(rev)`
-    #   shrank and the next batch's labels overlapped with
-    #   already-issued ones from the SAME prefix's earlier batch
-    #   (rare in practice — the UUID is per-CALL so this only hit
-    #   the unusual "carry rev across calls" pattern, but the bug
-    #   was real).
-    # * Operators reading the label name in error logs saw an
-    #   index that depended on the dict's current size, not the
-    #   per-batch position — confusing because two re-runs of the
-    #   same batch produced different labels depending on what
-    #   else was tracked.
-    #
-    # A real per-call counter (`enumerate` from 0) gives stable,
-    # batch-local indices that are easy to reason about. UUID
-    # handles cross-call uniqueness; per-call counter handles
-    # in-call uniqueness.
-    for i, (name, expr) in enumerate(labeled):
-        label = z3.Bool(f"_c{call_prefix}_{i}")
+    batch = []
+    for name, expr in labeled:
+        if type(expr) is bool:
+            expr = z3.BoolVal(expr, ctx=solver.ctx)
+        if not z3.is_bool(expr) or expr.ctx != solver.ctx:
+            raise ValueError("tracked expressions must be Boolean formulas in the solver context")
+        batch.append((name, expr))
+    existing = _boolean_names(solver.assertions())
+    incoming = _boolean_names(expr for _, expr in batch)
+    # Retain only labels still present after pop/reset, bounding registry
+    # lifetime to the solver's live assertions. A later source expression
+    # cannot reuse an active marker: those markers are assumed true by Z3.
+    active_labels = getattr(solver, "_raptor_track_labels", set(rev)) & existing
+    if incoming & active_labels:
+        raise ValueError("tracked expressions reference an active tracking label")
+    solver._raptor_track_labels = active_labels
+    reserved = existing | incoming | set(rev)
+    for name, expr in batch:
+        label = z3.FreshBool("_raptor_track", ctx=solver.ctx)
+        while str(label.decl().name()) in reserved:
+            label = z3.FreshBool("_raptor_track", ctx=solver.ctx)
+        reserved.add(str(label.decl().name()))
+        active_labels.add(str(label.decl().name()))
         solver.assert_and_track(expr, label)
         rev[str(label)] = name
     return rev

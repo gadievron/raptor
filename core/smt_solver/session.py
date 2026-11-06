@@ -23,10 +23,17 @@ DEFAULT_TIMEOUT_MS = 5000
 _MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 
+def _timeout_value(timeout_ms):
+    if type(timeout_ms) is not int:
+        raise ValueError("timeout_ms must be an integer")
+    return min(_MAX_TIMEOUT_MS, max(1, timeout_ms))
+
+
 def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     """Return a fresh ``z3.Solver()`` with the given timeout applied.
 
-    Caller-supplied ``timeout_ms`` is clamped to ``[1, _MAX_TIMEOUT_MS]``.
+    Caller-supplied ``timeout_ms`` must be an integer and is clamped to
+    ``[1, _MAX_TIMEOUT_MS]``.
 
     Pre-fix:
       * `timeout_ms=0` was forwarded verbatim. Z3 interprets `timeout=0`
@@ -43,10 +50,7 @@ def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     Clamp to a sensible range so each of those pathological inputs
     becomes a usable per-call timeout.
     """
-    if timeout_ms < 1:
-        timeout_ms = 1
-    elif timeout_ms > _MAX_TIMEOUT_MS:
-        timeout_ms = _MAX_TIMEOUT_MS
+    timeout_ms = _timeout_value(timeout_ms)
     s = z3.Solver()
     s.set("timeout", timeout_ms)
     return s
@@ -69,46 +73,39 @@ def new_optimizer(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     work without modification — verified empirically on the Z3 builds
     we ship.
     """
-    if timeout_ms < 1:
-        timeout_ms = 1
-    elif timeout_ms > _MAX_TIMEOUT_MS:
-        timeout_ms = _MAX_TIMEOUT_MS
+    timeout_ms = _timeout_value(timeout_ms)
     o = z3.Optimize()
     o.set("timeout", timeout_ms)
     return o
 
 
+def _pop_scope(solver):
+    try:
+        solver.pop()
+    except Exception as exc:
+        raise RuntimeError("scoped: solver.pop() failed; solver state was not restored") from exc
+
+
 @contextmanager
 def scoped(solver: Any) -> Iterator[Any]:
-    """Push an assertion scope on ``solver`` for the duration of the block.
+    """Push a temporary assertion scope and require successful rollback.
 
-    On exit (normal or exception), pops the scope — assertions added
-    inside are removed, assertions from before remain. Lets domain
-    encoders try hypothesis constraints and roll back cheaply without
-    discarding the surrounding solver state.
-
-    push() failure is caught and re-raised as RuntimeError with the
-    original chained. Pre-fix push() ran OUTSIDE the try/finally, so
-    a push() failure (rare — invalid solver state, OOM, transport
-    fault on a remote-Z3 build) propagated as a raw `Z3Exception`
-    that the caller could mis-attribute to body code rather than
-    scope setup. Post-fix the caller sees a clear "scope push
-    failed" message; the contract that a failed push means no body
-    runs (and nothing to pop) is preserved.
+    Failed setup never executes the body. Failed cleanup raises an
+    integrity error: callers must not continue assuming temporary facts
+    were removed. If both body and cleanup fail, preserve both failures
+    in an exception group, including cancellation/control-flow exceptions.
     """
     try:
         solver.push()
-    except Exception as e:
-        msg = f"scoped: solver.push() failed: {e}"
-        raise RuntimeError(msg) from e
+    except Exception as exc:
+        raise RuntimeError(f"scoped: solver.push() failed: {exc}") from exc
     try:
         yield solver
-    finally:
+    except BaseException as body_error:
         try:
-            solver.pop()
-        except Exception:  # noqa: BLE001
-            # If pop fails (very rare, but possible after a remote-Z3
-            # transport hiccup), re-raising would mask any exception
-            # from the body. Best-effort log via debug-only re-raise:
-            # we let the body's exception propagate.
-            pass
+            _pop_scope(solver)
+        except RuntimeError as cleanup_error:
+            raise BaseExceptionGroup("scoped: body and rollback both failed", [body_error, cleanup_error]) from None
+        raise
+    else:
+        _pop_scope(solver)
