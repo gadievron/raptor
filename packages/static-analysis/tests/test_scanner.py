@@ -626,6 +626,7 @@ class TestJoinCodeQLStage:
     (False, [], 0, False, {'timeout': 1}, False, False, None),
     (False, [], 0, False, {}, False, 'empty', None),
     (False, [], 0, False, {}, False, 'multi', None),
+    (False, [], 0, False, {}, False, 'configuration', None),
     (False, [], 0, False, {}, False, 'cocci', None),
     (False, [], 0, False, {}, False, False, 'missing'),
     (False, [], 0, False, {}, False, False, 'partial'),
@@ -664,7 +665,8 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
             path.with_suffix('.json').write_text(json.dumps(metadata))
         inputs.append(str(path))
     codeql_reports = []
-    if stage_mode == 'multi':
+    has_codeql_reports = stage_mode in ('multi', 'configuration')
+    if has_codeql_reports:
         (repo / 'Other.java').write_text('class Other {}')
         for path in inputs:
             Path(path).with_suffix('.json').write_text(json.dumps({
@@ -679,6 +681,9 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
                                          'rules': [{'id': f'{language}/example'}]}]},
                 'artifacts': [{'location': {'uri': file, 'uriBaseId': 'ROOT'}}],
                 'results': [],
+                'invocations': [{'executionSuccessful': True, 'toolConfigurationNotifications': [
+                    {'level': 'error'},
+                ]}] if stage_mode == 'configuration' and language == 'python' else [],
             }]}))
             codeql_reports.append(str(path))
         import core.coverage.record as coverage
@@ -731,7 +736,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
                               for line in removed_lines],
     })
     monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
-                                     '--sequential', '--codeql' if stage_mode in ('multi', 'empty') else '--no-codeql',
+                                     '--sequential', '--codeql' if stage_mode in ('multi', 'empty', 'configuration') else '--no-codeql',
                                      *([] if stage_mode == 'cocci' else ['--no-cocci']),
                                      '--no-source-wrappers', '--no-config-resolved',
                                      '--no-graduated-rules'])
@@ -740,7 +745,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     expected_exit = 4 if failed_count == 2 or (offline and failed_count) else 0
     assert exit_info.value.code == expected_exit
     metrics = json.loads((out / 'scan_metrics.json').read_text())
-    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or stage_mode == 'empty' or metadata_state else 'ok'
+    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or stage_mode in ('empty', 'configuration') or metadata_state else 'ok'
     assert metrics['execution_status'] == status
     stdout = capsys.readouterr().out
     result = json.loads(stdout[stdout.rfind('\n{') + 1:])
@@ -748,13 +753,14 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert metrics['sarif_merge_failed'] is merge_fails
     assert metrics['analysis_gaps'] == gaps
     assert metrics['codeql_no_output'] is (stage_mode == 'empty')
+    assert metrics['tool_execution_failures'] == ({'codeql': 1} if stage_mode == 'configuration' else {})
     assert metrics['semgrep_metadata_errors'] == (2 if metadata_state == 'missing' else 0)
     assert metrics['semgrep_partial_files'] == (1 if metadata_state == 'partial' else 0)
     expected_count = 4 if merge_fails else 2 - len(removed_lines)
     expected_suppressed = 0 if merge_fails else expected_count
     assert metrics['nosemgrep_suppressed_count'] == expected_suppressed
     assert metrics['total_files_scanned'] == (1 if stage_mode == 'cocci' else 2)
-    assert set(metrics['tool_coverage']) == ({'semgrep', 'codeql'} if stage_mode == 'multi'
+    assert set(metrics['tool_coverage']) == ({'semgrep', 'codeql'} if has_codeql_reports
                                              else {'coccinelle'} if stage_mode == 'cocci' else set())
     assert json.loads((out / 'coverage-coccinelle.json').read_text()) == stale_coverage
     if stage_mode == 'cocci':
@@ -768,8 +774,8 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert 'old.c' not in stdout and 'old-dependency.json' not in stdout
     assert metrics['total_findings'] == expected_count
     assert metrics['findings_by_tool'] == ({'semgrep': expected_count, 'codeql': 0}
-                                           if stage_mode == 'multi' else {'semgrep': expected_count})
-    if stage_mode == 'multi':
+                                           if has_codeql_reports else {'semgrep': expected_count})
+    if has_codeql_reports:
         record = json.loads((out / 'coverage-codeql.json').read_text())
         assert record['files_examined'] == ['Other.java', 'source.py']
         assert record['packs'] == ['java@1', 'python@1']

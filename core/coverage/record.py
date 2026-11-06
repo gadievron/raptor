@@ -564,15 +564,16 @@ class CodeQLCoverageAccumulator:
                     packs.add(f"{name}@{ver}" if ver else name)
                 rules.update(_str(rule, "id") for rule in _rows(extension, "rules"))
             for invocation in _rows(run, "invocations"):
-                for note in _rows(invocation, "toolExecutionNotifications"):
-                    if note.get("level") not in ("error", "warning"):
-                        continue
-                    reason = _str(_dict(note, "message"), "text", "unknown")
-                    for location in _rows(note, "locations"):
-                        artifact = _dict(_dict(location, "physicalLocation"), "artifactLocation")
-                        file = local_path(artifact)
-                        if file:
-                            failures.setdefault((file, reason), {"path": file, "reason": reason})
+                for channel in ("toolExecutionNotifications", "toolConfigurationNotifications"):
+                    for note in _rows(invocation, channel):
+                        if note.get("level") not in ("error", "warning"):
+                            continue
+                        reason = _str(_dict(note, "message"), "text", "unknown")
+                        for location in _rows(note, "locations"):
+                            artifact = _dict(_dict(location, "physicalLocation"), "artifactLocation")
+                            file = local_path(artifact)
+                            if file:
+                                failures.setdefault((file, reason), {"path": file, "reason": reason})
 
 
     def build_record(self) -> dict[str, Any] | None:

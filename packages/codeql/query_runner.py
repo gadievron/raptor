@@ -1665,7 +1665,8 @@ class QueryRunner:
         named descriptors per tool component, not proof of query execution.
         """
         from core.sarif.parser import (
-            ResultRuleResolver, _as_dict, _result_rule_id, load_sarif, rule_default_level,
+            ResultRuleResolver, _as_dict, _normalise_tool_name, _result_rule_id,
+            get_run_execution_diagnostics, get_tool_name, load_sarif, rule_default_level,
         )
 
         if sarif_data is _SARIF_DATA_UNSET:
@@ -1684,6 +1685,8 @@ class QueryRunner:
             "dataflow_paths": 0,
             "total_dataflow_steps": 0,
             "sarif_input_errors": 0,
+            "tool_execution_failures": {},
+            "tool_coverage_limitations": {},
         }
 
         def rows(container, key):
@@ -1698,6 +1701,13 @@ class QueryRunner:
                     summary["sarif_input_errors"] += 1
 
         for run in rows(sarif_data, "runs"):
+            diagnostics = get_run_execution_diagnostics(run)
+            summary["sarif_input_errors"] += diagnostics["sarif_input_errors"]
+            tool_key = _normalise_tool_name(get_tool_name(run))
+            for key in ("tool_execution_failures", "tool_coverage_limitations"):
+                if diagnostics[key]:
+                    counts = summary[key]
+                    counts[tool_key] = counts.get(tool_key, 0) + diagnostics[key]
             resolver = None
             for result in rows(run, "results"):
                 summary["total_findings"] += 1
@@ -1749,6 +1759,10 @@ class QueryRunner:
         if summary["sarif_input_errors"]:
             logger.warning("CodeQL SARIF summary retained usable data with %s malformed metadata item(s)",
                            summary["sarif_input_errors"])
+        if summary["tool_execution_failures"] or summary["tool_coverage_limitations"]:
+            logger.warning("CodeQL SARIF reports %s failed invocation(s) and %s coverage limitation(s)",
+                           sum(summary["tool_execution_failures"].values()),
+                           sum(summary["tool_coverage_limitations"].values()))
         return summary
 
 

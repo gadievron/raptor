@@ -107,3 +107,16 @@ def test_decoded_result_payloads_are_not_retained(tmp_path):
     gc.collect()
     assert reference() is None
     assert accumulator.build_record()['files_examined'] == ['a.c']
+
+
+def test_configuration_notification_locations_are_preserved_once_across_channels(tmp_path):
+    data = _report(tmp_path, 'cpp', 'a.c', 'cpp/example')
+    invocation = data['runs'][0]['invocations'][0]
+    invocation['toolConfigurationNotifications'] = list(invocation['toolExecutionNotifications'])
+    accumulator = coverage.CodeQLCoverageAccumulator(tmp_path)
+    accumulator.add_report(data)
+    assert accumulator.build_record()['files_failed'] == [{'path': 'a.c', 'reason': 'partial extraction'}]
+    invocation.pop('toolExecutionNotifications')
+    accumulator = coverage.CodeQLCoverageAccumulator(tmp_path)
+    accumulator.add_report(data)
+    assert accumulator.build_record()['files_failed'] == [{'path': 'a.c', 'reason': 'partial extraction'}]

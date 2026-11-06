@@ -1835,6 +1835,45 @@ def _normalise_tool_name(driver_name: str) -> str:
     return _TOOL_NAME_MAP.get(driver_name.lower(), driver_name.lower())
 
 
+def get_run_execution_diagnostics(run: dict[str, Any]) -> dict[str, int]:
+    """Count execution/configuration failures without retaining report payloads.
+
+    One invocation is one failure even when multiple notification channels
+    report errors. Ordinary warnings do not imply incomplete analysis unless
+    the producer explicitly marks a coverage limitation.
+    """
+    counts = {"tool_execution_failures": 0, "tool_coverage_limitations": 0, "sarif_input_errors": 0}
+    invocations = run.get("invocations", [])
+    if not isinstance(invocations, list):
+        counts["sarif_input_errors"] += 1
+        return counts
+    for invocation in invocations:
+        if not isinstance(invocation, dict):
+            counts["sarif_input_errors"] += 1
+            continue
+        failed = invocation.get("executionSuccessful") is False
+        if "executionSuccessful" in invocation and type(invocation["executionSuccessful"]) is not bool:
+            counts["sarif_input_errors"] += 1
+        for channel in ("toolExecutionNotifications", "toolConfigurationNotifications"):
+            notifications = invocation.get(channel, [])
+            if not isinstance(notifications, list):
+                counts["sarif_input_errors"] += 1
+                continue
+            for note in notifications:
+                if not isinstance(note, dict):
+                    counts["sarif_input_errors"] += 1
+                    continue
+                failed |= note.get("level") == "error"
+                limitation = _as_dict(note.get("properties")).get("coverage_limitation")
+                # Legacy compiler review candidates are informational, not a
+                # declaration that analysis was incomplete.
+                if isinstance(limitation, str) and limitation and limitation != "review_candidates":
+                    counts["tool_coverage_limitations"] += 1
+        if failed:
+            counts["tool_execution_failures"] += 1
+    return counts
+
+
 def generate_scan_metrics(
     sarif_paths: list[str], *, file_count_paths: list[str] | None = None,
     on_source_report: Callable[[str, dict[str, Any] | None], None] | None = None,
@@ -1880,35 +1919,12 @@ def generate_scan_metrics(
             inputs[path] = (inputs.get(path, (False, False))[0], True)
 
     def execution_metrics(run: dict, tool_key: str) -> None:
-        invocations = run.get("invocations", [])
-        if not isinstance(invocations, list):
-            metrics["sarif_input_errors"] += 1
-            return
-        for invocation in invocations:
-            if not isinstance(invocation, dict):
-                metrics["sarif_input_errors"] += 1
-                continue
-            failed = invocation.get("executionSuccessful") is False
-            if "executionSuccessful" in invocation and type(invocation["executionSuccessful"]) is not bool:
-                metrics["sarif_input_errors"] += 1
-            notifications = invocation.get("toolExecutionNotifications", [])
-            if not isinstance(notifications, list):
-                metrics["sarif_input_errors"] += 1
-                notifications = []
-            for note in notifications:
-                if not isinstance(note, dict):
-                    metrics["sarif_input_errors"] += 1
-                    continue
-                failed |= note.get("level") == "error"
-                limitation = _as_dict(note.get("properties")).get("coverage_limitation")
-                # Older compiler reports used this marker for informational
-                # review candidates, which do not imply incomplete analysis.
-                if isinstance(limitation, str) and limitation and limitation != "review_candidates":
-                    counts = metrics["tool_coverage_limitations"]
-                    counts[tool_key] = counts.get(tool_key, 0) + 1
-            if failed:
-                counts = metrics["tool_execution_failures"]
-                counts[tool_key] = counts.get(tool_key, 0) + 1
+        diagnostics = get_run_execution_diagnostics(run)
+        metrics["sarif_input_errors"] += diagnostics["sarif_input_errors"]
+        for key in ("tool_execution_failures", "tool_coverage_limitations"):
+            if diagnostics[key]:
+                counts = metrics[key]
+                counts[tool_key] = counts.get(tool_key, 0) + diagnostics[key]
 
     def accumulate_file(sarif_path: str, count_findings: bool, count_files: bool) -> None:
         sarif_data = load_sarif(Path(sarif_path))

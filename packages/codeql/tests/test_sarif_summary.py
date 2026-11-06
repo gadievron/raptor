@@ -125,3 +125,28 @@ def test_summary_does_not_retain_unused_finding_payloads(runner, tmp_path):
     gc.collect()
     assert reference() is None
     assert summary['total_findings'] == 1
+
+
+@pytest.mark.parametrize('findings', [0, 1], ids=['zero-findings', 'retained-finding'])
+def test_summary_and_scan_metrics_share_configuration_diagnostics(runner, tmp_path, findings):
+    import json
+    from core.reporting.scan_coverage import scan_execution_status
+    data = {'runs': [{'tool': {'driver': {'name': 'CodeQL'}},
+        'results': [{'ruleId': 'r', 'level': 'warning'}] * findings,
+        'invocations': [{'executionSuccessful': True,
+            'toolExecutionNotifications': [{'level': 'error'}],
+            'toolConfigurationNotifications': [{'level': 'error'}, {
+                'level': 'warning', 'properties': {'coverage_limitation': 'query_budget'},
+            }],
+        }],
+    }]}
+    report = tmp_path / 'report.sarif'
+    report.write_text(json.dumps(data))
+    summary = runner.get_sarif_summary(report, sarif_data=data)
+    metrics = parser.generate_scan_metrics([str(report)])
+    for key in ('tool_execution_failures', 'tool_coverage_limitations', 'sarif_input_errors'):
+        assert summary[key] == metrics[key]
+    assert summary['total_findings'] == metrics['total_findings'] == findings
+    assert summary['tool_execution_failures'] == {'codeql': 1}
+    assert summary['tool_coverage_limitations'] == {'codeql': 1}
+    assert scan_execution_status(summary) == 'partial'

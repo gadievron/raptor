@@ -525,6 +525,12 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Scan status and CodeQL summaries include both tool-execution and tool-configuration
+diagnostics recorded in SARIF. Configuration errors make execution partial even
+when the process exits successfully and reports no findings. Multiple errors
+from one invocation count as one failed invocation. Ordinary warnings remain
+informational unless the tool explicitly reports a coverage limitation.
+
 CodeQL summaries retain usable findings when neighboring result or dataflow
 metadata is malformed, and warn when some metadata could not be counted.
 When a finding omits severity, its own query's default is used. Query
