@@ -25,6 +25,7 @@ from cve_env.tools.verify import (
     verify,
 )
 
+from core.container.proc import RunOutcome
 from core.testing.module_bindings import patch_module_attribute
 
 
@@ -36,6 +37,40 @@ def _isolate_clock_patch_targets(monkeypatch):
     patch_module_attribute(
         monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_socket_patch_targets(monkeypatch):
+    import core.env.verify as consumer
+
+    patch_module_attribute(
+        monkeypatch, consumer, "socket", "create_connection", consumer.socket.create_connection,
+    )
+
+
+@pytest.fixture(autouse=True)
+def cli_runner(monkeypatch):
+    """Keep all unit cases off Docker while preserving cross-consumer order."""
+    from core.container import containers, exec as executor
+    import cve_env.utils.run as adapter
+
+    runner = MagicMock(return_value=RunOutcome(
+        returncode=None, stdout="", stderr="command_not_found: owned CLI unavailable",
+        timed_out=False,
+    ))
+    for consumer in (containers, executor, adapter):
+        monkeypatch.setattr(consumer, "run_cli", runner)
+    return runner
+
+
+@pytest.fixture
+def running_cli(cli_runner):
+    """Plan tests assume a running container unless they override its state."""
+    cli_runner.return_value = RunOutcome(
+        returncode=0, stdout='{"Status": "running", "Running": true}',
+        stderr="", timed_out=False,
+    )
+    return cli_runner
 
 
 def _mk_resp(*, status: int, body: bytes) -> MagicMock:
@@ -108,24 +143,28 @@ def test_http_check_content_check_missing(mock_req: Any) -> None:
     assert "admin" in r["details"]["missing_content"]
 
 
-@patch("core.container.proc.subprocess.run")
-def test_check_logs_passes_when_all_patterns_match(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+def test_check_logs_passes_when_all_patterns_match(
+    cli_runner: Any,
+) -> None:
+    cli_runner.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout="Started\nlistening on 80\n", stderr=""
     )
     r = check_logs("cid", expected_patterns=[r"Started", r"listening on \d+"])
     assert r["passed"] is True
 
 
-@patch("core.container.proc.subprocess.run")
-def test_check_logs_fails_on_missing_pattern(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
+
+def test_check_logs_fails_on_missing_pattern(
+    cli_runner: Any,
+) -> None:
+    cli_runner.return_value = RunOutcome(timed_out=False, returncode=0, stdout="hello\n", stderr="")
     r = check_logs("cid", expected_patterns=["missing-pattern"])
     assert r["passed"] is False
 
 
+
 def test_check_logs_fails_on_invalid_regex() -> None:
-    fake_outcome = MagicMock(timed_out=False, returncode=0, stdout="some log output", stderr="")
+    fake_outcome = RunOutcome(timed_out=False, returncode=0, stdout="some log output", stderr="")
     with patch("cve_env.utils.run.run_with_timeout", return_value=fake_outcome):
         r = check_logs("cid", expected_patterns=["("])
     assert r["passed"] is False
@@ -137,18 +176,21 @@ def test_check_logs_empty_patterns_passes() -> None:
     assert r["passed"] is True
 
 
-@patch("core.container.proc.subprocess.run")
-def test_check_container_status_passes_on_running(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+def test_check_container_status_passes_on_running(
+    cli_runner: Any,
+) -> None:
+    cli_runner.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout='{"Status":"running","Running":true}', stderr=""
     )
     r = check_container_status("cid")
     assert r["passed"] is True
 
 
-@patch("core.container.proc.subprocess.run")
-def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+def test_check_container_status_fails_on_exited(
+    cli_runner: Any,
+) -> None:
+    cli_runner.return_value = RunOutcome(timed_out=False,
         returncode=0,
         stdout='{"Status":"exited","Running":false,"ExitCode":0}',
         stderr="",
@@ -157,13 +199,16 @@ def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
     assert r["passed"] is False
 
 
-@patch("core.container.proc.subprocess.run")
-def test_check_container_status_fails_on_inspect_error(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(
+
+def test_check_container_status_fails_on_inspect_error(
+    cli_runner: Any,
+) -> None:
+    cli_runner.return_value = RunOutcome(timed_out=False,
         returncode=1, stdout="", stderr="no such container"
     )
     r = check_container_status("cid")
     assert r["passed"] is False
+
 
 
 def test_stability_wait_rejects_out_of_range() -> None:
@@ -348,13 +393,12 @@ def test_check_exec_accepts_and_propagates_workdir(mock_run: Any) -> None:
     assert kwargs.get("workdir") == "/srv/app"
 
 
-@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-def test_verify_dispatches_exec_check(mock_run: Any, mock_subproc: Any) -> None:
+def test_verify_dispatches_exec_check(
+    mock_run: Any,
+    running_cli: Any,
+) -> None:
     """Phase 1 canonicalization auto-prepends container_status; mock it as running."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_run.return_value = _mk_exec_result(exit_code=0, stdout="PONG")
     out = verify(
         container_id="cid",
@@ -375,13 +419,14 @@ def test_verify_dispatches_exec_check(mock_run: Any, mock_subproc: Any) -> None:
     assert out["results"][1]["type"] == "exec_check"
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-def test_verify_exec_check_aliases_normalized(mock_run: Any, mock_subproc: Any) -> None:
+def test_verify_exec_check_aliases_normalized(
+    mock_run: Any,
+    running_cli: Any,
+) -> None:
     """LLM may use 'cmd' / 'exit_code' / 'stdout_contains' aliases."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_run.return_value = _mk_exec_result(exit_code=42)
     out = verify(
         container_id="cid",
@@ -396,6 +441,8 @@ def test_verify_exec_check_aliases_normalized(mock_run: Any, mock_subproc: Any) 
         ],
     )
     assert out["passed"] is True
+
+
 
 
 # Phase 5: http_request_check (active payload injection) ---------------
@@ -546,8 +593,9 @@ def test_http_request_check_hint_for_500_server_error(mock_req: Any) -> None:
 # Phase 13.1: container_status logs_tail + hint -----------------------
 
 
-@patch("core.container.proc.subprocess.run")
-def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> None:
+def test_container_status_failure_includes_logs_tail_and_hint(
+    cli_runner: Any,
+) -> None:
     """When container_status reports exited, augment details with logs_tail
     + a classified hint instead of just the bare State dict.
     """
@@ -559,8 +607,8 @@ def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> 
         "ExitCode": 1,
         "OOMKilled": False,
     }
-    inspect_proc = MagicMock(returncode=0, stdout=json.dumps(inspect_state), stderr="")
-    logs_proc = MagicMock(
+    inspect_proc = RunOutcome(timed_out=False, returncode=0, stdout=json.dumps(inspect_state), stderr="")
+    logs_proc = RunOutcome(timed_out=False,
         returncode=0,
         stdout=(
             "apache2: Address already in use: AH00072: make_sock: "
@@ -569,7 +617,7 @@ def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> 
         stderr="",
     )
     # First call: docker inspect; second call: docker logs.
-    mock_run.side_effect = [inspect_proc, logs_proc]
+    cli_runner.side_effect = [inspect_proc, logs_proc]
 
     r = check_container_status(container_id="cid-port-conflict")
     assert r["passed"] is False
@@ -578,8 +626,10 @@ def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> 
     assert "port conflict" in r["details"]["hint"]
 
 
-@patch("core.container.proc.subprocess.run")
-def test_container_status_oom_hint(mock_run: Any) -> None:
+
+def test_container_status_oom_hint(
+    cli_runner: Any,
+) -> None:
     from cve_env.tools.verify import check_container_status
 
     inspect_state = {
@@ -588,17 +638,19 @@ def test_container_status_oom_hint(mock_run: Any) -> None:
         "ExitCode": 137,
         "OOMKilled": True,
     }
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout=json.dumps(inspect_state), stderr=""),
-        MagicMock(returncode=0, stdout="killed", stderr=""),
+    cli_runner.side_effect = [
+        RunOutcome(timed_out=False, returncode=0, stdout=json.dumps(inspect_state), stderr=""),
+        RunOutcome(timed_out=False, returncode=0, stdout="killed", stderr=""),
     ]
     r = check_container_status(container_id="cid-oom")
     assert r["passed"] is False
     assert "OOM" in r["details"]["hint"]
 
 
-@patch("core.container.proc.subprocess.run")
-def test_container_status_silent_death_hint(mock_run: Any) -> None:
+
+def test_container_status_silent_death_hint(
+    cli_runner: Any,
+) -> None:
     """Empty logs + non-running container → ENTRYPOINT/CMD ran-to-completion hint."""
     from cve_env.tools.verify import check_container_status
 
@@ -608,17 +660,19 @@ def test_container_status_silent_death_hint(mock_run: Any) -> None:
         "ExitCode": 0,
         "OOMKilled": False,
     }
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout=json.dumps(inspect_state), stderr=""),
-        MagicMock(returncode=0, stdout="", stderr=""),  # empty logs
+    cli_runner.side_effect = [
+        RunOutcome(timed_out=False, returncode=0, stdout=json.dumps(inspect_state), stderr=""),
+        RunOutcome(timed_out=False, returncode=0, stdout="", stderr=""),  # empty logs
     ]
     r = check_container_status(container_id="cid-silent")
     assert r["passed"] is False
     assert "ENTRYPOINT" in r["details"]["hint"] or "CMD" in r["details"]["hint"]
 
 
-@patch("core.container.proc.subprocess.run")
-def test_container_status_missing_module_hint(mock_run: Any) -> None:
+
+def test_container_status_missing_module_hint(
+    cli_runner: Any,
+) -> None:
     from cve_env.tools.verify import check_container_status
 
     inspect_state = {
@@ -627,9 +681,9 @@ def test_container_status_missing_module_hint(mock_run: Any) -> None:
         "ExitCode": 1,
         "OOMKilled": False,
     }
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout=json.dumps(inspect_state), stderr=""),
-        MagicMock(
+    cli_runner.side_effect = [
+        RunOutcome(timed_out=False, returncode=0, stdout=json.dumps(inspect_state), stderr=""),
+        RunOutcome(timed_out=False,
             returncode=0,
             stdout="ModuleNotFoundError: No module named 'flask'",
             stderr="",
@@ -640,8 +694,10 @@ def test_container_status_missing_module_hint(mock_run: Any) -> None:
     assert "missing language deps" in r["details"]["hint"]
 
 
-@patch("core.container.proc.subprocess.run")
-def test_container_status_running_does_not_fetch_logs(mock_run: Any) -> None:
+
+def test_container_status_running_does_not_fetch_logs(
+    cli_runner: Any,
+) -> None:
     """Phase 13.1: don't waste a docker logs call when the container is fine."""
     from cve_env.tools.verify import check_container_status
 
@@ -649,13 +705,14 @@ def test_container_status_running_does_not_fetch_logs(mock_run: Any) -> None:
         "Running": True,
         "Status": "running",
     }
-    mock_run.return_value = MagicMock(
+    cli_runner.return_value = RunOutcome(timed_out=False,
         returncode=0, stdout=json.dumps(inspect_state), stderr=""
     )
     r = check_container_status(container_id="cid-healthy")
     assert r["passed"] is True
     # Only one subprocess call (docker inspect); no docker logs.
-    assert mock_run.call_count == 1
+    assert cli_runner.call_count == 1
+
 
 
 @patch("core.env.verify._http_exchange")
@@ -686,15 +743,12 @@ def test_http_request_check_rejects_missing_marker(mock_req: Any) -> None:
     mock_req.assert_not_called()
 
 
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_verify_dispatches_http_request_check_with_aliases(
-    mock_req: Any, mock_subproc: Any
+    mock_req: Any,
+    running_cli: Any,
 ) -> None:
     """LLM may use 'data'/'marker'/'param' aliases; verify dispatches via verify()."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_req.return_value = _mk_payload_resp(status=200, body="output: uid=0 (proof)")
     out = verify(
         container_id="cid",
@@ -714,6 +768,8 @@ def test_verify_dispatches_http_request_check_with_aliases(
     assert out["passed"] is True
     assert out["results"][0]["type"] == "container_status"
     assert out["results"][1]["type"] == "http_request_check"
+
+
 
 
 # Phase 1: verify-plan canonicalization ---------------------------------
@@ -748,13 +804,12 @@ def test_canonicalize_plan_handles_empty_plan() -> None:
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
-def test_verify_canonicalizes_at_dispatch(mock_subproc: Any, mock_run: Any) -> None:
+def test_verify_canonicalizes_at_dispatch(
+    mock_run: Any,
+    running_cli: Any,
+) -> None:
     """End-to-end: a stability_wait-first plan runs container_status BEFORE stability_wait."""
     # First call: docker inspect for container_status -> running.
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     # Pretend stability_wait succeeds (container still running).
     out = verify(
         container_id="cid",
@@ -769,6 +824,8 @@ def test_verify_canonicalizes_at_dispatch(mock_subproc: Any, mock_run: Any) -> N
     types_in_order = [r.get("type") for r in out["results"]]
     assert types_in_order[0] == "container_status"
     assert "stability_wait" in types_in_order
+
+
 
 
 # Phase 2 (Java-class auto-stability_wait bump) tests removed in Phase 42.2
@@ -1001,21 +1058,19 @@ def test_phase61_check_http_rejects_public_ip(mock_req: Any) -> None:
     assert mock_req.call_count == 0
 
 
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify.socket.create_connection")
 @patch("cve_env.tools.verify._published_run_ports",
        return_value=frozenset({6379}))
 def test_verify_dispatches_tcp_probe_check_with_port_target_alias(
-    _mock_ports: Any, mock_conn: Any, mock_subproc: Any
+    _mock_ports: Any,
+    mock_conn: Any,
+    running_cli: Any,
 ) -> None:
     """S29 Phase A (2026-05-04): `port_target` aliased to `host_port`. Surfaced
     by the S28 kwarg-frequency scan (CVE-2014-0160 prior bench, manual-1777*
     turn 27 — 1 historical use). Same B8-class alias pattern as `host`/`port`/
     `data`/`marker`. Was xfail-strict until the alias landed in
     _TCP_PROBE_KEY_ALIASES (verify.py); now a positive lock-test."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
     out = verify(
         container_id="cid",
@@ -1035,12 +1090,15 @@ def test_verify_dispatches_tcp_probe_check_with_port_target_alias(
     assert args[0] == ("127.0.0.1", 6379)
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 @patch("core.env.verify.socket.create_connection")
 @patch("cve_env.tools.verify._published_run_ports",
        return_value=frozenset({6379}))
 def test_verify_dispatches_tcp_probe_check_with_host_alias(
-    _mock_ports: Any, mock_conn: Any, mock_subproc: Any
+    _mock_ports: Any,
+    mock_conn: Any,
+    running_cli: Any,
 ) -> None:
     """E1.1 (S28, 2026-05-04): `host` is a common LLM-synonym for `host_ip`.
     bench50-20260504-010418 CVE-2018-2628 turn 19 hit
@@ -1049,9 +1107,6 @@ def test_verify_dispatches_tcp_probe_check_with_host_alias(
     failure burned a turn. Add `host` to the alias dict to translate the
     synonym at dispatch time. Same precedent as B8 (check_exec workdir
     fix at test_verify.py:261-273)."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
     out = verify(
         container_id="cid",
@@ -1074,17 +1129,17 @@ def test_verify_dispatches_tcp_probe_check_with_host_alias(
     assert args[0] == ("127.0.0.1", 6379)
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 @patch("core.env.verify.socket.create_connection")
 @patch("cve_env.tools.verify._published_run_ports",
        return_value=frozenset({6379}))
 def test_verify_dispatches_tcp_probe_check_with_aliases(
-    _mock_ports: Any, mock_conn: Any, mock_subproc: Any
+    _mock_ports: Any,
+    mock_conn: Any,
+    running_cli: Any,
 ) -> None:
     """LLM aliases: port→host_port, data→send_text, marker→expected_response_contains."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
     out = verify(
         container_id="cid",
@@ -1107,22 +1162,22 @@ def test_verify_dispatches_tcp_probe_check_with_aliases(
     assert args[0] == ("127.0.0.1", 6379)
 
 
+
+
 # Phase 29: verify_quality_warning ------------------------------------------
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_verify_quality_warning_when_active_check_lacks_version_assertion(
-    mock_req: Any, mock_subproc: Any, mock_exec: Any
+    mock_req: Any,
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 29: verify response includes verify_quality_warning when active-
     vuln check passes but no exec_check command matches a version-assertion
     shape. Lets the agent self-heal in the same run before outcome locks in.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_req.return_value = _mk_payload_resp(status=200, body="output: uid=0 (proof)")
     out = verify(
         container_id="cid",
@@ -1143,11 +1198,14 @@ def test_verify_quality_warning_when_active_check_lacks_version_assertion(
     assert "version-assertion" in out["verify_quality_warning"]
 
 
+
+
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_verify_no_quality_warning_when_active_version_and_functional_smoke_all_present(
-    mock_req: Any, mock_subproc: Any, mock_exec: Any
+    mock_req: Any,
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 29 + Phase 49.3: when active payload + version-assertion exec_check
     + at least one additional functional-smoke check (third active or
@@ -1155,9 +1213,6 @@ def test_verify_no_quality_warning_when_active_version_and_functional_smoke_all_
     Pre-Phase-49.3, just version + vuln was enough; Phase 49.3 raised the
     bar to require functional smoke too.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_req.return_value = _mk_payload_resp(status=200, body="uid=0")
     mock_exec.return_value = _mk_exec_result(exit_code=0, stdout="Apache/2.4.41\n")
     out = verify(
@@ -1183,11 +1238,14 @@ def test_verify_no_quality_warning_when_active_version_and_functional_smoke_all_
     assert "verify_quality_warning" not in out
 
 
+
+
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_phase49_3_warning_when_only_version_and_vuln_no_functional_smoke(
-    mock_req: Any, mock_subproc: Any, mock_exec: Any
+    mock_req: Any,
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 49.3: plan passes Phase 29 minimum (active payload + version-
     assertion present) but lacks functional smoke — only 2 non-lifecycle
@@ -1195,9 +1253,6 @@ def test_phase49_3_warning_when_only_version_and_vuln_no_functional_smoke(
     verbs on benign input. Forensic case: bench50-20260430-000207 successes
     ALL had this shape (1 version-exec + 1 vuln-exec, nothing in between).
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_req.return_value = _mk_payload_resp(status=200, body="uid=0")
     mock_exec.return_value = _mk_exec_result(exit_code=0, stdout="Apache/2.4.41\n")
     out = verify(
@@ -1224,20 +1279,20 @@ def test_phase49_3_warning_when_only_version_and_vuln_no_functional_smoke(
     assert "FUNCTIONAL SMOKE" in warning or "functional" in warning
 
 
+
+
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_phase49_3_no_warning_when_http_check_with_content_check_provides_smoke(
-    mock_req: Any, mock_subproc: Any, mock_exec: Any
+    mock_req: Any,
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 49.3: an http_check with content_check (substring matching on
     response body) counts as functional smoke alongside the active checks.
     Plan: http_check with content_check + version exec + active payload check
     payload = 3 non-lifecycle, no warning.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     # Two distinct http calls: first is the content-check smoke, second is the vuln payload
     mock_req.side_effect = [
         _mk_payload_resp(status=200, body="Welcome to nginx"),
@@ -1270,16 +1325,16 @@ def test_phase49_3_no_warning_when_http_check_with_content_check_provides_smoke(
     )
 
 
-@patch("core.container.proc.subprocess.run")
-def test_verify_quality_warning_for_lifecycle_only_plans(mock_subproc: Any) -> None:
+
+
+def test_verify_quality_warning_for_lifecycle_only_plans(
+    running_cli: Any,
+) -> None:
     """Phase 52: lifecycle-only plans get a quality warning. Reframed from
     "missing active payload check" to "missing version-assertion" — under the
     new gate, success requires version + smoke. A pure-lifecycle plan
     triggers the version-assertion warning first (the gate's first hurdle).
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -1294,10 +1349,12 @@ def test_verify_quality_warning_for_lifecycle_only_plans(mock_subproc: Any) -> N
     assert "verified_partial" in warning
 
 
+
+
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 def test_phase49_3_warning_when_only_one_exec_check_is_both_active_and_version(
-    mock_subproc: Any, mock_exec: Any
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 29 + Phase 49.3: a single exec_check whose command IS a version
     assertion counts as both active payload (via type) and version-assertion
@@ -1307,9 +1364,6 @@ def test_phase49_3_warning_when_only_one_exec_check_is_both_active_and_version(
     The agent should add at least one separate functional smoke check on
     benign input.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_exec.return_value = _mk_exec_result(exit_code=0, stdout="Apache/2.4.41")
     out = verify(
         container_id="cid",
@@ -1328,14 +1382,17 @@ def test_phase49_3_warning_when_only_one_exec_check_is_both_active_and_version(
     assert "Phase 48" in out["verify_quality_warning"]
 
 
+
+
 # Phase 52 audit gap-fill tests ---------------------------------------------
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify._http_exchange")
 def test_phase52_no_warning_when_three_active_checks_satisfy_smoke_heuristic(
-    mock_req: Any, mock_subproc: Any, mock_exec: Any
+    mock_req: Any,
+    mock_exec: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 52 audit gap #1 (HIGH): the >=3-active-checks branch of the
     functional-smoke heuristic must satisfy the warning silencer in
@@ -1343,9 +1400,6 @@ def test_phase52_no_warning_when_three_active_checks_satisfy_smoke_heuristic(
     content_check, no multi-path http_checks). Tests the active_count >= 3
     arm of the OR.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_exec.return_value = _mk_exec_result(exit_code=0, stdout="OK")
     out = verify(
         container_id="cid",
@@ -1367,18 +1421,17 @@ def test_phase52_no_warning_when_three_active_checks_satisfy_smoke_heuristic(
     )
 
 
+
+
 @patch("core.env.verify._http_exchange")
-@patch("core.container.proc.subprocess.run")
 def test_phase52_warning_when_smoke_present_but_no_version(
-    mock_subproc: Any, mock_req: Any
+    mock_req: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 52 audit gap #6 (MED): smoke present but missing version-assertion
     must trigger the version warning (NOT the smoke warning). Verifies the
     gate's missing-version branch fires even when smoke is present.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     # Mock both http_check calls as 200 OK (no body content_check, just status).
     mock_req.return_value = (200, b"<html>ok</html>")
     out = verify(
@@ -1400,18 +1453,16 @@ def test_phase52_warning_when_smoke_present_but_no_version(
     assert "FUNCTIONAL SMOKE" not in warning
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 def test_phase52_http_check_with_content_check_sets_performed_flag(
-    mock_subproc: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 49.3 / Phase 52: check_http must set
     details.content_check_performed=True when content_check arg is
     passed. The functional-smoke heuristic in
     _compute_verify_quality_warning relies on this field.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     # Mock the http call as a successful response with body containing the marker
     with patch("core.env.verify._http_exchange") as mock_req:
         mock_req.return_value = (200, b"Welcome to nginx")
@@ -1439,18 +1490,16 @@ def test_phase52_http_check_with_content_check_sets_performed_flag(
     )
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 def test_phase52_quality_warning_when_both_version_and_smoke_missing(
-    mock_subproc: Any,
+    running_cli: Any,
 ) -> None:
     """Phase 52 audit gap #7 (MED): when BOTH version-assertion AND
     functional smoke are missing (pure-lifecycle plan), the warning fires
     on the version-assertion branch first (it's checked before smoke).
     Validates ordering of the two warning conditions.
     """
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -1468,12 +1517,12 @@ def test_phase52_quality_warning_when_both_version_and_smoke_missing(
     assert "FUNCTIONAL SMOKE" not in warning
 
 
-@patch("core.container.proc.subprocess.run")
-def test_verify_rejects_unknown_type(mock_subproc: Any) -> None:
+
+
+def test_verify_rejects_unknown_type(
+    running_cli: Any,
+) -> None:
     """Unknown check type fails. Phase 1: container_status runs first, then mystery_check."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -1484,6 +1533,8 @@ def test_verify_rejects_unknown_type(mock_subproc: Any) -> None:
     # results[0] = container_status (passes); results[1] = mystery_check (unknown)
     assert out["results"][0]["type"] == "container_status"
     assert "unknown check type" in out["results"][1]["reason"]
+
+
 
 
 def test_verify_rejects_string_encoded_plan() -> None:
@@ -1653,19 +1704,17 @@ if __name__ == "__main__":  # pragma: no cover
 # ── tcp probe destination pinning (agent plans are untrusted) ─────────
 
 
-@patch("core.container.proc.subprocess.run")
 @patch("core.env.verify.socket.create_connection")
 @patch("cve_env.tools.verify._published_run_ports",
        return_value=frozenset())
 def test_verify_tcp_probe_unpublished_port_fails_closed(
-    _mock_ports: Any, mock_conn: Any, mock_subproc: Any
+    _mock_ports: Any,
+    mock_conn: Any,
+    running_cli: Any,
 ) -> None:
     """A plan-supplied host_port that no cve-env container publishes is
     refused before any socket is opened — a hostile plan cannot aim
     probe payloads at unrelated host-local services."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -1684,18 +1733,18 @@ def test_verify_tcp_probe_unpublished_port_fails_closed(
     mock_conn.assert_not_called()
 
 
-@patch("core.container.proc.subprocess.run")
+
+
 @patch("core.env.verify.socket.create_connection")
 @patch("cve_env.tools.verify._published_run_ports",
        return_value=frozenset({6379}))
 def test_verify_tcp_probe_host_ip_pinned_to_endpoint(
-    _mock_ports: Any, mock_conn: Any, mock_subproc: Any
+    _mock_ports: Any,
+    mock_conn: Any,
+    running_cli: Any,
 ) -> None:
     """A plan-supplied host_ip (private-range SSRF steering) is
     discarded; the probe connects to the verify-level endpoint address."""
-    mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
-    mock_subproc.return_value.stderr = ""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
     out = verify(
         container_id="cid",
@@ -1714,6 +1763,8 @@ def test_verify_tcp_probe_host_ip_pinned_to_endpoint(
     assert out["passed"] is True, out
     args, _ = mock_conn.call_args
     assert args[0] == ("127.0.0.1", 6379)  # pinned address, allowed port
+
+
 
 
 def test_published_run_ports_scopes_to_this_runs_containers() -> None:
