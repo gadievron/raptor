@@ -391,14 +391,29 @@ def resolve_include_closure(
     file itself is the first entry.  Raises :class:`ProofRefusal` on a
     cap overrun.
     """
+    unresolved: list[str] = []
+    resolved = [path for path, _text in _iter_include_closure(
+        target_path, rel_file, unresolved=unresolved,
+        max_files=max_files, max_bytes=max_bytes,
+    )]
+    return resolved, unresolved
+
+
+def _iter_include_closure(
+    target_path: str | Path,
+    rel_file: str,
+    *,
+    unresolved: list[str],
+    max_files: int = _MAX_CLOSURE_FILES,
+    max_bytes: int = _MAX_CLOSURE_BYTES,
+) -> Iterator[tuple[Path, str]]:
+    """Yield validated closure members in BFS order without retaining their text."""
     root = Path(target_path).resolve()
     anchor = (root / rel_file).resolve()
     if not anchor.is_relative_to(root) or not anchor.is_file():
         raise ProofRefusal(f"anchor file not under target tree: {rel_file}")
     shared_roots = [root / "include", root]
 
-    resolved: list[Path] = []
-    unresolved: list[str] = []
     seen: set[Path] = set()
     queue: deque[Path] = deque([anchor])
     total_bytes = 0
@@ -422,7 +437,7 @@ def resolve_include_closure(
         total_bytes += len(text)
         if truncated or total_bytes > max_bytes:
             raise ProofRefusal("include closure exceeds the byte cap")
-        resolved.append(path)
+        yield path, text
         for m in _INCLUDE_RE.finditer(text):
             spec = m.group(1)
             inner = spec[1:-1]
@@ -444,7 +459,6 @@ def resolve_include_closure(
                     break
             else:
                 unresolved.append(spec)
-    return resolved, unresolved
 
 
 def _declared_function_names(text: str, parser: Any) -> set[str]:
@@ -466,14 +480,10 @@ def _declared_function_names(text: str, parser: Any) -> set[str]:
 
 
 def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
-    files, unresolved = resolve_include_closure(target_path, rel_file)
-    table = MacroTable(unresolved_includes=tuple(unresolved))
+    unresolved: list[str] = []
+    table = MacroTable()
     parser = _c_parser()
-    for path in files:
-        got = read_text_capped(path, _MAX_CLOSURE_BYTES)
-        if got is None:
-            continue
-        text = got[0]
+    for path, text in _iter_include_closure(target_path, rel_file, unresolved=unresolved):
         table.files_scanned += 1
         if parser is not None:
             table.function_names |= _declared_function_names(text, parser)
@@ -492,6 +502,7 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
                         table.poisoned.add(nm.group(1))
                     continue
                 table.defs.setdefault(parsed.name, []).append(parsed)
+    table.unresolved_includes = tuple(unresolved)
     return table
 
 
