@@ -1386,7 +1386,7 @@ class LogStreamer:
                         self._ambiguous_dropped += 1
                         if not self._ambiguous_cap_marker_emitted:
                             self._ambiguous_cap_marker_emitted = True
-                            self._append_record_locked({
+                            self._append_control_record_locked({
                                 "ts": _now_iso(),
                                 "type": "parse_ambiguous_cap_exceeded",
                                 "audit": True,
@@ -1405,7 +1405,7 @@ class LogStreamer:
                     record["syscall"], record["target_pid"],
                 )
                 if marker is not None:
-                    self._append_record_locked(marker)
+                    self._append_control_record_locked(marker)
                 # Global-cap notice: the Linux tracer surfaces
                 # this on stderr; there is no tracer on macOS,
                 # so pre-fix the global cap suppressed
@@ -1413,7 +1413,7 @@ class LogStreamer:
                 # markers). Emit the one-shot marker into the
                 # stream where operators actually look.
                 if self._budget.pop_global_cap_notice():
-                    self._append_record_locked(
+                    self._append_control_record_locked(
                         self._budget.global_cap_marker(),
                     )
                 if decision != _audit_budget.DROP:
@@ -1440,6 +1440,12 @@ class LogStreamer:
         and the parent's summary write at stop()."""
         with self._append_lock:
             self._append_record_locked(record)
+
+    def _append_control_record_locked(self, record: dict) -> None:
+        """Stamp parent-created metadata without changing ordinary data records."""
+        if self._observe_nonce is not None:
+            record = {**record, "nonce": self._observe_nonce}
+        self._append_record_locked(record)
 
     def _append_record_locked(self, record: dict) -> None:
         """Real append logic. Called with self._append_lock held.
