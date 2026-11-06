@@ -544,6 +544,14 @@ class _StaticSearches:
         return re.compile(r'"\s*\.\s*\$|\$\w+').search
 
 
+    @cached_property
+    def c_loop_limit(self) -> _Search:
+        return re.compile(
+            r'\b(?:while|for)\b.{0,200}\b(\w+)\s*<\s*(\w+)\b'
+            r'(?!\s*[-+*/])',
+        ).search
+
+
 _STATIC_SEARCHES = _StaticSearches()
 
 # Universal libc/POSIX surface plus a marked kernel SEED core
@@ -4173,6 +4181,7 @@ def _check_c_toctou(
     lines = source.splitlines() if _source_lines is None else _source_lines
     check_line = None
     check_path_var = None
+    use_search: _Search | None = None
 
     for i, line in enumerate(lines, start=line_start):
         stripped = line.strip()
@@ -4181,14 +4190,16 @@ def _check_c_toctou(
         if check_match:
             check_line = i
             check_path_var = check_match.group(2)
+            use_search = None
             continue
 
         if check_line is not None and check_path_var:
-            use_match = re.search(
-                r'\b(open|fopen|creat|unlink|rename|chmod|chown)\s*\(\s*'
-                + re.escape(check_path_var),
-                stripped,
-            )
+            if use_search is None:
+                use_search = re.compile(
+                    r'\b(open|fopen|creat|unlink|rename|chmod|chown)\s*\(\s*'
+                    + re.escape(check_path_var) + r'\b',
+                ).search
+            use_match = use_search(stripped)
             if use_match:
                 result.hits.append(PrefilterHit(
                     rule_id="toctou-filesystem",
@@ -4221,10 +4232,7 @@ def _check_c_post_loop_oob(
     judged on the blanked view's line.
     """
     lines = source.splitlines() if _source_lines is None else _source_lines
-    loop_re = re.compile(
-        r'\b(?:while|for)\b.{0,200}\b(\w+)\s*<\s*(\w+)\b'
-        r'(?!\s*[-+*/])',
-    )
+    loop_search = _STATIC_SEARCHES.c_loop_limit
     brace_depth = 0
     loop_index_var: str | None = None
     loop_cap_var: str | None = None
@@ -4232,6 +4240,9 @@ def _check_c_post_loop_oob(
     in_loop = False
     loop_brace_depth = 0
     braceless_body = False
+    pattern_index: str | None = None
+    reset_search: _Search | None = None
+    write_search: _Search | None = None
 
     for i, line in enumerate(lines, start=line_start):
         stripped = line.strip()
@@ -4241,7 +4252,7 @@ def _check_c_post_loop_oob(
             continue
 
         if not in_loop:
-            m = loop_re.search(stripped)
+            m = loop_search(stripped)
             if m:
                 loop_index_var = m.group(1)
                 loop_cap_var = m.group(2)
@@ -4260,26 +4271,31 @@ def _check_c_post_loop_oob(
             continue
 
         if loop_index_var and not in_loop:
-            idx_esc = re.escape(loop_index_var)
-            reset_re = (
-                rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
-                rf'\b{idx_esc}\b.{{0,200}}<|'
-                rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
-                rf'\b{idx_esc}\b.{{0,200}}>|'
-                rf'\bif\b[^<\n]{{0,64}}<.{{0,200}}\b{idx_esc}\b'
-            )
-            if views.vouch and re.search(
-                reset_re, views.code_lines[i - line_start],
-            ) and re.search(reset_re, stripped):  # baseline guard, verbatim (main)
+            if loop_index_var != pattern_index:
+                idx_esc = re.escape(loop_index_var)
+                reset_re = (
+                    rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
+                    rf'\b{idx_esc}\b.{{0,200}}<|'
+                    rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
+                    rf'\b{idx_esc}\b.{{0,200}}>|'
+                    rf'\bif\b[^<\n]{{0,64}}<.{{0,200}}\b{idx_esc}\b'
+                )
+                reset_search = re.compile(reset_re).search
+                write_search = None
+                pattern_index = loop_index_var
+            if views.vouch and reset_search(
+                views.code_lines[i - line_start],
+            ) and reset_search(stripped):  # baseline guard, verbatim (main)
                 loop_index_var = None
                 loop_cap_var = None
                 loop_line = None
                 continue
 
-            write_re = re.compile(
-                rf'\b\w+\s*\[\s*{idx_esc}\s*\]\s*=',
-            )
-            if write_re.search(stripped):
+            if write_search is None:
+                write_search = re.compile(
+                    rf'\b\w+\s*\[\s*{idx_esc}\s*\]\s*=(?!=)',
+                ).search
+            if write_search(stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="post-loop-oob-write",
                     message=(
