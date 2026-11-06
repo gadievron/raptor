@@ -293,7 +293,7 @@ def test_recovery_workflow_matches_sources_and_only_loads_trusted_code():
     assert 'uses: actions/cache' not in workflow
     assert 'uses: actions/download-artifact' not in workflow
     assert 'ref: ${{ github.event.workflow_run.head_sha }}' not in workflow
-    assert workflow.count('        run:') == 1
+    assert workflow.count('        run:') == 2
     assert '          python3 .github/scripts/retry_macos_allocation.py --apply' in workflow
 
 
@@ -318,3 +318,33 @@ def test_check_evidence_must_belong_to_this_repository(api, url):
 def test_deleted_unrelated_fork_metadata_does_not_break_freshness_check(api):
     api.recent.append(dict(api.run, id=101, head_repository=None))
     assert decide(api)['retried'] is True
+
+
+
+def test_retry_limit_report_runs_without_checkout_or_api_access(tmp_path):
+    import os
+
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / '.github/workflows/macos-runner-recovery.yml').read_text())
+    job = workflow['jobs']['retry-limit']
+    assert job['runs-on'] == 'ubuntu-latest'
+    assert job['permissions'] == {}
+    assert job['timeout-minutes'] == 2
+    assert 'github.event.workflow_run.run_attempt == 2 &&' in job['if']
+    assert "conclusion == 'failure'" in job['if']
+    assert "conclusion == 'timed_out'" in job['if']
+    assert len(job['steps']) == 1
+    step = job['steps'][0]
+    assert 'uses' not in step
+    assert step['shell'] == 'bash'
+    summary = tmp_path / 'summary.md'
+    summary.write_text('Earlier summary\n')
+    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', step['run']],
+                            cwd=tmp_path, capture_output=True, text=True, check=True,
+                            env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)})
+    assert summary.read_text() == 'Earlier summary\n' + result.stdout
+    assert 'already on attempt 2' in result.stdout
+    assert 'no further retry was requested' in result.stdout
+    assert 'no assigned runner' in result.stdout
+    assert 'manual rerun remains available' in result.stdout

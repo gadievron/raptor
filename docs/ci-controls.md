@@ -321,7 +321,10 @@ Recovery checks the latest run and live PR/ref metadata, refusing superseded
 runs, closed or updated PRs and deleted queue refs. Scheduled/manual snapshots
 remain eligible until a newer matching run supersedes them. Only the failed
 macOS job and its dependent gates are rerun; successful unrelated jobs are kept.
-A second attempt is never automatically retried.
+A second attempt is never automatically retried. If attempt 2 fails, a small
+Ubuntu reporting job explains the exhausted retry budget in the recovery
+workflow summary. It performs no checkout or API calls and cannot request
+another macOS runner. Later manual attempts do not start this reporting job.
 
 The inspector runs on Ubuntu with limited job permissions and loads only its
 trusted default-branch revision. It reads GitHub metadata, never source-run
