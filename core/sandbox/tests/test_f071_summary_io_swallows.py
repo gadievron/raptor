@@ -10,10 +10,11 @@ that swallowed I/O failures at DEBUG (or silently). Per-site triage:
   L294  record_audit_degraded tmp.unlink cleanup
         -> KEEP-SILENT. Cleanup path; missing_ok=True already used.
 
-  L334  summarize_and_write os.replace(jsonl, tmp) OSError
+  L334  summarize_and_write os.replace(jsonl, tmp) FileNotFoundError
         -> KEEP-SILENT. This is the race-lost branch (sibling already
         renamed and is summarising). Not data loss — the other party
-        is producing the summary. Returns None correctly.
+        is producing the summary. Other rename I/O failures warn.
+        Returns None correctly for the expected race.
 
   L349  summarize_and_write open(tmp) read OSError
         -> PROMOTE DEBUG -> WARNING (currently silent return None).
@@ -28,8 +29,8 @@ that swallowed I/O failures at DEBUG (or silently). Per-site triage:
   L403  summarize_and_write summary-write os.replace OSError
         -> PROMOTE DEBUG -> WARNING (currently silent return None).
         Silent loss of the run's final summary; operator must know.
-        The sentinel (return None) is correct contract; this just
-        adds operator visibility.
+        The default return-None sentinel preserves lifecycle behavior;
+        explicit strict callers propagate the operational error.
 
   L406  L403's tmp.unlink cleanup
         -> KEEP-SILENT. Cleanup path.
@@ -41,10 +42,30 @@ cleanup paths where logging would be noise.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
+from types import ModuleType
+
+import pytest
 
 from core.sandbox import summary as summary_mod
+from core.testing.sandbox_state_scope import isolated_sandbox_state
+from core.testing.state_isolation import pin_user_state_dirs
+
+
+@pytest.fixture(autouse=True)
+def owned_state(tmp_path):
+    with isolated_sandbox_state(()), pytest.MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, tmp_path / "state")
+        patch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(owned_state):
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def test_f071_l191_record_denial_append_failure_logs_warning(
@@ -55,7 +76,7 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
     visibility rationale."""
     # Set the module-level active run dir so record_denial doesn't
     # no-op early.
-    monkeypatch.setattr(summary_mod, "_active_run_dir", tmp_path)
+    summary_mod.set_active_run_dir(tmp_path)
     # Force the evidence-file open inside record_denial to raise
     # OSError (record_denial appends via a held evidence fd under
     # <run_dir>/.audit/ since the evidence relocation).
@@ -67,18 +88,30 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
         )
     )
 
-    def fake_open(path, flags, mode=0o666):
-        if str(path) == target_path:
-            raise OSError("EACCES")
-        return real_open(path, flags, mode)
+    private = ModuleType("evidence_warning_os")
+    vars(private).update(vars(os))
+    failure = PermissionError(errno.EACCES, "owned evidence open refusal")
+    failed = []
 
-    monkeypatch.setattr(evidence_mod.os, "open", fake_open)
+    def fake_open(path, flags, *args, **kwargs):
+        if (str(path) == target_path
+                or (str(path) == summary_mod.DENIALS_FILE
+                    and kwargs.get("dir_fd") is not None)):
+            failed.append(path)
+            raise failure
+        return real_open(path, flags, *args, **kwargs)
+
+    private.open = fake_open
+    monkeypatch.setattr(evidence_mod, "os", private)
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         summary_mod.record_denial(
             "test-cmd", 1, "network",
             host="example.invalid",
         )
 
+    assert len(failed) == 1
+    assert os.open is real_open
+    assert summary_mod.get_evidence_write_failure(tmp_path) is True
     warnings = [
         r for r in caplog.records
         if r.levelname == "WARNING"
@@ -88,6 +121,7 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
         "expected WARNING when record_denial append fails; got "
         f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
     )
+    assert any(record.exc_info and record.exc_info[1] is failure for record in warnings)
 
 
 def test_f071_l349_summarize_read_failure_logs_warning(
@@ -103,21 +137,27 @@ def test_f071_l349_summarize_read_failure_logs_warning(
     # Patch os.open (the F071 fd-based read path) to raise OSError
     # when opening the renamed tmp. A generic OSError (not ELOOP) is
     # the host-I/O branch — warn + return None, never tamper-flag.
-    import os as _os
-    real_os_open = _os.open
+    private = ModuleType("summary_read_warning_os")
+    vars(private).update(vars(os))
+    real_os_open = os.open
+    failed = []
 
     def fake_os_open(path, *args, **kwargs):
         spath = str(path)
         if ".sandbox-denials.jsonl.summarising" in spath:
-            raise OSError("EIO read failed")
+            failed.append(path)
+            raise OSError(errno.EIO, "owned read failure")
         return real_os_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(_os, "open", fake_os_open)
+    private.open = fake_os_open
+    monkeypatch.setattr(summary_mod, "os", private)
 
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         result = summary_mod.summarize_and_write(tmp_path)
 
     assert result is None, "summarize_and_write must return None on read fail"
+    assert len(failed) == 1
+    assert os.open is real_os_open
     warnings = [
         r for r in caplog.records
         if r.levelname == "WARNING"
@@ -142,23 +182,20 @@ def test_f071_l403_summarize_write_failure_logs_warning(
         encoding="utf-8",
     )
 
-    # Patch os.replace so the SUMMARY write (second replace call)
-    # fails, while letting the JSONL rename (first replace call)
-    # succeed.
-    real_replace = os.replace
-    state = {"count": 0}
-
-    def fake_replace(src, dst):
-        state["count"] += 1
-        if "sandbox-summary.json" in str(dst):
-            raise OSError("EXDEV")
-        return real_replace(src, dst)
-
-    monkeypatch.setattr(summary_mod.os, "replace", fake_replace)
+    # A real destination collision exercises the atomic output failure
+    # without replacing process-wide filesystem primitives.
+    output = tmp_path / summary_mod.SUMMARY_FILE
+    output.mkdir()
+    sentinel = output / "owned-sentinel"
+    sentinel.write_bytes(b"preserve")
 
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         result = summary_mod.summarize_and_write(tmp_path)
 
+    assert sentinel.read_bytes() == b"preserve"
+    snapshots = list(tmp_path.glob(".sandbox-denials.jsonl.summarising.*"))
+    assert len(snapshots) == 1
+    assert snapshots[0].read_bytes() == b'{"type": "network", "host": "x"}\n'
     assert result is None, (
         "summarize_and_write must return None on summary-write failure"
     )

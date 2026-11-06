@@ -1062,7 +1062,9 @@ def _iter_denial_lines(raw: bytes):
         yield raw[start:]
 
 
-def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
+def summarize_and_write(
+    run_dir: Path, *, raise_on_io_error: bool = False,
+) -> dict[str, Any] | None:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
 
@@ -1071,6 +1073,10 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     up-front and removed after the summary is successfully written (or
     an empty stream produces no summary). I/O failures retain the claimed
     JSONL at the path named in the warning for operator recovery.
+
+    By default, operational I/O failures return None after warning. Set
+    raise_on_io_error=True to propagate them, distinguishing failure from
+    empty input. Expected missing-input claim races still return None.
 
     Idempotent: if called again with the same run_dir and no JSONL is
     present, returns None without writing.
@@ -1137,7 +1143,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         return _assemble_and_write_summary(
             run_dir, records=[], refusals=_mem_only,
             corrupt_lines=0, inode_mismatch=inode_mismatch,
-            planted_object="")
+            planted_object="", raise_on_io_error=raise_on_io_error)
 
     # Rename-then-read pattern. Pre-fix the read-then-unlink sequence
     # had a race: a writer (concurrent sandbox subprocess emitting a
@@ -1173,6 +1179,8 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             "summarize_and_write: failed to rename denial evidence %s",
             jsonl, exc_info=True,
         )
+        if raise_on_io_error:
+            raise
         return None
 
     records = []
@@ -1212,6 +1220,8 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                 "for reading; evidence retained at %s", tmp,
                 exc_info=True,
             )
+            if raise_on_io_error:
+                raise
             return None
     if fd is not None:
         try:
@@ -1246,6 +1256,8 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                 "evidence retained at %s", tmp,
                 exc_info=True,
             )
+            if raise_on_io_error:
+                raise
             return None
         finally:
             try:
@@ -1302,10 +1314,18 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             continue
         records.append(record)
 
-    result = _assemble_and_write_summary(
-        run_dir, records=records, refusals=None,
-        corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
-        planted_object=planted_object)
+    try:
+        result = _assemble_and_write_summary(
+            run_dir, records=records, refusals=None,
+            corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
+            planted_object=planted_object, raise_on_io_error=raise_on_io_error)
+    except OSError:
+        # Strict callers still need the claimed stream's recovery path.
+        logger.warning(
+            "summarize_and_write: summary not written; evidence retained at %s",
+            tmp,
+        )
+        raise
     if result is None and (records or corrupt_lines or inode_mismatch
                            or planted_object):
         logger.warning(
@@ -1327,6 +1347,7 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
 def _assemble_and_write_summary(
     run_dir: Path, *, records: list, refusals: "list | None",
     corrupt_lines: int, inode_mismatch: bool, planted_object: str,
+    raise_on_io_error: bool = False,
 ) -> dict[str, Any] | None:
     """Assemble and atomically write ``sandbox-summary.json`` from the
     drained evidence records. Split out of :func:`summarize_and_write`
@@ -1652,6 +1673,8 @@ def _assemble_and_write_summary(
             "summarize_and_write: failed to write/replace summary.json",
             exc_info=True,
         )
+        if raise_on_io_error:
+            raise
         return None
 
     if inode_mismatch or evidence_write_failure:
@@ -1846,6 +1869,15 @@ def _cli_main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Retroactively finalize sandbox-summary.json for runs "
                     "whose lifecycle didn't complete.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Exit status: 0 on success (including empty input), "
+            "1 if any finalization fails or a directory cannot be inspected, "
+            "2 for argument errors. Sweeps continue after individual failures.\n\n"
+            "Examples:\n"
+            "  raptor-sandbox-summary /path/to/run\n"
+            "  raptor-sandbox-summary --sweep /path/to/project"
+        ),
     )
     parser.add_argument(
         "path",
@@ -1855,7 +1887,7 @@ def _cli_main(argv: list | None = None) -> int:
         "--sweep",
         action="store_true",
         help="finalize every stranded run under PATH (treats PATH as a "
-             "project dir containing run subdirectories)",
+             "project dir containing run subdirectories; default: single-run mode)",
     )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -1871,8 +1903,13 @@ def _cli_main(argv: list | None = None) -> int:
         return 1
 
     if not args.sweep:
-        # Single-run mode (original behaviour)
-        result = summarize_and_write(target)
+        # Single-run mode
+        try:
+            result = summarize_and_write(target, raise_on_io_error=True)
+        except OSError as exc:
+            print(f"error: cannot finalize {_sft(str(target))}: {_sft(str(exc))}",
+                  file=sys.stderr)
+            return 1
         if result is None:
             print(f"(no denials recorded for {_sft(str(target))})")
             return 0
@@ -1883,6 +1920,7 @@ def _cli_main(argv: list | None = None) -> int:
     # Sweep mode — iterate children, finalize anything with a stranded JSONL.
     swept = 0
     written = 0
+    failed = 0
     total_denials = 0
     try:
         children = sorted(target.iterdir())
@@ -1896,23 +1934,33 @@ def _cli_main(argv: list | None = None) -> int:
             # Keep refused objects and probe errors for the finalizer.
             if not path_may_exist(_evidence.resolve_read_path(child, DENIALS_FILE)):
                 continue
-        except OSError:
+        except OSError as exc:
+            failed += 1
+            print(f"error: cannot inspect {_sft(str(child))}: {_sft(str(exc))}",
+                  file=sys.stderr)
             continue
         swept += 1
-        result = summarize_and_write(child)
+        try:
+            result = summarize_and_write(child, raise_on_io_error=True)
+        except OSError as exc:
+            failed += 1
+            print(f"error: cannot finalize {_sft(str(child))}: {_sft(str(exc))}",
+                  file=sys.stderr)
+            continue
         if result is not None:
             written += 1
             total_denials += result.get("total_denials", 0)
             print(f"  {_sft(child.name)}: {result['total_denials']} denials → "
                   f"{SUMMARY_FILE}")
         else:
-            # JSONL was present but summarize_and_write returned None
-            # (empty file or write failure); summarize_and_write already
-            # cleaned the empty JSONL. No per-dir line — keeps output tight.
+            # An empty claimed stream produces no summary and is cleaned
+            # by summarize_and_write. Keep its per-directory output quiet.
             pass
+    failure_note = f" {failed} finalization(s) failed." if failed else ""
     print(f"Swept {swept} stranded run(s) under {_sft(str(target))}: "
-          f"{written} summary file(s) written, {total_denials} total denials.")
-    return 0
+          f"{written} summary file(s) written, {total_denials} total denials."
+          f"{failure_note}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
