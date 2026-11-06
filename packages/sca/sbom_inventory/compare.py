@@ -2,8 +2,25 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+
+from .relationships import dependency_changes, ownership_changes
 import re
+
+
+@dataclass
+class _Comparison:
+    before: str
+    after: str
+    matched: int
+    counts: dict
+    ambiguous: list
+    changes: list
+    dependencies: dict
+    ownership: dict
+    limitations: list
+    format: str = "raptor-sbom-diff"
+    schema_version: int = 1
 
 
 def _declarations(row):
@@ -79,10 +96,11 @@ def compare(before, after):
     counts = defaultdict(int)
     for change in changes:
         counts[change["kind"]] += 1
-    return {"format": "raptor-sbom-diff", "schema_version": 1,
-            "before": before.source_sha256, "after": after.source_sha256,
-            "matched": len(pairs), "counts": dict(sorted(counts.items())),
-            "ambiguous": ambiguities, "changes": changes,
-            "limitations": ["Notice-text changes are informational; legal meaning is not classified.",
-                            "Ambiguous occurrences are not paired or silently collapsed.",
-                            "Dependency-graph and binary-ownership changes are not classified."]}
+    return asdict(_Comparison(
+        before=before.source_sha256, after=after.source_sha256,
+        matched=len(pairs), counts=dict(sorted(counts.items())), ambiguous=ambiguities, changes=changes,
+        dependencies=dependency_changes(pairs), ownership=ownership_changes(before, after),
+        limitations=["Notice-text changes are informational; legal meaning is not classified.",
+                     "Ambiguous occurrences are not paired or silently collapsed.",
+                     "Graph changes require supplied data on both sides; ownership comparisons cover recorded scanner-unidentified files."],
+    ))

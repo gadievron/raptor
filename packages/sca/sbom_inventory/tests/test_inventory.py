@@ -189,3 +189,12 @@ def test_crc_failure_is_a_controlled_invalid_input(tmp_path):
     with Source(path) as source:
         with pytest.raises(ValueError, match="unreadable"):
             source.read_json("selected.json")
+
+
+def test_compacted_file_values_keep_original_depth_validation(cdx, write_json):
+    nested = "leaf"
+    for _ in range(65):
+        nested = {"extension": nested}
+    cdx["components"].append({"type": "file", "name": "file", "extra": nested})
+    with pytest.raises(ValueError, match="nesting"):
+        load(write_json(cdx))
