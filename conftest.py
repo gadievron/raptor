@@ -414,9 +414,9 @@ def _binary_cache_in_tmp(tmp_path_factory):
         yield
         return
     cache_dir = tmp_path_factory.mktemp("binary-cache")
-    os.environ["RAPTOR_BINARY_CACHE_DIR"] = str(cache_dir)
-    yield
-    os.environ.pop("RAPTOR_BINARY_CACHE_DIR", None)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("RAPTOR_BINARY_CACHE_DIR", str(cache_dir))
+        yield
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -424,9 +424,9 @@ def _raptor_logger_propagates():
     """Let caplog capture records from RaptorLogger-using modules."""
     import logging
     raptor = logging.getLogger("raptor")
-    raptor.propagate = True
-    yield
-    raptor.propagate = False
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(raptor, "propagate", True)
+        yield
 
 
 # The session registry (~/.local/share/raptor/sessions.d) is REAL user
@@ -489,6 +489,33 @@ _SESSIONS_DIR_SEQ = _itertools.count()
 
 
 @pytest.fixture(autouse=True)
+def _process_pin_state():
+    """Own process pin and CLI defaults even when a test undoes its patches."""
+    from contextlib import ExitStack
+    from core.run import pin
+    from core.sandbox import state
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(pin, {
+            "_frozen_pins": {}, "_process_project": None,
+            "_process_project_set": False, "_process_project_threaded": False,
+        }))
+        scope.enter_context(isolated_module_state(state, {
+            "_cli_sandbox_disabled": False, "_cli_sandbox_profile": None,
+            "_cli_sandbox_disable_consent": None,
+        }))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(_process_pin_state):
+    # Body overrides must unwind before the process defaults restore callers.
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
+
+
+@pytest.fixture(autouse=True)
 def _sessions_registry_in_tmp(monkeypatch):
     # The redirect target is a UNIQUE PATH, not a pytest ``tmp_path``:
     # requesting ``tmp_path`` here made every test in the suite allocate
@@ -511,36 +538,6 @@ def _sessions_registry_in_tmp(monkeypatch):
     monkeypatch.setattr(_sessions, "_walk_session_pid", lambda: None)
     monkeypatch.delenv(_sessions.ENV_SESSION_PID, raising=False)
     monkeypatch.delenv(_sessions.ENV_SESSION_TOKEN, raising=False)
-    # The pin freeze cache is process-global by design (sealed at
-    # start_run); across TESTS it would leak one test's pin into the
-    # next test's resolution — clear it per test.
-    from core.run import pin as _pin
-    _pin._frozen_pins.clear()
-    # Same doctrine for the process-scoped --project override: entry
-    # points (raptor.py, raptor_agentic.py, the scanner mains) set it
-    # once for the process lifetime because in production they own the
-    # process. A test that drives such a main() in-process inherits
-    # that lifetime — every later test on the worker then resolves its
-    # ambient project through the leaked override (a leaked ``-`` reads
-    # as authoritatively projectless, silently dropping project-setting
-    # consumption in victim tests). Reset per test; tests that need an
-    # override set it in their own bodies, after this fixture runs.
-    _pin._process_project = None
-    _pin._process_project_set = False
-    # Sibling in the same process-global class: the operator sandbox
-    # disable (--sandbox none / --no-sandbox) and its profile twin,
-    # set process-wide by core.sandbox.cli for the same
-    # entry-point-owns-the-process reason. A leaked disable makes
-    # consent chokepoints (apply_project_sandbox_floor and every
-    # sandbox construction) silently skip in victim tests. Reset the
-    # TRIPLE coherently — cli._set_cli_state keeps them in lockstep, so
-    # resetting one alone would leave an incoherent combination no
-    # real process can reach (the disable-consent stamp is non-None
-    # only while the disable flag is True).
-    from core.sandbox import state as _sbx_state
-    _sbx_state._cli_sandbox_disabled = False
-    _sbx_state._cli_sandbox_profile = None
-    _sbx_state._cli_sandbox_disable_consent = None
 
 
 @pytest.fixture(autouse=True)

@@ -218,35 +218,24 @@ def no_sandbox_consent_subprocess(tmp_path):
             pass
 
 
+@pytest.fixture
+def monkeypatch(_sandbox_state_guard):
+    # Keep body fault injection inside the owner that closes evidence handles.
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
+
+
 @pytest.fixture(autouse=True)
-def _sandbox_state_guard(monkeypatch):
-    """Snapshot and restore all mutable module state around each test, so a
-    test that sets any global can't poison others.
+def _sandbox_state_guard(_process_pin_state):
+    """Isolate process state and held evidence without mutating borrowed owners.
 
-    Covers:
-    - CLI-override flags (_cli_sandbox_*)
-    - Once-per-process warning flags (_landlock_warned_*, _sandbox_unavailable_warned)
-    - Availability caches (_net_available_cache, _mount_available_cache,
-      _user_limits_cache) — tests that mock check_net_available or
-      override _CONFIG_PATH would otherwise leave a stale False/{}
-      value that subsequent tests see as real state. NOTE:
-      _landlock_cache is INTENTIONALLY EXCLUDED — see the comment
-      next to its slot in state_names below for why.
-    - summary._active_run_dir — the per-run sandbox-summary recording
-      target. Test files have their own per-test fixtures that set/clear
-      this, but a forgotten cleanup would leak the run dir into
-      subsequent tests' record_denial calls (silently writing into a
-      stale dir). Snapshotting in the conftest is a backstop.
-
-    Runs automatically for every test in this directory (autouse=True).
+    Keep kernel-capability observations, but give mutable cache containers
+    private copies. The functional Landlock probe remains process-scoped.
+    Root process defaults are installed first; body patches unwind before
+    evidence finalization and restoration of the caller's state.
     """
-    from core.sandbox import state as mod
-    from core.sandbox import summary as summary_mod
-    # Streamer shutdown now records parent-known loss. Give each test owned
-    # registry bindings before writes, preserving inherited observations and
-    # restoring the original objects through monkeypatch's teardown stack.
-    for name in ('_evidence_write_failures', '_evidence_inode_mismatches'):
-        monkeypatch.setattr(summary_mod, name, dict(getattr(summary_mod, name)))
+    from core.testing.sandbox_state_scope import isolated_sandbox_state
+
     state_names = [
         # CLI overrides
         "_cli_sandbox_disabled", "_cli_sandbox_profile",
@@ -337,34 +326,8 @@ def _sandbox_state_guard(monkeypatch):
         # spawn_supervised test onto the group tier.
         "_pidns_supervision_cache",
     ]
-    saved = {name: getattr(mod, name) for name in state_names}
-    # Snapshot+restore the speculative-failure cache as a deep copy
-    # — it's a dict, so a shallow alias would let test mutations
-    # bleed across tests via the shared dict object. A test that
-    # populates it (or expects it empty) must not see entries left
-    # over from a sibling test.
-    saved_spec_cache = dict(mod._speculative_failure_cache)
-    # _unshare_engage_cache is a dict too — same deep-copy treatment as
-    # _speculative_failure_cache so a test that forces a flag-set to
-    # "not engaging" (to exercise the SandboxSetupError fail-loud path)
-    # doesn't leak the poisoned verdict into later tests on a host where
-    # the namespaces actually work.
-    saved_engage_cache = dict(mod._unshare_engage_cache)
-    saved_active_run = summary_mod._active_run_dir
-    try:
+    with isolated_sandbox_state(state_names):
         yield
-    finally:
-        for name, value in saved.items():
-            setattr(mod, name, value)
-        mod._speculative_failure_cache.clear()
-        mod._speculative_failure_cache.update(saved_spec_cache)
-        mod._unshare_engage_cache.clear()
-        mod._unshare_engage_cache.update(saved_engage_cache)
-        # Restore via the public setter so the module's threading.Lock
-        # is honoured (set_active_run_dir also resets _denial_count,
-        # which is harmless — a per-test counter reset is appropriate).
-        summary_mod.set_active_run_dir(saved_active_run)
-
 
 @pytest.fixture
 def private_triage_readers(monkeypatch, tmp_path):
