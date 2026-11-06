@@ -194,6 +194,29 @@ def test_expanded_identifier_selection_is_conservative_not_a_call_judgment(macro
     assert not state.diagnostics
 
 
+@pytest.mark.parametrize("prefix", ["", "\r", "\f\u2028"])
+@pytest.mark.parametrize("candidate", [False, True])
+def test_expanded_origin_lookup_only_visits_token_lines(macro_setup, monkeypatch, prefix, candidate):
+    state, _, _, pv = macro_setup
+    suffix = "memcpy(p,b,n);" if candidate else "alias(p,b,n);"
+    text = "memcpy(h,h,1);\n" + "\n" * 10_000 + prefix + suffix
+    view = pv.ExpandedView(ok=True, file_path="macro.c", text=text,
+                           line_map=(("header.h", 1),) + (None,) * 10_000 + (("macro.c", 4),))
+    calls = []
+    origin_of = pv.ExpandedView.origin_of
+
+    def origin(instance, line):
+        calls.append(line)
+        return origin_of(instance, line)
+
+    monkeypatch.setattr(pv.ExpandedView, "origin_of", origin)
+    monkeypatch.setattr(pv, "expand_translation_unit", lambda **kwargs: view)
+    assert not overlap._expanded_candidates(state, {state.target / "macro.c"}, overlap.monotonic() + 30)
+    assert ("macro.c" in state.candidates) is candidate
+    assert calls == ([1, 10_002] if candidate else [1])
+    assert not state.limitations
+
+
 def test_failed_macro_preparation_keeps_other_candidates(macro_setup, monkeypatch):
     state, prepared, _, pv = macro_setup
     expand = pv.expand_translation_unit
