@@ -121,7 +121,13 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
         "expected WARNING when record_denial append fails; got "
         f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
     )
-    assert any(record.exc_info and record.exc_info[1] is failure for record in warnings)
+    # Expected I/O failures retain type/text without a raw traceback.
+    assert all(record.exc_info is None for record in warnings)
+    assert any(
+        "PermissionError" in record.getMessage()
+        and "owned evidence open refusal" in record.getMessage()
+        for record in warnings
+    )
 
 
 def test_f071_l349_summarize_read_failure_logs_warning(
