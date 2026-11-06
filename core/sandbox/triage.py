@@ -382,6 +382,8 @@ def _verify_summary(
     if (type(corrupt_lines) is not int or corrupt_lines < 0
             or type(total_denials) is not int or total_denials < 0
             or type(evidence_write_failure) is not bool
+            or type(summary.get("cli_sandbox_disabled", False)) is not bool
+            or not isinstance(summary.get("disable_consent", ""), str)
             or not isinstance(denials, list)
             or not all(isinstance(row, dict) for row in denials)
             or any(row.get(field) is not None
@@ -437,6 +439,11 @@ def _verify_audit_degraded(
         ) -> tuple[dict | None, str]:
     if marker is None:
         return None, _INTEGRITY_VERIFIED
+    # Keep recognized marker text in its writer's string shape before
+    # either legacy acceptance or provenance-field construction.
+    if any(field in marker and not isinstance(marker[field], str)
+           for field in ("reason", "instructions")):
+        return None, _INTEGRITY_TAMPERED
     token = marker.get("mac")
     if "mac" not in marker:
         if not allow_legacy:
