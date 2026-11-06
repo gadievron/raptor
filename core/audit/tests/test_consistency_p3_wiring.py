@@ -47,7 +47,7 @@ class TestRuleIds:
             promote = rule_id(dim, detection=False)
             assert detect == f"consistency:{dim}-majority"
             assert is_detection_rule_id(detect)
-            assert not is_detection_rule_id(promote)
+            assert is_detection_rule_id(promote) == (dim == "guard-presence")
 
 
 class TestContractSources:
@@ -80,9 +80,9 @@ class TestAggregationFirewall:
             "coccinelle+consistency:guard-presence-majority",
         )
 
-    def test_promote_capable_rules_are_tool_evidence_alone(self):
+    def test_receipt_roles_distinguish_sanitizer_proofs_from_guard_hints(self):
         for rule in PROMOTE_CAPABLE_RULES:
-            assert is_tool_evidence(rule), rule
+            assert is_tool_evidence(rule) == (rule == "consistency:sanitize-sink"), rule
 
 
 @requires_ts('c')
