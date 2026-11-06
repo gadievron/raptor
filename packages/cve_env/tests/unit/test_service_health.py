@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import socket
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
+from core.container.proc import RunOutcome
 
 from core.http import HttpError, Response
 
@@ -186,12 +188,12 @@ def _github_resp(limit: int, remaining: int) -> Response:
     return _resp(200, body=body)
 
 
-@patch("core.container.proc.subprocess.run")
-def test_probe_github_with_gh_cli_token(mock_run: Any, monkeypatch: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_github_with_gh_cli_token(mock_cli: Any, monkeypatch: Any) -> None:
     """When GITHUB_TOKEN unset but `gh auth token` returns a token, that token
     should be sent and the higher rate-limit reported."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    mock_run.return_value = MagicMock(returncode=0, stdout="gho_test_token\n")
+    mock_cli.return_value = RunOutcome(timed_out=False, stderr="", returncode=0, stdout="gho_test_token\n")
     fake, ctx = _with_http([_github_resp(5000, 4998)])
     with ctx:
         r = probe_github()
@@ -201,10 +203,10 @@ def test_probe_github_with_gh_cli_token(mock_run: Any, monkeypatch: Any) -> None
     assert fake.calls[0]["headers"].get("Authorization") == "Bearer gho_test_token"
 
 
-@patch("core.container.proc.subprocess.run")
-def test_probe_github_anon_when_no_token(mock_run: Any, monkeypatch: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_github_anon_when_no_token(mock_cli: Any, monkeypatch: Any) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not logged in")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="not logged in")
     fake, ctx = _with_http([_github_resp(60, 59)])
     with ctx:
         r = probe_github()
@@ -213,9 +215,9 @@ def test_probe_github_anon_when_no_token(mock_run: Any, monkeypatch: Any) -> Non
     assert "unauth" in r.rate_limit
 
 
-@patch("core.container.proc.subprocess.run")
+@patch("cve_env.utils.run.run_cli")
 def test_probe_github_env_token_takes_precedence(
-    mock_run: Any, monkeypatch: Any
+    mock_cli: Any, monkeypatch: Any
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_explicit_env")
     fake, ctx = _with_http([_github_resp(5000, 4500)])
@@ -223,12 +225,12 @@ def test_probe_github_env_token_takes_precedence(
         r = probe_github()
     assert fake.calls[0]["headers"].get("Authorization") == "Bearer ghp_explicit_env"
     # When env var is set, gh CLI should NOT be invoked.
-    mock_run.assert_not_called()
+    mock_cli.assert_not_called()
     assert r.ok is True
 
 
-@patch("core.container.proc.subprocess.run")
-def test_probe_github_non_json_body_is_ok(mock_run: Any, monkeypatch: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_github_non_json_body_is_ok(mock_cli: Any, monkeypatch: Any) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     _fake, ctx = _with_http([_resp(200, body=b"<html>not json</html>")])
     with ctx:
@@ -241,10 +243,10 @@ def test_probe_github_non_json_body_is_ok(mock_run: Any, monkeypatch: Any) -> No
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("core.container.proc.subprocess.run")
-def test_probe_docker_hub_anonymous(mock_run: Any, mock_auth: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_docker_hub_anonymous(mock_cli: Any, mock_auth: Any) -> None:
     mock_auth.return_value = False
-    mock_run.return_value = MagicMock(returncode=0, stdout="manifest", stderr="")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="manifest", stderr="")
     r = probe_docker_hub()
     assert r.ok is True
     assert "anon" in r.rate_limit
@@ -252,20 +254,20 @@ def test_probe_docker_hub_anonymous(mock_run: Any, mock_auth: Any) -> None:
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("core.container.proc.subprocess.run")
-def test_probe_docker_hub_authed(mock_run: Any, mock_auth: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_docker_hub_authed(mock_cli: Any, mock_auth: Any) -> None:
     mock_auth.return_value = True
-    mock_run.return_value = MagicMock(returncode=0, stdout="manifest", stderr="")
+    mock_cli.return_value = RunOutcome(timed_out=False, returncode=0, stdout="manifest", stderr="")
     r = probe_docker_hub()
     assert r.ok is True
     assert "authed" in r.rate_limit
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("core.container.proc.subprocess.run")
-def test_probe_docker_hub_rate_limited(mock_run: Any, mock_auth: Any) -> None:
+@patch("cve_env.utils.run.run_cli")
+def test_probe_docker_hub_rate_limited(mock_cli: Any, mock_auth: Any) -> None:
     mock_auth.return_value = False
-    mock_run.return_value = MagicMock(
+    mock_cli.return_value = RunOutcome(timed_out=False,
         returncode=1,
         stdout="",
         stderr="toomanyrequests: You have reached your unauthenticated pull rate limit",
