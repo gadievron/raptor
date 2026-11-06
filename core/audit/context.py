@@ -3983,6 +3983,9 @@ def _find_callers(
         seen = set()
         for edge in context_map.get("call_edges", []):
             if edge.get("callee") == function_name:
+                callee_file = edge.get("callee_file", "")
+                if callee_file and file_path and callee_file != file_path:
+                    continue
                 caller_key = (edge.get("caller_file", ""), edge.get("caller", ""))
                 if caller_key not in seen:
                     seen.add(caller_key)
