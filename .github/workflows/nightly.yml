@@ -479,7 +479,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: github/codeql
-          ref: ${{ steps.codeql_identity.outputs.libraries_ref }}
+          # Immutable checkout pin; kept in sync with codeql-cli.json by tests.
+          ref: 28b6aa8616a393ebb45186e3ba4df004a0f3ef4e
           path: .codeql-java-libraries
           sparse-checkout: |
             java/ql/lib
@@ -595,7 +596,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: github/codeql
-          ref: ${{ steps.codeql_identity.outputs.libraries_ref }}
+          # Immutable checkout pin; kept in sync with codeql-cli.json by tests.
+          ref: 28b6aa8616a393ebb45186e3ba4df004a0f3ef4e
           path: .codeql-cpp-libraries
           sparse-checkout: |
             cpp/ql/lib

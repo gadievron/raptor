@@ -176,7 +176,15 @@ def test_native_tool_cache_is_platform_scoped_refreshes_weekly_and_can_miss():
     assert '[[ "$APT_CACHE_USABLE" == true ]] && ls' in workflow
     assert workflow.count('key: ${{ steps.codeql_identity.outputs.key }}') == 4
     assert workflow.count('CODEQL_SHA256: ${{ steps.codeql_identity.outputs.sha256 }}') == 2
-    assert workflow.count('ref: ${{ steps.codeql_identity.outputs.libraries_ref }}') == 2
+    pin = json.loads((SCRIPTS / 'codeql-cli.json').read_text())['libraries_ref']
+    assert re.fullmatch(r'[0-9a-f]{40}', pin)
+    checkout_blocks = re.findall(
+        r'repository: github/codeql\n(.*?)(?=\n      - |\Z)', workflow, re.S)
+    assert len(checkout_blocks) == 2
+    for checkout in checkout_blocks:
+        assert re.search(r'^          ref: ' + pin + r'$', checkout, re.M)
+        assert 'persist-credentials: false' in checkout
+    assert 'ref: ${{ steps.codeql_identity.outputs.libraries_ref }}' not in workflow
 
 
 def test_bytecode_restores_are_optional_and_prefix_hits_still_recompile():
