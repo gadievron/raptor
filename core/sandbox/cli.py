@@ -13,6 +13,8 @@ import argparse
 import logging
 import sys
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
 from . import state
 from . import tiers as _tiers
 from .errors import SandboxDisableRefusedError
@@ -200,7 +202,7 @@ def set_cli_readable_paths(paths: list) -> None:
     """
     logger.warning(
         "Sandbox read allowlist extended via --sandbox-readable-path: %s",
-        ", ".join(paths),
+        sanitise_for_terminal(", ".join(paths)),
     )
     state._cli_sandbox_readable_paths = list(paths)  # type: ignore[assignment]
 
@@ -214,7 +216,7 @@ def set_cli_tool_paths(paths: list) -> None:
     """
     logger.warning(
         "Sandbox tool paths extended via --sandbox-tool-path: %s",
-        ", ".join(paths),
+        sanitise_for_terminal(", ".join(paths)),
     )
     state._cli_sandbox_tool_paths = list(paths)  # type: ignore[assignment]
 
@@ -375,6 +377,9 @@ def apply_cli_args(
     - If `parser` is None (library callers / tests), validation
       errors raise `ValueError` so they can be caught programmatically.
 
+    Expected home-expansion and filesystem errors use this same validation
+    path before any sandbox settings change.
+
     Not idempotent with respect to logs — calling twice produces two
     WARNING lines. In normal use this is called once per process.
     """
@@ -468,21 +473,35 @@ def apply_cli_args(
         if readable:
             _validated_readable = []
             for p in readable:
-                rp = _Path(p).expanduser().resolve()
-                if not rp.exists():
+                try:
+                    rp = _Path(p).expanduser().resolve()
+                    _path_exists = rp.exists()
+                except (OSError, RuntimeError) as exc:
                     _fail(
-                        f"--sandbox-readable-path does not exist: {p} "
-                        f"(resolved to {rp})"
+                        f"cannot inspect --sandbox-readable-path {sanitise_for_terminal(str(p))}: "
+                        f"{sanitise_for_terminal(str(exc))}"
+                    )
+                if not _path_exists:
+                    _fail(
+                        f"--sandbox-readable-path does not exist: {sanitise_for_terminal(str(p))} "
+                        f"(resolved to {sanitise_for_terminal(str(rp))})"
                     )
                 _validated_readable.append(str(rp))
         if tool_dirs:
             _validated_tools = []
             for p in tool_dirs:
-                rp = _Path(p).expanduser().resolve()
-                if not rp.is_dir():
+                try:
+                    rp = _Path(p).expanduser().resolve()
+                    _path_is_dir = rp.is_dir()
+                except (OSError, RuntimeError) as exc:
                     _fail(
-                        f"--sandbox-tool-path is not a directory: {p} "
-                        f"(resolved to {rp})"
+                        f"cannot inspect --sandbox-tool-path {sanitise_for_terminal(str(p))}: "
+                        f"{sanitise_for_terminal(str(exc))}"
+                    )
+                if not _path_is_dir:
+                    _fail(
+                        f"--sandbox-tool-path is not a directory: {sanitise_for_terminal(str(p))} "
+                        f"(resolved to {sanitise_for_terminal(str(rp))})"
                     )
                 _validated_tools.append(str(rp))
 
