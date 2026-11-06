@@ -21,6 +21,7 @@ The tree, docstrings, and `--help` output own API and CLI details;
 
 **On this page:**
 
+- [Working on the development version](#working-on-the-development-version)
 - [The two-layer split](#the-two-layer-split)
 - [Layering rules](#layering-rules)
 - [Package map](#package-map)
@@ -30,6 +31,36 @@ The tree, docstrings, and `--help` output own API and CLI details;
 - [Running tests](#running-tests)
 - [Writing hermetic tests](#writing-hermetic-tests)
 - [Mechanical gates you will hit](#mechanical-gates-you-will-hit)
+
+## Working on the development version
+
+End-user [installation instructions](installation.md) use the stable RAPTOR
+release. For development, clone `main` and install its locked dependencies:
+
+```bash
+git clone --branch main https://github.com/gadievron/raptor.git
+cd raptor
+uv sync --locked --group dev --extra grammars
+```
+
+The [current tools image](https://hub.docker.com/r/danielcuthbert/raptor/tags?name=latest)
+provides the tool environment. It does not contain RAPTOR's source; mount your
+working checkout to run the code you are developing:
+
+```bash
+docker pull docker.io/danielcuthbert/raptor:latest
+docker run -it \
+  -v "$PWD:/workspaces/raptor" \
+  -v "/path/to/target-folder:/workspaces/target" \
+  docker.io/danielcuthbert/raptor:latest
+```
+
+Run these commands from the checkout; replace the target path with your own or
+omit that mount. The tools image is shared by releases and development checkouts.
+Pulling it updates tools, while switching branches or tags changes RAPTOR itself.
+Use a published image digest when you need to reproduce a particular tools
+snapshot; it does not pin the mounted source. VS Code can also build the
+checkout's `.devcontainer` configuration locally.
 
 ## The two-layer split
 

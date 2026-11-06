@@ -34,15 +34,19 @@ itself handles everything by default -- no extra API keys needed. If you want
 multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need
 to configure the other provider(s). See [LLM providers](llm.md).
 
+These instructions use the stable RAPTOR release, `v3.1.0`. Contributors
+working on unreleased code should use the [developer setup](developers.md#working-on-the-development-version).
+
 ## Option 1: Install manually
 
 ```bash
-# Clone the repo
-git clone https://github.com/gadievron/raptor.git
+# Clone the stable release
+git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
 
 # Install Python dependencies
-uv sync --locked
+uv venv
+uv pip install -r requirements.txt
 source .venv/bin/activate
 
 # Install Claude Code (if you don't already have it)
@@ -84,10 +88,11 @@ launcher avoids this failure mode entirely.
 
 ## Option 2: Run in a container (recommended)
 
-Start with a checkout if you do not already have one:
+Start with the stable release checkout. If you already have a checkout, switch
+to `v3.1.0` before using it with the container:
 
 ```bash
-git clone https://github.com/gadievron/raptor.git
+git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
 ```
 
@@ -97,8 +102,10 @@ malicious code that may execute (e.g via supply-chain attack). The image is larg
 starts from the Microsoft Python 3.14 devcontainer and adds static analysis, fuzzing,
 and browser automation tooling.
 
-The commands below pin the latest published image by digest, so pulling and running
-use the same image. You can pull it with:
+The published image contains tools and dependencies, not the RAPTOR framework.
+Mounting the release checkout selects the RAPTOR version; the image digest pins
+the tools environment separately. The `latest` image tag refers to that tools
+environment, not to a RAPTOR release. You can pull it with:
 ```bash
 docker pull docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 ```
