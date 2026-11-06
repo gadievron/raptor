@@ -52,6 +52,8 @@ def is_diagnostic_smt_rule(rule_id: str) -> bool:
         return True
     part = rule_id.removeprefix("smt:")
     verb = part.split(":", 1)[0]
+    if verb == "check-overflow" and "literal-call" in part.split(":")[1:]:
+        return part != "check-overflow:literal-call"
     if verb == "check-array-bounds" and part != verb:
         return True  # this source producer mints only the exact bare receipt
     return is_predicate_only_smt_rule(rule_id) or verb in _DIAGNOSTIC_ORACLE_SCOPES
@@ -61,7 +63,7 @@ def is_non_refuting_smt_rule(rule_id: str) -> bool:
     """A scoped positive safety obligation cannot clear a whole function."""
     if not isinstance(rule_id, str):
         return True
-    return is_diagnostic_smt_rule(rule_id) or rule_id.removeprefix("smt:").split(":", 1)[0] == "check-array-bounds"
+    return rule_id.removeprefix("smt:") == "check-overflow:literal-call" or is_diagnostic_smt_rule(rule_id) or rule_id.removeprefix("smt:").split(":", 1)[0] == "check-array-bounds"
 
 
 def scope_smt_observation(verb: str, outcome: str, data: dict) -> tuple[str, dict]:

@@ -22451,7 +22451,16 @@ def _run_tool_chain(
                         hypothesis=hypothesis,
                         target_path=str(effective_target),
                         integer_abi=getattr(config, "integer_abi", None),
+                        include_callers=False,
                     ),
+                )
+                # Caller proofs depend on the full current file, beyond the
+                # function-scoped memo key. Revalidate them outside that memo.
+                from .literal_call_observation import complete_literal_overflow_observation
+                smt_result = complete_literal_overflow_observation(
+                    smt_result, target_path=effective_target, file_path=file_path,
+                    function_name=function_name, source=source or "", hypothesis=hypothesis,
+                    integer_abi=getattr(config, "integer_abi", None),
                 )
                 _smt_oc = _observe_sweep(smt_result)
                 if _smt_oc == "confirmed":

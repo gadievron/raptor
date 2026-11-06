@@ -259,14 +259,15 @@ def _evaluate_caller_gate(
     # api_boundary adjudication. Contained + capped + fd-checked
     # regular; an escaping or unreadable path reads as "no defining
     # source", the existing degrade.
-    from core.source import read_contained
-
-    defining_source = read_contained(target_path, file_path) or ""
+    from .integer_abi import resolve_integer_abi
     from .literal_call_gate import evaluate_literal_caller_gate
-    numeric = evaluate_literal_caller_gate(file_path, function_name, verb.removeprefix("smt:"), mechanism,
-                                          defining_source=defining_source, source=source, integer_abi=integer_abi)
-    if numeric is not None:
-        return numeric
+    if resolve_integer_abi(integer_abi) is not None and verb.removeprefix("smt:") in {"check-overflow", "check-array-bounds"}:
+        from .literal_call_observation import read_literal_call_source
+        defining_source = read_literal_call_source(target_path, file_path) or ""
+        return evaluate_literal_caller_gate(file_path, function_name, verb.removeprefix("smt:"), mechanism,
+                                            defining_source=defining_source, source=source, integer_abi=integer_abi)
+    from core.source import read_contained
+    defining_source = read_contained(target_path, file_path) or ""
     param_names = (
         parse_param_names(defining_source, function_name)
         if defining_source else []

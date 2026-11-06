@@ -1169,3 +1169,27 @@ without promoting them into source verification or refutation. The legacy
 bare guard receipt IDs and suffixed variants are detection-grade as well;
 source safety verifiers must earn their own source-bound receipts. Old clean
 journal entries credited to these predicate receipts require fresh review.
+
+Literal caller obligations also run independently when a function-scoped
+integer overflow query is inconclusive. A complete literal argument tuple
+can prove an overflow in an unguarded callee; it does not need an abstract
+SAT observation as a prerequisite. These observations use
+`smt:check-overflow:literal-call`, retain the complete source/query/ABI
+binding and exact mathematical counterexample, and establish only entry to
+the cited wrapper. Safe, unsupported or unavailable callers remain
+inconclusive and cannot refute the source claim.
+
+The admitted wrapper contains one unconditional direct call, either as its
+return expression or as a discarded expression in a void wrapper. A void
+wrapper may end with a bare return. Supported scalar wrapper parameters
+may be unused, but every callee argument must still be a supported literal.
+Void callees may have an admitted arithmetic operation without returning
+its value. Effects, symbolic arguments and unmodeled conversions still
+decline proof credit.
+
+Caller snapshots use bounded, containment-checked binary reads and strict
+UTF-8 decoding; truncated inputs never become proof source. Caller checks
+run outside the function-only sweep memo, so editing a caller cannot reuse
+an earlier tuple's result. Persisted literal-call receipts require fresh
+source revalidation because the journal's function hash does not bind the
+whole caller file.

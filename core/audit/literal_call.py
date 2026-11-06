@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "signed-guard-literal-call-v2",
+        "query_contract": "statement-call-literal-frame-v3",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -60,7 +60,7 @@ def _signature(function, text, abi, language):
     params = declarator.child_by_field_name("parameters")
     if name is None or name.type != "identifier" or not IDENTIFIER_RE.fullmatch(text(name)) or params is None:
         return None
-    if not has_builtin_integer_type(result, text(result), language) or integer_type(text(result), abi) is None:
+    if not has_builtin_integer_type(result, text(result), language) or (text(result) != "void" and integer_type(text(result), abi) is None):
         return None
     for child in function.named_children:
         if child in (body, result, declarator) or child.type == "comment":
@@ -86,7 +86,7 @@ def _signature(function, text, abi, language):
         parameters.append((text(pname), text(ptype)))
     if len(parameters) > 8 or len({name for name, _ in parameters}) != len(parameters):
         return None
-    return text(name), tuple(parameters), body
+    return text(name), tuple(parameters), body, text(result) == "void"
 
 
 def _literal(node, data, abi):
@@ -127,7 +127,11 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
     callees = [(node, signature) for node, signature in signatures if signature is not None and signature[0] == function_name]
     if len(callees) != 1:
         return result
-    callee, (_, parameters, _) = callees[0]
+    callee, (_, parameters, _, callee_void) = callees[0]
+    if callee_void and any(node.type == "return_statement" and any(
+        child.type != "comment" for child in node.named_children
+    ) for node in nodes if callee.start_byte <= node.start_byte < callee.end_byte):
+        return result  # void-valued callees with value returns need a richer frame
     # Reject same-name definitions even if one has an unsupported signature.
     from .probe_function_scope import source_for_function
     _, selected = source_for_function(source, "source." + language, function_name)
@@ -151,11 +155,29 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
     for function, signature in signatures:
         if function == callee or signature is None:
             continue
-        caller, caller_params, body = signature
-        if caller_params:
-            continue  # first frame: a wrapper whose complete call tuple is literal
+        caller, caller_params, body, caller_void = signature
+        if any(name == function_name for name, _ in caller_params):
+            continue  # a parameter shadows the apparent direct callee
+        # Any supported scalar wrapper parameters are unused: the sole
+        # call's arguments below must all be literals, never identifiers.
         statements = [child for child in body.named_children if child.type != "comment"]
-        if len(statements) != 1 or statements[0].type != "return_statement":
+        # Only one unconditional call. A trailing bare return in a void
+        # wrapper has no effect on its execution; no earlier statements,
+        # branches, loops, constructors, or call argument value flow enter.
+        if caller_void and len(statements) == 2 and statements[-1].type == "return_statement" and not [
+            child for child in statements[-1].named_children if child.type != "comment"
+        ]:
+            statements = statements[:1]
+        if len(statements) != 1:
+            continue
+        statement_kind = statements[0].type
+        if statement_kind == "expression_statement":
+            if not caller_void:
+                continue
+        elif statement_kind == "return_statement":
+            if caller_void != callee_void or (caller_void and language != "cpp"):
+                continue  # do not admit an invalid void-valued return
+        else:
             continue
         values = [child for child in statements[0].named_children if child.type != "comment"]
         call = _unwrap(values[0]) if len(values) == 1 else None

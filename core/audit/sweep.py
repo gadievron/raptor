@@ -2626,6 +2626,7 @@ def run_smt_verb_direct(
     hypothesis: str,
     target_path: str | None = None,
     integer_abi=None,
+    include_callers: bool = True,
 ) -> SweepResult:
     """Call an SMT verb directly from Python (no shim subprocess).
 
@@ -2636,6 +2637,11 @@ def run_smt_verb_direct(
     ``target_path`` gates the target-kind vocab packs so the mechanical
     checkers keep kernel-API coverage on kernel targets (the checkers'
     hardcoded lists are seed-sized).
+
+    An inconclusive overflow query may be completed by an independently
+    checked literal caller, scoped to entry to that wrapper. Set
+    ``include_callers=False`` when caching only function-scoped inputs;
+    complete caller observations separately against a fresh file snapshot.
 
     Runs in a forked subprocess so Z3 assertion failures (segfaults in
     the C++ core) return inconclusive instead of killing the parent.
@@ -2652,7 +2658,7 @@ def run_smt_verb_direct(
             )
             if (bound.details or {}).get("array_bounds_status") != "unavailable":
                 return bound
-    return _smt_verb_in_subprocess(
+    result = _smt_verb_in_subprocess(
         file_path=file_path,
         function_name=function_name,
         verb=verb,
@@ -2660,6 +2666,13 @@ def run_smt_verb_direct(
         hypothesis=hypothesis,
         target_path=target_path, integer_abi=integer_abi,
     )
+    if include_callers:
+        from .literal_call_observation import complete_literal_overflow_observation
+        return complete_literal_overflow_observation(
+            result, target_path=target_path, file_path=file_path, function_name=function_name,
+            source=source, hypothesis=hypothesis, integer_abi=integer_abi,
+        )
+    return result
 
 
 def smt_child_env() -> dict:

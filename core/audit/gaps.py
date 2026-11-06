@@ -2939,6 +2939,9 @@ def _reuse_ineligibility(
       never at the stale recorded lines (see
       :func:`_context_staleness`). ``None`` skips the short-circuit.
     """
+    receipts = getattr(entry, "evidence_tools", None) or []
+    if any("smt:check-overflow:literal-call" in receipt for receipt in receipts if isinstance(receipt, str)):
+        return "literal caller proof requires full source revalidation"
     if getattr(entry, "verdict", None) == "clean":
         from .smt_evidence import is_diagnostic_smt_rule
         # Reclassifying a producer must also invalidate old clean verdicts
@@ -3013,6 +3016,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("literal caller proof"):
+        return "literal_caller"
     if reason.startswith("predicate consistency"):
         return "predicate_consistency"
     if reason.startswith("diagnostic SMT"):
