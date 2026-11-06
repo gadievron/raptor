@@ -35,6 +35,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.source.lines import split_lines
+
 logger = logging.getLogger(__name__)
 
 #: Render at most this many call sites in full.
@@ -185,17 +187,17 @@ def _infer_def_end(
         return line_start
     # House-capped read (64 MiB budget): a planted blob must be
     # refused, not buffered — this runs on the default review path.
-    from .context import _read_target_text
+    from .context import _read_target_line_window
 
-    text = _read_target_text(resolved)
-    if text is None:
+    start = max(0, line_start - 1)
+    end = max(0, line_start - 1 + _MAX_DEF_SCAN_LINES)
+    lines = _read_target_line_window(resolved, start, end)
+    if lines is None:
         return line_start
-    lines = text.splitlines()
     depth = 0
     opened = False
-    end = min(len(lines), line_start - 1 + _MAX_DEF_SCAN_LINES)
-    for i in range(max(0, line_start - 1), end):
-        for ch in lines[i]:
+    for i, line in enumerate(lines, start=start):
+        for ch in line:
             if ch == "{":
                 depth += 1
                 opened = True
@@ -229,7 +231,7 @@ def _site_excerpt(
 
                 text = _read_target_text(resolved)
                 file_cache[rel_file] = (
-                    text.splitlines() if text is not None else None
+                    split_lines(text) if text is not None else None
                 )
         except OSError:
             file_cache[rel_file] = None
