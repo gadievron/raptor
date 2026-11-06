@@ -97,18 +97,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", dest="json_output",
         help="Emit the profile as JSON (instead of human-readable).",
     )
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--show", action="store_true",
         help=(
             "Print the cached profile without spawning. Errors if "
             "no fresh cache entry exists for this binary."
         ),
     )
-    p.add_argument(
+    mode.add_argument(
         "--force", action="store_true",
         help="Ignore the cache and re-run the probe.",
     )
-    p.add_argument(
+    mode.add_argument(
         "--clear", action="store_true",
         help=(
             "Drop every cache entry for the named binary (across "
@@ -116,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "every entry for every binary."
         ),
     )
-    p.add_argument(
+    mode.add_argument(
         "--clear-all", action="store_true",
         help="Drop every cache entry for every binary.",
     )
