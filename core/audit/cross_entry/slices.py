@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from itertools import islice
+from itertools import chain, islice
 import time
 from typing import Iterable
 
@@ -46,10 +46,15 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
     children = defaultdict(set)
     parents = defaultdict(set)
     callbacks = defaultdict(list)
+    resource_functions = defaultdict(set)
+    resource_links = defaultdict(set)
+    dispatch_calls = defaultdict(list)
+    unresolved_calls = defaultdict(list)
     for row in index.callbacks:
         callbacks[row["owner_type"],row["slot"],row["target"]].append(row)
     for a in index.accesses:
         per_function[a.function].append(a)
+        resource_functions[a.type_id+":"+a.member_path].add(a.function)
         if a.resolution != "unresolved":
             by_type[a.type_id].add(a.function)
             key = (a.type_id,a.member_path)
@@ -61,13 +66,34 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         if r.kind == "call":
             children[r.source].add(r.target)
             parents[r.target].add(r.source)
+        elif r.kind == "resource_assignment":
+            resource_links[r.source].update((r.source,r.target))
+            resource_links[r.target].update((r.source,r.target))
+    for position, call in enumerate(index.calls):
+        if call.dispatch_candidates:
+            dispatch_calls[call.caller].append(position)
+        if len(call.targets) != 1:
+            unresolved_calls[call.caller].append(position)
+
+    def ordered_calls(by_function, functions):
+        # Restore global index order after selecting function-local rows.
+        selected = chain.from_iterable(by_function.get(f, ()) for f in set(functions))
+        return (index.calls[position] for position in sorted(selected))
+
     candidates = []
     unassembled = []
     started = time.monotonic()
     role_cache = {}
+    path_cache = {}
+    def paths_for(f):
+        if f not in path_cache:
+            path_cache[f] = tuple(tuple(path) for path in entry_paths(index,f,limits.graph_depth,parents))
+        # Slices own their mutable path lists, even when the search is reused.
+        return [list(path) for path in path_cache[f]]
+
     def roles(f):
         if f not in role_cache:
-            role_cache[f] = {reg.get("field","") for p in entry_paths(index,f,limits.graph_depth,parents)
+            role_cache[f] = {reg.get("field","") for p in paths_for(f)
                              for reg in index.entries.get(p[0],[]) if reg.get("field")}
         return role_cache[f]
     for fid, fn in sorted(index.functions.items()):
@@ -99,11 +125,10 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         resources = {a.type_id+":"+a.member_path for a in seed_accesses}
         # Follow syntax-backed cross-type resource transfers in either direction.
         linked: set[str] = set()
-        for r in index.relations:
-            if r.kind == "resource_assignment" and (r.source in resources or r.target in resources):
-                linked.update((r.source, r.target))
+        for resource in resources:
+            linked.update(resource_links.get(resource, ()))
         peers = {f for t in types for f in by_type[t]}
-        peers |= {a.function for a in index.accesses if a.type_id+":"+a.member_path in linked}
+        peers.update(chain.from_iterable(resource_functions.get(resource, ()) for resource in linked))
         # Compare typed paths, once per function, not raw field spelling or
         # touch counts. Large setup drivers must not win simply by repeating
         # generic scatterlist/request fields. Prefer direct consumer state
@@ -123,15 +148,13 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         # Reserve early space for sibling producers and their dispatch
         # wrappers. Deep consumer callees must not crowd them out.
         anchors = [fid]+peer_order[:3]
-        anchor_paths = [p for f in anchors for p in entry_paths(index,f,limits.graph_depth,parents)]
+        anchor_paths = [p for f in anchors for p in paths_for(f)]
         # These are conditional edges, kept separate from the resolved call
         # graph and its entry-point reachability. Retain every indexed target
         # row even when only some source excerpts fit in this study slice.
         dispatch_rows = []
         dispatch_callers = set()
-        for call in index.calls:
-            if call.caller not in neighborhood or not call.dispatch_candidates:
-                continue
+        for call in ordered_calls(dispatch_calls, neighborhood):
             dispatch_callers.add(call.caller)
             if call.dispatch_bindings:
                 dispatch_rows.extend(call.dispatch_bindings)
@@ -171,7 +194,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         if len(ordered) > len(keep):
             truncated.append(f"functions:{len(ordered)-len(keep)}")
         # Include causal wrapper paths to producers as well as consumers.
-        paths = [p for f in keep for p in entry_paths(index,f,limits.graph_depth,parents)]
+        paths = [p for f in keep for p in paths_for(f)]
         for f in [f for p in paths for f in p]:
             if f not in keep and len(keep) < limits.functions_per_slice:
                 keep.append(f)
@@ -198,7 +221,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
             if omitted:
                 truncated.append(f"dispatch_fragments:{omitted}")
         relevant = [a for f in keep for a in per_function[f]]
-        unresolved = [f"{c.caller}:{c.line}:{c.name}" for c in index.calls if c.caller in keep and len(c.targets) != 1]
+        unresolved = [f"{c.caller}:{c.line}:{c.name}" for c in ordered_calls(unresolved_calls, keep)]
         if any(a.resolution != "resolved" for a in relevant):
             unresolved.append("partial_or_unresolved_type_identity")
         unresolved.append("same_object_and_call_order_require_verification")
