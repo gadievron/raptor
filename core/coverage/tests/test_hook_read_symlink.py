@@ -47,9 +47,9 @@ def hook_env(tmp_path):
     }))
     (projects / ".active").symlink_to("myproj")
 
-    env = dict(os.environ)
-    env["HOME"] = str(home)
-    env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
+    # These fixtures establish a legacy global project, not a live session.
+    # Do not let caller credentials or registry overrides select another route.
+    env = {"HOME": str(home), "PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C"}
     return {"env": env, "target": target, "run_dir": run_dir}
 
 
