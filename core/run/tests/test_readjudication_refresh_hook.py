@@ -147,6 +147,7 @@ class TestRefreshHookLifecycle(unittest.TestCase):
         env = os.environ.copy()
         env.pop("RAPTOR_CALLER_DIR", None)
         env["HOME"] = tmp_home
+        env["RAPTOR_REGISTRY_HOME"] = str(Path(tmp_home) / ".raptor")
         return subprocess.run(
             [sys.executable, LIFECYCLE] + list(args),
             capture_output=True, text=True, env=env,
