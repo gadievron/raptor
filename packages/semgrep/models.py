@@ -309,6 +309,8 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
                 continue
             findings.append(finding)
     if errors is not None:
+        if not data["runs"]:
+            errors.append("Semgrep SARIF contains no tool runs")
         if malformed:
             errors.append(f"SARIF contains {malformed} malformed entry/entries")
         if failed_invocations:

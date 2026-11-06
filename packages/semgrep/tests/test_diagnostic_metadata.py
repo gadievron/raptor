@@ -10,6 +10,68 @@ from core.coverage.record import read_semgrep_outputs
 from packages.semgrep import models, runner
 
 
+@pytest.mark.parametrize('state', ['missing', 'empty', 'valid'])
+@pytest.mark.parametrize('with_finding', [False, True])
+@pytest.mark.parametrize('returncode', [0, 1])
+def test_runner_requires_produced_json_metadata_and_retains_recovered_findings(
+    tmp_path, monkeypatch, state, with_finding, returncode,
+):
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'scope_isolation_available', lambda: True)
+    source = tmp_path / 'good.py'
+    source.write_text('foo()\n')
+    rule = tmp_path / 'rule.yaml'
+    rule.write_text('rules: []\n')
+    findings = [{'ruleId': 'keep', 'message': {'text': 'hit'}, 'locations': [{
+        'physicalLocation': {'artifactLocation': {'uri': 'good.py'}, 'region': {'startLine': 1}}}]}] if with_finding else []
+    sarif = json.dumps({'runs': [{'results': findings}]})
+
+    def execute(command, **kwargs):
+        sidecar = Path(command[command.index('--json-output') + 1])
+        if state == 'missing':
+            sidecar.unlink(missing_ok=True)
+        else:
+            # A minimal JSON object remains valid for older output shapes.
+            sidecar.write_text('{}' if state == 'valid' else '')
+        return subprocess.CompletedProcess(command, returncode, stdout=sarif, stderr='')
+
+    result = runner.run_rule(source, str(rule), subprocess_runner=execute)
+    assert result.returncode == returncode
+    assert len(result.findings) == int(with_finding)
+    assert result.ok == (state == 'valid')
+    if state != 'valid':
+        assert any('metadata missing or empty' in error for error in result.errors)
+    else:
+        assert result.errors == []
+
+
+def test_sarif_without_tool_runs_is_not_executed_silence(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'scope_isolation_available', lambda: True)
+    source = tmp_path / 'good.py'
+    source.write_text('foo()\n')
+
+    def execute(command, **kwargs):
+        Path(command[command.index('--json-output') + 1]).write_text('{}')
+        return subprocess.CompletedProcess(command, 0, stdout='{"runs": []}', stderr='')
+
+    result = runner.run_rule(source, 'rules.yaml', subprocess_runner=execute)
+    assert not result.ok and any('no tool runs' in error for error in result.errors)
+    assert models.parse_sarif('{"runs": []}') == []  # Legacy listing callers retain their shape.
+
+
+def test_process_failure_keeps_its_reason_when_metadata_is_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'scope_isolation_available', lambda: True)
+
+    def execute(command, **kwargs):
+        return subprocess.CompletedProcess(command, 7, stdout='{"runs": [{"results": []}]}', stderr='invalid rule')
+
+    result = runner.run_rule(tmp_path, 'rules.yaml', subprocess_runner=execute)
+    assert not result.ok
+    assert any('code 7' in error and 'invalid rule' in error for error in result.errors)
+
+
 def both_consumers(tmp_path, entry):
     payload = {"paths": {"scanned": ["good.py"]}, "errors": [entry], "version": "1.177.0"}
     text = json.dumps(payload)
