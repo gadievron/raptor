@@ -1427,13 +1427,26 @@ def _cli_main(argv: list | None = None) -> int:
     # Fail-closed by default: this exit code is documented as a CI
     # gate, and unstamped telemetry on a current run is exactly what
     # a target that rewrote its own telemetry looks like.
-    result = triage_run(target, allow_legacy=args.legacy)
+    try:
+        result = triage_run(target, allow_legacy=args.legacy)
+    except OSError as exc:
+        print(
+            "error: cannot produce triage report for "
+            f"{sanitise_for_terminal(str(target))}: "
+            f"{sanitise_for_terminal(str(exc))}", file=sys.stderr,
+        )
+        return 1
     if result is None:
         if args.json:
             print(dumps_artifact(None, ensure_ascii=True))
         else:
             print(f"(no sandbox telemetry found for {sanitise_for_terminal(str(target))})")
         return 0
+
+    # Resolve the rules status before optional advisory work. Ordinary
+    # deep-pass I/O/data failures must not replace the CI gate's verdict.
+    exit_code = {VERDICT_CLEAN: 0, VERDICT_NOTABLE: 3,
+                 VERDICT_SUSPICIOUS: 4}[result["verdict"]]
 
     if args.json:
         print(dumps_artifact(result, ensure_ascii=True))
@@ -1455,7 +1468,14 @@ def _cli_main(argv: list | None = None) -> int:
                 print("(clean verdict — deep pass has nothing to assess)")
         else:
             from core.sandbox.triage_deep import deep_analyse
-            deep = deep_analyse(target)
+            try:
+                deep = deep_analyse(target)
+            except (OSError, ValueError) as exc:
+                print(
+                    f"deep pass failed: {type(exc).__name__}: "
+                    f"{sanitise_for_terminal(str(exc))}", file=sys.stderr,
+                )
+                return exit_code
             if deep is None:
                 print("(deep pass unavailable — no LLM configured, or "
                       "the triage report failed provenance "
@@ -1477,12 +1497,7 @@ def _cli_main(argv: list | None = None) -> int:
                           f"{sanitise_for_terminal(str(a['rationale']))}")
                 if deep.get("overall_note"):
                     print(f"  note: {sanitise_for_terminal(str(deep['overall_note']))}")
-    # Verdict-reflecting exit codes for scripting/CI gates:
-    #   0 clean (or no telemetry), 1 error, 2 usage,
-    #   3 notable, 4 suspicious. --deep never changes the code — the
-    #   deterministic rules verdict is the gate.
-    return {VERDICT_CLEAN: 0, VERDICT_NOTABLE: 3,
-            VERDICT_SUSPICIOUS: 4}[result["verdict"]]
+    return exit_code
 
 
 if __name__ == "__main__":
