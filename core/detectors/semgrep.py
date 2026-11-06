@@ -32,7 +32,7 @@ class PreparedInput:
 
 @dataclass
 class SemgrepAnalysis:
-    prepare: Callable[[], AbstractContextManager[PreparedInput]]
+    prepare: Callable[[], AbstractContextManager[PreparedInput]] | None
     rule_config: str
     timeout: int
     name: str | None = None
@@ -48,6 +48,7 @@ class SemgrepAnalysis:
 
 
 def _prepare(state: SemgrepAnalysis) -> StageResult:
+    assert state.prepare is not None
     try:
         state._input = state._resources.enter_context(state.prepare())
     except PreparationUnavailable as exc:
@@ -116,7 +117,16 @@ def run_semgrep_analysis(
     name: str | None = None,
     env_factory: Callable[[], dict[str, str]] | None = None,
 ) -> DetectorResult[SemgrepAnalysis]:
-    """Execute a fresh run, closing owned or borrowed preparation contexts."""
+    """Return derived outcomes after closing contexts and releasing run inputs."""
     state = SemgrepAnalysis(prepare, rule_config, timeout, name, env_factory)
-    with state._resources:
-        return run_detector(detector, state)
+    try:
+        with state._resources:
+            return run_detector(detector, state)
+    finally:
+        # Reports and analysis callbacks can retain large expanded views.
+        # Cleanup runs first, while every execution resource is still live;
+        # returned outcomes retain only their derived facts and diagnostics.
+        state._raw = None
+        state._input = None
+        state.prepare = None
+        state.env_factory = None
