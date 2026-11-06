@@ -16,6 +16,7 @@ import logging
 import re
 import sys
 from functools import partial
+from heapq import nsmallest
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -204,19 +205,26 @@ _MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
 _MAX_FLOW_TRACE_BYTES = 64 * 1024 * 1024
 
 
-def _read_target_text(full_path: Path) -> str | None:
-    """Stat-then-bounded-read of a target-source file.
+def _read_target_text(
+    full_path: Path, *, target_root: Path | None = None,
+) -> str | None:
+    """Bounded target-source read, optionally anchored beneath its root.
 
-    Returns the decoded text, or None when the file is unreadable OR
-    larger than ``_MAX_SOURCE_FILE_BYTES`` — callers take their
-    existing unreadable-file fallback in both cases. The bounded read
-    (``core.source.read_bytes_capped``: cap+1 probe, never
-    stat-then-read) detects an over-cap file without ever loading
-    more than the cap into memory.
+    Returns decoded text, or None on unreadability, oversize, or refusal
+    under a supplied root. The existing cap+1 probe and refusal policy
+    apply in both modes; rooted reads use an anchored open so cached
+    discovery paths cannot bypass containment at read time.
     """
-    from core.source import read_bytes_capped
+    from core.source import read_bytes_capped, read_contained_bytes
 
-    got = read_bytes_capped(full_path, _MAX_SOURCE_FILE_BYTES)
+    if target_root is None:
+        got = read_bytes_capped(full_path, _MAX_SOURCE_FILE_BYTES)
+    else:
+        # Discovery caches paths, not permission to read them later. Preserve
+        # filesystem-path spelling while enforcing containment at open time.
+        got = read_contained_bytes(
+            target_root, Path(full_path).absolute(), _MAX_SOURCE_FILE_BYTES,
+        )
     if got is None:
         return None
     raw, truncated = got
@@ -3576,6 +3584,9 @@ def _resolve_types(
     Extracts non-builtin type names from parameter types and source,
     then searches header files in the target for their definitions.
     """
+    if max_types <= 0:
+        return []
+
     if file_path.endswith(".go"):
         from .go_type_context import resolve_go_types
 
@@ -3615,7 +3626,7 @@ def _resolve_types(
     for header in _find_headers(target_path, file_path):
         if len(results) >= max_types:
             break
-        content = _read_target_text(header)
+        content = _read_target_text(header, target_root=target_path)
         if content is None:
             continue
 
@@ -3670,8 +3681,9 @@ def _find_headers(target_path: Path, source_file: str) -> list[Path]:
 
     Checks the source file's directory first, then the target root.
     The rglob result for the target root is cached per target_path
-    to avoid re-walking the entire tree on every call. Every candidate
-    passes :func:`_admissible_header`; the source file's directory is
+    to avoid re-walking the entire tree on every call. Discovery candidates
+    pass :func:`_admissible_header`; cached paths still need rooted reads
+    when consumed. The source file's directory is
     itself containment-checked (``source_file`` derives from checklist
     data over the scanned tree — a traversal spelling must not walk a
     directory outside the target).
@@ -3684,7 +3696,7 @@ def _find_headers(target_path: Path, source_file: str) -> list[Path]:
         source_dir = source_resolved.parent
         if source_dir.is_dir():
             headers.extend(
-                h for h in sorted(source_dir.glob("*.h"))[:20]
+                h for h in nsmallest(20, source_dir.glob("*.h"))
                 if _admissible_header(target_path, h)
             )
 
@@ -3697,9 +3709,11 @@ def _find_headers(target_path: Path, source_file: str) -> list[Path]:
         ],
     )
 
+    seen = set(headers)
     for h in all_headers:
-        if h not in headers:
+        if h not in seen:
             headers.append(h)
+            seen.add(h)
         if len(headers) >= 50:
             break
     return headers
