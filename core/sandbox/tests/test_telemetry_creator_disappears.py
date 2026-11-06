@@ -9,6 +9,9 @@ from core.sandbox import telemetry_mac as mac
 from core.testing.module_bindings import patch_module_attribute
 
 
+import core.sandbox.telemetry_mac as _os_fault_consumer
+
+
 @pytest.mark.parametrize('prefix', [0, 5])
 def test_waiting_caller_recovers_failed_creator(tmp_path, monkeypatch, prefix):
     key_path = tmp_path / 'key'
@@ -39,7 +42,7 @@ def test_waiting_caller_recovers_failed_creator(tmp_path, monkeypatch, prefix):
         assert winner_done.wait(2)
 
     winner = threading.Thread(target=creator, name='failing-key-creator')
-    monkeypatch.setattr(os, 'write', write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
     patch_module_attribute(monkeypatch, mac, "time", 'sleep', allow_failed_creator_to_exit)
     try:
         winner.start()
@@ -67,7 +70,7 @@ def test_repeated_missing_winners_have_bounded_creation_attempts(tmp_path, monke
         attempts.append(args)
         raise FileExistsError('another creator raced')
 
-    monkeypatch.setattr(os, 'open', lose_creation)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'open', lose_creation)
     assert mac._load_or_create_key() is None
     assert len(attempts) == 2
 
@@ -109,7 +112,7 @@ def test_unreadable_existing_key_does_not_repeat_creation_budget(tmp_path, monke
         attempts.append(args)
         return original_open(*args, **kwargs)
 
-    monkeypatch.setattr(os, 'open', open_key)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'open', open_key)
     assert mac._load_or_create_key() is None
     assert len(attempts) == 1
     assert key_path.read_bytes() == key

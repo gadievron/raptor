@@ -10,6 +10,10 @@ import pytest
 from core.sandbox import context, proxy, telemetry_mac
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('parent_count', [None, 12])
 @pytest.mark.parametrize('refusal', ['open', 'nonregular'])
 @pytest.mark.parametrize('sidecar_kind', ['verified', 'invalid'])
@@ -36,7 +40,7 @@ def test_refusal_retains_state(tmp_path, monkeypatch, refusal, sidecar_kind, par
                     raise OSError('append unavailable')
                 return original(path, *args, **kwargs)
 
-            scoped.setattr(os, 'open', refused)
+            patch_module_attribute(scoped, _os_fault_consumer, "os", 'open', refused)
         else:
             original = os.fstat
             first = True
@@ -48,7 +52,7 @@ def test_refusal_retains_state(tmp_path, monkeypatch, refusal, sidecar_kind, par
                     return SimpleNamespace(st_mode=stat.S_IFIFO | 0o600)
                 return original(fd)
 
-            scoped.setattr(os, 'fstat', nonregular)
+            patch_module_attribute(scoped, _os_fault_consumer, "os", 'fstat', nonregular)
         context._persist_proxy_events([{'host': 'example.test'}], output=tmp_path)
 
     persisted = json.loads(sidecar.read_text())

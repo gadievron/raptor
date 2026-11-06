@@ -9,6 +9,18 @@ from unittest.mock import patch
 from core.startup.init import _tighten_config_perms
 
 
+from core.testing.module_bindings import patch_module_attribute
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_fault_patches(monkeypatch):
+    """Keep process and path simulations on the module under test."""
+    import core.startup.init as consumer
+
+    patch_module_attribute(monkeypatch, consumer, "os", "getuid", consumer.os.getuid)
+
+
 class TestTightenConfigPerms(unittest.TestCase):
 
     def _make_file(self, d: Path, mode: int) -> Path:
@@ -57,7 +69,7 @@ class TestTightenConfigPerms(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = self._make_file(Path(d), 0o664)
             fake_uid = p.stat().st_uid + 1
-            with patch("os.getuid", return_value=fake_uid):
+            with patch('core.startup.init.os.getuid', return_value=fake_uid):
                 notice = _tighten_config_perms(p)
             self.assertIsNotNone(notice)
             self.assertTrue(notice.startswith("\u26a0"))
@@ -84,7 +96,7 @@ class TestTightenConfigPerms(unittest.TestCase):
         # + fchmod to close the swap-symlink-mid-call race.
         with TemporaryDirectory() as d:
             p = self._make_file(Path(d), 0o644)
-            with patch("os.fchmod", side_effect=PermissionError("denied")):
+            with patch('core.startup.init.os.fchmod', side_effect=PermissionError("denied")):
                 notice = _tighten_config_perms(p)
             self.assertTrue(notice.startswith("\u26a0"))
             self.assertIn("chmod failed", notice)

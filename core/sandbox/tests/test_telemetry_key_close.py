@@ -6,6 +6,10 @@ import pytest
 from core.sandbox import telemetry_mac as mac
 
 
+import core.sandbox.telemetry_mac as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class Cancelled(BaseException):
     pass
 
@@ -27,7 +31,7 @@ def failing_close(monkeypatch):
         closed.append(fd)
         raise OSError('secondary close failure')
 
-    monkeypatch.setattr(os, 'close', close)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'close', close)
     return closed
 
 
@@ -60,7 +64,7 @@ def test_read_failure_is_not_replaced_by_close(key_path, monkeypatch, failing_cl
     def read(*args):
         raise error
 
-    monkeypatch.setattr(os, 'read', read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', read)
     if failure is OSError:
         assert mac._read_existing_key(key_path) is None
     else:
@@ -77,7 +81,7 @@ def test_creation_write_failure_survives_close(key_path, monkeypatch, failing_cl
     def write(*args):
         raise error
 
-    monkeypatch.setattr(os, 'write', write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
     with pytest.raises(failure) as raised:
         mac._load_or_create_key()
     assert raised.value is error

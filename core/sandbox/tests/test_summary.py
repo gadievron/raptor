@@ -11,6 +11,10 @@ from core.sandbox import evidence as evidence_mod
 from core.sandbox import summary as summary_mod
 
 
+import core.sandbox.summary as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
@@ -322,9 +326,9 @@ class TestSummarizeAndWrite:
                 close_calls.append(fd)
             real_close(fd)
 
-        monkeypatch.setattr(os, "open", fake_open)
-        monkeypatch.setattr(os, "read", fake_read)
-        monkeypatch.setattr(os, "close", fake_close)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", fake_open)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", fake_read)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "close", fake_close)
         result = summary_mod.summarize_and_write(tmp_path)
         assert result is None
         assert len(tracked_fds) == 1

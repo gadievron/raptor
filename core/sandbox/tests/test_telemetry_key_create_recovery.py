@@ -7,6 +7,10 @@ import pytest
 from core.sandbox import telemetry_mac as mac
 
 
+import core.sandbox.telemetry_mac as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class Cancelled(BaseException):
     pass
 
@@ -35,7 +39,7 @@ def test_incomplete_creation_can_retry(path, monkeypatch, failure, prefix):
         raise error
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'write', write)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'write', write)
         with pytest.raises(Cancelled if failure == 'cancel' else OSError):
             mac._load_or_create_key()
     assert not path.exists()
@@ -53,7 +57,7 @@ def test_complete_key_survives_cancellation_after_write(path, monkeypatch):
         raise Cancelled('cancelled after full write')
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'write', write)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'write', write)
         with pytest.raises(Cancelled):
             mac._load_or_create_key()
     key = path.read_bytes()
@@ -74,7 +78,7 @@ def test_replacement_key_is_not_removed(path, monkeypatch):
         raise OSError('failed after path replacement')
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'write', write)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'write', write)
         with pytest.raises(OSError):
             mac._load_or_create_key()
     assert path.read_bytes() == replacement
@@ -92,7 +96,7 @@ def test_cleanup_error_does_not_replace_write_error(path, monkeypatch):
     def unlink(*args, **kwargs):
         raise OSError('cleanup failed')
 
-    monkeypatch.setattr(os, 'write', write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
     monkeypatch.setattr(type(path), 'unlink', unlink)
     with pytest.raises(OSError) as raised:
         mac._load_or_create_key()

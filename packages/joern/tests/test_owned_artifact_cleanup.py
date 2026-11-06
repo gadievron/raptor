@@ -10,6 +10,10 @@ from core.testing.restricted_tree import restricted_tree
 from packages.joern import artifacts, server
 
 
+import core.source.gated as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("mode", [0, 0o500, 0o555])
 @pytest.mark.parametrize("spawned", [False, True])
 def test_stop_reclaims_restricted_workspace_and_socket_tree(
@@ -140,8 +144,8 @@ def test_failed_stream_acquisition_closes_source_descriptor(
 
     try:
         with monkeypatch.context() as fault:
-            fault.setattr(os, "open", track)
-            fault.setattr(os, "fdopen", fail)
+            patch_module_attribute(fault, _os_fault_consumer, "os", "open", track)
+            patch_module_attribute(fault, _os_fault_consumer, "os", "fdopen", fail)
             with pytest.raises(error) as caught:
                 if operation == "digest":
                     artifacts.graph_digest(source)

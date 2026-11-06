@@ -13,6 +13,11 @@ import sys as _sys
 
 import pytest as _pytest
 
+
+import core.sandbox.tracer as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
@@ -938,8 +943,8 @@ class TestSignalReadyHandshake:
         try:
             def boom(*a, **k):
                 raise OSError("simulated write failure")
-            monkeypatch.setattr(os, "write", boom)
-            monkeypatch.setattr(os, "close", closed.append)
+            patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", boom)
+            patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "close", closed.append)
 
             # Must not raise; must close wr.
             tracer._signal_ready(wr)

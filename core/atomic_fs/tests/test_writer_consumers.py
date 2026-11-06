@@ -8,6 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
+
+import core.atomic_fs as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_delegated_os_faults(monkeypatch):
+    """Forward delegated syscalls while preserving each borrowed OS view."""
+    import core.atomic_fs as primary0
+    import core.source.beneath as delegated0
+    patch_module_attribute(monkeypatch, delegated0, "os", "open",
+                           lambda *args, **kwargs: primary0.os.open(*args, **kwargs))
+
+
 WRITERS = ("ledger", "resume", "summaries", "mutation", "labels", "staging")
 
 
@@ -81,7 +95,7 @@ def descriptors(monkeypatch):
         opened.add(fd)
         return fd, path
 
-    monkeypatch.setattr(os, "open", tracked_open)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", tracked_open)
     monkeypatch.setattr(tempfile, "mkstemp", tracked_mkstemp)
     return opened
 
@@ -104,7 +118,7 @@ def test_stream_setup_failure_does_not_leak_descriptor(writer, monkeypatch):
         raise OSError("stream setup failed")
 
     # A writer which avoids fdopen entirely can complete successfully.
-    monkeypatch.setattr(os, "fdopen", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fdopen", fail)
     try:
         writer.save()
     except OSError:
@@ -119,7 +133,7 @@ def test_interrupted_permission_setup_closes_descriptor(writer, monkeypatch):
     def interrupt(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(os, "fchmod", interrupt)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fchmod", interrupt)
     try:
         writer.save()
     except KeyboardInterrupt:
@@ -138,7 +152,7 @@ def test_failed_commit_preserves_destination_and_removes_scratch(
     def fail(*args, **kwargs):
         raise failure("commit failed")
 
-    monkeypatch.setattr(os, "replace", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", fail)
     try:
         writer.save()
     except (OSError, KeyboardInterrupt):
@@ -179,7 +193,7 @@ def test_short_writes_commit_complete_content(writer, monkeypatch):
         calls.append(len(content))
         return original_write(fd, content[:3])
 
-    monkeypatch.setattr(os, "write", short)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", short)
     writer.save()
     assert len(calls) > 1
     if writer.kind == "mutation":
@@ -211,7 +225,7 @@ def test_disk_full_does_not_commit_partial_state(writer, monkeypatch):
         calls.append(fd)
         return original_write(fd, content[:1])
 
-    monkeypatch.setattr(os, "write", full)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", full)
     try:
         writer.save()
     except OSError as error:

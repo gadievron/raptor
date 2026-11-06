@@ -65,6 +65,10 @@ from core.coverage.journal_checkpoint import (
 from core.coverage.journal_sidecar import SIDECAR_FILENAME, hydrate_entry
 
 
+import core.coverage.journal_compact as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _entry(i: int, **over) -> ReviewJournalEntry:
     fields = dict(
         ts=now_iso(),
@@ -635,7 +639,7 @@ class TestDrainInterplay:
             real_rename(src, dst, **kw)
             flag["set"] = True
 
-        monkeypatch.setattr(os, "rename", _rename_then_signal)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", _rename_then_signal)
         outcome = checkpoint_journal(
             tmp_path, boundary="test",
             should_abort=lambda: flag["set"])

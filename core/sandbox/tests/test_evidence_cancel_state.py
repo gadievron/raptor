@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import evidence
 
 
+import core.sandbox.evidence as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class Cancelled(BaseException):
     pass
 
@@ -33,7 +37,7 @@ def test_cancel_after_short_write_keeps_recovery_pending(tmp_path, monkeypatch):
         return cancel_after_return
 
     try:
-        monkeypatch.setattr(os, 'write', short_once)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', short_once)
         try:
             sys.settrace(cancel_after_return)
             with pytest.raises(Cancelled, match='before bookkeeping'):

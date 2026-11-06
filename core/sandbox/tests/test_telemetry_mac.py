@@ -11,6 +11,9 @@ from core.sandbox import telemetry_mac as tmac
 from core.testing.module_bindings import patch_module_attribute
 
 
+import core.sandbox.telemetry_mac as _os_fault_consumer
+
+
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
@@ -41,7 +44,7 @@ class TestKeyHandling:
         key = raptor_dir / "telemetry-mac.key"
         key.write_bytes(b"k" * 32)
         key.chmod(0o600)
-        monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 12345)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "geteuid", lambda: os.getuid() + 12345)
         assert tmac.mint({"kind": "proxy-event", "host": "h"}) is None
         assert key.exists(), "a refused key must never be moved"
         assert not list(raptor_dir.glob("*.tampered-*"))
@@ -71,7 +74,7 @@ class TestKeyHandling:
         key.write_bytes(data)
         key.chmod(0o600)
         real_read = os.read
-        monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
         assert tmac._read_existing_key(key) == data
 
     def test_truncated_key_file_reads_exact_length(
@@ -85,7 +88,7 @@ class TestKeyHandling:
         key.write_bytes(os.urandom(10))
         key.chmod(0o600)
         real_read = os.read
-        monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
         got = tmac._read_existing_key(key)
         assert isinstance(got, bytes)
         assert len(got) == 10

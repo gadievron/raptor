@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import telemetry_mac as mac
 
 
+import core.sandbox.telemetry_mac as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def marker(tmp_path, monkeypatch):
     path = tmp_path / 'tamper.jsonl'
@@ -26,7 +30,7 @@ def test_valid_append_survives_partial_predecessor(marker, monkeypatch, prefix):
         return original(fd, data[:prefix])
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(os, 'write', short)
+        patch_module_attribute(scoped, _os_fault_consumer, "os", 'write', short)
         mac._record_tamper_event('incomplete', 'first')
     assert len(calls) == 1
     mac._record_tamper_event('preserved', 'second')
@@ -49,7 +53,7 @@ def test_healthy_records_still_roundtrip(marker, monkeypatch):
         writes.append(bytes(data))
         return original(fd, data)
 
-    monkeypatch.setattr(os, 'write', write)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
     mac._record_tamper_event('first', 'one')
     mac._record_tamper_event('second', 'two')
     assert [event['reason'] for event in mac.tamper_events()] == ['first', 'second']

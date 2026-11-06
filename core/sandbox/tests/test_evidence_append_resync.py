@@ -8,6 +8,10 @@ import pytest
 from core.sandbox import evidence
 
 
+import core.sandbox.evidence as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class Cancelled(BaseException):
     pass
 
@@ -33,7 +37,7 @@ def test_next_record_is_separate_after_partial_failure(tmp_path, monkeypatch, fa
         return original(fd, data)
 
     try:
-        monkeypatch.setattr(os, 'write', write)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
         if failure == 'cancel':
             with pytest.raises(Cancelled):
                 handle.write_record({'first': 'incomplete'})
@@ -65,7 +69,7 @@ def test_resync_remains_pending_after_zero_progress(tmp_path, monkeypatch):
         return original(fd, data)
 
     try:
-        monkeypatch.setattr(os, 'write', write)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
         assert not handle.write_record({'first': 1})
         assert not handle.write_record({'second': 2})
         assert handle.write_record({'third': 3})
@@ -95,7 +99,7 @@ def test_recovery_state_is_set_before_another_writer_can_enter(tmp_path, monkeyp
 
     thread = threading.Thread(target=second_writer)
     try:
-        monkeypatch.setattr(os, 'write', write)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
         thread.start()
         assert not handle.write_record({'first': 'incomplete'})
         thread.join(2)

@@ -20,6 +20,10 @@ from core.audit.prep_cache import (
 )
 
 
+import core.atomic_fs as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestFingerprints:
     def test_source_fingerprint_deterministic_and_order_free(self):
         a = {"x.c": "int f(void);\n", "y.c": "int g(void);\n"}
@@ -99,12 +103,11 @@ class TestLoadWriteCycle:
         # atomic rename: the temp file must not strand in the cache
         # dir. Pins the seam property regardless of which writer
         # implements it (today: core.atomic_fs).
-        import os
 
         def failing_replace(src, dst):
             raise OSError("simulated disk full")
 
-        monkeypatch.setattr(os, "replace", failing_replace)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", failing_replace)
         write_prep_cache(tmp_path, "artifact.json", "fp1", {"a": 1},
                          label="test")  # must not raise
         leftovers = list((tmp_path / PREP_CACHE_DIRNAME).glob("*.tmp"))

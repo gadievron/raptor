@@ -10,6 +10,10 @@ import pytest
 from core.sandbox import evidence, summary
 
 
+import core.sandbox.summary as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path):
     from core.testing.sandbox_state_scope import isolated_sandbox_state
@@ -69,9 +73,9 @@ def test_failures_retain_evidence_without_overwriting_earlier_attempts(
         raise OSError(errno.ENOSPC, "injected summary write failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(os, "open", failing_open)
-        patch.setattr(os, "fstat", failing_fstat)
-        patch.setattr(os, "read", failing_read)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "open", failing_open)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "fstat", failing_fstat)
+        patch_module_attribute(patch, _os_fault_consumer, "os", "read", failing_read)
         if stage == "write":
             patch.setattr(summary, "write_text_atomically", failing_write)
         with caplog.at_level(logging.WARNING, logger=summary.__name__):

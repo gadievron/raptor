@@ -20,6 +20,9 @@ from core.sandbox.mount_ns import _copy_etc_tree
 from core.testing.module_bindings import patch_module_attribute
 
 
+import core.sandbox.mount_ns as _os_fault_consumer
+
+
 @pytest.fixture(autouse=True)
 def hostile_umask():
     """Force a restrictive umask for every test in this file.
@@ -56,7 +59,7 @@ def _copy(monkeypatch, src, dst, *, force_byte_copy):
     if force_byte_copy:
         def _no_link(*a, **k):
             raise OSError("cross-device")
-        monkeypatch.setattr(os, "link", _no_link)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "link", _no_link)
     dst.mkdir()
     _copy_etc_tree(str(src), str(dst))
 
@@ -403,7 +406,7 @@ def test_ca_bundle_precedes_unrelated_payload(tmp_path, monkeypatch, bundle, bud
     def copy_only(*args, **kwargs):
         clock[0] += 1.0
         raise OSError('cross-device')
-    monkeypatch.setattr(os, 'link', copy_only)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'link', copy_only)
     monkeypatch.setattr(mns, '_ETC_COPY_MAX_SECONDS', 3.0 if budget == 'seconds' else 1000.0)
     monkeypatch.setattr(mns, '_ETC_COPY_MAX_ENTRIES', 8 if budget == 'entries' else 8192)
     monkeypatch.setattr(mns, '_ETC_COPY_MAX_BYTES', 40 if budget == 'bytes' else 65536)
@@ -424,7 +427,7 @@ def test_tls_priority_does_not_follow_directory_symlink(tmp_path, monkeypatch):
     def confined(path):
         assert Path(path) not in (src/'ssl', outside), 'priority walk followed a directory symlink'
         return listdir(path)
-    monkeypatch.setattr(os, 'listdir', confined)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'listdir', confined)
     _copy_etc_tree(str(src), str(dst))
     assert (dst/'ssl').is_symlink()
     assert os.readlink(dst/'ssl') == str(outside)

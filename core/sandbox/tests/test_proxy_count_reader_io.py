@@ -7,6 +7,10 @@ import pytest
 from core.sandbox import context, proxy, telemetry_mac
 
 
+import core.sandbox.context as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def sidecar(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry_mac, 'verify', lambda fields, token: token == 'test-token')
@@ -27,7 +31,7 @@ def test_short_reads_reach_eof(sidecar, monkeypatch):
         calls.append(size)
         return original(fd, min(size, 3))
 
-    monkeypatch.setattr(os, 'read', short)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', short)
     assert read(sidecar) == (4, {'old'}, False)
     assert len(calls) > 2
 
@@ -43,7 +47,7 @@ def test_read_stops_at_cap_plus_one(sidecar, monkeypatch):
         consumed.append(len(chunk))
         return chunk
 
-    monkeypatch.setattr(os, 'read', short)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', short)
     assert read(sidecar) == (None, set(), True)
     assert sum(consumed) == 17
 
@@ -85,7 +89,7 @@ def test_close_error_does_not_mask_result(sidecar, monkeypatch, read_fails):
     if read_fails:
         def failed_read(*args):
             raise OSError('read failed')
-        monkeypatch.setattr(os, 'read', failed_read)
-    monkeypatch.setattr(os, 'close', close)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'read', failed_read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'close', close)
     assert read(sidecar) == ((None, set(), True) if read_fails else (4, {'old'}, False))
     assert len(closed) == 1

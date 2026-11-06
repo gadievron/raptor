@@ -11,6 +11,10 @@ from core.llm.dispatcher import server
 from core.llm.dispatcher.auth import CredentialStore
 
 
+import core.llm.dispatcher.server as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def creds():
     result = CredentialStore.__new__(CredentialStore)
@@ -165,7 +169,7 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
                 descriptors.append(fd)
             return fd
 
-        fault.setattr(os, "open", open_directory)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "open", open_directory)
         if stage in ("mac-base", "compact-allocation"):
             base = tmp_path / "mac-base"
             base.mkdir(mode=0o700)
@@ -210,7 +214,7 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
                     raise failure
                 return chmod(path, *args, **kwargs)
 
-            fault.setattr(os, "chmod", failed_chmod)
+            patch_module_attribute(fault, _os_fault_consumer, "os", "chmod", failed_chmod)
         elif stage == "finalizer":
             finalize = weakref.finalize
 

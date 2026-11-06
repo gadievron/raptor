@@ -9,6 +9,10 @@ from core.build import build_detector as bd
 from core.testing.restricted_tree import restricted_tree
 
 
+import core.build.build_detector as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def detector(tmp_path, monkeypatch):
     monkeypatch.setattr(
@@ -48,7 +52,7 @@ def test_creation_and_transfer_failures_leave_no_artifacts(
                 failed = True
                 raise failure
 
-        monkeypatch.setattr(os, "close", close_then_fail)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "close", close_then_fail)
     else:
         monkeypatch.setattr(bd, "BuildSystem", fail)
     with pytest.raises(error) as caught:

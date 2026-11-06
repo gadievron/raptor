@@ -8,6 +8,19 @@ from core.atomic_fs import write_bytes_atomically
 from core.source.beneath import open_dir_beneath
 
 
+import core.atomic_fs as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_delegated_os_faults(monkeypatch):
+    """Forward delegated syscalls while preserving each borrowed OS view."""
+    import core.atomic_fs as primary0
+    import core.source.beneath as delegated0
+    patch_module_attribute(monkeypatch, delegated0, "os", "open",
+                           lambda *args, **kwargs: primary0.os.open(*args, **kwargs))
+
+
 def test_directory_walk_rejects_parent_traversal_and_symlinks(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -36,7 +49,7 @@ def test_rename_cannot_redirect_an_already_pinned_atomic_write(tmp_path, monkeyp
         parent.rename(root / "held")
         parent.symlink_to(outside, target_is_directory=True)
         return original(source, destination, **kwargs)
-    monkeypatch.setattr(os, "replace", swap)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", swap)
     write_bytes_atomically(parent / "report.json", b"new report", root=root)
     assert (outside / "report.json").read_bytes() == b"outside evidence"
     assert (root / "held" / "report.json").read_bytes() == b"new report"
@@ -57,7 +70,7 @@ def test_swap_before_directory_open_is_refused(tmp_path, monkeypatch):
             parent.symlink_to(outside, target_is_directory=True)
             swapped = True
         return original(path, flags, *args, **kwargs)
-    monkeypatch.setattr(os, "open", swap)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", swap)
     with pytest.raises(OSError):
         write_bytes_atomically(parent / "report.json", b"new report", root=tmp_path)
     assert not list(outside.iterdir())
@@ -65,7 +78,7 @@ def test_swap_before_directory_open_is_refused(tmp_path, monkeypatch):
 
 def test_anchored_atomic_short_writes_are_completed(tmp_path, monkeypatch):
     original = os.write
-    monkeypatch.setattr(os, "write", lambda fd, data: original(fd, data[:3]))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", lambda fd, data: original(fd, data[:3]))
     destination = tmp_path / "nested/report.json"
     write_bytes_atomically(destination, b"complete report content", root=tmp_path)
     assert destination.read_bytes() == b"complete report content"
@@ -80,7 +93,7 @@ def test_failure_preserves_original_and_cleans_temporary(tmp_path, monkeypatch, 
         if interrupted:
             raise KeyboardInterrupt
         return 0
-    monkeypatch.setattr(os, "write", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "write", fail)
     with pytest.raises(KeyboardInterrupt if interrupted else OSError):
         write_bytes_atomically(destination, b"new report", root=tmp_path)
     assert destination.read_bytes() == b"old report"

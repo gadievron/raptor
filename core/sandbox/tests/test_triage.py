@@ -12,6 +12,11 @@ from core.sandbox import triage as triage_mod
 
 from pathlib import Path
 
+
+import core.security.capped_read as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
@@ -1235,7 +1240,7 @@ class TestReadBoundedGrewDuringRead:
                  st.st_uid, st.st_gid, 5, st.st_atime, st.st_mtime,
                  st.st_ctime))
 
-        monkeypatch.setattr(os, "fstat", lying_fstat)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fstat", lying_fstat)
         assert triage_mod._read_bounded(f) is None
 
 

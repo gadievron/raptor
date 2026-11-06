@@ -26,6 +26,11 @@ import time
 
 import pytest
 
+
+import core.sandbox.supervised as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="supervised trees are Linux-only (fork/pidfd/procfs)",
@@ -220,8 +225,8 @@ class TestGroupTeardownProofs:
                 calls.append((p, s))
                 raise ProcessLookupError  # suppressed by product code
 
-            monkeypatch.setattr(os, "getpgrp", lambda: pgid)
-            monkeypatch.setattr(os, "killpg", recording_killpg)
+            patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "getpgrp", lambda: pgid)
+            patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "killpg", recording_killpg)
             with pytest.raises(SupervisedTeardownError) as exc:
                 h.terminate(grace_s=0.2)
             assert "own process group" in str(exc.value)
@@ -264,7 +269,7 @@ class TestGroupTeardownProofs:
         def broken_listdir(path):
             raise OSError(5, "proc unavailable")
 
-        monkeypatch.setattr(os, "listdir", broken_listdir)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "listdir", broken_listdir)
         assert sup._group_sighted_members(999999) is None
 
     def test_group_sighted_members_vanished_entry_not_sighted(
@@ -275,7 +280,7 @@ class TestGroupTeardownProofs:
         # the group). The fabricated listing also omits this process's
         # own pid, which the scan must independently flag as occlusion:
         # a listing that cannot show US can never prove absence.
-        monkeypatch.setattr(os, "listdir", lambda path: ["999999999"])
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "listdir", lambda path: ["999999999"])
         view = sup._group_sighted_members(999999)
         assert view.members == ()
         assert view.occlusion is not None
@@ -322,8 +327,7 @@ class TestGroupTeardownProofs:
         real_listdir = os.listdir
         monkeypatch.setattr(sup, "_proc_pid_view_filtered",
                             racing_detector)
-        monkeypatch.setattr(
-            os, "listdir",
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "listdir",
             lambda path: ([own] if str(path) == "/proc"
                           else real_listdir(path)))
         view = sup._group_sighted_members(os.getpgrp())
@@ -346,8 +350,7 @@ class TestGroupTeardownProofs:
         real_listdir = os.listdir
         monkeypatch.setattr(sup, "_proc_self_stat_pid",
                             lambda: os.getpid() + 1, raising=False)
-        monkeypatch.setattr(
-            os, "listdir",
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "listdir",
             lambda path: ([own] if str(path) == "/proc"
                           else real_listdir(path)))
         view = sup._group_sighted_members(os.getpgrp())
@@ -363,8 +366,7 @@ class TestGroupTeardownProofs:
         real_listdir = os.listdir
         monkeypatch.setattr(sup, "_proc_self_stat_pid",
                             lambda: None, raising=False)
-        monkeypatch.setattr(
-            os, "listdir",
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "listdir",
             lambda path: ([own] if str(path) == "/proc"
                           else real_listdir(path)))
         view = sup._group_sighted_members(os.getpgrp())

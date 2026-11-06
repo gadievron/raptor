@@ -8,6 +8,10 @@ import pytest
 from core.container import compose as cco
 
 
+import core.container.compose as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def staging_case(tmp_path, monkeypatch):
     source = tmp_path / "source"
@@ -281,7 +285,7 @@ def test_preflight_stops_enumerating_at_entry_budget(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cco, "_STAGING_MAX_ENTRIES", 3)
     with monkeypatch.context() as fault:
-        fault.setattr(os, "scandir", CountingScan)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "scandir", CountingScan)
         with pytest.raises(cco.ComposeError, match="entry staging budget"):
             cco._require_stageable_size(source)
     assert seen == 4
