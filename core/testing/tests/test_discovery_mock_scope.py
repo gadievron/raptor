@@ -54,8 +54,13 @@ _SPECS = [('core/analysis/tests/test_binary_oracle.py', {'bo_mod': 'core.analysi
 
 
 @lru_cache(maxsize=None)
+def _tree(file):
+    return ast.parse((_REPO / file).read_text())
+
+
+@lru_cache(maxsize=None)
 def _calls(file):
-    tree = ast.parse((_REPO / file).read_text())
+    tree = _tree(file)
     calls = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -69,12 +74,51 @@ def _calls(file):
     return sorted(calls, key=lambda node: node.lineno)
 
 
+def _imported_consumer(tree, call, alias, approved):
+    """Resolve a new local import alias only to an already reviewed consumer.
+
+    Prefer the innermost enclosing scope. Do not borrow imports from sibling
+    functions or silently accept an ambiguous/new module target.
+    """
+    scopes = [tree, *(node for node in ast.walk(tree)
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                     and node.lineno <= call.lineno <= node.end_lineno)]
+    scopes.sort(key=lambda node: getattr(node, "end_lineno", float("inf"))
+                - getattr(node, "lineno", 0))
+    for scope in scopes:
+        modules = set()
+        pending = list(scope.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(node, ast.Import):
+                modules.update((name.name if name.asname else name.name.split(".")[0]) for name in node.names
+                               if (name.asname or name.name.split(".")[0]) == alias
+                               and node.lineno < call.lineno)
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                modules.update(f"{node.module}.{name.name}" for name in node.names
+                               if (name.asname or name.name) == alias
+                               and node.lineno < call.lineno)
+            pending.extend(ast.iter_child_nodes(node))
+        if modules:
+            assert len(modules) == 1, f"ambiguous consumer import for {alias}: {sorted(modules)}"
+            module = modules.pop()
+            assert module in approved, f"register newly discovered consumer module: {module}"
+            return module
+    raise AssertionError(f"consumer alias {alias!r} has no enclosing import; register it explicitly")
+
+
 def _cases():
     cases = []
+    approved = {module for _, aliases in _SPECS for module in aliases.values()}
     for file, aliases in _SPECS:
         for index, call in enumerate(_calls(file)):
             alias = call.args[1].id if isinstance(call.func, ast.Name) else call.args[0].value.id
-            cases.append(pytest.param(file, index, aliases[alias], id=Path(file).stem + "-" + str(index)))
+            module = aliases.get(alias)
+            if module is None:
+                module = _imported_consumer(_tree(file), call, alias, approved)
+            cases.append(pytest.param(file, index, module, id=Path(file).stem + "-" + str(index)))
     return cases
 
 
@@ -152,3 +196,38 @@ def test_unmodified_lookup_is_a_passing_control(borrowed):
     assert consumer.shutil.which(sys.executable) is not None
     assert shutil.which is shared_which
     _assert_namespace(original, inherited)
+
+
+@pytest.mark.parametrize("form", ["import {module} as consumer", "from core import {leaf} as consumer"])
+def test_new_alias_respects_function_local_imports(form):
+    source = "\n".join(
+        f"def case_{leaf}():\n    " + form.format(module=f"core.{leaf}", leaf=leaf)
+        + "\n    patch(consumer)"
+        for leaf in ("first", "second")
+    )
+    tree = ast.parse(source)
+    calls = sorted((node for node in ast.walk(tree) if isinstance(node, ast.Call)),
+                   key=lambda node: node.lineno)
+    approved = {"core.first", "core.second"}
+    assert [_imported_consumer(tree, call, "consumer", approved) for call in calls] == [
+        "core.first", "core.second",
+    ]
+
+
+@pytest.mark.parametrize("source,match", [
+    ("import core.new as consumer\npatch(consumer)", "register newly discovered"),
+    ("def sibling():\n    import core.known as consumer\npatch(consumer)", "no enclosing import"),
+    ("if flag:\n    import core.known as consumer\nelse:\n    import core.other as consumer\npatch(consumer)", "ambiguous consumer"),
+])
+def test_unreviewed_or_unresolvable_consumer_still_fails(source, match):
+    tree = ast.parse(source)
+    call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call))
+    with pytest.raises(AssertionError, match=match):
+        _imported_consumer(tree, call, "consumer", {"core.known", "core.other"})
+
+
+def test_dotted_import_without_alias_binds_only_its_root_package():
+    tree = ast.parse("import core.known\npatch(core)")
+    call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call))
+    with pytest.raises(AssertionError, match=r"(?m)^register newly discovered consumer module: core$"):
+        _imported_consumer(tree, call, "core", {"core.known"})
