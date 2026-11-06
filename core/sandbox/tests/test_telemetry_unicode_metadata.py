@@ -1,4 +1,5 @@
 """Filesystem-byte metadata remains stampable without changing old MAC bytes."""
+import errno
 import os
 
 import pytest
@@ -42,7 +43,12 @@ def test_audit_degradation_with_filesystem_bytes(tmp_path, location):
     name = os.fsdecode(b'run-\xff') if location == 'run' else 'run'
     reason = os.fsdecode(b'unavailable-\xff') if location == 'reason' else 'audit unavailable'
     run = tmp_path / name
-    run.mkdir()
+    try:
+        run.mkdir()
+    except OSError as exc:
+        if location == "run" and exc.errno == errno.EILSEQ:
+            pytest.skip("filesystem rejects non-UTF-8 directory names")
+        raise
     summary.record_audit_degraded(run, reason=reason)
     report = triage.triage_run(run, allow_legacy=False)
     assert report['audit_degraded'] is True
