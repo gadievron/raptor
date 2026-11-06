@@ -42,6 +42,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 from contextlib import nullcontext as _path_nullcontext
@@ -139,13 +140,25 @@ _WRITE_FLAGS = {"O_WRONLY", "O_RDWR", "O_CREAT", "O_EXCL", "O_APPEND"}
 _HARDENED_FLAGS = {"O_NOFOLLOW", "O_NONBLOCK"}
 
 
+_READ_CALLEE_RE = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, ("open", *_READ_ATTRS))) + r")\b",
+)
+
+
 def census_offenders(rel: str, source: str) -> list[str]:
     """Raw read spellings in *source* lacking the inline marker."""
+    # Necessary callee spellings only: the AST still decides whether a call
+    # is an unsafe read. Match Python's identifier normalization as well.
+    normalized = unicodedata.normalize("NFKC", source)
+    if not _READ_CALLEE_RE.search(normalized):
+        return []
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    lines = source.splitlines()
+    # AST coordinates count physical CR/LF newlines. Unicode text separators
+    # inside a string must not move another line's justification onto a read.
+    lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     offenders: list[str] = []
 
     def _line_has_marker(lineno: int) -> bool:
@@ -211,6 +224,54 @@ def test_no_unjustified_raw_reads_in_covered_runtime_source() -> None:
 
 class TestCensusMechanics:
     """The census's own failure directions, on planted sources."""
+
+    def test_normalized_read_identifiers_remain_visible(self):
+        for source in (
+            "data = ｏｐｅｎ(path)\n",
+            "data = path.ｒｅａｄ_ｔｅｘｔ()\n",
+            "data = path.ｒｅａｄ_ｂｙｔｅｓ()\n",
+            "fd = os.ｏｐｅｎ(path, os.O_RDONLY)\n",
+        ):
+            assert len(census_offenders("x.py", source)) == 1, source
+
+    def test_prescreen_keeps_ast_mode_and_flag_adjudication(self):
+        source = (
+            "writer = ｏｐｅｎ(path, 'w')\n"
+            "safe = os.ｏｐｅｎ(path, os.O_RDONLY | os.O_NOFOLLOW)\n"
+            "reader = wrapper(path.ｒｅａｄ_ｂｙｔｅｓ())\n"
+        )
+        offenders = census_offenders("x.py", source)
+        assert len(offenders) == 1
+        assert offenders[0].startswith("x.py:3:")
+
+    def test_identifier_prescreen_accepts_comments_before_the_call(self):
+        source = "data = (path.read_text # note\n())\n"
+        assert len(census_offenders("x.py", source)) == 1
+
+    def test_adopted_read_helpers_are_not_raw_readers(self):
+        source = (
+            "data = read_text_capped(path)\n"
+            "raw = read_bytes_capped(path)\n"
+            "handle = open_regular_beneath(root, path)\n"
+        )
+        assert census_offenders("x.py", source) == []
+
+    def test_unicode_text_separators_do_not_shift_justification_lines(self):
+        for separator in ("\x85", "\u2028", "\u2029"):
+            prefix = f"label = 'left{separator}raw-open: not a read justification'\n"
+            unmarked = prefix + "data = path.read_text()\n"
+            offenders = census_offenders("x.py", unmarked)
+            assert len(offenders) == 1
+            assert offenders[0].startswith("x.py:2:")
+            marked = prefix + "data = path.read_text()  # raw-open: trusted pack\n"
+            assert census_offenders("x.py", marked) == []
+
+    def test_diagnostics_follow_physical_newlines(self):
+        for newline in ("\n", "\r\n", "\r"):
+            source = newline.join(("label = 'source'", "data = path.read_bytes()", ""))
+            offenders = census_offenders("x.py", source)
+            assert len(offenders) == 1
+            assert offenders[0].startswith("x.py:2:")
 
     def test_unmarked_builtin_open_fires(self):
         assert census_offenders("x.py", "fh = open(p)\n")

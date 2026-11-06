@@ -67,6 +67,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,8 @@ def _expr_key(node: ast.AST) -> str | None:
 
 
 def _contains_minus_one(node: ast.AST) -> bool:
+    if isinstance(node, (ast.Name, ast.Constant)):
+        return False
     return any(
         isinstance(sub, ast.BinOp)
         and isinstance(sub.op, ast.Sub)
@@ -205,12 +208,30 @@ class _Scope:
         self.coupled: list[tuple[int, str]] = []
 
 
-def _scan_scope(body: list[ast.stmt], scope: _Scope) -> None:
+def _splitlines_text(source: str) -> str | None:
+    normalized = unicodedata.normalize("NFKC", source)
+    return normalized if "splitlines" in normalized else None
+
+
+def _scan_scope(
+    body: list[ast.stmt], scope: _Scope, *, source_lines: list[str] | None = None,
+) -> None:
     """Walk one scope's statements (recursing into nested scopes with
     fresh Scope objects) and record splitlines/line-number couplings."""
 
     def visit(node: ast.AST) -> None:
+        # Neither leaf can bind a list, correct an index, or contain a call.
+        # Their scalar fields and Name contexts need no recursive dispatch.
+        if isinstance(node, (ast.Name, ast.Constant)):
+            return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if (not scope.splitlines_bindings and source_lines is not None
+                    and node.end_lineno is not None):
+                text = "\n".join(source_lines[node.lineno - 1:node.end_lineno])
+                if _splitlines_text(text) is None:
+                    # No inherited list binding and no possible creation,
+                    # including in nested functions: this scope cannot couple.
+                    return
             inner = _Scope()
             # self.attr bindings propagate across a class's methods in
             # textual order (the F5 _source_lines shape: bind in one
@@ -219,7 +240,7 @@ def _scan_scope(body: list[ast.stmt], scope: _Scope) -> None:
                 k: v for k, v in scope.splitlines_bindings.items()
                 if k.startswith(".")
             }
-            _scan_scope(node.body, inner)
+            _scan_scope(node.body, inner, source_lines=source_lines)
             scope.coupled.extend(inner.coupled)
             scope.splitlines_bindings.update({
                 k: v for k, v in inner.splitlines_bindings.items()
@@ -305,15 +326,24 @@ def _scan_scope(body: list[ast.stmt], scope: _Scope) -> None:
         visit(stmt)
 
 
+_SPLITLINES_CALLEE_RE = re.compile(r"\bsplitlines\b")
+
+
 def census_offenders(rel: str, source: str) -> list[str]:
     """Coupled splitlines() sites in *source* lacking the marker."""
+    # Python normalizes identifiers, so raw ASCII-only screening can miss
+    # a real splitlines attribute written with Unicode identifier characters.
+    normalized = _splitlines_text(source)
+    if normalized is None or not _SPLITLINES_CALLEE_RE.search(normalized):
+        return []
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    lines = source.split("\n")
+    # Match AST physical line coordinates, including bare-CR source strings.
+    lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     scope = _Scope()
-    _scan_scope(tree.body, scope)
+    _scan_scope(tree.body, scope, source_lines=lines)
     offenders = []
     for lineno, why in sorted(set(scope.coupled)):
         if not _MARKER_RE.search(lines[lineno - 1]):
@@ -330,7 +360,7 @@ def test_no_unadjudicated_splitlines_line_pairings() -> None:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "splitlines" not in source:
+        if _splitlines_text(source) is None:
             continue
         rel = path.relative_to(repo).as_posix()
         offenders.extend(census_offenders(rel, source))
@@ -339,6 +369,66 @@ def test_no_unadjudicated_splitlines_line_pairings() -> None:
 
 class TestCensusMechanics:
     """The census's own failure directions, on planted sources."""
+
+    def test_normalized_splitlines_is_included_in_the_whole_file_scan(self, tmp_path, monkeypatch):
+        import pytest
+
+        path = tmp_path / "wide.py"
+        path.write_text("for i, line in enumerate(text.ｓｐｌｉｔｌｉｎｅｓ(), 1):\n    pass\n",
+                        encoding="utf-8")
+        monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+        monkeypatch.setitem(globals(), "runtime_file_universe", lambda *args, **kwargs: [path])
+        with pytest.raises(AssertionError, match="wide.py:1:"):
+            test_no_unadjudicated_splitlines_line_pairings()
+
+    def test_nested_index_correction_survives_leaf_values(self):
+        source = (
+            "def f(text, line):\n"
+            "    lines = text.splitlines()\n"
+            "    unrelated = [value, 'literal', 0]\n"
+            "    index = clamp(line - 1)\n"
+            "    return lines[checked(index, 0)]\n"
+        )
+        offenders = census_offenders("x.py", source)
+        assert len(offenders) == 1
+        assert offenders[0].startswith("x.py:2:")
+
+    def test_identifier_prescreen_accepts_comments_before_the_call(self):
+        source = "for i, line in enumerate((text.splitlines # note\n()), 1):\n    pass\n"
+        assert len(census_offenders("x.py", source)) == 1
+
+    def test_diagnostics_follow_physical_newlines(self):
+        for newline in ("\n", "\r\n", "\r"):
+            source = newline.join((
+                "label = 'source'", "lines = text.splitlines()",
+                "value = lines[row - 1]", "",
+            ))
+            offenders = census_offenders("x.py", source)
+            assert len(offenders) == 1
+            assert offenders[0].startswith("x.py:2:")
+
+    def test_nested_unicode_scope_is_not_pruned(self):
+        source = (
+            "def outer(text, row):\n"
+            "    def inner():\n"
+            "        lines = text.ｓｐｌｉｔｌｉｎｅｓ()\n"
+            "        return lines[row - 1]\n"
+        )
+        offenders = census_offenders("x.py", source)
+        assert len(offenders) == 1
+        assert offenders[0].startswith("x.py:3:")
+
+    def test_inherited_unicode_attribute_in_async_method_is_not_pruned(self):
+        source = (
+            "class C:\n"
+            "    def load(self, text):\n"
+            "        self.lines = text.splitlines()\n"
+            "    async def find(self, row):\n"
+            "        return self.ｌｉｎｅｓ[row - 1]\n"
+        )
+        offenders = census_offenders("x.py", source)
+        assert len(offenders) == 1
+        assert offenders[0].startswith("x.py:3:")
 
     def test_direct_enumerate_flagged(self):
         src = "for i, ln in enumerate(text.splitlines(), 1):\n    pass\n"
