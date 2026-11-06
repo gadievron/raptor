@@ -34,6 +34,7 @@ from core.analysis.rule_versions import VersionProbeCache, rule_version_refusal,
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
+from core.source import ReadBudgetExceededError, read_text_gated
 
 from .models import SpatchMatch, SpatchResult
 
@@ -631,30 +632,17 @@ def run_rule(
             returncode=-1,
         )
 
-    # Size cap on the .cocci rule body (see _RULE_MAX_BYTES).
+    # The shared reader checks regularity and the byte cap on the opened
+    # descriptor, then bounds the read even if the file grows afterward.
     try:
-        if rule.stat().st_size > _RULE_MAX_BYTES:
-            return SpatchResult(
-                rule=rule_name, rule_path=str(rule),
-                errors=[f"Rule file exceeds {_RULE_MAX_BYTES}-byte cap"],
-                returncode=-1,
-            )
-    except OSError as e:
+        rule_text = read_text_gated(rule, _RULE_MAX_BYTES, encoding="utf-8")
+    except ReadBudgetExceededError:
         return SpatchResult(
             rule=rule_name, rule_path=str(rule),
-            errors=[f"Rule file stat failed: {e}"],
+            errors=[f"Rule file exceeds {_RULE_MAX_BYTES}-byte cap"],
             returncode=-1,
         )
-
-    # Structured degradation, never a raise: every other failure shape
-    # in this runner returns a SpatchResult, and one undecodable
-    # (operator-authored latin-1 comment suffices) or unreadable rule
-    # file used to raise out of run_rule/run_rules/run_rules_batched —
-    # aborting the whole multi-rule sweep and losing every
-    # already-computed result.
-    try:
-        rule_text = rule.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError) as e:
+    except (OSError, ValueError) as e:
         return SpatchResult(
             rule=rule_name, rule_path=str(rule),
             errors=[f"Rule file unreadable (must be UTF-8 text): {e}"],
@@ -1145,38 +1133,21 @@ def run_rules_batched(
     colliding_ids: set[str] = set()
     isolated_stems: set[str] = set()
     for r in rules:
-        # Same per-rule size cap as run_rule (_RULE_MAX_BYTES) — the
-        # batched loop is the OTHER read path the OOM defence must
-        # cover; pre-fix a multi-GiB rule was read, concatenated, and
-        # handed to spatch uncapped whenever ≥2 rules batched.
+        # Use the same descriptor-bound cap and regular-file check as the
+        # single-rule lane; a refused rule must not discard its siblings.
         try:
-            if r.stat().st_size > _RULE_MAX_BYTES:
-                refused[r.stem] = SpatchResult(
-                    rule=r.stem, rule_path=str(r),
-                    errors=[
-                        f"Rule file exceeds {_RULE_MAX_BYTES}-byte cap",
-                    ],
-                    returncode=-1,
-                )
-                continue
-        except OSError as e:
+            text = read_text_gated(r, _RULE_MAX_BYTES, encoding="utf-8")
+        except ReadBudgetExceededError:
             refused[r.stem] = SpatchResult(
                 rule=r.stem, rule_path=str(r),
-                errors=[f"Rule file stat failed: {e}"],
+                errors=[f"Rule file exceeds {_RULE_MAX_BYTES}-byte cap"],
                 returncode=-1,
             )
             continue
-        # Same structured degradation as run_rule: an undecodable or
-        # unreadable rule gets its own error result; the remaining
-        # rules still batch and run.
-        try:
-            text = r.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError) as e:
+        except (OSError, ValueError) as e:
             refused[r.stem] = SpatchResult(
                 rule=r.stem, rule_path=str(r),
-                errors=[
-                    f"Rule file unreadable (must be UTF-8 text): {e}",
-                ],
+                errors=[f"Rule file unreadable (must be UTF-8 text): {e}"],
                 returncode=-1,
             )
             continue
