@@ -149,3 +149,17 @@ def test_malformed_skips_preserve_runner_findings(tmp_path, monkeypatch):
     assert result.returncode == 0 and result.errors and not result.ok
     assert [(finding.rule_id, finding.file) for finding in result.findings] == [('keep', 'good.py')]
     assert result.files_examined == [str(source)]
+
+
+@pytest.mark.parametrize('kind', ['IncompatibleRule', ['IncompatibleRule', {'rule_id': 'new-rule'}]])
+@pytest.mark.parametrize('path', [None, 'rules/custom.yml'])
+def test_incompatible_rules_limit_coverage_without_inventing_failed_source_files(tmp_path, kind, path):
+    notice = {'type': kind, 'level': 'info', 'message': 'Rule requires a newer Semgrep'}
+    if path is not None:
+        notice['path'] = path
+    parsed, coverage = both_consumers(tmp_path, notice)
+    assert not parsed['errors'] and coverage.input_errors == 0
+    assert len(parsed['skipped_rules']) == coverage.skipped_rules == 1
+    assert parsed['files_failed'] == coverage.files_failed == []
+    assert coverage.record['files_examined'] == ['good.py']
+    assert models.SemgrepResult(skipped_rules=parsed['skipped_rules']).ok

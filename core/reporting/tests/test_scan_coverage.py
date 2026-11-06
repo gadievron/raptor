@@ -238,6 +238,7 @@ class TestRobustness:
     ({'sarif_input_errors': 1}, 'partial'),
     ({'semgrep_metadata_errors': 1}, 'partial'),
     ({'semgrep_partial_files': 1}, 'partial'),
+    ({'semgrep_skipped_rules': 1}, 'partial'),
     ({'execution_status': 'ok', 'semgrep_failed_packs': ['a']}, 'partial'),
     ({'execution_status': 'error', 'sarif_merge_failed': True}, 'error'),
 ])

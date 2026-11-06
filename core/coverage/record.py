@@ -300,6 +300,7 @@ class SemgrepOutputSummary:
     skipped_paths: dict[str, int]
     input_errors: int
     files_failed: list[dict[str, str]]
+    skipped_rules: int = 0  # incompatible-rule notices across the supplied packs
 
 
 def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None = None,
@@ -320,9 +321,10 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
     skipped: dict[str, set[str]] = {}
     version = ""
     input_errors = 0
+    skipped_rules = 0
 
     def consume(path: Path) -> None:
-        nonlocal version, input_errors
+        nonlocal version, input_errors, skipped_rules
         data = load_json(path, max_bytes=max_bytes)
         if not isinstance(data, dict):
             input_errors += 1
@@ -360,6 +362,12 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
             file = error.get("path")
             if file is not None and (not isinstance(file, str) or "\x00" in file):
                 damaged = True
+            kind = error.get("type")
+            if isinstance(kind, list) and kind:
+                kind = kind[0]
+            if kind == "IncompatibleRule":
+                skipped_rules += 1
+                continue
             if not isinstance(file, str) or not file or "\x00" in file:
                 continue
             failure_reason = "error"
@@ -369,9 +377,6 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
                     failure_reason = text[:500]
                     break
             failed.setdefault((file, failure_reason), {"path": file, "reason": failure_reason})
-            kind = error.get("type")
-            if isinstance(kind, list) and kind:
-                kind = kind[0]
             if isinstance(kind, str) and kind in {
                 "Timeout", "OutOfMemory", "FixpointTimeout", "TimeoutDuringInterfile",
             }:
@@ -409,6 +414,7 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
     return SemgrepOutputSummary(
         record, {path: sorted(kinds) for path, kinds in sorted(dropped.items())},
         {reason: len(files) for reason, files in skipped.items()}, input_errors, failed_rows,
+        skipped_rules=skipped_rules,
     )
 
 

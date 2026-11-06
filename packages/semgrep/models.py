@@ -471,14 +471,11 @@ def parse_json_output(text: str) -> dict[str, Any]:
         for e in errors
         if isinstance(e, dict) and isinstance(e.get("path"), str)
         and e["path"] and "\x00" not in e["path"]
+        and not _incompatible_rule(e)
     ]
     out["skipped_rules"] = [
         _render_error(e) for e in errors
-        if isinstance(e, dict) and (
-            e.get("type") == "IncompatibleRule"
-            or (isinstance(e.get("type"), list) and e["type"]
-                and e["type"][0] == "IncompatibleRule")
-        )
+        if isinstance(e, dict) and _incompatible_rule(e)
     ]
     out["errors"].extend(
         _render_error(e)
@@ -489,6 +486,13 @@ def parse_json_output(text: str) -> dict[str, Any]:
 
     out["semgrep_version"] = str(data.get("version", ""))
     return out
+
+
+def _incompatible_rule(entry: dict[str, Any]) -> bool:
+    kind = entry.get("type")
+    if isinstance(kind, list) and kind:
+        kind = kind[0]
+    return kind == "IncompatibleRule"
 
 
 def _diagnostic_level(entry: dict[str, Any]) -> str | None:

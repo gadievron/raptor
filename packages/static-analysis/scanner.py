@@ -3692,6 +3692,7 @@ def main() -> None:
         metrics["analysis_gaps"] = {}
         metrics["semgrep_metadata_errors"] = 0
         metrics["semgrep_partial_files"] = 0
+        metrics["semgrep_skipped_rules"] = 0
 
         # Write coverage records and derive total_files_scanned from them
         try:
@@ -3719,6 +3720,10 @@ def main() -> None:
             # memory caps was NOT analysed even though the pack
             # "succeeded" — silent coverage loss unless said out loud.
             semgrep_summary = read_semgrep_outputs(_all_semgrep_jsons, rules_applied=_rules_applied)
+            metrics["semgrep_skipped_rules"] = semgrep_summary.skipped_rules
+            if semgrep_summary.skipped_rules:
+                print(f"⚠️  semgrep: {semgrep_summary.skipped_rules} incompatible-rule notice(s); "
+                      "compatible rules continued, but coverage is incomplete", file=sys.stderr)
             metrics["semgrep_metadata_errors"] = semgrep_summary.input_errors
             if semgrep_summary.input_errors:
                 print(f"⚠️  semgrep: {semgrep_summary.input_errors} metadata output(s) unreadable or malformed; "

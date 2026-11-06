@@ -630,6 +630,8 @@ class TestJoinCodeQLStage:
     (False, [], 0, False, {}, False, 'cocci', None),
     (False, [], 0, False, {}, False, False, 'missing'),
     (False, [], 0, False, {}, False, False, 'partial'),
+    (False, [], 0, False, {}, False, False, 'incompatible'),
+    (False, [], 0, False, {}, False, False, 'incompatible-path'),
 ])
 def test_scan_metrics_follow_committed_report_or_raw_fallback(
     tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, stage_mode, metadata_state,
@@ -662,6 +664,12 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
             metadata = {'paths': {'scanned': []}, 'errors': [{
                 'path': 'source.py', 'type': 'PartialParsing', 'level': 'warn', 'message': 'partial parse',
             }]} if metadata_state == 'partial' else {}
+            if metadata_state in ('incompatible', 'incompatible-path'):
+                notice = {'type': ['IncompatibleRule', {'rule_id': 'new-rule'}],
+                          'level': 'info', 'message': 'Rule requires newer Semgrep'}
+                if metadata_state == 'incompatible-path':
+                    notice['path'] = 'rules/custom.yml'
+                metadata = {'paths': {'scanned': [f'pack-{index}.py']}, 'errors': [notice]}
             path.with_suffix('.json').write_text(json.dumps(metadata))
         inputs.append(str(path))
     codeql_reports = []
@@ -756,12 +764,15 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert metrics['tool_execution_failures'] == ({'codeql': 1} if stage_mode == 'configuration' else {})
     assert metrics['semgrep_metadata_errors'] == (2 if metadata_state == 'missing' else 0)
     assert metrics['semgrep_partial_files'] == (1 if metadata_state == 'partial' else 0)
+    assert metrics['semgrep_skipped_rules'] == (2 if metadata_state in ('incompatible', 'incompatible-path') else 0)
     expected_count = 4 if merge_fails else 2 - len(removed_lines)
     expected_suppressed = 0 if merge_fails else expected_count
     assert metrics['nosemgrep_suppressed_count'] == expected_suppressed
     assert metrics['total_files_scanned'] == (1 if stage_mode == 'cocci' else 2)
     assert set(metrics['tool_coverage']) == ({'semgrep', 'codeql'} if has_codeql_reports
-                                             else {'coccinelle'} if stage_mode == 'cocci' else set())
+                                             else {'coccinelle'} if stage_mode == 'cocci'
+                                             else {'semgrep'} if metadata_state in ('incompatible', 'incompatible-path')
+                                             else set())
     assert json.loads((out / 'coverage-coccinelle.json').read_text()) == stale_coverage
     if stage_mode == 'cocci':
         assert metrics['tool_coverage']['coccinelle'] == {'rules_applied': 1}
