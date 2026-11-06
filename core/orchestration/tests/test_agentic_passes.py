@@ -21,6 +21,19 @@ from core.orchestration.agentic_passes import (
     run_validate_postpass,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import core.orchestration.skill_dispatch as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
 # Dispatch here is mocked (run_untrusted_networked patched throughout)
 # — the pass wiring is under test, so the transport kill switch the
 # root conftest sets is cleared for this module.
@@ -1457,6 +1470,10 @@ class MockContractTests(unittest.TestCase):
     at module level, the patch path becomes wrong but tests still pass
     (mocking nothing) — silent test rot.
     """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_subprocess_run_patches(self):
+        """Inspect the unmodified import binding; this class never patches run."""
 
     def test_subprocess_module_is_imported_as_module_not_attr(self):
         # The patch target only works if subprocess is imported as a module

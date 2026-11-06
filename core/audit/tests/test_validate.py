@@ -18,6 +18,18 @@ from core.audit.validate import (
     validate_findings,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import core.orchestration.skill_dispatch as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
 
 def _result(*outcomes):
     r = OrchestratorResult()

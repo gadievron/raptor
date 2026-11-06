@@ -32,6 +32,16 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
+def _isolate_subprocess_run_patches(monkeypatch):
+    """Keep subprocess run mocks on consumer-owned module bindings."""
+    import packages.fuzzing.cargofuzz_runner as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_shutil_patch_targets(monkeypatch):
     """Keep shutil patch decorators and contexts on consumer-owned views."""
     import packages.fuzzing.cargofuzz_runner as consumer_0
