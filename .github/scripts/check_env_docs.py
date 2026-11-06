@@ -279,6 +279,17 @@ CAPS_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ENV_HELPER_NAME = re.compile(r"^_env_[a-z0-9_]+$")
 
 
+# Necessary spellings for the Python scanner's APIs, helpers and child-env
+# dict names. Word boundaries reject prose such as "environment". Matches
+# inside comments/strings deliberately retain a file; only absence skips it.
+# *_ENV / _ENV_* declarations use the separate coarse substring check below.
+_PY_ENV_SOURCE_NAME = re.compile(
+    r"(?<!\w)(?:environ[0-9]*|env[0-9]*|env_vars|envs|getenv|putenv|"
+    r"unsetenv|setenv|delenv|env_flag|_env_[a-z0-9_]+)(?!\w)"
+    r"|_(?:env|environ|env_vars|envs)(?!\w)"
+)
+
+
 class Occurrence:
     __slots__ = ("file", "kind", "line")
 
@@ -776,12 +787,14 @@ def scan_tree(root: Path) -> Inventory:
         kind = source_kind(p)
         if kind == "python":
             source = p.read_text(encoding="utf-8", errors="replace")
-            # Every supported Python form spells env in an identifier:
-            # direct APIs, imports establishing arbitrary aliases, child-env
-            # dict names, helpers, or *_ENV declarations. Normalise only
-            # this necessary-name filter, never the parsed source/literals.
+            # Retain every supported API/helper/dict spelling and every
+            # possible cross-file env declaration. Prose-only mentions need
+            # no AST. Normalize this necessary-name filter, never the source
+            # passed to the parser or the environment-variable literals.
             spelling = unicodedata.normalize("NFKC", source)
             if "env" not in spelling.casefold():
+                continue  # Cheap screen before the more specific name search.
+            if "_ENV" not in spelling and not _PY_ENV_SOURCE_NAME.search(spelling):
                 continue
             parsed: str | ast.Module = source
             facts = None

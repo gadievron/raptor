@@ -671,3 +671,35 @@ def test_lazy_credential_tables_preserve_public_policy_inventory(det, tmp_path, 
     )})
     inv = det.scan_tree(root)
     assert _kinds(inv, "EXAMPLE_API_KEY") == ["declared:LLM_API_KEY_VARS"]
+
+
+@pytest.mark.parametrize('source', [
+    "def environment_for_message():\n    return 'environment'\n",
+    "text = 'environment envelope ENVIOUS event'\n",
+    "text = 'getenvironment _envish _envelope'\n",
+    "def call(env_usage):\n    return env_usage\n",
+])
+def test_prose_and_unrecognized_names_do_not_build_python_asts(det, tmp_path, monkeypatch, source):
+    from core.testing.module_bindings import patch_module_attribute
+
+    root = _tree(tmp_path, {'core/consumer.py': source})
+
+    def unexpected_parse(*args, **kwargs):
+        pytest.fail('no supported environment spelling needs an AST')
+
+    patch_module_attribute(monkeypatch, det, 'ast', 'parse', unexpected_parse)
+    inventory = det.scan_tree(root)
+    assert not inventory.vars
+    assert not inventory.prefixes
+
+
+@pytest.mark.parametrize('name', [
+    'env', 'environ', 'env_vars', 'envs', 'spawn_env', 'child_env_vars',
+    'env15', 'environ2', '\u03b1_env', '\u03b1\u0301_env_vars',
+])
+def test_name_filter_retains_all_child_environment_name_families(det, tmp_path, name):
+    root = _tree(tmp_path, {'core/consumer.py': f"{name}['RAPTOR_RETAINED'] = '1'\n"})
+    inventory = det.scan_tree(root)
+    assert [occ.to_dict() for occ in inventory.vars['RAPTOR_RETAINED']] == [
+        {'file': 'core/consumer.py', 'line': 1, 'kind': 'child-write'},
+    ]
