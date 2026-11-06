@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import heapq
-import json
 from itertools import chain
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.hash import sha256_string
 from core.logging import get_logger
-from core.sarif.parser import get_result_rule, load_sarif, rule_default_level
+from core.sarif.parser import (
+    _sarif_content_identity, get_result_rule, load_sarif, rule_default_level,
+)
 
 logger = get_logger()
 
@@ -36,11 +36,10 @@ def all_run_results(sarif: dict) -> list[tuple[dict, dict]]:
     ]
 
 
-def _content_key(value: dict) -> str:
-    # Keep sort keys small even when results contain large dataflow traces.
-    return sha256_string(json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-    ))
+def _content_key(value: dict, *, stream: bool = False) -> str:
+    # Use the same frozen identity bytes as the SARIF parser. Large shared
+    # contexts stream; small result records retain the fast C encoder path.
+    return _sarif_content_identity(value, stream=stream)
 
 
 def _duplicate_key(
@@ -86,7 +85,7 @@ def _duplicate_key(
         if key not in context_keys:
             context_keys[key] = _content_key({
                 key: value for key, value in component.items() if key != "rules"
-            })
+            }, stream=True)
         return context_keys[key]
 
     descriptor_key = ("rule", id(rule))
@@ -115,7 +114,7 @@ def _duplicate_key(
                                     for invocation in run.get("invocations", [])
                                     if isinstance(invocation, dict) and "workingDirectory" in invocation]
             if isinstance(run.get("invocations"), list) else [],
-        })
+        }, stream=True)
     evidence = {key: value for key, value in result.items() if key not in {
         "ruleId", "ruleIndex", "rule", "level", "is_exploitable",
         "exploitability_score", "tree_class",
@@ -205,7 +204,7 @@ def _scan_file(
             if len(heap) >= cap and signal_key > heap[0].rank[0]:
                 continue
             if run_key is None:
-                run_key = _content_key({k: v for k, v in run.items() if k != "results"})
+                run_key = _content_key({k: v for k, v in run.items() if k != "results"}, stream=True)
             # Matches stable content-sort followed by stable signal-sort.
             # Ordinal preserves the old encounter order for exact ties.
             rank = (signal_key, _content_key(result), run_key,

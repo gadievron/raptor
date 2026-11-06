@@ -714,9 +714,9 @@ def test_count_only_selection_skips_ranking_metadata(monkeypatch, tmp_path, cap)
     monkeypatch.setattr(selection, 'load_sarif', lambda path: {'runs': [run]})
     original = selection._content_key
 
-    def hash_needed_value(value):
+    def hash_needed_value(value, **kwargs):
         assert 'metadata_marker' not in value, 'count-only selection hashed full run metadata'
-        return original(value)
+        return original(value, **kwargs)
 
     monkeypatch.setattr(selection, '_content_key', hash_needed_value)
     assert selection.select_findings_for_analysis([tmp_path / 'counts.sarif'], cap) == ([], 2, 1)
@@ -736,12 +736,12 @@ def test_weaker_candidates_skip_ranking_hashes_but_keep_duplicate_counts(monkeyp
     original = selection._content_key
     ranked = []
 
-    def hash_needed_value(value):
+    def hash_needed_value(value, **kwargs):
         assert 'metadata_marker' not in value, 'strictly weaker run hashed ranking metadata'
         assert not any(value is result for result in losing['results']), 'strictly weaker result hashed for ranking'
         if value is high:
             ranked.append(value)
-        return original(value)
+        return original(value, **kwargs)
 
     monkeypatch.setattr(selection, '_content_key', hash_needed_value)
     selected, count, duplicates = selection.select_findings_for_analysis([tmp_path / 'ranked.sarif'], 1)
