@@ -4,6 +4,7 @@ import os
 import pytest
 
 from core.sandbox import evidence
+from core.testing.module_bindings import patch_module_attribute
 
 
 class Cancelled(BaseException):
@@ -29,10 +30,10 @@ def descriptors(monkeypatch):
             pytest.fail('descriptor closed without ownership')
         real_close(fd)
 
-    # Limit patched calls to the operation, avoiding unrelated pytest cleanup.
+    # Keep descriptor spies local to evidence, including fixture teardown.
     with monkeypatch.context() as scoped:
-        scoped.setattr(evidence.os, 'open', open_fd)
-        scoped.setattr(evidence.os, 'close', close_fd)
+        patch_module_attribute(scoped, evidence, 'os', 'open', open_fd)
+        patch_module_attribute(scoped, evidence, 'os', 'close', close_fd)
         yield acquired, closed
     for fd in acquired:
         real_close(fd)
