@@ -480,36 +480,42 @@ def _token_tracked_superset(
     pass against the tree-sitter alias/derived closure once the
     token-certified parse can be trusted.
     """
+    # Each recognised assignment consumes its entire RHS through the next
+    # semicolon. The ranges never overlap, so retaining their identifier sets
+    # takes linear space and avoids re-scanning the token stream every round.
+    facts: list[tuple[str, set[str]]] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        kind, s = tokens[i]
+        if (
+            kind == "ident"
+            and i + 1 < n
+            and tokens[i + 1][1] in _ASSIGN_OPS
+            and (i + 2 >= n or tokens[i + 2][1] != "=")
+            and (i == 0 or tokens[i - 1][1] not in ("=", "!", "<",
+                                                    ">", "+", "-",
+                                                    "*", "/", "%",
+                                                    "&", "|", "^"))
+        ):
+            j = i + 2
+            rhs_names: set[str] = set()
+            while j < n and tokens[j][1] != ";":
+                if tokens[j][0] == "ident":
+                    rhs_names.add(tokens[j][1])
+                j += 1
+            if rhs_names:
+                facts.append((s, rhs_names))
+            i = j
+            continue
+        i += 1
     tracked = set(seeds)
-    spellings = [s for _k, s in tokens]
     for _round in range(_MAX_TRACK_ROUNDS):
         grew = False
-        i = 0
-        n = len(tokens)
-        while i < n:
-            kind, s = tokens[i]
-            if (
-                kind == "ident"
-                and i + 1 < n
-                and tokens[i + 1][1] in _ASSIGN_OPS
-                and (i + 2 >= n or tokens[i + 2][1] != "=")
-                and (i == 0 or spellings[i - 1] not in ("=", "!", "<",
-                                                        ">", "+", "-",
-                                                        "*", "/", "%",
-                                                        "&", "|", "^"))
-            ):
-                j = i + 2
-                rhs_hit = False
-                while j < n and tokens[j][1] != ";":
-                    if tokens[j][0] == "ident" and tokens[j][1] in tracked:
-                        rhs_hit = True
-                    j += 1
-                if rhs_hit and s not in tracked:
-                    tracked.add(s)
-                    grew = True
-                i = j
-                continue
-            i += 1
+        for name, rhs_names in facts:
+            if not rhs_names.isdisjoint(tracked) and name not in tracked:
+                tracked.add(name)
+                grew = True
         if not grew:
             return frozenset(tracked)
     raise ProofRefusal("tracked-superset fixpoint did not converge")
