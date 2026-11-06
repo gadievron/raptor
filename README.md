@@ -180,12 +180,13 @@ tools/data and appropriate egress controls.
 
 ### Option 1: Install manually
 
-Run in your terminal:
+Use the stable RAPTOR release (`v3.1.0`). Run in your terminal:
 
 ```bash
-git clone https://github.com/gadievron/raptor.git
+git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
-uv sync --locked
+uv venv
+uv pip install -r requirements.txt
 source .venv/bin/activate
 npm install -g @anthropic-ai/claude-code  # if not already installed
 uv tool install semgrep
@@ -200,12 +201,13 @@ see [manual installation](docs/installation.md#option-1-install-manually).
 
 ### Option 2: Run in a container (recommended)
 
-The image includes analysis, fuzzing, and browser tooling. It is large and
-expects this checkout mounted at `/workspaces/raptor`. These commands pin the latest
-published image by digest. Run in your terminal:
+The image supplies analysis, fuzzing, and browser tools; RAPTOR itself runs from
+the checkout you mount at `/workspaces/raptor`. Use the stable release below.
+The image digest pins the tools environment separately from the RAPTOR version.
+Run in your terminal:
 
 ```bash
-git clone https://github.com/gadievron/raptor.git
+git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
 docker pull docker.io/danielcuthbert/raptor:latest@sha256:6c28f58e4306ca232de33f49f35bf440ae700a20c34c70f698f958f913667ab8
 docker run -it \
@@ -215,6 +217,8 @@ docker run -it \
 ```
 
 Replace the target path with your own; omit that mount if you do not need it.
+For an existing checkout, switch to `v3.1.0` before running these commands.
+Contributors working on unreleased code should use the [developer setup](docs/developers.md#working-on-the-development-version).
 Inside the container, run `raptor`. Local image builds, VS Code devcontainers,
 CodeQL provisioning, and debugger-specific requirements are covered in
 [container installation](docs/installation.md#option-2-run-in-a-container-recommended).
