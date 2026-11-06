@@ -1768,6 +1768,18 @@ def validate_sarif(
         logger.warning("SARIF validation: missing required 'runs' field")
         return False
 
+    runs = sarif_data["runs"]
+    if not isinstance(runs, list) or any(
+        not isinstance(run, dict)
+        or ("results" in run and (
+            not isinstance(run["results"], list)
+            or any(not isinstance(result, dict) for result in run["results"])
+        ))
+        for run in runs
+    ):
+        logger.warning("SARIF validation: runs and results must be arrays of objects")
+        return False
+
     # Track whether full schema validation actually ran. If it didn't,
     # we return None (the tri-state "couldn't verify") rather than
     # True (the false-positive "fully verified").

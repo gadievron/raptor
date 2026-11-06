@@ -190,56 +190,78 @@ class SemgrepResult:
         }
 
 
-def parse_sarif(text: str) -> list[SemgrepFinding]:
-    """Parse SARIF JSON text into SemgrepFinding objects.
+def parse_sarif(text: str, *, errors: list[str] | None = None) -> list[SemgrepFinding]:
+    """Recover findings from bounded SARIF; optionally report incomplete output.
 
-    Returns an empty list on malformed input rather than raising — Semgrep
-    sometimes emits empty output on rule errors. Over-budget input
-    (> ``_MAX_TOOL_OUTPUT_BYTES``) is refused the same way, with the
-    size logged by the bounded loader.
+    Legacy callers still receive an empty list on malformed input. Execution
+    callers pass ``errors`` so missing output cannot masquerade as no matches.
     """
     if not text:
+        if errors is not None:
+            errors.append("semgrep produced empty SARIF output")
         return []
     try:
         data = loads_bounded(text, max_bytes=_MAX_TOOL_OUTPUT_BYTES)
     except ValueError:
-        # Malformed, whitespace-only, or over-budget output.
+        if errors is not None:
+            errors.append("semgrep produced invalid or over-budget SARIF output")
         return []
-    return parse_sarif_data(data)
+    return parse_sarif_data(data, errors=errors)
 
 
-def parse_sarif_data(data: Any) -> list[SemgrepFinding]:
+def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[SemgrepFinding]:
     """Interpret an already decoded document; callers bound its input read.
 
-    Shared with text parsing so artifact consumers need no second read,
-    serialization, or decode merely to obtain finding objects.
+    Recover valid sibling results while recording bounded aggregate diagnostics.
+    Missing optional fields remain compatible with older Semgrep versions.
     """
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+        if errors is not None:
+            errors.append("semgrep SARIF requires an object with a runs array")
         return []
 
     from core.sarif.parser import get_rules, rule_default_level
 
     findings: list[SemgrepFinding] = []
-    runs = data.get("runs") or []
-    for run in runs:
+    malformed = 0
+    failed_invocations = 0
+    for run in data["runs"]:
         if not isinstance(run, dict):
+            malformed += 1
             continue
-        # Rule-declared severities from the run's rules table — the
-        # only place semgrep's SARIF carries them (results omit level).
+        invocations = run.get("invocations", [])
+        if not isinstance(invocations, list):
+            malformed += 1
+        else:
+            for invocation in invocations:
+                if not isinstance(invocation, dict):
+                    malformed += 1
+                elif invocation.get("executionSuccessful") is False:
+                    failed_invocations += 1
         rule_levels = {
             rid: level
             for rid, rule in get_rules(run).items()
             if (level := rule_default_level(rule))
         }
-        results = run.get("results") or []
-        # Skip non-dict / empty entries outright: converting them
-        # produced phantom SemgrepFinding(file='', line=0) records that
-        # inflated finding_count downstream.
-        findings.extend(
-            SemgrepFinding.from_sarif_result(result, rule_levels)
-            for result in results
-            if result and isinstance(result, dict)
-        )
+        results = run.get("results", [])
+        if not isinstance(results, list):
+            malformed += 1
+            continue
+        for result in results:
+            if not isinstance(result, dict) or not result:
+                malformed += 1
+                continue
+            try:
+                finding = SemgrepFinding.from_sarif_result(result, rule_levels)
+            except (TypeError, ValueError, AttributeError, IndexError, OverflowError):
+                malformed += 1
+                continue
+            findings.append(finding)
+    if errors is not None:
+        if malformed:
+            errors.append(f"semgrep SARIF contains {malformed} malformed entry/entries")
+        if failed_invocations:
+            errors.append(f"semgrep SARIF reports {failed_invocations} unsuccessful invocation(s)")
     return findings
 
 

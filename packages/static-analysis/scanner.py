@@ -1098,7 +1098,8 @@ def run_single_semgrep(
                 name, promote_exc)
 
         # Validate output
-        if not so or not so.strip():
+        output_missing = not so or not so.strip()
+        if output_missing:
             logger.warning("Semgrep scan '%s' produced empty output", name)
             so = '{"runs": []}'
 
@@ -1134,7 +1135,7 @@ def run_single_semgrep(
                 name
             )
 
-        success = rc in (0, 1) and is_valid is not False
+        success = rc in (0, 1) and not output_missing and is_valid is not False
         logger.debug("Completed Semgrep scan: %s (exit=%s, valid=%s)", name, rc, is_valid)
 
         return str(sarif), success

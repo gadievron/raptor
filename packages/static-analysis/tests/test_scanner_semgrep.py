@@ -476,3 +476,15 @@ class TestChildJsonPromotion:
         )
         assert not stale.exists()
         assert not (tmp_path / "semgrep_test_scan.json").exists()
+
+
+@patch('shutil.which', return_value='/usr/bin/semgrep')
+@patch.object(_scanner_mod, 'run', return_value=(0, '  ', ''))
+@patch.object(_scanner_mod, 'validate_sarif', return_value=True)
+def test_empty_output_cannot_become_a_successful_replacement_report(validate, run, which, tmp_path):
+    sarif_path, success = run_single_semgrep(
+        name='empty', config='p/default', repo_path=tmp_path, out_dir=tmp_path, timeout=30,
+    )
+    assert not success
+    assert Path(sarif_path).read_text() == '{"runs": []}'
+    assert (tmp_path / 'semgrep_empty.exit').read_text() == '0'
