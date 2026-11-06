@@ -217,7 +217,7 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
     """
     if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
         if errors is not None:
-            errors.append("semgrep SARIF requires an object with a runs array")
+            errors.append("SARIF requires an object with a runs array")
         return []
 
     from core.sarif.parser import get_rules, rule_default_level
@@ -259,9 +259,9 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
             findings.append(finding)
     if errors is not None:
         if malformed:
-            errors.append(f"semgrep SARIF contains {malformed} malformed entry/entries")
+            errors.append(f"SARIF contains {malformed} malformed entry/entries")
         if failed_invocations:
-            errors.append(f"semgrep SARIF reports {failed_invocations} unsuccessful invocation(s)")
+            errors.append(f"SARIF reports {failed_invocations} unsuccessful invocation(s)")
     return findings
 
 
