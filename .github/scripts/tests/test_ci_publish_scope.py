@@ -257,3 +257,131 @@ def test_workflow_does_not_publish_on_supersession_or_failed_main_lookup(tmp_pat
         TAGS='image:latest', PUBLISH_MARKER=str(marker)), capture_output=True, text=True)
     assert result.returncode == expected, result.stdout + result.stderr
     assert not marker.exists()
+
+
+
+def _reference_fingerprint(repo, ref='HEAD'):
+    """Original per-path Git protocol: published fingerprint compatibility."""
+    import hashlib
+
+    def tree(*args):
+        return subprocess.check_output(['git', *args], cwd=repo, stderr=subprocess.DEVNULL)
+    dockerfile = tree('show', f'{ref}:{image.DOCKERFILE}').decode()
+    required = sorted(set(image.BUILD_INPUTS + image.copy_sources(dockerfile)))
+    optional = sorted(set(image.OPTIONAL_INPUTS + image.attribute_inputs(required)))
+    digest = hashlib.sha256()
+    for source in required + optional:
+        records = tree('ls-tree', '-r', '-z', ref, '--', source)
+        if source in required and not records:
+            raise ValueError('missing image input: ' + source)
+        digest.update(source.encode() + b'\0' + records)
+    return digest.hexdigest()
+
+
+def _record_fingerprint_git(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        return subprocess.check_output(command, **kwargs)
+    monkeypatch.setattr(image, 'subprocess', SimpleNamespace(
+        check_output=execute, DEVNULL=subprocess.DEVNULL, SubprocessError=subprocess.SubprocessError))
+    return calls
+
+
+@pytest.mark.parametrize('shape', [
+    'ordinary', 'overlap', 'unusual-names', 'executable', 'symlink', 'gitlink', 'gitlink-trailing',
+    'root-copy', 'noncanonical', 'backslash', 'colon',
+])
+def test_fingerprint_matches_original_git_protocol(repo, monkeypatch, shape):
+    import json
+
+    sources = []
+    if shape == 'overlap':
+        sources = ['.devcontainer/', '.devcontainer/notices/LICENSE']
+        (repo / '.devcontainer/notices-extra').write_text('prefix collision\n')
+    elif shape == 'unusual-names':
+        sources = ['.devcontainer/space name', '.devcontainer/café',
+                   '.devcontainer/tab\tname', '.devcontainer/line\nname']
+        for source in sources:
+            (repo / source).write_text('owned input\n')
+    elif shape == 'executable':
+        (repo / '.devcontainer/helper.py').chmod(0o755)
+    elif shape == 'symlink':
+        sources = ['.devcontainer/link']
+        (repo / sources[0]).symlink_to('notices/LICENSE')
+    elif shape in {'gitlink', 'gitlink-trailing'}:
+        sources = ['.devcontainer/vendor' + ('/' if shape == 'gitlink-trailing' else '')]
+    elif shape == 'root-copy':
+        sources = ['.']
+    elif shape == 'noncanonical':
+        sources = ['./.devcontainer/helper.py']
+    elif shape in {'backslash', 'colon'}:
+        sources = ['.devcontainer/back\\slash' if shape == 'backslash' else '.devcontainer/license:notice']
+        (repo / sources[0]).write_text('owned input\n')
+    dockerfile = repo / image.DOCKERFILE
+    if sources:
+        dockerfile.write_text(dockerfile.read_text() + 'COPY ' + json.dumps([*sources, '/extra/']) + '\n')
+    # Present and absent optional attributes must both match the old protocol.
+    (repo / '.gitattributes').write_text('*.py text eol=lf\n')
+    git(repo, 'add', '-A')
+    if shape in {'gitlink', 'gitlink-trailing'}:
+        target = git(repo, 'rev-parse', 'HEAD')
+        git(repo, 'update-index', '--add', '--cacheinfo', f'160000,{target},.devcontainer/vendor')
+    git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'input shape')
+    expected = _reference_fingerprint(repo)
+    calls = _record_fingerprint_git(monkeypatch)
+    assert image.fingerprint(repo, 'HEAD') == expected
+    if shape in {'ordinary', 'overlap', 'unusual-names', 'executable', 'symlink', 'gitlink', 'gitlink-trailing'}:
+        assert len(calls) == 2
+        assert sum(command[1] == 'ls-tree' for command in calls) == 1
+    else:
+        assert len(calls) > 2  # Ambiguous paths retain Git's own selection.
+
+
+@pytest.mark.parametrize('source', ['.devcontainer/helper.py/', '.devcontainer/missing', '.devcontainer/*'])
+def test_missing_or_unmodelled_input_still_refuses_fingerprint(repo, source):
+    import json
+
+    dockerfile = repo / image.DOCKERFILE
+    dockerfile.write_text(dockerfile.read_text() + 'COPY ' + json.dumps([source, '/extra/']) + '\n')
+    commit(repo)
+    with pytest.raises(ValueError, match='missing image input'):
+        image.fingerprint(repo, 'HEAD')
+    assert image.should_build(repo, 'push', 'a' * 64)
+
+
+def test_large_pathspec_list_keeps_bounded_git_commands(repo, monkeypatch):
+    import json
+
+    sources = [f'not-present-{i:04d}-' + 'x' * 40 for i in range(700)]
+    dockerfile = repo / image.DOCKERFILE
+    dockerfile.write_text(dockerfile.read_text() + 'COPY ' + json.dumps([*sources, '/extra/']) + '\n')
+    commit(repo)
+    calls = _record_fingerprint_git(monkeypatch)
+    with pytest.raises(ValueError, match='missing image input'):
+        image.fingerprint(repo, 'HEAD')
+    assert all(len(command) == 7 for command in calls if command[1] == 'ls-tree')
+
+
+
+def test_case_insensitive_pathspec_setting_retains_git_selection(repo, monkeypatch):
+    alternative = repo / '.DEVCONTAINER/helper.py'
+    alternative.parent.mkdir()
+    alternative.write_text('case-distinct tracked input\n')
+    commit(repo)
+    monkeypatch.setenv('GIT_ICASE_PATHSPECS', '1')
+    calls = _record_fingerprint_git(monkeypatch)
+    # ls-tree currently rejects icase magic. If Git gains support, compare
+    # its actual selections rather than freezing that version limitation.
+    try:
+        expected = _reference_fingerprint(repo)
+    except subprocess.CalledProcessError as error:
+        with pytest.raises(subprocess.CalledProcessError) as actual:
+            image.fingerprint(repo, 'HEAD')
+        assert actual.value.returncode == error.returncode
+        assert image.should_build(repo, 'push', 'a' * 64)
+    else:
+        assert image.fingerprint(repo, 'HEAD') == expected
+    assert all(len(command) == 7 for command in calls if command[1] == 'ls-tree')
