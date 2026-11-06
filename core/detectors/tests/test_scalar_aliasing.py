@@ -176,3 +176,49 @@ def test_duplicate_warning_points_are_bounded_and_late_failures_export_nothing(t
         gcc="gcc", clang="clang", sandbox_run=run, budget=WorkBudget(10), scratch_root=str(tmp_path))
     assert result.complete is not late_failure
     assert len(result.proofs) == (0 if late_failure else 1)
+
+
+@pytest.mark.slow
+def test_sparse_proof_locations_do_not_index_every_source_newline(parsed):
+    padding = b"\n" * 100_000
+    shifted = json.loads(json.dumps(parsed))
+    pending = [shifted]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if "offset" in value:
+                value["offset"] += len(padding)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    counted = []
+
+    class MeasuredSource(bytes):
+        def __iter__(self):
+            pytest.fail("must not build an index of every source newline")
+
+        def count(self, sub, start=0, end=None):
+            counted.append((start, end))
+            return super().count(sub, start, end)
+
+    original = scalar_access_proofs(parsed, _SOURCE)
+    actual = scalar_access_proofs(shifted, MeasuredSource(padding + _SOURCE))
+    assert len(actual) == len(original) == 3
+    expected = [dict(proof, **{key: proof[key] + 100_000
+                              for key in ("line", "cast_start", "cast_end")})
+                for proof in original]
+    assert actual == expected
+    assert counted and counted[0][0] == 0
+    assert all(left[1] == right[0] for left, right in zip(counted, counted[1:]))
+    assert counted[-1][1] <= len(padding + _SOURCE)
+
+
+def test_no_proofs_require_no_source_line_scan():
+    class UnscannedSource(bytes):
+        def __iter__(self):
+            pytest.fail("no-proof input must not build a source line index")
+
+        def count(self, *args):
+            pytest.fail("no-proof input needs no line numbers")
+
+    assert scalar_access_proofs({"inner": []}, UnscannedSource(b"\n" * 100_000)) == []
