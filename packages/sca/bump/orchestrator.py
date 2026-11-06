@@ -30,6 +30,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from core.run.scratch import scratch_dir
+
 from ..parsers.inline_installs._arg_version_pins import (
     _ARG_RE,
     _BUILTIN_ARG_MAP,
@@ -1350,12 +1352,11 @@ def _binary_capability_delta_for_candidate(
         current_ref = f"{cand.locator}:{cand.current_version}"
         target_ref = f"{cand.locator}:{cand.target_version}"
 
-    from .image_binary_extract import cleanup_extracted_binary
-    current_bin = None
-    target_bin = None
-    try:
+    # One owner holds both binaries through extraction and comparison.
+    # Sharing the directory also reuses identical content-addressed files.
+    with scratch_dir("raptor-sca-bump-") as workspace:
         current_bin = fetch_image_binary(
-            current_ref, client=oci_client,
+            current_ref, client=oci_client, out_dir=workspace,
         )
         if current_bin is None:
             logger.debug(
@@ -1364,7 +1365,7 @@ def _binary_capability_delta_for_candidate(
             )
             return None
         target_bin = fetch_image_binary(
-            target_ref, client=oci_client,
+            target_ref, client=oci_client, out_dir=workspace,
         )
         if target_bin is None:
             logger.debug(
@@ -1380,11 +1381,6 @@ def _binary_capability_delta_for_candidate(
             current_binary=current_bin,
             target_binary=target_bin,
         )
-    finally:
-        # Extracted binaries previously accumulated in the system
-        # tempdir across runs, unbounded; the diff is done, drop them.
-        cleanup_extracted_binary(current_bin)
-        cleanup_extracted_binary(target_bin)
 
 
 def _resolve_gha_image_refs(
