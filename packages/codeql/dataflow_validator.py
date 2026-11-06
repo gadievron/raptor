@@ -923,6 +923,10 @@ class DataflowValidator:
             )
             smt_result = check(
                 conditions, profile=profile, prefer_witness=prefer,
+                # Extraction hints do not establish callee identity, return
+                # types, or effects. Name-based summaries are conditional
+                # math assumptions and must not suppress source findings.
+                use_call_summaries=False,
             )
             if smt_result.feasible is False:
                 self.logger.info(
