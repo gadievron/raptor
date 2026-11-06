@@ -68,13 +68,17 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
                 f"state at {root}")
     registry = base / "projects"
 
+    # These public names are resolved lazily by module __getattr__. Pin their
+    # dictionaries so undo removes a previously missing override rather than
+    # freezing the path returned by that dynamic getter.
+
     import core.startup as startup
     from core.project import project, registry_home, sessions
 
-    monkeypatch.setattr(project, "PROJECTS_DIR", registry)
-    monkeypatch.setattr(startup, "PROJECTS_DIR", registry)
-    monkeypatch.setattr(startup, "ACTIVE_LINK", registry / ".active")
-    monkeypatch.setattr(sessions, "SESSIONS_DIR", base / "sessions.d")
+    monkeypatch.setitem(vars(project), "PROJECTS_DIR", registry)
+    monkeypatch.setitem(vars(startup), "PROJECTS_DIR", registry)
+    monkeypatch.setitem(vars(startup), "ACTIVE_LINK", registry / ".active")
+    monkeypatch.setitem(vars(sessions), "SESSIONS_DIR", base / "sessions.d")
     # Same base through the resolution seam's env override: the
     # module-attribute pins above cover in-process consumers, the env
     # covers everything that resolves through
@@ -85,5 +89,7 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
     # matches the attribute pins by construction.
     monkeypatch.setenv(registry_home.ENV_REGISTRY_HOME, str(base))
     monkeypatch.setattr(sessions, "_walk_session_pid", lambda: None)
-    monkeypatch.delenv(sessions.ENV_SESSION_PID, raising=False)
-    monkeypatch.delenv(sessions.ENV_SESSION_TOKEN, raising=False)
+    # Register absence too: entry points can write credentials directly.
+    for name in (sessions.ENV_SESSION_PID, sessions.ENV_SESSION_TOKEN):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)

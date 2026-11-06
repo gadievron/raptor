@@ -489,7 +489,27 @@ _SESSIONS_DIR_SEQ = _itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def _process_pin_state():
+def _registry_paths():
+    """Keep registry isolation outside the test body's undo stack.
+
+    A unique, never-created base avoids pytest's numbered-directory scan per
+    test. Writers create it on demand inside the session-owned scratch tree.
+    One registry-home value also keeps reloaded modules and children aligned
+    with the in-process project, active-link and session overrides.
+    """
+    from core.testing.state_isolation import pin_user_state_dirs
+
+    base = (
+        Path(_tempfile.gettempdir())
+        / f"raptor-test-registries-{os.getpid()}-{next(_SESSIONS_DIR_SEQ)}"
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, base)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _process_pin_state(_registry_paths):
     """Own process pin and CLI defaults even when a test undoes its patches."""
     from contextlib import ExitStack
     from core.run import pin
@@ -516,68 +536,13 @@ def monkeypatch(_process_pin_state):
 
 
 @pytest.fixture(autouse=True)
-def _sessions_registry_in_tmp(monkeypatch):
-    # The redirect target is a UNIQUE PATH, not a pytest ``tmp_path``:
-    # requesting ``tmp_path`` here made every test in the suite allocate
-    # a numbered dir under the session basetemp, and pytest's
-    # ``make_numbered_dir`` scans the basetemp per allocation — a cost
-    # that grows with every test the session has already run (~30ms per
-    # SETUP by the 10k-test mark, minutes of pure setup overhead across
-    # a full single-process run). Nothing here needs a directory up
-    # front: registry writers ``mkdir(parents=True)`` on demand and
-    # readers treat a missing dir as an empty registry, so a fresh
-    # never-created path per test keeps the write-isolation guarantee
-    # at zero allocation cost. Created dirs land under the contained
-    # session tmp (``_contained_system_tmp``) and are removed with it.
-    from core.project import sessions as _sessions
-    unique = (
-        Path(_tempfile.gettempdir())
-        / f"raptor-test-sessions-{os.getpid()}-{next(_SESSIONS_DIR_SEQ)}"
-    )
-    monkeypatch.setattr(_sessions, "SESSIONS_DIR", unique / "sessions.d")
-    monkeypatch.setattr(_sessions, "_walk_session_pid", lambda: None)
-    monkeypatch.delenv(_sessions.ENV_SESSION_PID, raising=False)
-    monkeypatch.delenv(_sessions.ENV_SESSION_TOKEN, raising=False)
+def _sessions_registry_in_tmp(_registry_paths):
+    """Session redirects share the independent registry owner."""
 
 
 @pytest.fixture(autouse=True)
-def _projects_registry_in_tmp(monkeypatch):
-    """Pin the RAPTOR projects registry (~/.raptor/projects) to a
-    fresh per-test path.
-
-    Two-sided, same doctrine as the sessions-registry redirect above:
-    the operator's REAL project store must never steer tests (an
-    active project or a project whose output_path matches a test dir
-    changes resolution behaviour — the static-analysis suite already
-    carried this fixture locally after exactly that incident), and a
-    test that creates projects must never write into the operator's
-    store. It is also a measured perf chokepoint: ``resolve_run_pin``
-    consults ``is_project_output_dir`` per walk level, each of which
-    ``list_projects()``-loads EVERY json in the store — against a
-    populated operator store (hundreds of projects) that is tens of
-    milliseconds per resolve, times 8+ resolves per audit-prep
-    fixture, across thousands of tests. ``ProjectManager`` reads the module global at call time and
-    creates the dir on demand, so a never-created unique path is
-    sufficient. Suites that need a populated registry pass their own
-    ``projects_dir`` / patch (monkeypatch wins over this default).
-    """
-    unique = (
-        Path(_tempfile.gettempdir())
-        / f"raptor-test-projects-{os.getpid()}-{next(_SESSIONS_DIR_SEQ)}"
-    )
-    monkeypatch.setattr(
-        "core.project.project.PROJECTS_DIR", unique / "projects",
-    )
-    # core.startup keeps its own import-time copies (PROJECTS_DIR and
-    # the derived ACTIVE_LINK) for the light no-ProjectManager readers
-    # (get_active_name and the expiry probe) — patch both so the light
-    # path resolves the same isolated store as the manager path.
-    monkeypatch.setattr(
-        "core.startup.PROJECTS_DIR", unique / "projects",
-    )
-    monkeypatch.setattr(
-        "core.startup.ACTIVE_LINK", unique / "projects" / ".active",
-    )
+def _projects_registry_in_tmp(_registry_paths):
+    """Project redirects share the independent registry owner."""
 
 
 # ---------------------------------------------------------------------------

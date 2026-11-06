@@ -234,7 +234,9 @@ def test_process_pin_guard_preserves_caller_values(owner_name, name, mode, tmp_p
             if "monkeypatch" in function.__code__.co_varnames[:function.__code__.co_argcount]:
                 function(body)
             else:
-                generator = function()
+                # The outer pytest registry owner is already active here.
+                arguments = (None,) if "_registry_paths" in function.__code__.co_varnames[:function.__code__.co_argcount] else ()
+                generator = function(*arguments)
                 next(generator)
             if mode in ("error", "interrupt"):
                 raise RuntimeError if mode == "error" else KeyboardInterrupt
