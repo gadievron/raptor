@@ -1942,6 +1942,11 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/sarif/parser.py::metrics": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed scan-metrics serialization schema: finding counts, artifact counts and tool execution/coverage diagnostics. These fixed report field names are infrastructure schema keys, not a learned target-name vocabulary."
+  },
   "core/sarif/parser.py::parse_sarif_findings": {
     "count": 12,
     "kind": "literal"

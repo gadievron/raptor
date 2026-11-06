@@ -943,10 +943,26 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
         _limitation_note(item["tu"], item.get("detector", "memcpy_overlap"), item["reason"])
         for item in result.detector_limitations
     ]
+    if result.tus_failed:
+        notifications.append(_limitation_note(
+            "", "compiler_failed_tus",
+            f"{result.tus_failed} TU(s) failed compilation or analysis; coverage is incomplete",
+        ))
+    if result.tus_skipped_cap:
+        notifications.append(_limitation_note(
+            "", "compiler_tu_cap",
+            f"{result.tus_skipped_cap} TU(s) skipped by the translation-unit cap; "
+            "raise --compiler-scan-max-tus for more coverage",
+        ))
     if result.review_candidates:
-        notifications.append(_limitation_note("", "review_candidates",
-            f"{len(result.review_candidates)} compiler review candidate(s) require independent corroboration; "
-            "see compiler-review-candidates.json"))
+        notifications.append({
+            "level": "note",
+            "message": {"text": (
+                f"{len(result.review_candidates)} compiler review candidate(s) require independent corroboration; "
+                "see compiler-review-candidates.json"
+            )},
+            "properties": {"review_candidates": len(result.review_candidates)},
+        })
     if notifications:
         run["invocations"] = [{
             "executionSuccessful": True,
