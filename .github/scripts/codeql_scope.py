@@ -34,7 +34,7 @@ import argparse
 import ast
 import os
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 
@@ -275,20 +275,27 @@ def extract_imports(
     modules: list[str] = []
     own_package = ".".join(path.parts[:-1]) if len(path.parts) > 1 else ""
 
-    # Preserve breadth-first order within each kind, without repeatedly
-    # scanning inert nodes in the import/call/string passes. Walk every
-    # subtree: imports and references inside nested scopes still count.
+    # Preserve breadth-first order within each kind. Names have only inert
+    # context children, and parsed constants have no AST children. Keep the
+    # constants themselves for module paths and literal script references;
+    # walk every other subtree, including expressions and nested scopes.
     declarations, calls, constants = [], [], []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            declarations.append(node)
-        elif isinstance(node, ast.Call):
-            calls.append(node)
-        elif isinstance(node, ast.Constant):
+    pending = deque([tree])
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, ast.Name):
+            continue
+        if isinstance(node, ast.Constant):
             constants.append(node)
             if (literal_references is not None and isinstance(node.value, str)
                     and node.value in literal_references):
                 literal_references[node.value].add(path)
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            declarations.append(node)
+        elif isinstance(node, ast.Call):
+            calls.append(node)
+        pending.extend(ast.iter_child_nodes(node))
     for node in declarations:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
@@ -334,9 +341,10 @@ def extract_imports(
     # the graph as NODES but could never acquire reverse-dependents,
     # so a PR editing only a root entry module dispatched zero test
     # tiers while the tests importing it silently went unrun.
+    prefixes = tuple(root + "." for root in SCAN_ROOTS)
     return [
         m for m in modules
-        if any(m == r or m.startswith(r + ".") for r in SCAN_ROOTS)
+        if m in SCAN_ROOTS or m.startswith(prefixes)
         or m in root_modules
     ]
 
