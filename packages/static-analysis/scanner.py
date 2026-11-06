@@ -3093,6 +3093,11 @@ def main() -> None:
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
 
+    # Also cover direct scanner/agentic workers that bypass raptor.py. Refuse
+    # before cloning, allocating scan output, tool probes or scanner children.
+    from core.sandbox.preflight import preflight_scan_cli
+    preflight_scan_cli(sys.argv[1:])
+
     # Orphan containment: when the spawner opted this scanner in
     # (raptor_agentic pairs the env var with start_new_session), a
     # dead parent takes this whole process group down — pre-fix a
