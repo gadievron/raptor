@@ -130,6 +130,25 @@ def render_scan_execution(metrics: dict) -> str | None:
     return f"Scan execution: {status}{suffix}"
 
 
+def summarize_tool_coverage(record: dict) -> dict:
+    """Keep only counts needed for a saved, invocation-local tool summary."""
+    summary = {}
+    rules = record.get("rules_applied")
+    if isinstance(rules, list):
+        summary["rules_applied"] = len({rule for rule in rules if isinstance(rule, str) and rule})
+    elif type(rules) is int and rules >= 0:
+        summary["rules_applied"] = rules
+    issues = record.get("files_failed")
+    if isinstance(issues, list):
+        summary["paths_with_issues"] = len({row["path"] for row in issues
+            if isinstance(row, dict) and isinstance(row.get("path"), str) and row["path"]})
+    else:
+        count = record.get("paths_with_issues")
+        if type(count) is int and count >= 0:
+            summary["paths_with_issues"] = count
+    return summary
+
+
 def render_scan_coverage(out_dir: Path) -> str | None:
     """Render the operator-facing tool-execution coverage block for
     a /scan run. Saved execution failures remain visible even when no
@@ -156,20 +175,19 @@ def render_scan_coverage(out_dir: Path) -> str | None:
 
     rendered_lines: list[str] = []
     for tool in _TOOL_ORDER:
-        rec = _load_coverage_record(out_dir, tool)
-        if rec is None:
+        # A present snapshot is authoritative, including an empty or damaged
+        # one. Never resurrect earlier per-tool files for a modern scan.
+        if "tool_coverage" in metrics:
+            snapshot = metrics["tool_coverage"]
+            rec = snapshot.get(tool) if isinstance(snapshot, dict) else None
+        else:
+            rec = _load_coverage_record(out_dir, tool)
+        if not isinstance(rec, dict):
             continue
         label = _TOOL_LABELS[tool]
         finds = _findings_for_tool(metrics, tool)
-        rules = rec.get("rules_applied")
-        # rules_applied is either an int (legacy: count) or a list
-        # (newer shape). Render the count regardless.
-        if isinstance(rules, list):
-            rule_count = len({rule for rule in rules if isinstance(rule, str) and rule})
-        elif type(rules) is int and rules >= 0:
-            rule_count = rules
-        else:
-            rule_count = None
+        summary = summarize_tool_coverage(rec)
+        rule_count = summary.get("rules_applied")
 
         # Pack-level failures supplement the per-path diagnostics below.
         failed_packs: list = []
@@ -179,12 +197,9 @@ def render_scan_coverage(out_dir: Path) -> str | None:
                 failed_packs = list(dict.fromkeys(pack for pack in value if isinstance(pack, str) and pack))
 
         detail_parts: list[str] = []
-        file_issues = rec.get("files_failed")
-        if isinstance(file_issues, list):
-            affected = {row["path"] for row in file_issues
-                        if isinstance(row, dict) and isinstance(row.get("path"), str) and row["path"]}
-            if affected:
-                detail_parts.append(f"{len(affected)} path(s) with tool warnings or errors")
+        affected = summary.get("paths_with_issues", 0)
+        if affected:
+            detail_parts.append(f"{affected} path(s) with tool warnings or errors")
         if rule_count is not None:
             detail_parts.append(
                 f"{rule_count} rule group{'s' if rule_count != 1 else ''}"

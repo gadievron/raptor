@@ -525,6 +525,11 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+When reusing an output directory, the scan's file total and tool-execution
+summary describe the current invocation. Earlier coverage files remain on disk
+but do not make a disabled or skipped tool appear to have run again. Saved
+scan metrics retain the current tool-summary counts for later display.
+
 The scan coverage summary shows how many distinct paths have tool warnings or
 errors, alongside rule counts and findings. Multiple diagnostics for one path
 count once. Consult the tool's coverage record for the affected paths and
