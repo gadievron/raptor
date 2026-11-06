@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.coverage.journal import (
     ReviewJournalEntry,
@@ -47,7 +49,7 @@ def test_store_lock_refuses_foreign_uid_lock_file(
 ):
     (tmp_path / "coverage.json.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     entered = False
     with caplog.at_level("WARNING"):
         with coverage_store_lock(tmp_path / "coverage.json"):
@@ -66,7 +68,7 @@ def test_index_flock_refuses_foreign_uid_lock_file(
     idx = tmp_path / "review-journal-index.json"
     (tmp_path / "review-journal-index.json.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     entered = False
     with caplog.at_level("WARNING"):
         with _flock(idx):

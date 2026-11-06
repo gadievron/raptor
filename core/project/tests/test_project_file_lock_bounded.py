@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.project.project import project_file_lock
 
@@ -27,7 +29,7 @@ def test_foreign_uid_lock_file_degrades_loudly(
     project_file = tmp_path / "project.json"
     (tmp_path / "project.json.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     entered = False
     with caplog.at_level("WARNING"):
         with project_file_lock(project_file):

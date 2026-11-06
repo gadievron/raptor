@@ -17,6 +17,9 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from core import atomic_fs
+
 from core.atomic_fs import write_text_atomically
 
 
@@ -56,7 +59,7 @@ class TestWriteTextAtomically:
         def boom(fd):
             raise OSError("simulated fsync failure")
 
-        monkeypatch.setattr(os, "fsync", boom)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "fsync", boom)
         with pytest.raises(OSError):
             write_text_atomically(target, "new\n")
 
@@ -69,7 +72,7 @@ class TestWriteTextAtomically:
         ]
         assert siblings == []
         # Restore for the fixture teardown.
-        monkeypatch.setattr(os, "fsync", real_fsync)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "fsync", real_fsync)
 
     def test_fd_closed_when_fchmod_window_raises_baseexception(
         self, tmp_path, monkeypatch,
@@ -92,8 +95,8 @@ class TestWriteTextAtomically:
         def interrupt(fd, mode):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(os, "open", capturing_open)
-        monkeypatch.setattr(os, "fchmod", interrupt)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "open", capturing_open)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "fchmod", interrupt)
         with pytest.raises(KeyboardInterrupt):
             write_text_atomically(target, "new\n")
 
@@ -388,7 +391,7 @@ class TestShortWriteCompletion:
         def short_write(fd, data):
             return real_write(fd, bytes(memoryview(data)[:4]))
 
-        monkeypatch.setattr(_os, "write", short_write)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "write", short_write)
         write_bytes_atomically(target, content)
         monkeypatch.undo()
         assert target.read_bytes() == content
@@ -398,12 +401,11 @@ class TestShortWriteCompletion:
     ):
         """A zero-return ``os.write`` must raise, not loop forever or
         commit — and the tempfile must be cleaned up."""
-        import os as _os
 
         from core.atomic_fs import write_bytes_atomically
 
         target = tmp_path / "blob.bin"
-        monkeypatch.setattr(_os, "write", lambda fd, data: 0)
+        patch_module_attribute(monkeypatch, atomic_fs, "os", "write", lambda fd, data: 0)
         with pytest.raises(OSError):
             write_bytes_atomically(target, b"payload")
         monkeypatch.undo()
@@ -798,7 +800,7 @@ def test_byte_chunks_are_written_incrementally_even_with_short_writes(tmp_path, 
         assert b"".join(observed) == b"first"
         yield memoryview(b"second")
 
-    monkeypatch.setattr(os, "write", short_write)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", "write", short_write)
     write_bytes_atomically(target, chunks(), mode=0o600)
     assert target.read_bytes() == b"firstsecond"
     assert target.stat().st_mode & 0o777 == 0o600
@@ -845,6 +847,6 @@ def test_short_writes_count_bytes_for_multibyte_buffers(tmp_path, monkeypatch, c
     def short_write(fd, data):
         return real_write(fd, memoryview(data).cast("B")[:3])
 
-    monkeypatch.setattr(os, "write", short_write)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", "write", short_write)
     write_bytes_atomically(target, iter([content]) if chunked else content)
     assert target.read_bytes() == content.tobytes()

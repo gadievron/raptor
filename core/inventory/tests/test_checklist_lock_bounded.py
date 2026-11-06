@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.inventory import _checklist_lock
 
@@ -27,7 +29,7 @@ def test_foreign_uid_lock_file_fails_the_update(
     checklist = tmp_path / "checklist.json"
     (tmp_path / "checklist.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     with pytest.raises(OSError, match="foreign lock file"):
         with _checklist_lock(checklist):
             pass

@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.threat_model import _model_write_lock
 
@@ -27,7 +29,7 @@ def test_foreign_uid_lock_file_fails_the_save(
     json_path = tmp_path / "threat-model.json"
     (tmp_path / "threat-model.json.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     with pytest.raises(OSError, match="foreign lock file"):
         with _model_write_lock(json_path):
             pass
