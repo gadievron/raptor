@@ -7,7 +7,6 @@ function; absence of a proof never establishes safety.
 """
 from __future__ import annotations
 
-from bisect import bisect_right
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -208,7 +207,6 @@ def scalar_access_proofs(ast: Any, source: bytes) -> list[dict[str, Any]]:
     """Return narrow language-level access proofs, never a clean verdict."""
     if len(source) > _MAX_SOURCE_BYTES or not isinstance(ast, dict):
         raise _Unsupported("source/AST cap")
-    newlines = [i for i, byte in enumerate(source) if byte == 10]
     pending = [(ast, 0)]
     count = 0
     proofs: list[dict[str, Any]] = []
@@ -228,18 +226,30 @@ def scalar_access_proofs(ast: Any, source: bytes) -> list[dict[str, Any]]:
         try:
             found = _Function(node).run()
             for proof in found:
-                start, end = proof.pop("cast")
-                offset = proof.pop("offset")
+                start, end = proof["cast"]
+                offset = proof["offset"]
                 if not (0 <= start <= end < len(source) and 0 <= offset < len(source)):
                     raise _Unsupported("offset outside source")
-                proof.update(line=bisect_right(newlines, offset) + 1,
-                             cast_start=bisect_right(newlines, start) + 1,
-                             cast_end=bisect_right(newlines, end) + 1)
             proofs.extend(found)
         except (_Unsupported, KeyError, TypeError, AttributeError, RecursionError):
             pass
         if len(proofs) > 256:
             raise _Unsupported("scalar access proof cap")
+    # Only proof locations need line numbers. Count disjoint byte spans in
+    # offset order rather than retaining an integer for every source newline.
+    locations = sorted({offset for proof in proofs
+                        for offset in (*proof["cast"], proof["offset"])})
+    lines: dict[int, int] = {}
+    cursor = 0
+    line = 1
+    for offset in locations:
+        line += source.count(b"\n", cursor, offset + 1)
+        cursor = offset + 1
+        lines[offset] = line
+    for proof in proofs:
+        start, end = proof.pop("cast")
+        offset = proof.pop("offset")
+        proof.update(line=lines[offset], cast_start=lines[start], cast_end=lines[end])
     return proofs
 
 
