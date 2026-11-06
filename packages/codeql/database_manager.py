@@ -55,6 +55,7 @@ from core.hash import sha256_string
 from core.json import JsonBudgetExceededError, load_json, load_json_bounded, save_json
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
+from core.source import open_regular_gated
 from core.security.credential_env import (
     CREDENTIAL_ENV_FAMILY,
     is_credential_redirect_shaped,
@@ -1046,13 +1047,21 @@ class DatabaseManager:
         the extractor's real error while the CLI stderr only names the
         failing build step.
         """
+        if tail_bytes <= 0:
+            return ""
         try:
-            logs = sorted((staging_path / "log").glob("database-create-*.log"))
-            if not logs:
+            newest = max(
+                (staging_path / "log").glob("database-create-*.log"),
+                default=None,
+            )
+            if newest is None:
                 return ""
-            data = logs[-1].read_bytes()
-            return data[-tail_bytes:].decode("utf-8", errors="replace")
-        except OSError:
+            with open_regular_gated(newest, follow_symlinks=False) as log:
+                size = log.seek(0, os.SEEK_END)
+                log.seek(max(0, size - tail_bytes))
+                data = log.read(tail_bytes)
+            return data.decode("utf-8", errors="replace")
+        except (OSError, ValueError):
             return ""
 
     def _gc_stale_markers(
