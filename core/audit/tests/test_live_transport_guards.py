@@ -1645,6 +1645,7 @@ class TestCompilerSurfaceFences:
             "test_both_missing_is_error",
             "test_shared_clang_checker_unknown_wording",
             "test_corrupt_gcc_output_errors_without_poisoning_audit_cache",
+            "test_failed_sarif_invocation_is_not_cached_as_refutation",
             "sweep",
         }
         assert _callers_of(
