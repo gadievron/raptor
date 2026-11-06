@@ -5,6 +5,8 @@ import logging
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import summary
 
 
@@ -20,7 +22,7 @@ def test_rename_failure_warns_and_preserves_evidence_for_retry(
         def refuse_rename(*args, **kwargs):
             raise OSError(error, "injected rename failure")
 
-        patch.setattr(summary.os, "replace", refuse_rename)
+        patch_module_attribute(patch, summary, 'os', "replace", refuse_rename)
         with caplog.at_level(logging.WARNING, logger=summary.__name__):
             assert summary.summarize_and_write(tmp_path) is None
 
@@ -38,7 +40,7 @@ def test_missing_input_race_stays_quiet(tmp_path, monkeypatch, caplog):
     def lost_race(*args, **kwargs):
         raise FileNotFoundError(errno.ENOENT, "sibling claimed input")
 
-    monkeypatch.setattr(summary.os, "replace", lost_race)
+    patch_module_attribute(monkeypatch, summary, 'os', "replace", lost_race)
     with caplog.at_level(logging.WARNING, logger=summary.__name__):
         assert summary.summarize_and_write(tmp_path) is None
     assert not caplog.records
