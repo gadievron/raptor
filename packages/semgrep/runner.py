@@ -797,6 +797,7 @@ def run_rule(
             budget_errors.append(msg)
             sarif_text = ""
         json_text = ""
+        metadata_errors_before = len(budget_errors)
         if os.path.lexists(json_path):
             from core.security.capped_read import read_capped_text
             try:
@@ -812,6 +813,11 @@ def run_rule(
                     f"semgrep --json metadata unavailable within output budget "
                     f"({_MAX_TOOL_OUTPUT_BYTES} bytes): {exc}"
                 )
+        if (not json_text and proc.returncode in (0, 1)
+                and len(budget_errors) == metadata_errors_before):
+            budget_errors.append(
+                "semgrep --json metadata missing or empty; scan coverage unavailable"
+            )
         if sandbox_output is not None and json_output_path is not None and json_text:
             from core.atomic_fs import write_text_atomically
             try:

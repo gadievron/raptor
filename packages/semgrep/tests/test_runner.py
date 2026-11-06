@@ -1006,9 +1006,11 @@ class TestOutputBudget:
             with patch("packages.semgrep.runner.is_available",
                        return_value=True), \
                  patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout=sarif_text, stderr="", returncode=0,
-                )
+                def execute(command, **kwargs):
+                    sidecar = Path(command[command.index("--json-output") + 1])
+                    sidecar.write_text("{}")
+                    return MagicMock(stdout=sarif_text, stderr="", returncode=0)
+                mock_run.side_effect = execute
                 return run_rule(target, "p/x", unsandboxed=True)
 
         # Control: under budget, the finding surfaces and the run is ok.
