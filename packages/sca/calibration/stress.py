@@ -90,7 +90,6 @@ import concurrent.futures
 import logging
 import os
 import subprocess
-import tempfile
 import sys
 import threading
 import time
@@ -103,6 +102,7 @@ from typing import Any
 from .project_samples import PROJECT_SAMPLES, ProjectSample
 
 from core.json import load_json, save_json
+from core.run.scratch import scratch_dir
 
 # Read budget for the (small, committed) stress-baseline file.
 # findings.json is deliberately NEVER re-read by this module: on
@@ -339,6 +339,46 @@ def configure_sweep_logging(debug_log: Path) -> None:
     root.addHandler(fh)
 
 
+class _SweepWorkspace:
+    """Keep one ephemeral root until its driver and every submitted job exit."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._users = 1  # driver owns submission and setup until its finally
+        self._scope = scratch_dir("raptor-sca-stress-")
+        self.path = self._scope.__enter__()
+
+    def submit(self, pool, fn, *args, **kwargs):
+        # Acquire before submission: queued jobs and jobs that finish before
+        # submit returns must both keep the root alive.
+        with self._lock:
+            self._users += 1
+        try:
+            future = pool.submit(fn, *args, **kwargs)
+        except BaseException:
+            self.release()
+            raise
+        future.add_done_callback(self._worker_done)
+        return future
+
+    def _worker_done(self, future):
+        # A cancelled queued job also drops its lease. Completion callbacks
+        # run after the scan has stopped writing, including raising scans.
+        try:
+            self.release()
+        except BaseException:
+            logger.warning("Deferred stress workspace cleanup incomplete", exc_info=True)
+
+    def release(self):
+        with self._lock:
+            self._users -= 1
+            last = self._users == 0
+        if last:
+            # Driver exceptions retain precedence. Late worker cleanup logs
+            # cancellation rather than raising it into an executor thread.
+            self._scope.__exit__(*sys.exc_info())
+
+
 def run_stress_sweep(
     *,
     samples: Sequence[ProjectSample] | None = None,
@@ -394,21 +434,35 @@ def run_stress_sweep(
     if samples is None:
         samples = PROJECT_SAMPLES
 
-    cleanup_dir: Path | None = None
+    workspace = None
     if out_root is None:
         if os.environ.get("RAPTOR_SCA_STRESS_EPHEMERAL"):
-            # A dir orphaned by SIGTERM/OOM (which skips the
-            # ``finally`` below) is reclaimed by the next run's sweep:
-            # the raptor-sca-stress- prefix is listed in
-            # core.run.tmp_reaper's static tuple. (A runtime
-            # register_dir_prefix() call could not deliver that — it
-            # dies with the process that made it.)
-            cleanup_dir = Path(tempfile.mkdtemp(prefix="raptor-sca-stress-"))
-            out_root = cleanup_dir
+            workspace = _SweepWorkspace()
+            out_root = workspace.path
         else:
             from packages.sca import sca_cache_root
             out_root = sca_cache_root() / "stress" / "clones"
-    out_root.mkdir(parents=True, exist_ok=True)
+    try:
+        out_root.mkdir(parents=True, exist_ok=True)
+        return _run_stress_sweep(
+            samples=samples, out_root=out_root,
+            git_clone_timeout=git_clone_timeout, sca_timeout=sca_timeout,
+            max_workers=max_workers, results_sink=results_sink,
+            completed_sink=completed_sink, workspace=workspace,
+        )
+    finally:
+        if workspace is not None:
+            workspace.release()
+
+
+def _run_stress_sweep(
+    *, samples, out_root, git_clone_timeout, sca_timeout, max_workers,
+    results_sink, completed_sink, workspace,
+):
+    def submit(pool, fn, *args, **kwargs):
+        if workspace is not None:
+            return workspace.submit(pool, fn, *args, **kwargs)
+        return pool.submit(fn, *args, **kwargs)
 
     # Per-scan wall-clock budget: a scan must clone
     # (``git_clone_timeout``) and then scan (``sca_timeout``). The
@@ -445,8 +499,9 @@ def run_stress_sweep(
                 "(rss=%s)", ", ".join(_in_flight() or []) or "none", rss,
             )
 
-    threading.Thread(target=_heartbeat, daemon=True).start()
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
     try:
+        heartbeat.start()
         # Explicit executor lifecycle instead of a ``with`` block: on
         # KeyboardInterrupt the context manager's exit would call
         # shutdown(wait=True) and JOIN the in-flight workers — the
@@ -483,8 +538,8 @@ def run_stress_sweep(
 
         try:
             future_to_sample = {
-                executor.submit(
-                    _scan_and_publish, sample,
+                submit(
+                    executor, _scan_and_publish, sample,
                 ): sample
                 for sample in samples
             }
@@ -672,8 +727,8 @@ def run_stress_sweep(
                         thread_name_prefix="sca-stress-timeout-retry",
                     )
                     try:
-                        retry = retry_pool.submit(
-                            _scan_one, sample, out_root,
+                        retry = submit(
+                            retry_pool, _scan_one, sample, out_root,
                             git_clone_timeout=git_clone_timeout,
                         )
                         try:
@@ -775,12 +830,17 @@ def run_stress_sweep(
                 # (interpreter exit still joins pool threads).
                 executor.shutdown(wait=not abandoned)
     finally:
+        failed = sys.exc_info()[0] is not None
         _hb_stop.set()
-        if cleanup_dir is not None:
-            try:
-                _rmtree(cleanup_dir)
-            except OSError:
-                pass
+        try:
+            if heartbeat.ident is not None:
+                heartbeat.join(timeout=5)
+                if heartbeat.is_alive():
+                    logger.warning("Stress heartbeat did not stop after sweep shutdown")
+        except BaseException:
+            logger.warning("Stress heartbeat join incomplete", exc_info=True)
+            if not failed:
+                raise
     return results
 
 
@@ -1372,11 +1432,15 @@ def _load_baseline(path: Path) -> dict[str, Any]:
 
 
 def _rmtree(path: Path) -> None:
-    """Recursive rm — avoids importing shutil at module top, since
-    a stress sweep that doesn't pass through this code path
-    (e.g., caller-supplied out_root) shouldn't pay the import."""
-    import shutil
-    shutil.rmtree(path, ignore_errors=True)
+    """Remove one old scan node; refuse a new scan over retained debris."""
+    from core.build.artifacts import cleanup_build_paths
+    from core.project.registry_home import refuse_registry_overlap
+
+    refuse_registry_overlap(path)
+    pending = [path]
+    cleanup_build_paths(pending)
+    if pending:
+        raise OSError(f"stress scan cleanup incomplete: {path}")
 
 
 # Human-readable labels for the severity enum. Only the rendered

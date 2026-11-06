@@ -53,6 +53,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from core.run.scratch import scratch_dir
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -815,7 +816,7 @@ def _collect_one(
     eco_dir.mkdir(parents=True, exist_ok=True)
     out_path = eco_dir / f"{sample.name}.json"
 
-    with tempfile.TemporaryDirectory(prefix="raptor-sca-sample-") as tmp:
+    with scratch_dir("raptor-sca-sample-") as tmp:
         clone_root = Path(tmp) / sample.name
         # Shallow clone, single ref. ``--depth 1`` keeps it fast;
         # ``--branch`` accepts branches and tags; commit SHAs need
