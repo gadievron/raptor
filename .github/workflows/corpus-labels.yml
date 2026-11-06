@@ -34,6 +34,8 @@ jobs:
   schema-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      pins_run: ${{ steps.pin_scope.outputs.pins_run }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -49,6 +51,15 @@ jobs:
       - name: Schema-lint corpus labels
         run: python3 -m core.audit.corpus.lint --mode schema
 
+      - name: Decide whether PR pin lint has work
+        id: pin_scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+        run: python3 .github/scripts/corpus_label_scope.py
+
+  # PR pin lint is allocated only when the schema job finds work.
+  # Corpus tooling/execution changes and unknown history check all labels.
   # PR pin lint (blocking for the labels the PR touches). Verifies the
   # changed labels' pins against the pinned upstream trees by fetching
   # ONLY the labelled files at the pinned refs (sparse, blob-filtered;
@@ -61,7 +72,8 @@ jobs:
   # no longer serves the pinned ref (history rewrite, tag deletion)
   # scores missing and DOES fail.
   pin-lint-pr:
-    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: schema-lint
+    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.schema-lint.outputs.pins_run != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,68 +82,43 @@ jobs:
         with:
           # Belt-and-braces: no step in this job needs git credentials.
           persist-credentials: false
-          # Need merge-base history for ``git diff origin/main...HEAD``.
-          # Depth 200 covers any sane PR; shallower clones miss the base.
-          fetch-depth: 200
+          # The scope helper fetches only a missing event-base commit.
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Compute changed label files
-        id: changed
-        run: |
-          set -euo pipefail
-          git fetch origin main:refs/remotes/origin/main --depth=200 2>/dev/null \
-            || git fetch origin main --depth=200 2>/dev/null \
-            || true
-          BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
-          if [[ -z "$BASE_SHA" ]]; then
-            echo "WARN: no merge-base found; pin-linting all labels" >&2
-            CHANGED="core/audit/corpus/labels"
-          else
-            CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD \
-                        -- 'core/audit/corpus/labels/**/*.label.json' \
-                      | tr '\n' ' ')
-          fi
-          echo "files=${CHANGED}" >> "$GITHUB_OUTPUT"
-          echo "Changed label files vs origin/main: ${CHANGED:-<none>}"
-
-      # Sparse checkouts are keyed by repo@ref inside the cache dir, so
-      # a content hash of the label set is a good cache key: any pin
-      # change (new repo, new ref, new file) misses to a fresh key while
-      # restore-keys still seed it with the previous fetches.
+      # Reuse earlier label caches only within the same source registry
+      # and fetch implementation. A changed URL or cache layout must not
+      # seed a new key with checkouts belonging to the previous namespace.
       - name: Cache pinned-source sparse checkouts
         id: source_cache
         continue-on-error: true
-        if: steps.changed.outputs.files != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.LINT_CACHE }}
-          key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
+          key: corpus-lint-v2-${{ hashFiles('core/audit/corpus/sources.json', 'core/audit/corpus/sources.py') }}-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
           restore-keys: |
-            corpus-lint-
+            corpus-lint-v2-${{ hashFiles('core/audit/corpus/sources.json', 'core/audit/corpus/sources.py') }}-
 
       - name: Discard incomplete sparse cache restore
         if: steps.source_cache.outcome == 'failure'
         run: rm -rf -- "$LINT_CACHE"
 
       - name: Pin-lint changed labels
-        if: steps.changed.outputs.files != ''
         env:
-          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
         # shell: bash makes GHA run `bash --noprofile --norc -eo pipefail`;
         # the DEFAULT shell is `bash -e` only (no pipefail), which lets
         # `| tee` swallow the linter's exit code and turn this blocking
         # gate into a no-op.
         shell: bash
         run: |
-          set -f  # disable globbing — $CHANGED_FILES needs word-split but not glob-expand
-          python3 -m core.audit.corpus.lint --mode pins \
-            --fetch-missing \
-            --cache-dir "$LINT_CACHE" \
-            $CHANGED_FILES | tee pin-lint.log
+          python3 .github/scripts/corpus_label_scope.py --lint \
+            --cache-dir "$LINT_CACHE" | tee pin-lint.log
           if grep -q "no-fixture" pin-lint.log; then
             echo "::warning::pin lint could not verify some labels (no-fixture — network unreachable?); schema lint still gates"
           fi
@@ -156,27 +143,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cache pinned-source sparse checkouts
-        id: source_cache
-        continue-on-error: true
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.LINT_CACHE }}
-          key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
-          restore-keys: |
-            corpus-lint-
-
-      - name: Discard incomplete sparse cache restore
-        if: steps.source_cache.outcome == 'failure'
-        run: rm -rf -- "$LINT_CACHE"
-
       - name: Pin-lint all labels
         # shell: bash for pipefail — see the pin-lint-pr step above.
         shell: bash
         run: |
+          # A warm source cache can satisfy pins without contacting upstream.
+          # The drift sweep must verify fresh fetchability, not cached history.
+          corpus_sweep_cache=$(mktemp -d "$RUNNER_TEMP/corpus-pin-sweep.XXXXXX")
+          trap 'rm -rf -- "$corpus_sweep_cache"' EXIT
           python3 -m core.audit.corpus.lint --mode pins \
             --fetch-missing \
-            --cache-dir "$LINT_CACHE" \
+            --cache-dir "$corpus_sweep_cache" \
             --tree-search | tee pin-lint.log
           if grep -q "no-fixture" pin-lint.log; then
             echo "::warning::pin lint could not verify some labels (no-fixture — network unreachable?)"
