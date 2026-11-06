@@ -207,7 +207,8 @@ class TestSemgrepMintedIdentities:
     """The regex arms match what the runner ACTUALLY mints — pinned by
     running the real ``run_rule`` with an injected child spawn."""
 
-    def _minted(self, monkeypatch: pytest.MonkeyPatch, runner) -> list[str]:
+    def _minted(self, monkeypatch: pytest.MonkeyPatch, runner, *,
+                expected_error_count: int = 1) -> list[str]:
         import packages.semgrep.runner as runner_mod
 
         monkeypatch.setattr(runner_mod, "is_available", lambda: True)
@@ -216,7 +217,7 @@ class TestSemgrepMintedIdentities:
             subprocess_runner=runner,
         )
         assert result.returncode == -1 or result.returncode not in (0, 1)
-        assert len(result.errors) == 1
+        assert len(result.errors) == expected_error_count
         return result.errors
 
     def test_timeout_identity(self, monkeypatch) -> None:
@@ -234,11 +235,13 @@ class TestSemgrepMintedIdentities:
         assert SEMGREP_TRANSPORT_RE.match(errors[0]), errors
 
     def test_signal_kill_identity(self, monkeypatch) -> None:
-        errors = self._minted(monkeypatch, _rc_runner(-9))
+        errors = self._minted(monkeypatch, _rc_runner(-9), expected_error_count=2)
+        assert errors[1] == "semgrep produced empty SARIF output"
         assert SEMGREP_TRANSPORT_RE.match(errors[0]), errors
 
     def test_positive_exit_stays_product(self, monkeypatch) -> None:
-        errors = self._minted(monkeypatch, _rc_runner(7))
+        errors = self._minted(monkeypatch, _rc_runner(7), expected_error_count=2)
+        assert errors[1] == "semgrep produced empty SARIF output"
         assert not SEMGREP_TRANSPORT_RE.match(errors[0]), errors
 
     def test_not_installed_identity(self, monkeypatch) -> None:
