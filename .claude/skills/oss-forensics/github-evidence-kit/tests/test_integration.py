@@ -34,24 +34,39 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/test_integration.py -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src.collectors.api import GitHubAPICollector
-from src.collectors.archive import GHArchiveCollector
-from src.collectors.local import LocalGitCollector
-from src.schema.common import EvidenceSource
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+
+    from src.collectors.api import GitHubAPICollector
+    from src.collectors.archive import GHArchiveCollector
+    from src.collectors.local import LocalGitCollector
+    from src.schema.common import EvidenceSource
 
 
-# Mark all tests in this module as integration tests
-pytestmark = pytest.mark.integration
+    # Mark all tests in this module as integration tests
+    pytestmark = pytest.mark.integration
 
 
-# =============================================================================
-# GITHUB API INTEGRATION TESTS
-#
-# These hit the real GitHub API to verify the full pipeline works.
-# Uses public repos that are unlikely to disappear.
-# =============================================================================
+    # =============================================================================
+    # GITHUB API INTEGRATION TESTS
+    #
+    # These hit the real GitHub API to verify the full pipeline works.
+    # Uses public repos that are unlikely to disappear.
+    # =============================================================================
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class TestGitHubAPIIntegration:

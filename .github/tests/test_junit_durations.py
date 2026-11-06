@@ -9,14 +9,29 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from junit_durations import (
-    collect_run,
-    main,
-    mean_across_runs,
-    resolve_classname,
-)
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+    from junit_durations import (
+        collect_run,
+        main,
+        mean_across_runs,
+        resolve_classname,
+    )
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _write_junit(path: Path, cases: list[tuple[str, str, str]]) -> Path:

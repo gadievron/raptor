@@ -12,15 +12,30 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / ".github" / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from check_tracked_file_census import (  # noqa: E402
-    SUBSYSTEMS,
-    census_violations,
-    main,
-    mode_violations,
-    _glob_to_regex,
-)
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(REPO / ".github" / "scripts"))
+
+    from check_tracked_file_census import (  # noqa: E402
+        SUBSYSTEMS,
+        census_violations,
+        main,
+        mode_violations,
+        _glob_to_regex,
+    )
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(REPO / '.github' / 'scripts'))
 
 
 class TestGlobDialect:

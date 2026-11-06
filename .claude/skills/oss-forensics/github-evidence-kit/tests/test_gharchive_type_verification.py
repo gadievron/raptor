@@ -13,19 +13,34 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src.clients.gharchive import GHArchiveClient
-from src.schema.common import (
-    EvidenceSource,
-    GitHubActor,
-    GitHubRepository,
-    VerificationInfo,
-)
-from src.schema.events import MemberEvent, PushEvent, WatchEvent
-from src.verifiers.consistency import ConsistencyVerifier
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
-_WHEN = datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
+    from src.clients.gharchive import GHArchiveClient
+    from src.schema.common import (
+        EvidenceSource,
+        GitHubActor,
+        GitHubRepository,
+        VerificationInfo,
+    )
+    from src.schema.events import MemberEvent, PushEvent, WatchEvent
+    from src.verifiers.consistency import ConsistencyVerifier
+
+    _WHEN = datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class _CannedClient(GHArchiveClient):

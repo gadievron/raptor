@@ -20,12 +20,27 @@ from pathlib import Path
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/... ->
 # .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src.helpers import make_repo
-from src.schema.common import EvidenceSource, VerificationInfo
-from src.schema.observations import IssueObservation
-from src.verifiers.consistency import ConsistencyVerifier
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+
+    from src.helpers import make_repo
+    from src.schema.common import EvidenceSource, VerificationInfo
+    from src.schema.observations import IssueObservation
+    from src.verifiers.consistency import ConsistencyVerifier
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class _RaisingGitHubClient:

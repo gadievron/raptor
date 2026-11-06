@@ -32,16 +32,31 @@ import ast
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_SURFACE_PREFIX = "core/audit/"
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-# (relpath, exact stripped first source line of the call) -> reason
-# the bare construction is safe as written. Keep entries tight: every
-# one is an adjudication record, not an exemption of convenience.
-_ALLOWLIST: dict[tuple[str, str], str] = {}
+    _SURFACE_PREFIX = "core/audit/"
+
+    # (relpath, exact stripped first source line of the call) -> reason
+    # the bare construction is safe as written. Keep entries tight: every
+    # one is an adjudication record, not an exemption of convenience.
+    _ALLOWLIST: dict[tuple[str, str], str] = {}
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _client_name_bindings(tree: ast.Module) -> set[str]:

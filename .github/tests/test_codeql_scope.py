@@ -9,22 +9,37 @@ from pathlib import Path
 import pytest
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from codeql_scope import (
-    build_graph,
-    discover_py_files,
-    discover_root_modules,
-    extract_imports,
-    file_to_module,
-    init_imports,
-    is_root_module_path,
-    load_base_config,
-    missing_graph_covered_py,
-    module_to_files,
-    transitive_dependents,
-    write_scoped_config,
-)
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+    from codeql_scope import (
+        build_graph,
+        discover_py_files,
+        discover_root_modules,
+        extract_imports,
+        file_to_module,
+        init_imports,
+        is_root_module_path,
+        load_base_config,
+        missing_graph_covered_py,
+        module_to_files,
+        transitive_dependents,
+        write_scoped_config,
+    )
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 class TestFileToModule:

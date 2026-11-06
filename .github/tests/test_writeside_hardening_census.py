@@ -75,112 +75,127 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_PACKAGES = (
-    "packages/fuzzing/",
-    "packages/binary_analysis/",
-    "packages/ghidra/",
-    "packages/web/",
-)
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-# (relpath, exact stripped first source line of the call) -> reason
-# the site is safe as written. Keep entries tight: every one is an
-# adjudication record, not an exemption of convenience.
-_ALLOWLIST: dict[tuple[str, str], str] = {
-    (
-        "packages/binary_analysis/corpus_profile.py",
-        "obj_path.write_bytes(_wrap_bpf_object(code))",
-    ): (
-        "candidate object written into a fresh process-private "
-        "TemporaryDirectory created in the enclosing with-block"
-    ),
-    (
-        "packages/fuzzing/afl_runner.py",
-        "shutil.copy2(entry, staged / entry.name)",
-    ): (
-        "staging runs pre-campaign into a dir rmtree'd + freshly "
-        "mkdir'd two lines above — no hostile child is live and no "
-        "planted entry can pre-occupy the fresh destination names"
-    ),
-    (
-        "packages/fuzzing/afl_runner.py",
-        "shutil.copy2(source, staged / source.name)",
-    ): (
-        "same fresh pre-campaign staging dir as the dir-copy branch "
-        "above"
-    ),
-    (
-        "packages/fuzzing/capability.py",
-        'with open(src_path, "w") as src:',
-    ): (
-        "probe source written into a fresh process-private "
-        "TemporaryDirectory created in the enclosing with-block"
-    ),
-    (
-        "packages/fuzzing/capability.py",
-        '(seeds / "seed").write_bytes(b"seed\\n")',
-    ): (
-        "probe seed written into a fresh process-private "
-        "TemporaryDirectory created in the enclosing with-block"
-    ),
-    (
-        "packages/ghidra/ebpf_probe.py",
-        'src.write_text(probe.asm, encoding="utf-8")',
-    ): (
-        "probe assembly written into a src dir the probe itself "
-        "creates under its work dir — a fresh process-private "
-        "TemporaryDirectory by default, or the operator-supplied "
-        "--work-dir argument"
-    ),
-    (
-        "packages/ghidra/ebpf_probe.py",
-        '(script_dir / "EbpfProbeDump.java").write_text(',
-    ): (
-        "dump script written into a script dir the probe itself "
-        "creates under the same process-private-or-operator-owned "
-        "work dir as the assembly sources above"
-    ),
-    (
-        "packages/ghidra/headless.py",
-        '(script_dir / "ExportRaptor.java").write_text(EXPORT_SCRIPT_JAVA, encoding="utf-8")',
-    ): (
-        "script dir freshly mkdir'd inside a process-private "
-        "TemporaryDirectory work dir"
-    ),
-    (
-        "packages/ghidra/headless.py",
-        'script_path.write_text(IMPORT_SCRIPT_JAVA, encoding="utf-8")',
-    ): (
-        "script written into a fresh process-private "
-        "TemporaryDirectory created in the enclosing with-block"
-    ),
-    (
-        "packages/ghidra/match_precision.py",
-        "src.write_text(_CORPUS_C)",
-    ): (
-        "corpus source written into a fresh process-private "
-        "TemporaryDirectory work dir"
-    ),
-    (
-        "packages/ghidra/match_precision.py",
-        "shutil.copy2(v2, v2s)",
-    ): (
-        "copy between two fresh names inside the same process-"
-        "private TemporaryDirectory work dir"
-    ),
-    (
-        "packages/web/benchmark.py",
-        'args.out.write_text(rendered + "\\n", encoding="utf-8")',
-    ): (
-        "destination is an operator-supplied CLI argument, not a "
-        "predictable name inside a target-writable run dir"
-    ),
-}
+    _PACKAGES = (
+        "packages/fuzzing/",
+        "packages/binary_analysis/",
+        "packages/ghidra/",
+        "packages/web/",
+    )
 
-_WRITE_MODE_PREFIXES = ("w", "a")
+    # (relpath, exact stripped first source line of the call) -> reason
+    # the site is safe as written. Keep entries tight: every one is an
+    # adjudication record, not an exemption of convenience.
+    _ALLOWLIST: dict[tuple[str, str], str] = {
+        (
+            "packages/binary_analysis/corpus_profile.py",
+            "obj_path.write_bytes(_wrap_bpf_object(code))",
+        ): (
+            "candidate object written into a fresh process-private "
+            "TemporaryDirectory created in the enclosing with-block"
+        ),
+        (
+            "packages/fuzzing/afl_runner.py",
+            "shutil.copy2(entry, staged / entry.name)",
+        ): (
+            "staging runs pre-campaign into a dir rmtree'd + freshly "
+            "mkdir'd two lines above — no hostile child is live and no "
+            "planted entry can pre-occupy the fresh destination names"
+        ),
+        (
+            "packages/fuzzing/afl_runner.py",
+            "shutil.copy2(source, staged / source.name)",
+        ): (
+            "same fresh pre-campaign staging dir as the dir-copy branch "
+            "above"
+        ),
+        (
+            "packages/fuzzing/capability.py",
+            'with open(src_path, "w") as src:',
+        ): (
+            "probe source written into a fresh process-private "
+            "TemporaryDirectory created in the enclosing with-block"
+        ),
+        (
+            "packages/fuzzing/capability.py",
+            '(seeds / "seed").write_bytes(b"seed\\n")',
+        ): (
+            "probe seed written into a fresh process-private "
+            "TemporaryDirectory created in the enclosing with-block"
+        ),
+        (
+            "packages/ghidra/ebpf_probe.py",
+            'src.write_text(probe.asm, encoding="utf-8")',
+        ): (
+            "probe assembly written into a src dir the probe itself "
+            "creates under its work dir — a fresh process-private "
+            "TemporaryDirectory by default, or the operator-supplied "
+            "--work-dir argument"
+        ),
+        (
+            "packages/ghidra/ebpf_probe.py",
+            '(script_dir / "EbpfProbeDump.java").write_text(',
+        ): (
+            "dump script written into a script dir the probe itself "
+            "creates under the same process-private-or-operator-owned "
+            "work dir as the assembly sources above"
+        ),
+        (
+            "packages/ghidra/headless.py",
+            '(script_dir / "ExportRaptor.java").write_text(EXPORT_SCRIPT_JAVA, encoding="utf-8")',
+        ): (
+            "script dir freshly mkdir'd inside a process-private "
+            "TemporaryDirectory work dir"
+        ),
+        (
+            "packages/ghidra/headless.py",
+            'script_path.write_text(IMPORT_SCRIPT_JAVA, encoding="utf-8")',
+        ): (
+            "script written into a fresh process-private "
+            "TemporaryDirectory created in the enclosing with-block"
+        ),
+        (
+            "packages/ghidra/match_precision.py",
+            "src.write_text(_CORPUS_C)",
+        ): (
+            "corpus source written into a fresh process-private "
+            "TemporaryDirectory work dir"
+        ),
+        (
+            "packages/ghidra/match_precision.py",
+            "shutil.copy2(v2, v2s)",
+        ): (
+            "copy between two fresh names inside the same process-"
+            "private TemporaryDirectory work dir"
+        ),
+        (
+            "packages/web/benchmark.py",
+            'args.out.write_text(rendered + "\\n", encoding="utf-8")',
+        ): (
+            "destination is an operator-supplied CLI argument, not a "
+            "predictable name inside a target-writable run dir"
+        ),
+    }
+
+    _WRITE_MODE_PREFIXES = ("w", "a")
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _mode_of(call: ast.Call, positional_index: int) -> str | None:

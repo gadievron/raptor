@@ -23,20 +23,35 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/... -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src.clients.gharchive import GHArchiveClient
-from src.collectors.archive import (
-    GHArchiveCollector,
-    _gharchive_day,
-    _timestamp_matches,
-)
-from src.schema.common import EvidenceSource
-from src.schema.observations import CommitObservation, IssueObservation
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
-# =============================================================================
-# BIGQUERY TRANSPORT STUB
-# =============================================================================
+    from src.clients.gharchive import GHArchiveClient
+    from src.collectors.archive import (
+        GHArchiveCollector,
+        _gharchive_day,
+        _timestamp_matches,
+    )
+    from src.schema.common import EvidenceSource
+    from src.schema.observations import CommitObservation, IssueObservation
+
+    # =============================================================================
+    # BIGQUERY TRANSPORT STUB
+    # =============================================================================
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class _StubBigQueryClient:

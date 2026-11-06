@@ -71,21 +71,36 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_MARKER = "line-model:"
-# The marker must carry an actual justification — a bare
-# "# line-model:" is a rubber stamp, not an adjudication record.
-_MARKER_RE = re.compile(r"#[ \t]*" + re.escape(_MARKER) + r"[ \t]*\S")
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-_GUIDANCE = (
-    "splitlines() result feeds 1-indexed line-number arithmetic — "
-    "external line numbers count \\n only, so this desyncs on one "
-    "plantable byte. Use core.source.lines.split_lines, or justify "
-    f"inline with '# {_MARKER} <why>' on the call's first line:\n"
-)
+    _MARKER = "line-model:"
+    # The marker must carry an actual justification — a bare
+    # "# line-model:" is a rubber stamp, not an adjudication record.
+    _MARKER_RE = re.compile(r"#[ \t]*" + re.escape(_MARKER) + r"[ \t]*\S")
+
+    _GUIDANCE = (
+        "splitlines() result feeds 1-indexed line-number arithmetic — "
+        "external line numbers count \\n only, so this desyncs on one "
+        "plantable byte. Use core.source.lines.split_lines, or justify "
+        f"inline with '# {_MARKER} <why>' on the call's first line:\n"
+    )
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _is_splitlines_call(node: ast.AST) -> bool:

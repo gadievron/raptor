@@ -31,17 +31,32 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-_MARKER = "json-unbounded:"
-# The marker must carry an actual justification — a bare
-# "# json-unbounded:" is a rubber stamp, not an adjudication record.
-_MARKER_RE = re.compile(re.escape(_MARKER) + r"[ \t]*\S")
+    from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-_LOADER_NAMES = frozenset({"load_json", "load_json_with_comments"})
-_UNBOUNDED_NAME = "load_json_unbounded"
+    _MARKER = "json-unbounded:"
+    # The marker must carry an actual justification — a bare
+    # "# json-unbounded:" is a rubber stamp, not an adjudication record.
+    _MARKER_RE = re.compile(re.escape(_MARKER) + r"[ \t]*\S")
+
+    _LOADER_NAMES = frozenset({"load_json", "load_json_with_comments"})
+    _UNBOUNDED_NAME = "load_json_unbounded"
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _call_name(node: ast.Call) -> str | None:

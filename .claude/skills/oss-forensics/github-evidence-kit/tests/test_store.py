@@ -15,14 +15,29 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/test_store.py -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).parents[1]))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from src import EvidenceStore, EvidenceSource, load_evidence_from_json
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+
+    from src import EvidenceStore, EvidenceSource, load_evidence_from_json
 
 
-# =============================================================================
-# STORE BASIC OPERATIONS
-# =============================================================================
+    # =============================================================================
+    # STORE BASIC OPERATIONS
+    # =============================================================================
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).parents[1]))
 
 
 class TestEvidenceStoreBasics:

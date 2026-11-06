@@ -42,28 +42,43 @@ import ast
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from contextlib import nullcontext as _path_nullcontext
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
 
-from runtime_universe import EXCLUDED_PARTS, repo_root  # noqa: E402
+with (_path_patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else _path_nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-#: Increment-helper spellings (definition names and the orchestrator's
-#: underscore import aliases).
-_HELPER_NAMES = frozenset({
-    "increment_tier_dict",
-    "_increment_tier_dict",
-    "increment_tier",
-    "_increment_tier",
-    "_tick_tier",
-    "tally_substrate_skip_language",
-    "_tally_substrate_language",
-})
+    from runtime_universe import EXCLUDED_PARTS, repo_root  # noqa: E402
 
-#: The registry owner.
-_REGISTRY_FILE = ("core", "audit", "orchestrator.py")
-_REGISTRY_FUNC = "_make_tier_counters"
+    #: Increment-helper spellings (definition names and the orchestrator's
+    #: underscore import aliases).
+    _HELPER_NAMES = frozenset({
+        "increment_tier_dict",
+        "_increment_tier_dict",
+        "increment_tier",
+        "_increment_tier",
+        "_tick_tier",
+        "tally_substrate_skip_language",
+        "_tally_substrate_language",
+    })
 
-#: The chain-entry dynamic variable (``tool_type = entry["type"]``).
-_CHAIN_VAR = "tool_type"
+    #: The registry owner.
+    _REGISTRY_FILE = ("core", "audit", "orchestrator.py")
+    _REGISTRY_FUNC = "_make_tier_counters"
+
+    #: The chain-entry dynamic variable (``tool_type = entry["type"]``).
+    _CHAIN_VAR = "tool_type"
+
+
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _audit_runtime_files() -> list[Path]:
