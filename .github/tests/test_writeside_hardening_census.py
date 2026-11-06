@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -284,6 +285,26 @@ def _flag(call: ast.Call) -> str | None:
     return None
 
 
+_WRITE_CALLEES = frozenset({
+    "open", "write_text", "write_bytes", "touch", "copy", "copy2",
+    "copyfile", "move", "copytree",
+})
+
+
+def _flagged_calls(text: str) -> list[tuple[ast.Call, str]]:
+    # Only candidate selection is textual; _flag still judges parsed calls.
+    # Flagger self-checks use this same path so a new callee needs both its
+    # detection rule and its prescreen entry. Include Unicode identifiers.
+    normalized = unicodedata.normalize("NFKC", text)
+    if not any(name in normalized for name in _WRITE_CALLEES):
+        return []
+    return [
+        (node, why)
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Call) and (why := _flag(node)) is not None
+    ]
+
+
 def _census() -> tuple[list[tuple[str, str, int, str]], Counter]:
     """All flagged sites: (relpath, stripped line, lineno, why)."""
     root = repo_root()
@@ -295,16 +316,11 @@ def _census() -> tuple[list[tuple[str, str, int, str]], Counter]:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         try:
-            tree = ast.parse(text)
+            calls = _flagged_calls(text)
         except SyntaxError:
             continue
         lines = text.splitlines()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            why = _flag(node)
-            if why is None:
-                continue
+        for node, why in calls:
             line = (
                 lines[node.lineno - 1].strip()
                 if node.lineno <= len(lines) else ""
@@ -314,8 +330,15 @@ def _census() -> tuple[list[tuple[str, str, int, str]], Counter]:
     return found, keys
 
 
-def test_no_unadjudicated_write_side_sites() -> None:
-    found, _keys = _census()
+@_path_pytest.fixture(scope="module")
+def write_census():
+    # The source tree is fixed during a test run. Share only this snapshot;
+    # planted-source mechanics continue to execute their own extraction.
+    return _census()
+
+
+def test_no_unadjudicated_write_side_sites(write_census) -> None:
+    found, _keys = write_census
     unlisted = [
         f"{rel}:{lineno}: [{why}] {line}"
         for rel, line, lineno, why in found
@@ -334,11 +357,7 @@ def test_no_unadjudicated_write_side_sites() -> None:
 
 def _flags_of(snippet: str) -> list[str]:
     """Self-test helper: every _flag verdict in a parsed snippet."""
-    return [
-        why
-        for node in ast.walk(ast.parse(snippet))
-        if isinstance(node, ast.Call) and (why := _flag(node)) is not None
-    ]
+    return [why for _node, why in _flagged_calls(snippet)]
 
 
 def test_flagger_catches_bypass_spellings() -> None:
@@ -362,6 +381,26 @@ def test_flagger_catches_bypass_spellings() -> None:
     assert _flags_of("shutil.copytree(src, dst, dirs_exist_ok=True)")
     assert _flags_of("p.touch()")
     assert _flags_of("p.write_text(x)")
+
+
+def test_candidate_selection_keeps_copy_and_unicode_writers():
+    for source in (
+        "shutil.copy(src, dst)", "shutil.copy2(src, dst)",
+        "shutil.copyfile(src, dst)", "p.write_bytes(data)",
+        "p.ｗｒｉｔｅ_ｔｅｘｔ(data)", "ｏｐｅｎ(p, 'w')",
+    ):
+        assert _flags_of(source), source
+
+
+def test_census_preserves_duplicate_hazard_counts(tmp_path, monkeypatch):
+    path = tmp_path / "packages/web/plant.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("p.write_text(data)\np.write_text(data)\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals(), "runtime_file_universe", lambda: [path])
+    found, keys = _census()
+    assert [row[2] for row in found] == [1, 2]
+    assert keys[("packages/web/plant.py", "p.write_text(data)")] == 2
 
 
 # Spelling the flagger does not scan -> the docstring token that
@@ -413,10 +452,10 @@ def test_flagger_ignores_hardened_and_read_shapes() -> None:
     assert not _flags_of("shutil.copyfileobj(a, b)")  # file objects
 
 
-def test_allowlist_entries_still_live() -> None:
+def test_allowlist_entries_still_live(write_census) -> None:
     """A stale entry means the site changed or moved — re-adjudicate
     rather than carry a dead exemption."""
-    _found, keys = _census()
+    _found, keys = write_census
     stale = [
         f"{rel}: {line}"
         for (rel, line) in _ALLOWLIST
@@ -429,7 +468,7 @@ def test_allowlist_entries_still_live() -> None:
     )
 
 
-def test_allowlist_entries_match_exactly_one_site() -> None:
+def test_allowlist_entries_match_exactly_one_site(write_census) -> None:
     """An allowlist entry is the adjudication record of ONE site. The
     (relpath, stripped-line) key is not injective: a SECOND hazard
     with byte-identical source text in the same file would ride the
@@ -438,7 +477,7 @@ def test_allowlist_entries_match_exactly_one_site() -> None:
     that ``test_allowlist_entries_still_live``'s ==0 staleness check
     does not cover — so every new site earns its own entry (rework
     the duplicate line, or route it through a hardened helper)."""
-    _found, keys = _census()
+    _found, keys = write_census
     multi = [
         f"{rel}: {line} (matches {keys[(rel, line)]} flagged sites)"
         for (rel, line) in _ALLOWLIST

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import unicodedata
 from pathlib import Path
 
 from contextlib import nullcontext as _path_nullcontext
@@ -59,21 +60,6 @@ def _scoped_helper_import_path(monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
-def _client_name_bindings(tree: ast.Module) -> set[str]:
-    """Local names bound to ``core.llm.client.LLMClient`` by import
-    (``from core.llm.client import LLMClient [as X]``), module- or
-    function-scoped."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and (
-            node.module.endswith("client") and "llm" in node.module
-        ):
-            for alias in node.names:
-                if alias.name == "LLMClient":
-                    names.add(alias.asname or alias.name)
-    return names
-
-
 def _bare_constructions(
     source: str,
 ) -> list[tuple[int, str]]:
@@ -85,13 +71,26 @@ def _bare_constructions(
     aliases). ``TranscriptLLMClient`` and other names are not
     LLMClient constructions and are ignored.
     """
+    # An attribute call or an imported alias needs this identifier somewhere
+    # in the source. Python normalizes identifiers before building the AST.
+    if "LLMClient" not in unicodedata.normalize("NFKC", source):
+        return []
     tree = ast.parse(source)
-    bound = _client_name_bindings(tree)
+    bound: set[str] = set()
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and (
+            node.module.endswith("client") and "llm" in node.module
+        ):
+            for alias in node.names:
+                if alias.name == "LLMClient":
+                    bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Call):
+            calls.append(node)
     lines = source.splitlines()
     hits: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    # Resolve after all bindings are known, including imports below a call.
+    for node in calls:
         func = node.func
         direct = isinstance(func, ast.Name) and func.id in bound
         attr = isinstance(func, ast.Attribute) and func.attr == "LLMClient"
@@ -120,6 +119,19 @@ def test_detector_sees_both_construction_shapes():
     )
     hits = _bare_constructions(snippet)
     assert len(hits) == 2, hits
+
+
+def test_detector_resolves_aliases_imported_below_calls():
+    source = "client = C()\nfrom core.llm.client import LLMClient as C\n"
+    assert _bare_constructions(source) == [(1, "client = C()")]
+
+
+def test_detector_keeps_unicode_identifier_spellings():
+    for source in (
+        "client = m.ＬＬＭＣｌｉｅｎｔ()\n",
+        "from core.llm.client import ＬＬＭＣｌｉｅｎｔ as C\nclient = C()\n",
+    ):
+        assert len(_bare_constructions(source)) == 1, source
 
 
 def test_detector_ignores_the_seam_and_unrelated_names():

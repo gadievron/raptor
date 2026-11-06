@@ -134,6 +134,7 @@ class _Collector(ast.NodeVisitor):
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._visitors = {}
         self.func_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self.literal_tiers: set[str] = set()
         # (lineno, name_id, enclosing funcdef or None)
@@ -146,6 +147,16 @@ class _Collector(ast.NodeVisitor):
         # tier-parameter resolution across the same module set.
         self.calls_by_name: dict[str, list[ast.Call]] = {}
 
+    def visit(self, node: ast.AST):
+        # Callback selection is stable for this collector. Avoid rebuilding
+        # the method name and resolving it for every node in a large module.
+        kind = type(node)
+        visitor = self._visitors.get(kind)
+        if visitor is None:
+            visitor = getattr(self, "visit_" + kind.__name__, self.generic_visit)
+            self._visitors[kind] = visitor
+        return visitor(node)
+
     def _visit_func(self, node) -> None:
         self.func_stack.append(node)
         self.generic_visit(node)
@@ -153,6 +164,13 @@ class _Collector(ast.NodeVisitor):
 
     visit_FunctionDef = _visit_func
     visit_AsyncFunctionDef = _visit_func
+
+    def visit_Name(self, node: ast.Name | ast.Constant) -> None:
+        # Call/Dict visitors inspect these values themselves. A Name context
+        # or Constant's scalar fields cannot add calls, dicts or scopes.
+        return
+
+    visit_Constant = visit_Name
 
     def visit_Dict(self, node: ast.Dict) -> None:
         keys = {
@@ -326,3 +344,26 @@ def test_tier_counter_registry_closure() -> None:
         f"tiers registered in {_REGISTRY_FUNC}() but never reachable "
         f"from any derived increment site: {orphans}"
     )
+
+
+def test_collector_keeps_calls_dicts_and_nested_function_scopes():
+    source = (
+        'def outer(tier="default"):\n'
+        '    increment_tier_dict({}, "literal")\n'
+        '    config = {"type": "outer", "config": prepare()}\n'
+        '    async def inner(tier="inner"):\n'
+        '        increment_tier_dict({}, tier)\n'
+        '        return {"type": "nested", "config": finish()}\n'
+        '    return inner()\n'
+    )
+    collector = _Collector(Path("owned.py"))
+    collector.visit(ast.parse(source))
+    assert collector.literal_tiers == {"literal"}
+    assert collector.chain_types == {"outer", "nested"}
+    assert [(line, name, fn.name) for line, name, fn in collector.dynamic_sites] == [
+        (5, "tier", "inner"),
+    ]
+    assert {name: len(calls) for name, calls in collector.calls_by_name.items()} == {
+        "increment_tier_dict": 2, "prepare": 1, "finish": 1, "inner": 1,
+    }
+    assert collector.unresolvable == []
