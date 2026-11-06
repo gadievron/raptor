@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from core.sandbox import telemetry_mac as tmac
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +27,7 @@ def test_partial_creation_writes_produce_a_verifiable_key(monkeypatch):
         writes.append(written)
         return written
 
-    monkeypatch.setattr(tmac.os, "write", partial_write)
+    patch_module_attribute(monkeypatch, tmac, "os", "write", partial_write)
     fields = {"kind": "proxy-event", "host": "example"}
     token = tmac.mint(fields)
     assert token is not None
@@ -37,9 +38,20 @@ def test_partial_creation_writes_produce_a_verifiable_key(monkeypatch):
 
 
 @pytest.mark.parametrize("failure", ["zero", "error"])
-def test_failed_creation_never_returns_an_unpersisted_key(monkeypatch, failure):
-    real_write, real_close = os.write, os.close
-    calls, closed = [], []
+def test_failed_creation_never_returns_an_unpersisted_key(monkeypatch, request, failure):
+    real_write, real_close, real_open = os.write, os.close, os.open
+    calls, closed, active = [], [], set()
+
+    def release_if_owned(fd):
+        if fd in active:
+            active.remove(fd)
+            real_close(fd)
+
+    def open_fd(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        active.add(fd)
+        request.addfinalizer(lambda: release_if_owned(fd))
+        return fd
 
     def fail_write(fd, data):
         calls.append(fd)
@@ -50,11 +62,13 @@ def test_failed_creation_never_returns_an_unpersisted_key(monkeypatch, failure):
         raise OSError(errno.ENOSPC, "no space")
 
     def close(fd):
+        active.discard(fd)  # Never retry a descriptor after a close attempt.
         closed.append(fd)
         return real_close(fd)
 
-    monkeypatch.setattr(tmac.os, "write", fail_write)
-    monkeypatch.setattr(tmac.os, "close", close)
+    patch_module_attribute(monkeypatch, tmac, "os", "open", open_fd)
+    patch_module_attribute(monkeypatch, tmac, "os", "write", fail_write)
+    patch_module_attribute(monkeypatch, tmac, "os", "close", close)
     assert tmac.mint({"kind": "proxy-event"}) is None
     assert len(calls) == 2
     assert closed.count(calls[0]) == 1
@@ -64,8 +78,7 @@ def test_failed_creation_never_returns_an_unpersisted_key(monkeypatch, failure):
     # Failed exclusive creation removes only its own incomplete inode.
     # A later healthy call can create a usable key instead of refusing forever.
     assert not tmac._key_path().exists()
-    monkeypatch.setattr(tmac.os, "write", real_write)
-    monkeypatch.setattr(tmac.os, "close", real_close)
+    patch_module_attribute(monkeypatch, tmac, "os", "write", real_write)
     token = tmac.mint({"kind": "proxy-event"})
     assert token
     assert tmac.verify({"kind": "proxy-event"}, token)

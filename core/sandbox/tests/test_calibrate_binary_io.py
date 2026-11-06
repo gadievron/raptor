@@ -6,12 +6,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from core.sandbox import calibrate as cal, calibrate_cli as cli
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture
@@ -36,7 +36,9 @@ def test_operator_symlink_and_partial_reads_remain_supported(tmp_path, monkeypat
     link = tmp_path / "linked-tool"
     link.symlink_to(path)
     real_read = os.read
-    monkeypatch.setattr(cal.os, "read", lambda fd, size: real_read(fd, min(size, 3)))
+    patch_module_attribute(
+        monkeypatch, cal, "os", "read", lambda fd, size: real_read(fd, min(size, 3)),
+    )
     assert cal._sha256_file(link) == hashlib.sha256(payload).hexdigest()
 
 
@@ -54,7 +56,7 @@ def test_size_changes_after_stat_are_refused(tmp_path, monkeypatch, change):
             path.write_bytes(b"binary-data-extra" if change == "grow" else b"b")
         return metadata
 
-    monkeypatch.setattr(cal.os, "fstat", fstat)
+    patch_module_attribute(monkeypatch, cal, "os", "fstat", fstat)
     with pytest.raises(OSError) as raised:
         cal._sha256_file(path)
     assert raised.value.errno == errno.EIO
@@ -70,40 +72,47 @@ def test_same_size_metadata_change_is_refused(tmp_path, monkeypatch):
         metadata = real_fstat(fd)
         calls.append(fd)
         if len(calls) == 2:
-            return SimpleNamespace(
-                st_size=metadata.st_size,
-                st_mtime_ns=metadata.st_mtime_ns + 1,
-                st_ctime_ns=metadata.st_ctime_ns,
-            )
+            # Native reconstruction fields retain platform-specific metadata.
+            sequence, fields = metadata.__reduce__()[1]
+            fields = {**fields, "st_mtime_ns": metadata.st_mtime_ns + 1}
+            return os.stat_result(sequence, fields)
         return metadata
 
-    monkeypatch.setattr(cal.os, "fstat", fstat)
+    patch_module_attribute(monkeypatch, cal, "os", "fstat", fstat)
     with pytest.raises(OSError, match="changed while hashing"):
         cal._sha256_file(path)
 
 
 @pytest.mark.parametrize("stage", ["fstat", "read"])
 @pytest.mark.parametrize("failure_type", [OSError, KeyboardInterrupt])
-def test_hash_failure_releases_descriptor(tmp_path, monkeypatch, stage, failure_type):
+def test_hash_failure_releases_descriptor(tmp_path, monkeypatch, request, stage, failure_type):
     path = tmp_path / "tool"
     path.write_bytes(b"binary-data")
     real_open, real_close = os.open, os.close
-    opened, closed = [], []
+    opened, closed, active = [], [], set()
     failure = failure_type("hash failed")
+
+    def release_if_owned(fd):
+        if fd in active:
+            active.remove(fd)
+            real_close(fd)
 
     def open_fd(*args, **kwargs):
         fd = real_open(*args, **kwargs)
+        active.add(fd)
+        request.addfinalizer(lambda: release_if_owned(fd))
         opened.append(fd)
         return fd
 
     def close_fd(fd):
+        active.discard(fd)  # Never retry a descriptor after a close attempt.
         closed.append(fd)
         return real_close(fd)
 
     with monkeypatch.context() as patch:
-        patch.setattr(cal.os, "open", open_fd)
-        patch.setattr(cal.os, "close", close_fd)
-        patch.setattr(cal.os, stage, Mock(side_effect=failure))
+        patch_module_attribute(patch, cal, "os", "open", open_fd)
+        patch_module_attribute(patch, cal, "os", "close", close_fd)
+        patch_module_attribute(patch, cal, "os", stage, Mock(side_effect=failure))
         with pytest.raises(failure_type) as raised:
             cal._sha256_file(path)
     assert raised.value is failure

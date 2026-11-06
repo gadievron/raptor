@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.sandbox import calibrate as cal
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture
@@ -31,7 +32,9 @@ def test_chunked_reads_round_trip(cache, monkeypatch):
     path = cache / "entry.json"
     path.write_text(json.dumps(profile(proxy_hosts=["example.test"])))
     real_read = os.read
-    monkeypatch.setattr(cal.os, "read", lambda fd, size: real_read(fd, min(size, 5)))
+    patch_module_attribute(
+        monkeypatch, cal, "os", "read", lambda fd, size: real_read(fd, min(size, 5)),
+    )
     loaded = cal._load_from_cache("entry")
     assert loaded is not None
     assert loaded.proxy_hosts == ["example.test"]
@@ -41,7 +44,7 @@ def test_oversized_entry_is_rejected_before_read(cache, monkeypatch):
     monkeypatch.setattr(cal, "_MAX_CACHE_BYTES", 64)
     (cache / "entry.json").write_bytes(b"x" * 65)
     read = Mock(side_effect=AssertionError("oversized file must not be read"))
-    monkeypatch.setattr(cal.os, "read", read)
+    patch_module_attribute(monkeypatch, cal, "os", "read", read)
     assert cal._load_from_cache("entry") is None
     read.assert_not_called()
 
@@ -55,7 +58,7 @@ def test_growth_after_stat_is_bounded(cache, monkeypatch):
         reads.append(size)
         return b"x" * size
 
-    monkeypatch.setattr(cal.os, "read", growing_read)
+    patch_module_attribute(monkeypatch, cal, "os", "read", growing_read)
     assert cal._load_from_cache("entry") is None
     assert reads == [65]
 
@@ -78,21 +81,35 @@ def test_symlink_is_not_followed(cache, tmp_path, operation):
 
 
 @pytest.mark.parametrize("stage", ["fstat", "read"])
-def test_read_failure_releases_descriptor(cache, monkeypatch, stage):
+def test_read_failure_releases_descriptor(cache, monkeypatch, request, stage):
     (cache / "entry.json").write_text(json.dumps(profile()))
-    real_open = os.open
-    opened = []
+    real_open, real_close = os.open, os.close
+    opened, closed, active = [], [], set()
+
+    def release_if_owned(fd):
+        if fd in active:
+            active.remove(fd)
+            real_close(fd)
 
     def open_fd(*args, **kwargs):
         fd = real_open(*args, **kwargs)
+        active.add(fd)
+        request.addfinalizer(lambda: release_if_owned(fd))
         opened.append(fd)
         return fd
 
+    def close_fd(fd):
+        active.discard(fd)  # Never retry a descriptor after a close attempt.
+        closed.append(fd)
+        return real_close(fd)
+
     with monkeypatch.context() as patch:
-        patch.setattr(cal.os, "open", open_fd)
-        patch.setattr(cal.os, stage, Mock(side_effect=OSError("I/O failure")))
+        patch_module_attribute(patch, cal, "os", "open", open_fd)
+        patch_module_attribute(patch, cal, "os", "close", close_fd)
+        patch_module_attribute(patch, cal, "os", stage, Mock(side_effect=OSError("I/O failure")))
         assert cal._load_from_cache("entry") is None
     assert len(opened) == 1
+    assert closed == opened
     with pytest.raises(OSError) as exc:
         os.fstat(opened[0])
     assert exc.value.errno == errno.EBADF

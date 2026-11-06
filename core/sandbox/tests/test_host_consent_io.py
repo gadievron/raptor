@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.sandbox import host_consent as hc
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def test_partial_writes_publish_complete_json(marker, monkeypatch):
         calls.append(len(data))
         return real_write(fd, data[:7])
 
-    monkeypatch.setattr(hc.os, "write", partial)
+    patch_module_attribute(monkeypatch, hc, "os", "write", partial)
     assert hc.write_marker() == marker
     assert len(calls) > 1
     record, reason = hc._read_marker_record(marker)
@@ -45,16 +46,29 @@ def test_partial_writes_publish_complete_json(marker, monkeypatch):
 @pytest.mark.parametrize("stage", ["write", "fsync", "replace"])
 @pytest.mark.parametrize("failure_type", [OSError, KeyboardInterrupt])
 def test_failed_publish_preserves_previous_marker_and_cleans_up(
-    marker, monkeypatch, stage, failure_type,
+    marker, monkeypatch, request, stage, failure_type,
 ):
     marker.parent.mkdir()
     original = b"previous marker bytes"
     marker.write_bytes(original)
     failure = failure_type("operation failed")
     real_close = os.close
-    closes = []
+    real_mkstemp = hc.tempfile.mkstemp
+    closes, active = [], set()
+
+    def release_if_owned(fd):
+        if fd in active:
+            active.remove(fd)
+            real_close(fd)
+
+    def mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        active.add(fd)
+        request.addfinalizer(lambda: release_if_owned(fd))
+        return fd, name
 
     def close(fd):
+        active.discard(fd)  # Never retry a descriptor after a close attempt.
         closes.append(fd)
         # Intercept duplicate closes so a regression cannot close an
         # unrelated descriptor that reused this number.
@@ -62,8 +76,9 @@ def test_failed_publish_preserves_previous_marker_and_cleans_up(
             raise OSError(errno.EBADF, "duplicate close")
         real_close(fd)
 
-    monkeypatch.setattr(hc.os, "close", close)
-    monkeypatch.setattr(hc.os, stage, Mock(side_effect=failure))
+    patch_module_attribute(monkeypatch, hc, "tempfile", "mkstemp", mkstemp)
+    patch_module_attribute(monkeypatch, hc, "os", "close", close)
+    patch_module_attribute(monkeypatch, hc, "os", stage, Mock(side_effect=failure))
     with pytest.raises(failure_type) as raised:
         hc.write_marker()
     assert raised.value is failure
@@ -85,7 +100,7 @@ def test_zero_progress_write_does_not_publish(marker, monkeypatch):
         calls.append(fd)
         return real_write(fd, data[:5]) if len(calls) == 1 else 0
 
-    monkeypatch.setattr(hc.os, "write", stalled)
+    patch_module_attribute(monkeypatch, hc, "os", "write", stalled)
     with pytest.raises(OSError) as exc:
         hc.write_marker()
     assert exc.value.errno == errno.EIO
@@ -98,7 +113,9 @@ def test_chunked_reads_load_the_complete_record(marker, monkeypatch):
     hc.write_marker()
     expected = json.loads(marker.read_bytes())
     real_read = os.read
-    monkeypatch.setattr(hc.os, "read", lambda fd, size: real_read(fd, min(size, 3)))
+    patch_module_attribute(
+        monkeypatch, hc, "os", "read", lambda fd, size: real_read(fd, min(size, 3)),
+    )
     assert hc._read_marker_record(marker) == (expected, None)
 
 
@@ -110,7 +127,7 @@ def test_actual_read_size_is_checked_after_stat(marker, monkeypatch):
         requests.append(size)
         return b"x" * size
 
-    monkeypatch.setattr(hc.os, "read", growing_read)
+    patch_module_attribute(monkeypatch, hc, "os", "read", growing_read)
     assert hc._read_marker_record(marker) == (None, "too-large")
     assert requests == [hc._MAX_MARKER_BYTES + 1]
 
@@ -130,5 +147,7 @@ def test_decoder_recursion_error_is_invalid_json(marker, monkeypatch):
     marker.parent.mkdir()
     marker.write_bytes(b"{}")
     marker.chmod(0o600)
-    monkeypatch.setattr(hc.json, "loads", Mock(side_effect=RecursionError("too deep")))
+    patch_module_attribute(
+        monkeypatch, hc, "json", "loads", Mock(side_effect=RecursionError("too deep")),
+    )
     assert hc._read_marker_record(marker) == (None, "invalid-json")
