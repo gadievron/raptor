@@ -91,11 +91,14 @@ class _Function:
     def __init__(self, node):
         self.node = node
         self.variables: dict[str, _Place | _Pointer] = {}
+        self.initialized: set[_Object] = set()
         self.proofs: list[dict[str, Any]] = []
 
     def access(self, place, node):
         if not isinstance(place, _Place):
             raise _Unsupported("unknown access")
+        if place.obj not in self.initialized:
+            raise _Unsupported("uninitialized object access")
         # Corresponding signed and unsigned integer types may alias.
         if place.ctype.removeprefix("unsigned ") == place.obj.ctype.removeprefix("unsigned "):
             return
@@ -166,6 +169,7 @@ class _Function:
                     raise _Unsupported("parameter attributes")
                 obj = _Object(_scalar_type(node), _name(node))
                 self.variables[node["id"]] = _Place(obj.ctype, obj)
+                self.initialized.add(obj)
             elif kind != "CompoundStmt":
                 raise _Unsupported("function attributes")
         for stmt in bodies[0].get("inner", []):
@@ -173,17 +177,23 @@ class _Function:
             if kind == "DeclStmt":
                 for decl in nodes:
                     init = decl.get("inner", [])
-                    if decl.get("kind") != "VarDecl" or len(init) != 1 or decl.get("storageClass"):
+                    if decl.get("kind") != "VarDecl" or len(init) > 1 or decl.get("storageClass"):
                         raise _Unsupported("unsupported declaration")
-                    value = self.expression(init[0])
                     ctype = _type(decl)
+                    if not init:
+                        obj = _Object(_scalar_type(decl), _name(decl))
+                        self.variables[decl["id"]] = _Place(ctype, obj)
+                        continue
+                    value = self.expression(init[0])
                     if isinstance(value, _Pointer) and ctype == value.pointee + " *":
                         if len(value.aliases) >= 16:
                             raise _Unsupported("pointer alias chain cap")
                         self.variables[decl["id"]] = _Pointer(value.pointee, value.obj, value.cast,
                                                              (*value.aliases, _name(decl)))
                     elif isinstance(value, _Scalar) and ctype in _SCALARS:
-                        self.variables[decl["id"]] = _Place(ctype, _Object(ctype, _name(decl)))
+                        obj = _Object(ctype, _name(decl))
+                        self.variables[decl["id"]] = _Place(ctype, obj)
+                        self.initialized.add(obj)
                     else:
                         raise _Unsupported("unknown initializer")
             elif kind == "ReturnStmt" and len(nodes) <= 1:
@@ -210,6 +220,8 @@ class _Function:
                         self.access(place, nodes[0])
                     elif value.ctype != place.ctype:
                         raise _Unsupported("unmodeled scalar assignment conversion")
+                    else:
+                        self.initialized.add(place.obj)
                     # A store to a declared scalar changes its value, not its
                     # type or the object provenance held by existing pointers.
                 else:

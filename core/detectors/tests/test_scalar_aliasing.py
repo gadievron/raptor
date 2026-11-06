@@ -38,6 +38,11 @@ double float_widening(int value) { return *(float*)&value; }
 int numeric_only(float value) { return (int)value; }
 double numeric_widening(float value) { return (double)value; }
 int unused_float_initializer(void) { float value=1.0; int *p=(int*)&value; return 0; }
+int assigned_initializer(void) { float value; value=1; return *(int*)&value; }
+int alias_before_initializer(void) { float value; int *p=(int*)&value; value=1; return *p; }
+int read_before_initializer(void) { float value; float copy=value; value=1; return *(int*)&value; }
+int indirect_initializer(void) { float value; float *p=&value; *p=1; return *(int*)&value; }
+int other_initializer(void) { float value; float other; other=1; return *(int*)&value; }
 void stop(void);
 int interrupted(float value) { int *p=(int*)&value; stop(); return *p; }
 typedef int alias_int __attribute__((may_alias));
@@ -70,6 +75,7 @@ def test_native_ast_proves_only_supported_actual_accesses(parsed):
         "direct", "indirect", "write_access", "reassigned_access", "saved_alias", "assigned_alias", "self_assignment",
         "scalar_update", "alias_after_store", "stored_read",
         "float_initializer", "float_to_integer", "float_widening",
+        "assigned_initializer", "alias_before_initializer",
     }
     indirect = next(p for p in proofs if p["function"] == "indirect")
     assert indirect["declared_type"] == "float" and indirect["access_type"] == "int"

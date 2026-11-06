@@ -4116,3 +4116,23 @@ def test_aliasing_corroboration_receives_only_locatable_candidates(tmp_path, mon
     assert result.outcome == 'inconclusive'
     assert candidates == [{'file': 'a.c', 'line': 1}]
     assert result.details['unlocated_diagnostics']
+
+
+@pytest.mark.slow
+@needs_gcc
+@pytest.mark.parametrize('initialized', [False, True])
+def test_aliasing_local_assignment_requires_definite_initialization(tmp_path, sandbox_spy, initialized):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    assignment = 'value=1;' if initialized else ''
+    (target / 'a.c').write_text('int f(void) { float value; int *p=(int*)&value; ' + assignment + ' return *p; }\n')
+    result = _guarded_compiler_sweep(
+        target_path=target, file_path='a.c', function_name='f', line_start=1, line_end=1,
+        cwe='CWE-843', hypothesis='incompatible access',
+    )
+    expected = 'confirmed' if initialized and HAVE_CLANG else 'inconclusive'
+    assert result.outcome == expected
+    if expected == 'confirmed':
+        assert result.details['aliasing_proofs'][0]['object'] == 'value'
+    else:
+        assert result.details['candidate_only']
