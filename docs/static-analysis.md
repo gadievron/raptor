@@ -356,6 +356,9 @@ A Semgrep parser error can leave a file only partially analysed. Findings
 recovered from that file remain useful, but an empty result does not establish
 that the file is clean. Check the reported exclusions and analysis errors when
 assessing scan coverage, especially for C code with compiler extensions.
+A successful tool exit alone does not establish a successful scan: missing
+or malformed SARIF output is reported as a failure. If part of a report is
+damaged, the package runner retains readable findings and records the damage.
 Expanded-source scans warn when files or rules were skipped while retaining
 usable findings. An enriched SARIF export that drops malformed finding rows
 marks its invocation unsuccessful and includes error notifications; surviving

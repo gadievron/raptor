@@ -674,3 +674,27 @@ def test_metadata_damage_preserves_valid_paths_and_tool_errors():
     assert parsed["files_examined"] == ["a.py"]
     assert "error: tool failed" in parsed["errors"]
     assert len(parsed["errors"]) == 3
+
+
+@pytest.mark.parametrize("text", ["", " ", "not-json", "[]", "{}", '{"runs": {}}'])
+def test_sarif_damage_is_reported_to_execution_callers(text):
+    errors = []
+    assert parse_sarif(text, errors=errors) == []
+    assert errors
+    assert parse_sarif(text) == []  # compatibility for artifact-only callers
+
+
+def test_sarif_damage_retains_valid_siblings_with_bounded_diagnostics():
+    good = {"ruleId": "keep", "locations": [{"physicalLocation": {
+        "artifactLocation": {"uri": "a.py"}, "region": {"startLine": 7},
+    }}]}
+    errors = []
+    text = json.dumps({"runs": [None, {"results": "invalid"}, {
+        "invocations": [{"executionSuccessful": False}],
+        "results": [None] * 1000 + [{"locations": 1}, good],
+    }]})
+    findings = parse_sarif(text, errors=errors)
+    assert [(finding.rule_id, finding.file, finding.line) for finding in findings] == [("keep", "a.py", 7)]
+    assert len(errors) == 2
+    assert "1003 malformed" in errors[0]
+    assert "unsuccessful invocation" in errors[1]

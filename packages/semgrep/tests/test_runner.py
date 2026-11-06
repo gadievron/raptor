@@ -741,7 +741,7 @@ class TestErrorTruth:
             if "--json-output" in cmd:
                 idx = cmd.index("--json-output")
                 Path(cmd[idx + 1]).write_text(json_output)
-            return MagicMock(stdout="", stderr=stderr, returncode=returncode)
+            return MagicMock(stdout=_make_sarif(count=0), stderr=stderr, returncode=returncode)
 
         with patch("packages.semgrep.runner.is_available", return_value=True):
             return run_rule(target, "rules.yaml", subprocess_runner=runner)
@@ -1318,3 +1318,33 @@ def test_failure_diagnostics_cannot_launder_a_successful_replay(tmp_path, monkey
     assert calls[0]["restrict_reads"] is True
     assert calls[0]["block_network"] is True
     assert (tmp_path / "sandbox-observe.jsonl").is_file()
+
+
+@pytest.mark.parametrize("stdout", ["", "not-json", '{"runs": "bad"}',
+    '{"runs": [{"invocations": [{"executionSuccessful": false}], "results": []}]}'])
+@pytest.mark.parametrize("rc", [0, 1])
+def test_success_exit_does_not_hide_missing_or_failed_sarif(tmp_path, stdout, rc):
+    def runner(cmd, **kwargs):
+        Path(cmd[cmd.index("--json-output") + 1]).write_text(_make_json_output())
+        return MagicMock(stdout=stdout, stderr="", returncode=rc)
+
+    with patch("packages.semgrep.runner.is_available", return_value=True):
+        result = run_rule(tmp_path, "rules.yaml", subprocess_runner=runner)
+    assert result.returncode == rc
+    assert not result.ok
+    assert result.errors
+
+
+def test_partial_sarif_retains_findings_and_reports_failure(tmp_path):
+    data = json.loads(_make_sarif())
+    data["runs"][0]["results"].insert(0, None)
+
+    def runner(cmd, **kwargs):
+        Path(cmd[cmd.index("--json-output") + 1]).write_text(_make_json_output())
+        return MagicMock(stdout=json.dumps(data), stderr="", returncode=0)
+
+    with patch("packages.semgrep.runner.is_available", return_value=True):
+        result = run_rule(tmp_path, "rules.yaml", subprocess_runner=runner)
+    assert not result.ok
+    assert len(result.findings) == 1
+    assert "malformed" in result.errors[0]

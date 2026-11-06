@@ -813,7 +813,8 @@ def run_rule(
             if sandbox_output is not None:
                 rmtree_hardened(sandbox_output)
 
-    findings = parse_sarif(sarif_text)
+    sarif_errors: list[str] = []
+    findings = parse_sarif(sarif_text, errors=sarif_errors)
     parsed_json = parse_json_output(json_text)
 
     # Engine failure must never read as verified silence: surface the
@@ -833,6 +834,8 @@ def run_rule(
             f"semgrep exited with code {proc.returncode}"
             + (f": {stderr_tail}" if stderr_tail else "")
         )
+
+    errors.extend(sarif_errors)
 
     # Semgrep lists both excluded paths and partially analysed files in
     # paths.skipped. Recovered findings may coexist with parser errors;
