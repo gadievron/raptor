@@ -1069,6 +1069,7 @@ def run_rules_batched(
     defines: dict[str, str] | None = None,
     subprocess_runner=None,
     allow_scripting: bool = False,
+    tree_files: set[str] | None = None,
     _installed_version: Callable[[], str | None] | None = None,
 ) -> dict[str, SpatchResult]:
     """Run multiple .cocci rules in a single spatch invocation.
@@ -1088,6 +1089,11 @@ def run_rules_batched(
     silently drop all three, so rules that needed them diverged
     between the batched and per-rule lanes.
 
+    ``tree_files`` optionally supplies the same C/H inventory accepted by
+    run_rule. Otherwise a directory inventory is created when needed and
+    shared through batch splitting and individual retries within this call.
+    It is never reused by a later call or mutated by coverage filtering.
+
     Returns a dict keyed by rule stem name → SpatchResult.
     Falls back to per-rule run_rule when only one rule is given or
     accepted rules have colliding result IDs (including file-stem
@@ -1098,6 +1104,7 @@ def run_rules_batched(
     retries its accepted rules individually with the original timeout/options;
     incomplete batch matches never stand in for those per-rule results.
     """
+    target = Path(target)
     rules = [Path(r).resolve() for r in rules if Path(r).exists()]
     if not rules:
         return {}
@@ -1111,6 +1118,7 @@ def run_rules_batched(
             env=env, defines=defines,
             subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
+            tree_files=tree_files,
             _installed_version=installed_version,
         )
         return {rules[0].stem: result}
@@ -1124,6 +1132,12 @@ def run_rules_batched(
             )
             for r in rules
         }
+
+    def target_inventory() -> set[str] | None:
+        nonlocal tree_files
+        if tree_files is None and target.is_dir():
+            tree_files = _walk_c_h(target)
+        return tree_files
 
     parts = []
     rule_stems = []
@@ -1206,6 +1220,7 @@ def run_rules_batched(
                 env=env, defines=defines,
                 subprocess_runner=subprocess_runner,
                 allow_scripting=allow_scripting,
+                tree_files=target_inventory(),
                 _installed_version=installed_version,
             )
             for r in selected
@@ -1242,6 +1257,7 @@ def run_rules_batched(
                     timeout=timeout, env=env, defines=defines,
                     subprocess_runner=subprocess_runner,
                     allow_scripting=allow_scripting,
+                    tree_files=target_inventory(),
                     _installed_version=installed_version,
                 ))
         out.update(refused)
@@ -1390,7 +1406,7 @@ def run_rules_batched(
             return out
         batch_examined = _collect_files_examined(
             target, {m.file for m in all_matches},
-            no_includes=no_includes,
+            no_includes=no_includes, tree_files=target_inventory(),
         )
         out = {
             s: SpatchResult(

@@ -59,7 +59,7 @@ def test_duplicate_ids_preserve_results_options_and_refusals(tmp_path, monkeypat
         assert callable(version_callbacks[-1])
         assert kwargs == dict(include_dirs=include, no_includes=True, timeout=17,
                               env=env, defines=defines, subprocess_runner=no_batch,
-                              allow_scripting=True)
+                              allow_scripting=True, tree_files=None)
         return expected[path.stem]
 
     monkeypatch.setattr(runner, "run_rule", individual)
