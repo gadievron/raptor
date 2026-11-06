@@ -614,6 +614,45 @@ returns 0 even when gaps or changes are present; invalid inputs return 2.
 Use each command's `--help` for options and examples.
 
 
+## Authenticating a published container evidence download
+
+The image-publishing job includes `evidence-checksums.sha256` and
+`evidence-attestation.jsonl` in the `container-sbom` download when signing
+succeeds. The checksum manifest covers the retained image manifest, image
+digest, inventories, reports, provenance and notice files. It also covers
+findings or coverage receipts if they are present; it does not create them.
+Partial reports can be authenticated too: a signature identifies their
+producer and preserves their bytes, without certifying their completeness.
+
+Extract the download into a new directory and use a recent GitHub CLI to
+verify the signature against RAPTOR's publishing workflow **before** checking
+its file hashes:
+
+```bash
+cd container-sbom
+gh attestation verify evidence-checksums.sha256 \
+  --repo gadievron/raptor \
+  --signer-workflow gadievron/raptor/.github/workflows/dockerhub-publish.yml \
+  --deny-self-hosted-runners --bundle evidence-attestation.jsonl
+sha256sum --check --strict evidence-checksums.sha256
+```
+
+Both commands must succeed. Compare the image digest in `image-digest.txt`
+with the image you intend to inspect; an authentic older report is not proof
+that it describes today's `latest` image. Files added after signing are not
+covered by these checks. Signing failures are shown in the job summary and
+annotations; unsigned downloads remain available and publication continues.
+
+For an offline machine, obtain a trusted-root file on a trusted connected
+machine with `gh attestation trusted-root`, then add
+`--custom-trusted-root /trusted/path/trusted-root.jsonl` to the verification
+command. Transfer that trust root independently of the download being checked.
+See GitHub's [offline verification instructions](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline).
+
+This authenticates RAPTOR's producing workflow. It does not establish Node's
+upstream build provenance, prove compiled native dependency membership, or
+change the findings of `sbom verify-plan`, which checks local consistency.
+
 ## Preparing RAPTOR inventory exports
 
 [Syft](https://github.com/anchore/syft) is an external SBOM generation tool;

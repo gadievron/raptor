@@ -46,6 +46,7 @@ on:
       - '.github/scripts/prepare_sbom.py'
       - '.github/scripts/check_playwright_source.py'
       - '.github/scripts/check_node_release.py'
+      - '.github/scripts/write_sbom_checksums.py'
       - '.github/actions/enable-userns/**'
   schedule:
     # Refresh mutable base images and apt packages, even without source changes.
@@ -103,6 +104,10 @@ jobs:
     if: needs.scope.outputs.build == 'true' && github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       published: ${{ steps.publish.outputs.published }}
       digest: ${{ steps.publish.outputs.digest }}
@@ -333,6 +338,48 @@ jobs:
             echo "::warning::Container license audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact."
             echo "## Container licenses and notices" >> "$GITHUB_STEP_SUMMARY"
             echo "Audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Hash retained container evidence
+        id: evidence_checksums
+        if: always() && steps.export_image.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/write_sbom_checksums.py --audit-dir "${RUNNER_TEMP}/container-sbom"
+
+      - name: Attest container evidence checksums
+        id: evidence_attestation
+        if: always() && steps.evidence_checksums.outcome == 'success'
+        continue-on-error: true
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/container-sbom/evidence-checksums.sha256
+          push-to-registry: false
+
+      - name: Retain evidence signature bundle
+        id: retain_attestation
+        if: always() && steps.evidence_attestation.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUNDLE_PATH: ${{ steps.evidence_attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" "${RUNNER_TEMP}/container-sbom/evidence-attestation.jsonl"
+
+      - name: Report evidence authentication status
+        if: always() && steps.export_image.outcome == 'success'
+        env:
+          ATTESTATION_OUTCOME: ${{ steps.retain_attestation.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$ATTESTATION_OUTCOME" == 'success' ]]; then
+            echo 'Evidence checksums and signature bundle are included in the container-sbom download.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'The signature authenticates the producing workflow; it does not certify coverage or upstream build provenance.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::warning::Container evidence authentication unavailable; do not treat the download as authenticated.'
+            echo 'Evidence authentication unavailable. The download may contain partial or unsigned evidence.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Retain container SBOM and notice evidence

@@ -59,6 +59,7 @@ def repo(tmp_path):
     ('.github/scripts/prepare_sbom.py', True),
     ('.github/scripts/check_playwright_source.py', True),
     ('.github/scripts/check_node_release.py', True),
+    ('.github/scripts/write_sbom_checksums.py', True),
 ])
 def test_image_inputs_not_audit_or_test_changes(repo, name, expected):
     base = git(repo, 'rev-parse', 'HEAD')
