@@ -162,10 +162,13 @@ from core.smt_solver.witness import format_witness as _format_witness
 
 @dataclass
 class PathCondition:
-    """A single guard/branch condition extracted from a dataflow step."""
+    """A guard with Boolean branch polarity; malformed flags raise ValueError."""
     text: str
     step_index: int
     negated: bool = False
+
+    def __post_init__(self):
+        require_bool(self.negated, argument="negated")
 
 
 # --- Phase 8: weakest-precondition extraction ------------------------------
@@ -1544,6 +1547,8 @@ def check_verb_feasibility(
     ``smt_available=False`` case before calling this helper.
     """
     require_bool(reduce_constraints, argument="reduce_constraints")
+    for condition in text_guards:
+        require_bool(condition.negated, argument="negated")
     mode = profile.describe()
     count = len(intrinsic) + len(text_guards)
     if count > _MAX_CONDITIONS_PER_CALL:
@@ -1645,6 +1650,8 @@ def check_path_feasibility(
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
     require_bool(use_call_summaries, argument="use_call_summaries")
+    for condition in conditions:
+        require_bool(condition.negated, argument="negated")
     mode = profile.describe()
 
     if not _z3_available():

@@ -29,6 +29,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+from core.smt_solver._validation import require_bool
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +40,11 @@ class PathCondition:
     negated: bool = False
     source: str = ""
 
+    def __post_init__(self):
+        require_bool(self.negated, argument="negated")
+
     def to_smt_condition(self) -> str | dict[str, Any]:
+        require_bool(self.negated, argument="negated")
         if self.negated:
             return {"text": self.text, "negated": True}
         return self.text
@@ -61,6 +67,9 @@ def extract_conditions_from_flow_trace(
     path_conditions in two formats:
     - List of strings: ["size > 0", "buf != NULL"]
     - List of dicts: [{"text": "size > 0", "negated": false}]
+
+    A present negated flag must be a Boolean. Invalid polarity raises
+    ValueError so the enclosing check can decline the entire trace.
     """
     conditions = []
 
@@ -90,7 +99,7 @@ def extract_conditions_from_flow_trace(
             elif isinstance(cond, dict):
                 conditions.append(PathCondition(
                     text=cond.get("text", ""),
-                    negated=bool(cond.get("negated", False)),
+                    negated=cond.get("negated", False),
                     source=step.get("definition", step.get("file", "")) or "",
                 ))
 
@@ -105,7 +114,7 @@ def extract_conditions_from_flow_trace(
         elif isinstance(cond, dict):
             conditions.append(PathCondition(
                 text=cond.get("text", ""),
-                negated=bool(cond.get("negated", False)),
+                negated=cond.get("negated", False),
                 source="trace",
             ))
 
@@ -200,14 +209,14 @@ def check_path_feasibility(
             reasoning="no conditions to check",
         )
 
-    smt_conditions = [c.to_smt_condition() for c in conditions if c.text]
-    if not smt_conditions:
-        return FeasibilityResult(
-            feasible=None,
-            reasoning="all conditions were empty after filtering",
-        )
-
     try:
+        smt_conditions = [c.to_smt_condition() for c in conditions if c.text]
+        if not smt_conditions:
+            return FeasibilityResult(
+                feasible=None,
+                reasoning="all conditions were empty after filtering",
+            )
+
         from .sweep import run_smt_sweep
 
         smt_args: dict[str, Any] = {"conditions": smt_conditions}
@@ -264,7 +273,12 @@ def check_flow_trace_feasibility(
     profile: dict[str, Any] | None = None,
 ) -> FeasibilityResult:
     """Check feasibility of a single flow trace's path conditions."""
-    conditions = extract_conditions_from_flow_trace(trace)
+    try:
+        conditions = extract_conditions_from_flow_trace(trace)
+    except (ValueError, TypeError) as exc:
+        return FeasibilityResult(
+            feasible=None, reasoning="invalid path-condition metadata", error=str(exc),
+        )
     if not conditions:
         return FeasibilityResult(
             feasible=None,

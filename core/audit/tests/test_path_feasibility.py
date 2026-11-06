@@ -276,3 +276,44 @@ class TestNonDictStepTolerated:
         }
         conds = extract_conditions_from_flow_trace(trace)
         assert [c.text for c in conds] == ["size > 0"]
+
+
+class TestStrictConditionPolarity:
+    def test_malformed_trace_polarity_declines_the_entire_check(self, monkeypatch):
+        import pytest
+        from core.audit import sweep
+
+        monkeypatch.setattr(sweep, 'run_smt_sweep', lambda **kw: pytest.fail('invalid trace reached SMT'))
+        for location in ('steps', 'top-level'):
+            for polarity in ('false', 'true', '', 0, 1, None, [], {}):
+                raw = ['Value == 0', {'text': 'Value == 0', 'negated': polarity}]
+                trace = {'steps': [{'path_conditions': raw}]} if location == 'steps' else {'path_conditions': raw}
+                with pytest.raises(ValueError, match='negated must be a boolean'):
+                    extract_conditions_from_flow_trace(trace)
+                result = check_flow_trace_feasibility(trace)
+                assert result.feasible is None and result.error == 'negated must be a boolean'
+
+    def test_mutated_direct_condition_is_inconclusive_before_sweep(self, monkeypatch):
+        import pytest
+        from core.audit import sweep
+
+        monkeypatch.setattr(sweep, 'run_smt_sweep', lambda **kw: pytest.fail('invalid condition reached SMT'))
+        condition = PathCondition('Value == 0')
+        condition.negated = 'false'
+        result = check_path_feasibility([PathCondition('Value == 0'), condition])
+        assert result.feasible is None and result.error == 'negated must be a boolean'
+
+    def test_direct_constructor_requires_a_real_boolean(self):
+        import pytest
+
+        with pytest.raises(ValueError, match='negated must be a boolean'):
+            PathCondition('Value == 0', negated='false')
+
+    def test_real_booleans_survive_trace_extraction_and_serialization(self):
+        conditions = extract_conditions_from_flow_trace({'path_conditions': [
+            {'text': 'Value == 0'}, {'text': 'Value == 1', 'negated': False},
+            {'text': 'Value == 2', 'negated': True},
+        ]})
+        assert [condition.to_smt_condition() for condition in conditions] == [
+            'Value == 0', 'Value == 1', {'text': 'Value == 2', 'negated': True},
+        ]

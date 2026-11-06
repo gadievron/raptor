@@ -959,3 +959,41 @@ def test_untyped_signed_call_is_not_an_unsigned_source_refutation(tmp_path, miss
         result = validator.validate_dataflow_path(path, tmp_path)
     assert result.is_exploitable is True
     assert validator.llm.generate_structured.call_count == 1
+
+
+@pytest.mark.parametrize('polarity', ['false', 'true', '', 0, 1, None, [], {}],
+                         ids=['string-false', 'string-true', 'empty-string', 'zero', 'one', 'null', 'list', 'dict'])
+def test_malformed_extraction_polarity_cannot_short_circuit_analysis(tmp_path, polarity):
+    validator = _validator()
+    # Exercise the actual extraction adapter, with a mocked response only.
+    validator._extract_path_conditions = DataflowValidator._extract_path_conditions.__get__(validator)
+    extraction = {
+        'path_width': 32, 'path_signed': False,
+        'path_conditions': [
+            {'condition': 'Value == 0', 'negated': False},
+            {'condition': 'Value == 0', 'negated': polarity},
+        ],
+    }
+    validator.llm.generate_structured.side_effect = [(extraction, 'raw'), (dict(_FULL_RESPONSE), 'raw')]
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    with patch.object(validator, '_injection_prescreen', return_value=None), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ):
+        result = validator.validate_dataflow_path(path, tmp_path)
+    assert result.is_exploitable is True
+    assert validator.llm.generate_structured.call_count == 2
+
+
+@pytest.mark.parametrize('negated', [False, True])
+def test_extraction_preserves_actual_boolean_polarity(tmp_path, negated):
+    validator = _validator()
+    validator.llm.generate_structured.return_value = ({
+        'path_conditions': [{'condition': 'Value == 0', 'negated': negated}],
+        'path_width': 32, 'path_signed': False,
+    }, 'raw')
+    path = validator.extract_dataflow_from_sarif(_sarif_two_flows())
+    conditions, hint = DataflowValidator._extract_path_conditions(validator, path, tmp_path)
+    assert len(conditions) == 1 and conditions[0].negated is negated
+    assert hint == {'width': 32, 'signed': False}

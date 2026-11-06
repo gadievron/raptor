@@ -773,7 +773,7 @@ class DataflowValidator:
                 PathCondition(
                     text=c.get("condition", ""),
                     step_index=c.get("step_index", 0),
-                    negated=bool(c.get("negated", False)),
+                    negated=c.get("negated", False),
                 )
                 for c in response.get("path_conditions", [])
                 if c.get("condition")
