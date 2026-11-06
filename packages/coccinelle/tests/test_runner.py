@@ -3293,6 +3293,23 @@ class TestDemuxResultByFile:
         assert out["a.c"].files_examined == ["a.c"]
         assert out["a.c"].returncode == 0
 
+    @pytest.mark.parametrize("unassigned", ["other.c", "sub/a.c", "./a.c"])
+    def test_unassigned_match_invalidates_batch_silence(self, tmp_path, unassigned):
+        root = tmp_path / "src"
+        root.mkdir()
+        fa, fb = root / "a.c", root / "b.c"
+        result = self._batch(root, [fa, fb], matches=[
+            SpatchMatch(file=str(fa), line=3, rule="r"),
+            SpatchMatch(file=unassigned, line=7, rule="r"),
+        ])
+        out = demux_result_by_file(result, [fa, fb], root)
+        assert [m.line for m in out["a.c"].matches] == [3]
+        for per in out.values():
+            assert not per.ok
+            assert per.files_examined == []
+            assert any("input file set" in error for error in per.errors)
+        assert result.ok  # Demultiplexing does not mutate its input.
+
     def test_match_free_file_is_verified_silent(self, tmp_path):
         root = tmp_path / "src"
         root.mkdir()
