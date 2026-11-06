@@ -6,10 +6,9 @@ pattern (jsonc, source_intel, inventory extractors, SCA parsers,
 audit callsite consistency, staleness normalisation).  This module
 is the canonical one; new consumers should import from here.
 
-Each language handler is a character-by-character state machine that
-tracks whether the cursor is inside a string literal.  Comment markers
-inside strings are left untouched.  This is deliberately NOT a full
-lexer — it handles the common cases that matter for cosmetic-change
+The language handlers track quoted literals while skipping comments.
+Comment markers inside strings are left untouched.  This is deliberately NOT
+a full lexer — it handles the common cases that matter for cosmetic-change
 detection and call-site analysis, not every edge case in the language
 spec.
 
@@ -26,6 +25,7 @@ Known limitations:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 __all__ = [
@@ -138,8 +138,61 @@ def blank_c_noncode(content: str, *, allow_digit_separators: bool = False) -> st
 
 
 
-def strip_c_comments(text: str) -> str:
-    """Strip C-family comments while preserving string/char literals."""
+_C_NONCODE_START_RE = re.compile(r"[\"']|/\*|//")
+
+
+def _strip_c_comment_spans(text: str, comment_replacement: str) -> str:
+    """Skip quoted literals and copy spans only around actual comments."""
+    out: list[str] = []
+    i = 0
+    copied = 0
+    # Replacement contents must not depend on a str subclass's truthiness.
+    has_replacement = str.__len__(comment_replacement) > 0
+    n = len(text)
+    while match := _C_NONCODE_START_RE.search(text, i):
+        start = match.start()
+        marker = match.group()
+        if marker in ("\"", "'"):
+            end = start + 1
+            while end < n:
+                character = text[end]
+                if character == "\\":
+                    end += 2
+                elif character == marker:
+                    end += 1
+                    break
+                else:
+                    end += 1
+            i = end
+            continue
+        if start > copied:
+            out.append(text[copied:start])
+        if has_replacement:
+            out.append(comment_replacement)
+        if marker == "/*":
+            end = text.find("*/", start + 2)
+            i = n if end < 0 else end + 2
+        else:
+            end = text.find("\n", start + 2)
+            i = n if end < 0 else end
+        copied = i
+    if copied == 0:
+        return text
+    if copied < n:
+        out.append(text[copied:])
+    return "".join(out)
+
+
+def strip_c_comments(text: str, *, comment_replacement: str = "") -> str:
+    """Strip C-family comments while preserving string/char literals.
+
+    Replace each comment with ``comment_replacement`` (empty by default).
+    A single space keeps surrounding preprocessing tokens separate.
+    """
+    if type(text) is str:
+        if "/*" not in text and "//" not in text:
+            return text
+        return _strip_c_comment_spans(text, comment_replacement)
     out: list[str] = []
     i = 0
     n = len(text)
@@ -159,11 +212,13 @@ def strip_c_comments(text: str) -> str:
         if c == "/" and i + 1 < n:
             nxt = text[i + 1]
             if nxt == "/":
+                out.append(comment_replacement)
                 i += 2
                 while i < n and text[i] != "\n":
                     i += 1
                 continue
             if nxt == "*":
+                out.append(comment_replacement)
                 in_block = True
                 i += 2
                 continue
