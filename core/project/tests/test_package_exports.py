@@ -85,10 +85,15 @@ def test_public_exports_resolve_to_original_objects_and_are_cached(tmp_path):
             namespace = {}
             exec(f"from {package_name} import *", namespace)
             assert all(namespace[name] is getattr(package, name) for name in expected)
-        # Configuration still performs its normal broker initialization when
-        # a project/output API actually requests it.
+        # Project/output exports load configuration, but credential registry
+        # initialization remains deferred until credential access.
         assert "core.config" in sys.modules
+        assert "core.llm.model_brokers" not in sys.modules
+        from core.config import RaptorConfig
+        broker_keys = RaptorConfig._LLM_AGGREGATOR_KEYS
         assert "core.llm.model_brokers" in sys.modules
+        from core.llm.model_brokers import MODEL_BROKERS
+        assert broker_keys == tuple(broker.api_key_env for broker in MODEL_BROKERS)
     """, tmp_path)
 
 
