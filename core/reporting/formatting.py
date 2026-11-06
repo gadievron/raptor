@@ -185,6 +185,7 @@ def get_display_status(finding: dict[str, Any]) -> str:
         "false_positive": "False Positive",
         "poc_success": "Exploitable",
         "not_disproven": "Unconfirmed",
+        "unconfirmed": "Unconfirmed",
         "disproven": "Ruled Out",
         "validated": "Confirmed",
         "test_code": "Ruled Out",

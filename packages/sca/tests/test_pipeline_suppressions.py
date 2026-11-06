@@ -137,7 +137,8 @@ suppressions:
             http=StubHttp(), cache=cache)
     md = (out / "report.md").read_text()
     assert "Suppressed" in md
-    assert "(suppressed: ack)" in md
+    assert "| Suppressed | True |" in md
+    assert "| Suppression reason | ack |" in md
 
 
 def test_untrusted_run_ignores_target_suppression_file(

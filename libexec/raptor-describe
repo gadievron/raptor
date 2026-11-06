@@ -56,12 +56,18 @@ def main(argv=None):
         "--json", action="store_true",
         help="Emit machine-readable JSON instead of the text block",
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args(argv)
+    report_options = options_from_args(args, parser)
+    explicit_report = bool(args.report_format or args.report_output or args.no_report)
+    if explicit_report and report_options.enabled and report_options.output is None:
+        parser.error("Describe reports require --report-output")
 
     from core.project.registry_home import RegistryHomeError
     from packages.describe.cli import describe_main
     try:
-        return describe_main(args.target, args.json)
+        return describe_main(args.target, args.json, report_options=report_options) if explicit_report else describe_main(args.target, args.json)
     except RegistryHomeError as exc:
         # Invalid operator override refused by default-target
         # resolution: the designed one-line refusal, never a raw

@@ -233,14 +233,14 @@ libexec/raptor-validation-helper 1 "$OUTPUT_DIR" --model <your-model-id>
 
 This merges stage-f.json, generates the validation report, diagrams, coverage records, and completes the run lifecycle (recording the model into the manifest). The findings summary and coverage summary are printed to stdout.
 
-Then read `{output_dir}/validation-report.md` and add a 1-2 sentence summary paragraph
-after the `# Exploitability Validation Report` header — e.g., "All 3 buffer overflows are
-real and reachable. 2 are directly exploitable; the third is constrained by RELRO." Use only
-facts from the findings data.
+The Python reporting engine produces a complete report and a chat-ready
+`summary.md`. Do not edit the completed report to add LLM-authored prose.
 
-**GATE: VERBATIM OUTPUT.** Read `$OUTPUT_DIR/summary.txt` and copy its ENTIRE contents
-into your chat response exactly as-is. No editing, no reformatting, no column removal. If
-the table has 7 columns, your output must have 7 columns.
+**GATE: VERBATIM OUTPUT.** Read `$OUTPUT_DIR/summary.md` and display its complete
+bounded contents in your chat response without changing counts, columns, verdict
+labels, or limitations. For historical outputs without `summary.md`, display
+`summary.txt` verbatim. If persistence failed, present the printed results and
+reporting warning. A file-written announcement is not a result summary.
 
 ### Post-run fork (interactive sessions only)
 

@@ -604,6 +604,20 @@ _REPORT_WRITER_FILES = (
     # sanitise_for_terminal grade at construction.
     "core/project/annotations_diff.py",
     "core/reporting/renderer.py",
+    "core/reporting/renderers.py",
+    "core/reporting/builders.py",
+    "core/reporting/summary.py",
+    "core/reporting/delta.py",
+    "core/reporting/service.py",
+    "core/reporting/writer.py",
+    "core/reporting/__main__.py",
+    "core/reporting/results.py",
+    "packages/codeql/agent.py",
+    "libexec/raptor-run-lifecycle",
+    "core/audit/report_document.py",
+    "core/project/findings_utils.py",
+    "packages/sca/reporting.py",
+    "packages/diagram/reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
@@ -1346,7 +1360,7 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     # --- helper-return arm: adjudicated module-local helper flows ----
     AllowlistEntry(
         file="core/project/report.py",
-        func_name="generate_project_report",
+        func_name="_generate_project_report",
         kind="unsanitised_llm_value",
         detail="annotations_md",
         audit_note=(
@@ -1878,6 +1892,37 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "prompt assembly; this site does not render a report"
         ),
     ),
+)
+
+
+# Portable reporting builders retain original values as DATA. Escaping belongs
+# to the format renderer; escaping here would corrupt JSON and double-escape
+# Markdown/HTML. Enumerate exact detector sites rather than exempting modules.
+_ALLOWLIST += tuple(
+    AllowlistEntry(file=file, func_name=function, kind="unsanitised_llm_value", detail=detail, audit_note=note)
+    for file, function, details, note in (
+        ("core/reporting/builders.py", "build_document",
+         ("tool", "rule_id", "file", "line", "status", "severity", "reason", "path"),
+         "Block fields are portable data, not writes. render_document validates blocks and its Markdown/HTML renderers encode every field; JSON uses ensure_ascii and XML uses ElementTree."),
+        ("core/reporting/summary.py", "build_operator_summary",
+         ("tool", "rule_id", "file", "line", "status", "severity"),
+         "OperatorSummary rows are structured data. render_operator_summary routes foreign values through its safe alias: md_inline for chat or sanitise_for_terminal for terminal; persisted JSON is ensure_ascii."),
+        ("core/reporting/summary.py", "render_operator_summary",
+         ("reason", "v", "status", "tool"),
+         "The local safe callable is md_inline in Markdown mode and a sanitise_for_terminal wrapper in terminal mode. Each interpolated foreign value passes through it; counts are generated integers."),
+        ("packages/codeql/agent.py", "CodeQLAgent.print_summary", ("summary",),
+         "render_operator_summary is the shared terminal boundary: every foreign field uses sanitise_for_terminal; its generated newlines are deliberate layout, not foreign controls."),
+        ("core/reporting/delta.py", "build_delta", ("status",),
+         "Delta rows are structured Block table data. They have no IO here and are escaped by the selected report renderer; source verdicts are labeled recorded snapshot claims."),
+        ("core/project/findings_utils.py", "findings_from_report_context",
+         ("tool", "file", "line", "rule_id", "message", "function", "suppressed"),
+         "Committed scan findings are returned as native DATA for existing project grouping/merging APIs, never rendered here. Status is the fixed unconfirmed label. Project Markdown and console consumers retain their existing escaping boundaries."),
+        ("core/reporting/renderers.py", "_markdown.block", ("block",),
+         "Recursive block rendering returns sanitised Markdown. Text uses md_prose, table cells/titles md_inline, code and legacy literals md_fence; imported legacy content is never trusted as active Markdown."),
+        ("core/reporting/renderers.py", "_markdown", ("block", "k", "v"),
+         "Metadata keys/values call md_inline directly; block() recursively sanitises the structured document fields and preserves only explicitly marked producer-built legacy Markdown."),
+    )
+    for detail in details
 )
 
 

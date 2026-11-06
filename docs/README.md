@@ -27,6 +27,7 @@ The [dependency reference](dependencies.md) lists tools and optional packages.
 |------------|------------|
 | Run an end-to-end source analysis | [Autonomous workflow](agentic.md#usage) |
 | Review source systematically | [Audit guide](audit.md#usage) |
+| Read or export scan summaries, reports and deltas | [Reporting guide](reporting.md) |
 | Check dependencies and supply-chain risks | [SCA guide](sca.md#usage) |
 | Investigate a binary | [Binary analysis](binary-analysis.md) |
 | Fuzz a target and investigate crashes | [Fuzzing](fuzzing.md#usage) and [crash analysis](crash-analysis.md#quick-start) |

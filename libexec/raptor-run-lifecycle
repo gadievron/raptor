@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.run.metadata import complete_run, fail_run, start_run  # noqa: E402
 from core.run.output import TargetMismatchError, get_output_dir  # noqa: E402
+from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
 
 
 def _pop_flag(rest: list, name: str):
@@ -111,6 +112,8 @@ def main():
                             help="Target path (preferred form)")
         parser.add_argument("--out", dest="explicit_out", default=None,
                             help="Explicit output directory override")
+        parser.add_argument("--retry-of", type=Path, help="Explicit failed/interrupted run to retry as a new attempt; does not imply supersession")
+        parser.add_argument("--parent-run", type=Path, help="Explicit workflow parent run; records provenance without inferring coverage")
         parser.add_argument(
             "--max-cost-usd", dest="max_cost_usd", default=None,
             type=float,
@@ -149,13 +152,15 @@ def main():
         try:
             out_dir = get_output_dir(args.command, target_path=target_path,
                                      explicit_out=args.explicit_out)
+            if str(out_dir) != str(out_dir).strip() or any(not c.isprintable() for c in str(out_dir)):
+                raise ValueError("Lifecycle output directory contains whitespace or control characters unsupported by the OUTPUT_DIR protocol")
         except (TargetMismatchError, ProjectArgvError,
-                RegistryHomeError) as e:
+                RegistryHomeError, ValueError) as e:
             # RegistryHomeError: an invalid RAPTOR_REGISTRY_HOME is a
             # hard error, never a projectless fallback — same CLI
             # contract as the other designed refusals (one ERROR line,
             # exit 1, no OUTPUT_DIR sentinel).
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
 
         # Run-start contention (managed project dirs only): a live run
@@ -165,9 +170,10 @@ def main():
         from core.project.oplock import OpLockContention
         try:
             start_run(out_dir, args.command, target=target_path,
-                      wait_for_project=args.wait)
-        except (OpLockContention, ProjectArgvError) as e:
-            print(f"ERROR: {e}", file=sys.stderr)
+                      wait_for_project=args.wait, **({"retry_of": args.retry_of} if args.retry_of else {}),
+                      **({"parent_run": args.parent_run} if args.parent_run else {}))
+        except (OpLockContention, ProjectArgvError, ValueError) as e:
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
         except OSError as e:
             # Disk-full / permission failures at the start boundary
@@ -175,7 +181,7 @@ def main():
             # a raw traceback here broke every caller that parses
             # stderr. The half-born dir is left for inspection; a
             # marker-less dir is inert to run discovery.
-            print(f"ERROR: could not start the run in {out_dir}: {e}",
+            print(f"ERROR: could not start the run in {sanitise_for_terminal(str(out_dir))}: {sanitise_for_terminal(str(e), max_len=2000)}",
                   file=sys.stderr)
             sys.exit(1)
 
@@ -212,7 +218,7 @@ def main():
                 except SystemExit:
                     raise
                 except Exception as e:  # noqa: BLE001
-                    sys.stderr.write(f"  (estimate skipped: {e})\n")
+                    sys.stderr.write(f"  (estimate skipped: {sanitise_for_terminal(str(e), max_len=2000)})\n")
             else:
                 # An operator-declared cap must never vanish silently:
                 # say the pre-flight estimate could not run. The
@@ -255,7 +261,7 @@ def main():
             complete_run(Path(sys.argv[2]), manifest=manifest,
                          expected_command=claim)
         except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
 
     elif action == "fail":
@@ -269,7 +275,7 @@ def main():
         try:
             fail_run(Path(sys.argv[2]), message, expected_command=claim)
         except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
 
     elif action == "cancel":
@@ -283,7 +289,7 @@ def main():
             from core.run.metadata import cancel_run
             cancel_run(Path(sys.argv[2]), expected_command=claim)
         except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
 
     elif action == "interrupt":
@@ -304,11 +310,11 @@ def main():
             interrupt_run(Path(sys.argv[2]), message,
                           expected_command=claim)
         except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
             sys.exit(1)
 
     else:
-        print(f"Unknown action: {action}", file=sys.stderr)
+        print(f"Unknown action: {sanitise_for_terminal(action)}", file=sys.stderr)
         print("Actions: start, complete, fail, cancel, interrupt", file=sys.stderr)
         sys.exit(1)
 

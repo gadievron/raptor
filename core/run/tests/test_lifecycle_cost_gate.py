@@ -62,6 +62,31 @@ def _start(env, monkeypatch, *extra: str) -> None:
     env["mod"].main()
 
 
+@pytest.mark.parametrize("name", ["output\nOUTPUT_DIR=forged\x1b", "output ", "output\u00a0"])
+def test_output_sentinel_refuses_control_characters(env, monkeypatch, tmp_path, capsys, name):
+    env["out"] = tmp_path / name
+    with pytest.raises(SystemExit) as exc:
+        _start(env, monkeypatch)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "OUTPUT_DIR=" not in captured.out
+    assert "\x1b" not in captured.err
+    assert not (env["out"] / ".raptor-run.json").exists()
+
+
+def test_terminal_lifecycle_errors_are_sanitised(env, monkeypatch, capsys):
+    def refuse(*args, **kwargs):
+        raise ValueError("fixture\x1b[31m\nFORGED")
+    monkeypatch.setattr(env["mod"], "complete_run", refuse)
+    monkeypatch.setattr(sys, "argv", ["raptor-run-lifecycle", "complete", str(env["out"])])
+    with pytest.raises(SystemExit) as exc:
+        env["mod"].main()
+    assert exc.value.code == 1
+    text = capsys.readouterr().err
+    assert "\x1b" not in text and "\\x1b" in text
+    assert "\nFORGED" not in text
+
+
 def test_gate_runs_with_explicit_target(env, monkeypatch, tmp_path, capsys):
     target = tmp_path / "target"
     target.mkdir()

@@ -3,10 +3,120 @@
 from __future__ import annotations
 
 import json
+import re
+import pytest
 from pathlib import Path
 from typing import Any, Dict, List
 
 from packages.sca import render
+
+
+def test_shared_formats_are_regenerable_without_source_or_network(tmp_path, monkeypatch):
+    from core.reporting.writer import load_committed_report, regenerate
+    from packages.sca import pipeline
+    monkeypatch.setattr(pipeline, "run_sca", lambda *a, **kw: pytest.fail("rerender must not run analysis"))
+    source = _findings_file(tmp_path, [_vuln_row(), _hygiene_row(), _license_row()])
+    before = source.read_bytes()
+    assert render.main([str(source), "--no-sarif", "--report-format", "markdown", "--report-format", "html",
+                        "--report-format", "json", "--report-format", "xml"]) == 0
+    context, document, _ = load_committed_report(tmp_path)
+    assert context.state == "unknown" and context.stages[0].coverage == []
+    assert document.summary["Dependencies analysed"] is None and document.summary["Cache hits"] is None
+    assert source.read_bytes() == before
+    for suffix in ("md", "html", "json", "xml"):
+        assert "log4j-core" in (tmp_path / f"report.{suffix}").read_text()
+    expected = (tmp_path / "report.html").read_bytes()
+    source.unlink()
+    regenerate(tmp_path, tmp_path / "offline.html", format="html")
+    assert (tmp_path / "offline.html").read_bytes() == expected
+
+
+def test_no_report_keeps_summary_sarif_and_input(tmp_path, capsys):
+    source = _findings_file(tmp_path, [_vuln_row()])
+    before = source.read_bytes()
+    assert render.main([str(source), "--no-report"]) == 0
+    assert source.read_bytes() == before
+    assert (tmp_path / "summary.md").exists() and (tmp_path / "findings.sarif").exists()
+    assert not (tmp_path / "report.md").exists()
+    assert "Captured findings: 1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flags", [["--report-format", "pdf"], ["--no-report", "--report-format", "html"],
+                                  ["--no-md", "--report-format", "markdown"], ["--out-md", "custom.md", "--report-format", "html"]])
+def test_report_conflicts_fail_before_reading_or_writing(tmp_path, flags):
+    with pytest.raises(SystemExit) as exc:
+        render.main([str(tmp_path / "missing.json"), *flags])
+    assert exc.value.code == 2
+    assert not list(tmp_path.iterdir())
+
+
+def test_legacy_output_filename_without_extension_is_preserved(tmp_path):
+    source = _findings_file(tmp_path, [_vuln_row()])
+    destination = tmp_path / "custom-report"
+    assert render.main([str(source), "--out-md", str(destination), "--no-sarif"]) == 0
+    assert destination.is_file() and "Log4Shell" in destination.read_text()
+
+
+@pytest.mark.parametrize("flags", ["--report-output", "--out-md", "--out-sarif"])
+def test_output_cannot_overwrite_its_input(tmp_path, flags):
+    source = _findings_file(tmp_path, [_vuln_row()])
+    before = source.read_bytes()
+    extra = ["--report-format", "json"] if flags == "--report-output" else []
+    assert render.main([str(source), flags, str(source), *extra]) == 2
+    assert source.read_bytes() == before
+
+
+def test_filter_scope_and_threshold_population_remain_distinct(tmp_path):
+    from core.reporting.writer import load_committed_report
+    source = _findings_file(tmp_path, [_vuln_row(reachability="not_reachable"), _hygiene_row()])
+    assert render.main([str(source), "--only-reachable", "--fail-on-kev"]) == 1
+    context, _, _ = load_committed_report(tmp_path)
+    assert len(context.findings) == 1
+    assert context.extensions["raptor.rerender"]["source_rows"] == 2
+    assert context.extensions["raptor.scope"]["filters"]["only_reachable"] is True
+
+
+def test_report_failure_returns_nonzero_but_keeps_sarif_and_quick_view(tmp_path, monkeypatch, capsys):
+    import core.reporting.writer as writer
+    source = _findings_file(tmp_path, [_vuln_row()])
+    monkeypatch.setattr(writer, "render_document", lambda *a, **kw: (_ for _ in ()).throw(ValueError("format failed")))
+    assert render.main([str(source)]) == 1
+    assert (tmp_path / "findings.sarif").is_file() and source.is_file()
+    assert "Captured findings: 1" in capsys.readouterr().out
+
+
+def test_sarif_failure_preserves_the_report_and_quick_view(tmp_path, monkeypatch, capsys):
+    source = _findings_file(tmp_path, [_vuln_row()])
+    def fail(*a, **kw):
+        raise OSError("destination unavailable")
+    monkeypatch.setattr(render, "write_sarif", fail)
+    assert render.main([str(source)]) == 1
+    assert (tmp_path / "report.md").is_file()
+    assert "Captured findings: 1" in capsys.readouterr().out
+
+
+def test_exports_cannot_replace_a_committed_generation(tmp_path):
+    from core.reporting.writer import load_committed_report
+    source = _findings_file(tmp_path, [_vuln_row()])
+    assert render.main([str(source), "--no-sarif"]) == 0
+    _, _, manifest = load_committed_report(tmp_path)
+    destination = tmp_path / ".reporting" / manifest["generation"] / "report.md"
+    original = destination.read_bytes()
+    assert render.main([str(source), "--out-sarif", str(destination)]) == 2
+    assert render.main([str(source), "--no-sarif", "--report-output", str(destination)]) == 1
+    assert destination.read_bytes() == original
+
+
+def test_scan_and_rerender_share_the_actual_portable_document_builder(tmp_path):
+    from packages.sca.reporting import build_sca_document
+    from core.reporting.writer import load_committed_report
+    rows = [_vuln_row(), _hygiene_row()]
+    source = _findings_file(tmp_path, rows)
+    _, scan_document = build_sca_document(rows=rows, target=tmp_path, output_dir=tmp_path, deps_analysed=5)
+    assert render.main([str(source), "--no-sarif"]) == 0
+    _, rerendered, _ = load_committed_report(tmp_path)
+    titles = {"Dependency summary", "Vulnerable dependencies", "Hygiene findings", "Dependency and policy evidence"}
+    assert {b.title: b for b in scan_document.blocks if b.title in titles} == {b.title: b for b in rerendered.blocks if b.title in titles}
 
 
 def _vuln_row(
@@ -287,7 +397,10 @@ def test_render_defangs_hostile_advisory_fields(tmp_path: Path) -> None:
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "\x1b" not in md
     assert "\x07" not in md
-    assert "![](" not in md
+    # Complete evidence is retained in inert JSON code blocks. The shared
+    # renderer must strip autofetch markup from all active report prose.
+    prose = re.sub(r"(?ms)^```[^\n]*\n.*?^```[ \t]*$", "", md)
+    assert "![](" not in prose
 
 
 def test_render_hostile_description_cannot_break_table_row(
@@ -301,7 +414,7 @@ def test_render_hostile_description_cannot_break_table_row(
     rc = render.main([str(findings), "--no-sarif"])
     assert rc == 0
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "detail \\| with \\| pipes" in md
+    assert "detail &#124; with &#124; pipes" in md
 
 
 def test_render_normal_fields_unchanged(tmp_path: Path) -> None:

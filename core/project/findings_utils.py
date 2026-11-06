@@ -215,7 +215,26 @@ def _load_size_gated_json(path: Path) -> Any | None:
     return load_json(path, max_bytes=MAX_FINDINGS_JSON_BYTES)
 
 
-def load_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
+def findings_from_report_context(report_context) -> list[dict[str, Any]]:
+    """Project-domain rows from a frozen capture, without reading live artifacts."""
+    rows = []
+    for finding in report_context.findings:
+        native = finding.get("native")
+        if isinstance(native, dict):
+            from copy import deepcopy
+            rows.append(deepcopy(native))
+        elif report_context.kind in {"scan", "codeql"}:
+            rows.append({"finding_id": finding.get("source_id"), "tool": finding.get("tool"),
+                         "file": finding.get("file"), "line": finding.get("line"),
+                         "vuln_type": finding.get("rule_id"), "message": finding.get("message"),
+                         "function": finding.get("function") or "", "rule_scope": finding.get("rule_scope"),
+                         "status": "unconfirmed", "suppressed": finding.get("suppressed") is True,
+                         "report_occurrence_ref": finding["occurrence_ref"],
+                         "report_snapshot_id": report_context.snapshot_id})
+    return rows
+
+
+def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_report=True) -> list[dict[str, Any]]:
     """Load findings list from a run directory's findings.json.
 
     Standalone ``/openant`` runs write their translated findings to
@@ -235,6 +254,15 @@ def load_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     if data is None:
         data = _load_size_gated_json(run_dir / "openant_findings.json")
     if data is None:
+        if not any((run_dir / name).exists() for name in ("findings.json", "openant_findings.json")):
+            if report_context is None and discover_report and (run_dir / "reporting-manifest.json").exists():
+                from core.reporting.writer import load_committed_report
+                try:
+                    report_context, _, _ = load_committed_report(run_dir)
+                except (OSError, ValueError, TypeError):
+                    logger.warning("Committed findings snapshot unavailable in %s", run_dir)
+            if report_context is not None:
+                return findings_from_report_context(report_context)
         logger.debug("No findings.json in %s", run_dir)
         return []
     if isinstance(data, list):

@@ -824,9 +824,14 @@ def _import_findings_file(
             "deduped": deduped,
         })
 
-    container, shape_note = _coerce_findings_container(
-        load_json(src), target_path=target)
+    loaded_input = load_json(src)
+    from core.reporting.lifecycle import find_input_snapshot, bind_native_input, write_input_selection
+    source_binding = find_input_snapshot(src, loaded_input)
+    container, shape_note = _coerce_findings_container(loaded_input, target_path=target)
+    if container is not None:
+        bind_native_input(container, source_binding)
     if container is None:
+        write_input_selection(dest.parent, {"findings": []}, source_binding, source_path=src)
         shutil.copy2(src, dest)
         _remove_stale_dedup_report(dest.parent)
         _write_import_marker(0)
@@ -885,6 +890,7 @@ def _import_findings_file(
     # Normalise foreign ids at the import chokepoint so the container
     # satisfies its own schema before any stage prep validates it.
     renamed = _normalise_finding_ids(container)
+    write_input_selection(dest.parent, container, source_binding, source_path=src)
     if renamed:
         print(f"  Normalised {renamed} foreign finding "
               f"id(s) to FIND-<n> (originals kept as "
@@ -4519,6 +4525,8 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             # dir would make a fresh sweep run report findings-mode
             # stats and a phantom routed count.
             _remove_stale_import_marker(out_dir)
+            from core.reporting.lifecycle import clear_input_selection
+            clear_input_selection(out_dir)
             _remove_stale_witness_backlog(out_dir)
             _remove_stale_dedup_report(out_dir)
 
@@ -4645,22 +4653,22 @@ def _write_stage1_coverage_records(workdir: Path) -> None:
         cleanup_manifest(workdir)
 
 
-def prepare_1(workdir, target=None, model=None):
+def prepare_1(workdir, target=None, model=None, report_options=None):
     """Stage 1: report, coverage, diagrams, complete lifecycle."""
     _apply_stage_file(workdir, "F")
 
     # Report
     from packages.exploitability_validation.report import (
-        generate_summary,
         write_validation_report,
     )
+    reporting = []
+    report_failed = False
     try:
-        write_validation_report(workdir)
-        print("Report generated")
+        write_validation_report(workdir, target=target, report_options=report_options, stream=sys.stdout, reporting_sink=reporting)
+        report_failed = any(r.errors for r in reporting)
     except Exception as e:  # noqa: BLE001
+        report_failed = True
         print(f"⚠️  Report error: {_sft(str(e), max_len=300)}", file=sys.stderr)
-
-    print(generate_summary(workdir))
 
     # Machine-readable per-finding outcomes + graph enrichment: the
     # writer projects findings.json's verdicts into
@@ -4711,13 +4719,8 @@ def prepare_1(workdir, target=None, model=None):
                 if disproven_list:
                     store_validation_disproven(resolved_target, disproven_list)
 
-    # Diagrams
-    try:
-        from packages.diagram import render_and_write
-        render_and_write(Path(workdir))
-        print("Diagrams generated")
-    except Exception as e:  # noqa: BLE001
-        print(f"⚠️  Diagram error: {_sft(str(e), max_len=300)}", file=sys.stderr)
+    # Report and diagrams are published from the same captured document. Do not
+    # reread live artifacts here and overwrite the snapshot's diagrams.md.
 
     # Coverage summary (unified store-backed report; file-level tier when
     # there's no function inventory).
@@ -4754,6 +4757,9 @@ def prepare_1(workdir, target=None, model=None):
         # the run is orphaned with status=running while the caller
         # believes the pipeline sealed it.
         print(f"ERROR: {_sft(str(e), max_len=300)}", file=sys.stderr)
+        sys.exit(1)
+
+    if report_failed:
         sys.exit(1)
 
 
@@ -5495,7 +5501,12 @@ def main():
     sanitizer_cut_config.load_persisted(workdir)
 
     if stage == "1":
-        prepare_1(workdir, target, model=model)
+        import argparse
+        from core.reporting.options import add_report_arguments, options_from_args
+        report_parser = argparse.ArgumentParser(add_help=False)
+        add_report_arguments(report_parser)
+        report_args, _ = report_parser.parse_known_args(args[2:])
+        prepare_1(workdir, target, model=model, report_options=options_from_args(report_args, report_parser))
     elif stage == "E":
         prepare_E(workdir, target, dynamic=dynamic, build=build,
                   mitigation_matrix=mitigation_matrix,

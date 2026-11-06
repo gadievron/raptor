@@ -408,7 +408,19 @@ def build_finding_detail(finding: dict[str, Any], index: int) -> ReportSection:
     if dataflow:
         lines.append(f"\n**Dataflow:** `{sanitise_string(str(dataflow), max_chars=500)}`")
 
-    return ReportSection(title=title, content="\n".join(lines))
+    from .document import Block
+    from .results import result_blocks
+    portable: list[Block] | None = [Block("table", columns=["Attribute", "Value"], rows=[["Final Status", get_display_status(finding)]])]
+    ruling = finding.get("ruling")
+    if isinstance(ruling, dict) and ruling.get("reason"):
+        portable.append(Block("list", items=["Ruling: " + str(ruling["reason"])]))
+    try:
+        portable.extend(result_blocks(finding, title="Recorded finding evidence"))
+    except (ValueError, TypeError):
+        # The public legacy spec API predates strict JSON capture. Preserve its
+        # existing behavior for callers with nonportable Python-only fields.
+        portable = None
+    return ReportSection(title=title, content="\n".join(lines), blocks=portable, source_data=finding)
 
 
 def build_findings_spec(

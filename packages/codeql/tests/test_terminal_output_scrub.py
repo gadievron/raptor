@@ -46,6 +46,24 @@ def _assert_inert(text: str) -> None:
 
 
 class TestPrintSummaryErrors:
+    def test_hostile_repository_and_output_paths_escaped(self, tmp_path, capsys):
+        from packages.codeql.agent import CodeQLAgent, CodeQLWorkflowResult
+        agent = CodeQLAgent.__new__(CodeQLAgent)
+        agent.out_dir = tmp_path / HOSTILE
+        result = CodeQLWorkflowResult(success=True, repo_path=HOSTILE, timestamp="t", duration_seconds=0,
+                                     languages_detected={}, databases_created={}, analyses_completed={},
+                                     total_findings=0, sarif_files=[], errors=[])
+        agent.print_summary(result)
+        _assert_inert(capsys.readouterr().out)
+
+    def test_direct_dataflow_display_enforces_its_own_boundary(self, capsys):
+        from packages.codeql.agent import CodeQLAgent
+        agent = CodeQLAgent.__new__(CodeQLAgent)
+        agent._print_dataflow_table([{"rule": HOSTILE, "source": HOSTILE, "sink": HOSTILE, "steps": 10**8}])
+        text = capsys.readouterr().out
+        _assert_inert(text)
+        assert len(text) < 3000
+
     def test_hostile_error_lines_escaped(self, tmp_path, capsys):
         from packages.codeql.agent import CodeQLAgent, CodeQLWorkflowResult
 

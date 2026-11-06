@@ -9,6 +9,14 @@ dispatch: python3 raptor.py codeql
 
 Runs CodeQL deep static analysis with dataflow validation. Slower but finds complex vulnerabilities that Semgrep misses (tainted flows, use-after-free, injection chains).
 
+After completion, read `summary.md` from the output directory and show its
+mechanically generated quick view in the conversation. Preserve counts, scanner
+levels, Unconfirmed labels, and incomplete-tool warnings; do not replace the
+result with “a report was written” or infer exploitability from raw SARIF.
+Use the printed summary if persistence failed. `--report-format` selects
+Markdown, JSON, HTML, or XML (repeatable), `--report-output` selects a destination,
+and `--no-report` keeps the summary and evidence while disabling full reports.
+
 ## Usage
 
 ```

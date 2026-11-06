@@ -21,13 +21,14 @@ import contextlib
 import logging
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.cve import EpssClient, KevClient
 from core.json import JsonCache
 from core.progress import HackerProgressBar
+from core.reporting.options import ReportOptions
 
 from . import sca_cache_root, default_client
 from . import suppressions as _suppressions
@@ -45,7 +46,6 @@ from .osv import OsvClient
 from .parsers import capture_parse_failures, parse_manifest
 from .parsers._safe_read import scan_root_context
 from .reachability import scan as scan_reachability
-from .report import render_markdown_report, write_markdown_report
 from .sarif import write_sarif
 from .sbom import write_sbom_json
 from .supply_chain import evaluate as evaluate_supply_chain
@@ -121,6 +121,7 @@ class RunOptions:
                                            # findings.json. Operators
                                            # uploading to CI dashboards /
                                            # compliance docs opt in.
+    report_options: ReportOptions = field(default_factory=ReportOptions)
     enable_reachability: bool = True
     enable_supply_chain: bool = True
     enable_suppressions: bool = True
@@ -282,6 +283,7 @@ class RunResult:
     # big projects), which is indistinguishable from a genuinely
     # empty result.
     eco_breakdown: dict[str, int] = field(default_factory=dict)
+    report_outputs: dict[str, str] = field(default_factory=dict)
 
 
 def _suppression_entry_label(entry: _suppressions.SuppressionEntry) -> str:
@@ -340,6 +342,11 @@ def _run_sca(
     directly with stubbed HTTP and isolated caches.
     """
     options = options or RunOptions()
+    report_options = (options.report_options or ReportOptions()).validate()
+    if options.emit_html_report:
+        if not report_options.enabled:
+            raise ValueError("HTML reporting conflicts with disabled report output")
+        report_options = replace(report_options, formats=tuple(dict.fromkeys([*report_options.formats, "html"]))).validate()
     target = target.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1143,40 +1150,6 @@ def _run_sca(
         ingest_sca_evidence(output_dir, str(target))
     except Exception:  # noqa: BLE001 — JSON output remains authoritative
         logger.warning("SCA graph enrichment skipped", exc_info=True)
-    md = render_markdown_report(
-        target=target,
-        deps_analysed=len(joined),
-        vuln_findings=vuln_findings,
-        hygiene_findings=hygiene_findings,
-        supply_chain_findings=supply_chain_findings,
-        license_findings=license_findings,
-        cache_hits=cache.hits,
-        cache_misses=cache.misses,
-        cache_evictions=cache.memo_evictions,
-        parse_failures=parse_failures,
-        project_license=project_license,
-    )
-    write_markdown_report(report_path, md)
-
-    # 9a. Optional HTML report — operators uploading to CI
-    # artefact dashboards / sending to compliance teams want a
-    # browser-renderable single-file. Default off because most
-    # tooling consumes findings.json directly; ``--html`` opts in.
-    if options.emit_html_report:
-        from .report_html import render_html_report, write_html_report
-        html = render_html_report(
-            target=target,
-            deps_analysed=len(joined),
-            vuln_findings=vuln_findings,
-            hygiene_findings=hygiene_findings,
-            supply_chain_findings=supply_chain_findings,
-            license_findings=license_findings,
-            cache_hits=cache.hits,
-            cache_misses=cache.misses,
-            cache_evictions=cache.memo_evictions,
-        )
-        write_html_report(output_dir / "report.html", html)
-
     sbom_path = output_dir / "sbom.cdx.json"
     write_sbom_json(
         sbom_path,
@@ -1239,6 +1212,25 @@ def _run_sca(
     sarif_path = output_dir / "findings.sarif"
     write_sarif(sarif_path, target=target, rows=rows)
 
+    # One structured builder owns every report format; existing finding/SARIF
+    # and SBOM serializers remain domain-owned and unchanged.
+    reporting = None
+    try:
+        from .reporting import build_sca_document
+        from core.reporting.service import complete_reporting
+        report_context, report_document = build_sca_document(
+            rows=rows, target=target, output_dir=output_dir, deps_analysed=len(joined),
+            parse_failures=parse_failures, project_license=project_license,
+            cache_hits=cache.hits, cache_misses=cache.misses,
+            cache_evictions=cache.memo_evictions,
+        )
+        reporting = complete_reporting(report_context, output_dir, stem="report", options=report_options,
+                                       document=report_document)
+        if reporting.publication and reporting.publication.outputs:
+            report_path = Path(reporting.publication.outputs.get("markdown") or next(iter(reporting.publication.outputs.values())))
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("SCA report capture unavailable (%s); analysis artifacts retained", type(exc).__name__)
+
     # 9. Best-effort coverage record: files examined = manifests +
     #    reachability evidence (sources that genuinely informed verdicts).
     _maybe_write_coverage(
@@ -1249,7 +1241,7 @@ def _run_sca(
     )
     total = (len(vuln_findings) + len(hygiene_findings)
               + len(supply_chain_findings) + len(license_findings))
-    progress.done("findings.json · report.md · sbom · sarif")
+    progress.done("findings.json · sbom · sarif · " + ("reports" if report_options.enabled else "full reports disabled"))
     # Surface cache hits/misses so a run shows dedup working at a glance —
     # a project scanned after others that share deps (or a warm cross-run
     # cache) reports mostly hits; a host that keeps missing stands out.
@@ -1290,6 +1282,7 @@ def _run_sca(
         triage_run=triage_run,
         llm_cost=llm_cost,
         parse_failures=list(parse_failures),
+        report_outputs=reporting.publication.outputs if reporting and reporting.publication else {},
     )
 
 

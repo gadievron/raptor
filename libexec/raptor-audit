@@ -1444,10 +1444,11 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     report = generate_report(out_dir, target_path=target_path)
     write_report(report, out_dir)
-    write_markdown_report(report, out_dir, target_path=target_path)
+    reporting = []
+    write_markdown_report(report, out_dir, target_path=target_path, report_options=getattr(args, "report_options", None), reporting_sink=reporting)
 
     _print_scrubbed(report["summary"])
-    return 0
+    return 1 if any(r.errors for r in reporting) else 0
 
 
 def cmd_stale(args: argparse.Namespace) -> int:
@@ -2305,6 +2306,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     return _finalize_run(
         out_dir, result, model_id, scope=args.scope,
         supervisor_bounded=supervisor_bound is not None,
+        report_options=getattr(args, "report_options", None),
     )
 
 
@@ -2316,6 +2318,7 @@ def _finalize_run(
     scope=None,
     segment: int | None = None,
     supervisor_bounded: bool = False,
+    report_options=None,
 ) -> int:
     """Post-pipeline tail shared by `run` and `resume`: final report,
     console summary, lifecycle transition, exit code."""
@@ -2382,7 +2385,7 @@ def _finalize_run(
     # must never fail a fully-paid run at finalise.
     try:
         from core.audit.report import write_markdown_report
-        write_markdown_report(report, out_dir)
+        write_markdown_report(report, out_dir, report_options=report_options)
     except Exception:  # noqa: BLE001 — completion tail is best-effort
         logging.getLogger(__name__).debug(
             "markdown report write failed", exc_info=True,
@@ -3685,6 +3688,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         out_dir, result, model_id,
         scope=run_cfg.get("scope"), segment=segment,
         supervisor_bounded=resume_supervisor_bound is not None,
+        report_options=getattr(args, "report_options", None),
     )
 
 
@@ -4639,6 +4643,8 @@ def main() -> int:
     p_rep = sub.add_parser("report", help="Generate audit summary")
     p_rep.add_argument("--out", required=True)
     p_rep.add_argument("--target", default=None)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p_rep)
 
     # stale
     p_stale = sub.add_parser("stale", help="List stale annotations")
@@ -4672,6 +4678,7 @@ def main() -> int:
              "default: unknown, source overflow/array SMT stays inconclusive). Uses the same "
              "selection on resume; never infers the target from the audit host.",
     )
+    add_report_arguments(p_run)
     p_run.add_argument("target", help="Path to codebase to review")
     p_run.add_argument("--out", default=None, help="Output directory")
     p_run.add_argument(
@@ -4964,6 +4971,7 @@ def main() -> int:
         "resume",
         help="Resume a failed/interrupted audit run as the same run",
     )
+    add_report_arguments(p_resume)
     p_resume.add_argument(
         "out_dir",
         help="Output directory of the run to resume",
@@ -5258,6 +5266,9 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if hasattr(args, "report_format"):
+        from core.reporting.options import options_from_args
+        args.report_options = options_from_args(args, parser) if (args.report_format or args.report_output or args.no_report) else None
     if getattr(args, "project", None) is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)

@@ -25,6 +25,10 @@ from .findings import (
     findings_summary,
 )
 from .witnesses import build_witness_summary, render_witness_summary
+from .document import Block, Inline, ReportContext, ReportDocument, StageEnvelope
+from .options import ReportOptions
+from .renderers import available_formats, render_document
+from .service import complete_reporting
 
 # Public re-export surface (see module docstring for layering).
 # Order matches the import groups above; both layers are intentionally
@@ -52,4 +56,6 @@ __all__ = [
     # Layer 2 — witness summary
     "build_witness_summary",
     "render_witness_summary",
+    "Block", "Inline", "ReportContext", "ReportDocument", "StageEnvelope", "ReportOptions",
+    "available_formats", "render_document", "complete_reporting",
 ]

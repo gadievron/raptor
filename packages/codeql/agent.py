@@ -31,6 +31,7 @@ from core.logging import get_logger
 from core.run.output import unique_run_suffix as _unique_run_suffix
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.security.log_sanitisation import sanitise_for_terminal
 from packages.codeql.database_manager import (
     AUTOBUILD_LANGUAGES,
     BUILDLESS_DEFAULT_LANGUAGES,
@@ -325,6 +326,43 @@ class CodeQLAgent:
         logger.info("Output: %s", self.out_dir)
 
     def run_autonomous_analysis(
+        self,
+        languages: list[str] | None = None,
+        build_commands: dict[str, str] | None = None,
+        force_db_creation: bool = False,
+        use_extended: bool = False,
+        min_files: int = 3,
+        traced_build: bool = False,
+    ) -> CodeQLWorkflowResult:
+        """Run scanning and publish triage data even on early failure paths."""
+        self._reporting_result = None
+        result = self._run_autonomous_analysis(
+            languages=languages, build_commands=build_commands,
+            force_db_creation=force_db_creation, use_extended=use_extended,
+            min_files=min_files, traced_build=traced_build,
+        )
+        from core.reporting.adapters import context_from_sarif
+        from core.reporting.document import StageEnvelope
+        from core.reporting.service import complete_reporting
+        try:
+            context = context_from_sarif(
+                [Path(p) for p in result.sarif_files], kind="codeql",
+                target=str(self.repo_path), run_id=self.out_dir.name,
+                stages=[StageEnvelope("codeql", "completed" if result.success else "failed",
+                                      diagnostics=list(result.errors), duration_seconds=result.duration_seconds)],
+            )
+            context.generated_at = result.timestamp
+            from core.reporting.lifecycle import apply_lifecycle
+            apply_lifecycle(context, self.out_dir, scope={"mode": "scanner-invocation", "target": str(self.repo_path)})
+            self._reporting_result = complete_reporting(context, self.out_dir, stem="codeql-report",
+                                                       options=getattr(self, "report_options", None))
+            for warning in self._reporting_result.diagnostics:
+                logger.warning("%s", warning)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("CodeQL triage reporting failed (%s); SARIF retained", type(exc).__name__)
+        return result
+
+    def _run_autonomous_analysis(
         self,
         languages: list[str] | None = None,
         build_commands: dict[str, str] | None = None,
@@ -1200,16 +1238,21 @@ class CodeQLAgent:
 
     def print_summary(self, result: CodeQLWorkflowResult) -> None:
         """Print workflow summary."""
+        reporting = getattr(self, "_reporting_result", None)
+        if reporting is not None:
+            from core.reporting.summary import render_operator_summary
+            print(render_operator_summary(reporting.summary), end="")
+            return
         print(f"\n{'=' * 70}")
         print("CODEQL ANALYSIS SUMMARY")
         print(f"{'=' * 70}")
-        print(f"Repository: {result.repo_path}")
+        print(f"Repository: {sanitise_for_terminal(str(result.repo_path))}")
         print(f"Duration: {result.duration_seconds:.1f}s")
         print(f"Status: {'✓ SUCCESS' if result.success else '✗ FAILED'}")
         print(f"\nLanguages detected: {len(result.languages_detected)}")
         print(f"Databases created: {len([r for r in result.databases_created.values() if r.success])}")
         print(f"Analyses completed: {len([r for r in result.analyses_completed.values() if r.success])}")
-        print(f"\nTotal findings: {result.total_findings}")
+        print(f"\nTotal findings: {sanitise_for_terminal(str(result.total_findings))}")
         print(f"SARIF files: {len(result.sarif_files)}")
 
         # Count dataflow paths across all SARIF files
@@ -1254,7 +1297,7 @@ class CodeQLAgent:
         if result.sarif_files:
             print("\nSARIF outputs:")
             for sarif in result.sarif_files:
-                print(f"  - {sarif}")
+                print(f"  - {sanitise_for_terminal(str(sarif))}")
 
         if result.errors:
             print(f"\nErrors encountered: {len(result.errors)}")
@@ -1267,12 +1310,9 @@ class CodeQLAgent:
                 # bypasses core.logging's console chokepoint
                 # (EscapingConsoleFormatter escapes logger-routed
                 # lines only), so the per-site escape is load-bearing.
-                from core.security.log_sanitisation import (
-                    sanitise_for_terminal,
-                )
                 print(f"  - {sanitise_for_terminal(error, max_len=100)}")
 
-        print(f"\nOutput directory: {self.out_dir}")
+        print(f"\nOutput directory: {sanitise_for_terminal(str(self.out_dir))}")
         print(f"{'=' * 70}\n")
 
     def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
@@ -1383,6 +1423,14 @@ class CodeQLAgent:
 
     def _print_dataflow_table(self, dataflow_examples: list) -> None:
         """Print dataflow paths in a formatted table."""
+        # Enforce the display boundary even for callers that bypass extraction.
+        dataflow_examples = [
+            {"rule": sanitise_for_terminal(str(example.get("rule", "")), max_len=80),
+             "source": sanitise_for_terminal(str(example.get("source", "")), max_len=80),
+             "sink": sanitise_for_terminal(str(example.get("sink", "")), max_len=80),
+             "steps": example.get("steps") if type(example.get("steps")) is int and example["steps"] >= 0 else 0}
+            for example in dataflow_examples[:5] if isinstance(example, dict)
+        ]
         try:
             from tabulate import tabulate
 
@@ -1391,7 +1439,7 @@ class CodeQLAgent:
             table_data = [[
                     example["rule"],
                     example["source"],
-                    "→" * (example["steps"] - 1),
+                    "→" * min(10, max(0, example["steps"] - 1)),
                     example["sink"],
                     example["steps"]
                 ] for example in dataflow_examples]
@@ -1407,7 +1455,7 @@ class CodeQLAgent:
             # Fallback to simple formatting if tabulate not available
             print("\n  Example Dataflow Paths:")
             for i, example in enumerate(dataflow_examples, 1):
-                print(f"    {i}. {example['rule']}: {example['source']} → {example['sink']} ({example['steps']} steps)")
+                print(f"    {i}. {sanitise_for_terminal(example['rule'])}: {sanitise_for_terminal(example['source'])} → {sanitise_for_terminal(example['sink'])} ({example['steps']} steps)")
         except Exception as e:  # noqa: BLE001 — display-only helper
             logger.debug("Failed to print dataflow table: %s", e)
 
@@ -1507,7 +1555,10 @@ Examples:
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
 
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args()
+    report_options = options_from_args(args, parser)
     apply_cli_args(args, parser=parser)
 
     # Orphan containment: when the spawner opted this agent in (the
@@ -1634,6 +1685,7 @@ Examples:
             out_dir=_precomputed_out_dir,
             codeql_cli=args.codeql_cli
         )
+        agent.report_options = report_options
 
         # Run analysis
         result = agent.run_autonomous_analysis(
@@ -1677,13 +1729,13 @@ Examples:
         # (/agentic, /scan) translates it back into a fail-loud abort rather
         # than treating it as a generic codeql failure. The analysis did NOT
         # run — never let it look like a clean "0 findings".
-        print(f"\n✗ Analysis aborted — sandbox isolation could not engage.\n{e}",
+        print(f"\n✗ Analysis aborted — sandbox isolation could not engage.\n{sanitise_for_terminal(str(e), max_len=2000)}",
               file=sys.stderr)
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         # RaptorLogger has no .exception method
         logger.error("Fatal error: %s", e, exc_info=True)  # noqa: G201
-        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
+        print(f"\n✗ Fatal error: {sanitise_for_terminal(str(e), max_len=2000)}", file=sys.stderr)
         sys.exit(1)
 
 

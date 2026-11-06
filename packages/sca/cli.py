@@ -409,7 +409,13 @@ def _parse_analyse_args(argv: Sequence[str]) -> argparse.Namespace:
     # it to ``_scan_args`` instead.
     from ._scan_args import add_scan_args
     add_scan_args(parser)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    from ._scan_args import resolve_report_options
+    try:
+        resolve_report_options(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 
@@ -461,6 +467,11 @@ def _resolve_output_dir(
 
 def _print_summary(result) -> None:
     """Print a one-screen analyse-mode summary."""
+    from core.security.log_sanitisation import sanitise_for_terminal
+    outputs = getattr(result, "report_outputs", None)
+    has_report = bool(outputs) if outputs is not None else result.report_path.exists()
+    html_path = outputs.get("html") if outputs is not None else (
+        result.report_path.with_suffix(".html") if result.report_path.with_suffix(".html").exists() else None)
     lines: list[str] = [
         "",
         f"raptor-sca: target            {result.target}",
@@ -494,18 +505,19 @@ def _print_summary(result) -> None:
         (f"raptor-sca: cache             {result.cache_hits} hits / "
          f"{result.cache_misses} misses"),
         f"raptor-sca: findings.json     {result.findings_path}",
-        f"raptor-sca: report.md         {result.report_path}",
+        (f"raptor-sca: report            {result.report_path}" if has_report
+         else "raptor-sca: full report       disabled or unavailable; see analysis artifacts"),
         *(
             [(f"raptor-sca: report.html       "
-              f"{result.report_path.with_suffix('.html')}")]
-            if (result.report_path.with_suffix('.html')).exists()
+              f"{html_path}")]
+            if html_path
             else []
         ),
         f"raptor-sca: sbom.cdx.json     {result.sbom_path}",
         f"raptor-sca: findings.sarif    {result.sarif_path}",
         "",
     ])
-    sys.stdout.write("\n".join(lines))
+    sys.stdout.write("\n".join(sanitise_for_terminal(line, max_len=2000) for line in lines))
     sys.stdout.flush()
 
 

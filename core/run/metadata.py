@@ -1066,7 +1066,9 @@ def start_run(output_dir: Path, command: str,
               extra: dict[str, Any] | None = None,
               target: str | None = None,
               target_identity: dict[str, Any] | None = None,
-              wait_for_project: bool = False) -> Path:
+              wait_for_project: bool = False,
+              retry_of: Path | None = None,
+              parent_run: Path | None = None) -> Path:
     """Write initial .raptor-run.json with status=running.
 
     Call this at the start of a command. Returns the output_dir (for chaining).
@@ -1171,6 +1173,30 @@ def start_run(output_dir: Path, command: str,
         # contention identity. resume_run is the sanctioned re-owning
         # path (it refreshes the full stamp).
         _prior_meta = _load_meta(output_dir / RUN_METADATA_FILE)
+        from core.run.report_identity import identity_for_start
+        retry_metadata = _load_meta(Path(retry_of) / RUN_METADATA_FILE) if retry_of is not None else None
+        metadata["reporting_identity"] = identity_for_start(command, _prior_meta, retry_metadata=retry_metadata,
+                                                           retry_directory=Path(retry_of) if retry_of is not None else None,
+                                                           target=target)
+        if retry_of is not None:
+            metadata["reporting_identity"]["retry_of"]["local"] = Path(retry_of).resolve() == output_dir.resolve()
+        if parent_run is not None:
+            from core.run.report_identity import checkpoint, valid_identity
+            parent_metadata = _load_meta(Path(parent_run) / RUN_METADATA_FILE)
+            parent_identity = parent_metadata.get("reporting_identity") if isinstance(parent_metadata, dict) else None
+            if (Path(parent_run).resolve() == output_dir.resolve()
+                    and (not valid_identity(parent_identity)
+                         or parent_identity["run_id"] == metadata["reporting_identity"]["run_id"])):
+                raise ValueError("A lifecycle run cannot be its own parent")
+            metadata["reporting_identity"]["parent_execution"] = {
+                "directory": str(parent_run), "identity_available": valid_identity(parent_identity),
+                "local": Path(parent_run).resolve() == output_dir.resolve(),
+                **({k: parent_identity[k] for k in ("run_id", "pass_id", "attempt_id")} if valid_identity(parent_identity) else {}),
+                "checkpoint": checkpoint(Path(parent_run), parent_identity),
+            }
+        if (isinstance(_prior_meta, dict) and metadata["reporting_identity"] == _prior_meta.get("reporting_identity")
+                and isinstance(_prior_meta.get("extra"), dict) and isinstance(_prior_meta["extra"].get("resumes"), list)):
+            metadata["extra"] = {**metadata["extra"], "resumes": _prior_meta["extra"]["resumes"]}
         _prior_owner_live = (
             isinstance(_prior_meta, dict)
             and _prior_meta.get("status") == STATUS_RUNNING
@@ -2650,6 +2676,8 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
         if not isinstance(resumes, list):
             resumes = []
         segment = len(resumes) + 2
+        from core.run.report_identity import identity_for_resume
+        metadata["reporting_identity"] = identity_for_resume(metadata, Path(output_dir), segment)
         row: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "prior_status": current,

@@ -45,6 +45,9 @@ KNOWN_FILES = {
     "openant_findings.json",
     "raptor_openant_report.json",
     "openant-report.md",
+    "scan-report.md", "codeql-report.md", "project-report.md",
+    "report-context.json", "report-document.json", "reporting-manifest.json",
+    "summary.json", "summary.md",
 }
 
 # Patterns for known file types (matched by extension).
@@ -206,7 +209,7 @@ def _status_rank(finding: dict[str, Any]) -> int:
     return _STATUS_RANK.get(status, 0)
 
 
-def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
+def merge_findings(run_dirs: list[Path], *, records_by_run=None, origins_by_run=None, decisions=None, grouping_keys=None) -> list[dict[str, Any]]:
     """Merge findings from multiple runs. Deduplicate by (file, function, line).
 
     When the same finding appears in multiple runs, prefer the version with the
@@ -257,10 +260,11 @@ def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
     refs_by_key: dict[tuple, dict[tuple, dict[str, Any]]] = {}
 
     for run_dir in run_dirs:
-        findings = _load_findings_from_dir(Path(run_dir))
-        origin_rank = 0 if _run_is_imported(Path(run_dir)) else 1
-        for finding in findings:
-            key = _finding_key(finding)
+        findings = records_by_run[str(run_dir)] if records_by_run is not None else _load_findings_from_dir(Path(run_dir))
+        imported = origins_by_run[str(run_dir)] if origins_by_run is not None else _run_is_imported(Path(run_dir))
+        origin_rank = 0 if imported else 1
+        for finding_index, finding in enumerate(findings):
+            key = (grouping_keys or {}).get((str(run_dir), finding_index), _finding_key(finding))
             # Accumulate this finding's refs (if any) into the union for the
             # key — independent of who wins the status race.
             ref_acc = refs_by_key.setdefault(key, {})
@@ -289,6 +293,9 @@ def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
             if key not in merged or candidate_rank >= rank_by_key[key]:
                 merged[key] = finding
                 rank_by_key[key] = candidate_rank
+                if decisions is not None:
+                    decisions[key] = {"run": str(run_dir), "origin": "imported claim" if imported else "local",
+                                      "status_rank": candidate_rank[1], "policy": "origin-status-recency/v1", "group_key": list(key)}
 
     # Inject the union back onto each winning representation. If the key has
     # no refs at all (all sources were pre-stamping), leave the field absent
@@ -296,6 +303,8 @@ def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
     # available" signal.
     out: list[dict[str, Any]] = []
     for key, winner in merged.items():
+        if decisions is not None:
+            decisions[_finding_key(winner)] = decisions[key]
         union = list(refs_by_key.get(key, {}).values())
         if union:
             # Shallow-copy so we don't mutate the source-run finding dict.
@@ -467,6 +476,26 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     # (core/project/export.py) so merge cannot pull content from
     # outside the run directory into the merged output.
     artefacts_preserved = 0
+    # Preserve frozen report histories separately from merged-domain evidence.
+    # Root mirrors cannot identify which source snapshot they belong to, and
+    # copying them over one another would destroy the only regeneration input.
+    for run_dir in run_dirs:
+        history = run_dir / ".reporting"
+        if not history.is_dir() or history.is_symlink():
+            continue
+        key = _hashlib.sha256(str(run_dir.resolve()).encode()).hexdigest()[:20]
+        bundle = output_dir / "report-histories" / key
+        if bundle.exists():
+            continue
+        bundle.mkdir(parents=True)
+        shutil.copytree(history, bundle / ".reporting", symlinks=True)
+        for name in ("reporting-manifest.json", ".raptor-imported.json"):
+            source = run_dir / name
+            if source.is_file() and not source.is_symlink():
+                shutil.copy2(source, bundle / name)
+        save_json(bundle / "source.json", {"source_run": str(run_dir), "imported": _run_is_imported(run_dir),
+                                           "note": "Copied report claims; digests do not authenticate verdicts"})
+        artefacts_preserved += 1
     for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue

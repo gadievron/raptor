@@ -18,11 +18,16 @@ You are helping the user run RAPTOR's autonomous security scanning on a code rep
    - For quick Semgrep scan: `python3 raptor.py scan --repo <path>`
    - For CodeQL only: `python3 raptor.py codeql --repo <path>`
 
-4. **Analyze results**: After the scan completes:
-   - Read the output SARIF files and reports
-   - Summarize the vulnerabilities found
-   - Explain the severity and exploitability
-   - Show any generated exploits or patches
+4. **Present the mechanical quick view**: After the scan completes, read
+   `summary.md` from the emitted output directory and display its contents in
+   the conversation. It already contains the outcome, tool status, counts,
+   bounded findings, limitations, and next step. Show the result on screen;
+   announcing a written file is insufficient. If persistence failed, display
+   the scanner's printed quick view and its warning instead.
+   - Keep findings **Unconfirmed**; scanner levels are not exploitability verdicts.
+   - Do not ask an LLM to reconstruct counts or summarize the full SARIF.
+   - Link the full report for detail and suggest `/validate` when appropriate.
+   - `--no-report` disables full report files, not the quick summary or SARIF.
 
 5. **Help fix issues**: Offer to:
    - Apply the generated patches
@@ -49,7 +54,7 @@ python3 raptor.py scan --repo /path/to/code --policy-groups secrets,injection
 - Always use absolute paths for repositories
 - The scan outputs go to `out/` directory
 - `/scan` itself is mechanical: SARIF files with findings, scan metrics,
-  coverage records — no LLM analysis
+  coverage records, deterministic on-screen summary, and an optional report — no LLM analysis
 - The agentic workflow additionally generates exploit PoC code
   (`autonomous/exploits/`), secure patches (`autonomous/patches/`), and
   detailed analysis reports

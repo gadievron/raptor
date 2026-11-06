@@ -36,6 +36,7 @@ def describe_main(
     json_output: bool,
     stderr=sys.stderr,
     stdout=sys.stdout,
+    *, report_options=None,
 ) -> int:
     """Resolve target → (optionally extract archive) → build
     report → render. Returns an exit code.
@@ -44,6 +45,10 @@ def describe_main(
     use the real streams.
     """
     from core.run.output import resolve_default_target
+    if report_options is not None:
+        report_options.validate()
+        if report_options.enabled and report_options.output is None:
+            raise ValueError("Describe report output requires an explicit --report-output destination")
 
     target_arg = target_arg or resolve_default_target()
     if target_arg is None:
@@ -80,7 +85,7 @@ def describe_main(
             # magic-matched file only when its headers actually
             # parse — a refusal on a recognised archive falls
             # through to the extraction path below.
-            rc = _describe_binary(raw_path, json_output, stderr, stdout)
+            rc = _describe_binary(raw_path, json_output, stderr, stdout, report_options=report_options)
             if rc is not None:
                 return rc
             resolved = _resolve_archive(raw_path, stderr)
@@ -105,14 +110,14 @@ def describe_main(
         else:
             stdout.write(format_text(report))
             stdout.write("\n")
-        return 0
+        return _write_describe_document(format_json(report), raw_path, report_options)
     finally:
         if tmp_extract_root is not None:
             rmtree_hardened(tmp_extract_root)
 
 
 def _describe_binary(
-    raw_path: Path, json_output: bool, stderr, stdout,
+    raw_path: Path, json_output: bool, stderr, stdout, *, report_options=None,
 ) -> int | None:
     """The single-binary target arm. Returns an exit code when the
     file is a recognised binary (handled here, describe ends), or
@@ -157,7 +162,20 @@ def _describe_binary(
     else:
         stdout.write(format_binary_text(report))
     stdout.write("\n")
-    return 0
+    return _write_describe_document(format_binary_json(report), raw_path, report_options)
+
+
+def _write_describe_document(serialized: str, target: Path, options) -> int:
+    if options is None or not options.enabled:
+        return 0
+    import json
+    from core.reporting.results import NativeResult, complete_native_result
+    destination = options.output
+    directory = destination.parent if destination.suffix else destination
+    result = complete_native_result(NativeResult("describe", str(target), "inspection", json.loads(serialized), state="completed",
+                                                artifacts=[{"path": str(target)}] if target.is_file() else []),
+                                    directory, stem="describe-report", options=options)
+    return 1 if result.errors else 0
 
 
 def _is_recognised_archive(raw_path: Path) -> bool:

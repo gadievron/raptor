@@ -2644,6 +2644,8 @@ Examples:
 
     from core.sandbox import add_cli_args
     add_cli_args(parser)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     return parser
 
 
@@ -2698,6 +2700,8 @@ def main() -> int:
 
     parser = build_parser()
     args = parser.parse_args()
+    from core.reporting.options import options_from_args
+    report_options = options_from_args(args, parser)
 
     apply_cli_args(args, parser=parser)
 
@@ -3548,6 +3552,8 @@ def main() -> int:
             "--out", str(out_dir / "scan"),
             *sandbox_passthrough,
         ]
+        if not report_options.enabled:
+            semgrep_cmd.append("--no-report")
         # Compiler-analyzer + expanded-semgrep channels ride the scanner
         # subprocess — forwarded verbatim (same pattern as --traced-build
         # on the codeql agent). --no wins over --on at the scanner too,
@@ -3623,6 +3629,8 @@ def main() -> int:
             "--out", str(out_dir / "codeql"),
             *sandbox_passthrough,
         ]
+        if not report_options.enabled:
+            codeql_cmd.append("--no-report")
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])
         if args.traced_build:
@@ -5361,7 +5369,6 @@ def main() -> int:
         build_findings_summary,
         findings_summary_line,
         render_console_table,
-        render_report,
     )
     from core.reporting.formatting import format_elapsed
     print(f"   Duration: {format_elapsed(workflow_duration)}")
@@ -5636,6 +5643,19 @@ def main() -> int:
     if dv and (dv.get("n_validated") or dv.get("n_cache_hits") or dv.get("skipped_reason")):
         extra_sections.append(_build_dataflow_validation_report_section(dv))
 
+    from core.reporting.results import result_blocks
+    section_sources = [
+        (audit_postpass.get("enabled"), audit_postpass),
+        (threat_model_phase.get("completed"), threat_model_phase),
+        (bool(aggregation), aggregation),
+        (bool(dv and (dv.get("n_validated") or dv.get("n_cache_hits") or dv.get("skipped_reason"))), dv),
+    ]
+    for section, source in zip(extra_sections, [value for enabled, value in section_sources if enabled]):
+        if section.blocks is None:
+            section.blocks = result_blocks(source, title="Recorded phase results")
+        if section.source_data is None:
+            section.source_data = source
+
     spec = build_findings_spec(
         analysed_results,
         title="RAPTOR Agentic Security Report",
@@ -5647,20 +5667,44 @@ def main() -> int:
         include_details=False,
     )
 
-    md_report = render_report(spec)
-    md_path = out_dir / "agentic-report.md"
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(md_report)
-    print(f"   Report: {md_path}")
+    from core.reporting.adapters import native_findings, stages_from_phases
+    from core.reporting.builders import document_from_spec
+    from core.reporting.document import ReportContext
+    from core.reporting.service import complete_reporting
+    report_context = ReportContext(
+        "agentic", out_dir.name, target=str(repo_path), state="unknown",
+        findings=native_findings(analysed_results, run_id=out_dir.name, producer="agentic"),
+        diagnostics=list(warnings), extensions={"raptor.metadata": metadata, "raptor.metrics": extra_summary,
+                                               "raptor.agentic": final_report,
+                                               "raptor.phase_enrichment": [s.source_data for s in extra_sections]},
+        artifacts=[{"uri": str(out_dir / "raptor_agentic_report.json")},
+                   *({"uri": str(path)} for path in sarif_files)],
+    )
+    report_context.stages = stages_from_phases(final_report.get("phases", {}), producer="agentic", run_id=out_dir.name)
+    report_context.expected_stages = list(final_report.get("phases", {}))
+    from core.reporting.lifecycle import apply_lifecycle, apply_input_selection
+    apply_lifecycle(report_context, out_dir, scope={"mode": "agentic-invocation", "target": str(repo_path)})
+    apply_input_selection(report_context, out_dir)
+    if report_context.stages:
+        report_context.state = "completed" if all(s.state in {"completed", "skipped"} for s in report_context.stages) else "partial"
+    from packages.diagram.reporting import build_report_blocks, capture_directory_blocks
+    captured_diagrams = capture_directory_blocks(out_dir)
+    from dataclasses import asdict
+    report_context.extensions["raptor.captured_diagrams"] = [asdict(b) for b in captured_diagrams]
+    def report_document_factory(context):
+        document = document_from_spec(spec, context)
+        document.blocks.extend(build_report_blocks({"findings": analysed_results}, snapshot_id=context.snapshot_id))
+        document.blocks.extend(captured_diagrams)
+        return document
+    reporting = complete_reporting(report_context, out_dir, stem="agentic-report", options=report_options,
+                                   document_factory=report_document_factory)
+    if reporting.publication:
+        for format_name, report_path in reporting.publication.outputs.items():
+            print(f"   Report ({sanitise_for_terminal(format_name, max_len=30)}): {sanitise_for_terminal(report_path, max_len=500)}")
+    for diagnostic in reporting.diagnostics:
+        logger.warning("%s", diagnostic)
 
-    # Generate summary diagrams (verdict + type pies from orchestrated results)
-    try:
-        from packages.diagram import render_and_write
-        diagrams_path = render_and_write(out_dir)
-        if diagrams_path.stat().st_size > 200:
-            print(f"   Diagrams: {diagrams_path}")
-    except Exception:
-        logger.debug("diagram rendering failed", exc_info=True)
+    # diagrams.md is derived from the same captured document by the writer.
 
     # Mark run as completed
     try:
@@ -5768,6 +5812,7 @@ def _build_audit_report_section(audit_phase, validate_dir=None):
         lines.append(f"- Run directory: `{audit_phase['audit_dir']}`")
 
     findings = []
+    outcomes = {}
     if audit_phase.get("audit_dir"):
         report = load_json(
             Path(audit_phase["audit_dir"]) / "audit-report.json")
@@ -5825,9 +5870,13 @@ def _build_audit_report_section(audit_phase, validate_dir=None):
                 f"`{audit_phase.get('audit_dir')}/findings.json`."
             )
 
+    from core.reporting.results import result_blocks
+    source_data = {"phase": audit_phase, "findings": findings, "validation_outcomes": outcomes}
     return ReportSection(
         title="Gap Audit Post-Pass",
         content="\n".join(lines),
+        blocks=result_blocks(source_data, title="Recorded audit and validation results"),
+        source_data=source_data,
     )
 
 

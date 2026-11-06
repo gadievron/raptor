@@ -24,29 +24,19 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections import Counter
-from datetime import datetime, timezone
-from io import StringIO
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from .findings import severity_rank
-from .models import REACHABILITY_LABELS, REACHABILITY_ORDER
 from .rows import FindingRow
 from .sarif import write_sarif
 
 from core.json import load_json
-from core.security.prompt_output_sanitise import sanitise_string
+from core.reporting.options import ReportOptions, add_report_arguments, options_from_args
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
 # findings.json artifacts are RAPTOR-written run output — the
 # findings-class budget.
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
-
-# Row fields interpolated into the markdown tables carry advisory- and
-# manifest-sourced text (dep names, advisory ids/aliases, descriptions)
-# — the same untrusted classes the scan-path report sanitises. Cap
-# matches that renderer's detail budget.
-_DETAIL_MAX_CHARS = 2000
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -62,7 +52,7 @@ def main(argv: Sequence[str]) -> int:
 
     findings_path = Path(args.findings).resolve()
     if not findings_path.exists():
-        print(f"raptor-sca render: findings file not found: {findings_path}",
+        print(f"raptor-sca render: findings file not found: {_sft(str(findings_path))}",
               file=sys.stderr)
         return 2
     try:
@@ -73,45 +63,69 @@ def main(argv: Sequence[str]) -> int:
             # Strict load_json soft-returns None for a missing file.
             raise FileNotFoundError(findings_path)
     except (OSError, ValueError) as e:
-        print(f"raptor-sca render: cannot read {findings_path}: {e}", file=sys.stderr)
+        print(f"raptor-sca render: cannot read {_sft(str(findings_path))}: {_sft(str(e))}", file=sys.stderr)
         return 2
     if not isinstance(rows, list):
-        print(f"raptor-sca render: {findings_path} is not a finding list",
+        print(f"raptor-sca render: {_sft(str(findings_path))} is not a finding list",
               file=sys.stderr)
         return 2
 
     base_dir = findings_path.parent
-    md_path = Path(args.out_md).resolve() if args.out_md else (
-        base_dir / "report.md"
-    )
     sarif_path = Path(args.out_sarif).resolve() if args.out_sarif else (
         base_dir / "findings.sarif"
     )
+    options = args.report_options
+    report_destinations = []
+    if options.enabled:
+        from core.reporting.renderers import get_renderer
+        for format in options.formats:
+            output = options.output
+            report_destinations.append((output if output and (options.output_is_file or output.suffix and not output.is_dir()) else (output or base_dir) / ("report" + get_renderer(format).extension)).resolve())
+    if findings_path in report_destinations or (not args.no_sarif and (sarif_path == findings_path or sarif_path in report_destinations)):
+        print("raptor-sca render: input, SARIF and report destinations must be distinct", file=sys.stderr)
+        return 2
+    if not args.no_sarif and (sarif_path.name in {"report-context.json", "report-document.json", "reporting-manifest.json", "summary.json", "summary.md", ".raptor-run.json", ".raptor-imported.json"}
+                              or any(parent.name == ".reporting" for parent in sarif_path.parents)):
+        print("raptor-sca render: SARIF output cannot replace reporting or lifecycle state", file=sys.stderr)
+        return 2
+    if args.no_md and args.no_sarif and not (args.report_format or args.report_output or args.no_report):
+        print("raptor-sca render: nothing to do (both --no-md and --no-sarif supplied)", file=sys.stderr)
+        return 2
     all_rows = rows
     try:
         rows = _apply_reachability_filters(rows, args)
     except ValueError as e:
-        print(f"raptor-sca render: {e}", file=sys.stderr)
+        print(f"raptor-sca render: {_sft(str(e))}", file=sys.stderr)
         return 2
 
     target = Path(args.target).resolve() if args.target else base_dir
     wrote: list[str] = []
-    if not args.no_md:
-        md = _render_markdown(rows, target=target)
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        from ._atomic import atomic_write_text
-        atomic_write_text(md_path, md)
-        wrote.append(f"report.md → {md_path}")
+    sarif_errors = []
     if not args.no_sarif:
-        write_sarif(sarif_path, target=target, rows=rows)
-        wrote.append(f"findings.sarif → {sarif_path}")
-
-    if not wrote:
-        print("raptor-sca render: nothing to do (both --no-md and --no-sarif "
-              "supplied)", file=sys.stderr)
-        return 2
-
-    sys.stdout.write("raptor-sca render: wrote " + "; ".join(wrote) + "\n")
+        try:
+            write_sarif(sarif_path, target=target, rows=rows)
+            wrote.append(f"findings.sarif → {sarif_path}")
+        except (OSError, ValueError) as exc:
+            print(f"raptor-sca render: SARIF write failed: {_sft(str(exc))}", file=sys.stderr)
+            sarif_errors.append("SARIF export failed; the operator summary and requested reports are generated independently.")
+    from .reporting import build_sca_document
+    from core.reporting.service import complete_reporting
+    try:
+        context, document = build_sca_document(rows=rows, target=target, output_dir=base_dir,
+                                               deps_analysed=None, cache_hits=None, cache_misses=None, rerender=True,
+                                               artifacts=[{"path": str(findings_path)}, {"path": str(sarif_path)}],
+                                               limitations=sarif_errors,
+                                               selection={"source_rows": len(all_rows), "selected_rows": len(rows),
+                                                 "reachability": args.reachability, "only_reachable": args.only_reachable,
+                                                 "hide_not_reachable": args.hide_not_reachable})
+        result = complete_reporting(context, base_dir, document=document, options=options, stream=sys.stdout)
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"raptor-sca render: report failed: {_sft(str(exc))}", file=sys.stderr)
+        return 1
+    if result.publication:
+        wrote.extend(f"{format} → {path}" for format, path in result.publication.outputs.items())
+    if wrote:
+        sys.stdout.write("raptor-sca render: wrote " + _sft("; ".join(wrote), max_len=4000) + "\n")
     sys.stdout.flush()
 
     # CI-gate threshold evaluation — only fires when --fail-on-* set.
@@ -122,9 +136,9 @@ def main(argv: Sequence[str]) -> int:
     if cfg.is_active:
         passed, fails = eval_thresholds(all_rows, cfg)
         print_result(passed, fails, prog="raptor-sca render")
-        return 0 if passed else 1
+        return 0 if passed and not result.errors and not sarif_errors else 1
 
-    return 0
+    return 1 if result.errors or sarif_errors else 0
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +181,22 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     from .thresholds import add_threshold_args
     add_threshold_args(p)
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    options = options_from_args(args, p)
+    if args.out_md and (args.no_md or args.no_report or args.report_output or options.formats != ("markdown",)):
+        p.error("--out-md requires Markdown output and conflicts with --no-md, --no-report, or --report-output")
+    if args.no_md and args.report_format and "markdown" in options.formats:
+        p.error("--no-md conflicts with requested Markdown output")
+    if args.no_md and args.report_output and not args.report_format:
+        p.error("--no-md with --report-output requires an explicit non-Markdown --report-format")
+    try:
+        args.report_options = ReportOptions(options.formats, Path(args.out_md) if args.out_md else options.output,
+                                            options.enabled and not (args.no_md and not args.report_format),
+                                            output_is_file=bool(args.out_md)).validate()
+    except ValueError as exc:
+        p.error(str(exc))
+    return args
 
 
 _REACHABLE_VERDICTS = {"likely_called", "imported"}
@@ -233,208 +262,13 @@ def _apply_reachability_filters(
 # Row-shaped markdown renderer
 # ---------------------------------------------------------------------------
 
-_SEV_LABEL = {
-    "critical": "Critical",
-    "high": "High",
-    "medium": "Medium",
-    "low": "Low",
-    "info": "Info",
-    "none": "None",
-}
-
-
-def _cell(value: Any, *, max_chars: int = 200) -> str:
-    """Sanitise an untrusted row value for a markdown table cell.
-
-    ``sanitise_string`` defangs autofetch markup (``![](url)``),
-    ANSI / OSC / BIDI / control bytes and line-leading markdown; the
-    pipe escape stops the value from breaking out of its cell.
-    """
-    return sanitise_string(str(value), max_chars=max_chars).replace("|", "\\|")
-
-
-
 def _render_markdown(rows: list[dict[str, Any]], *, target: Path) -> str:
-    # Defensive — hand-edited findings.json may contain non-dict
-    # elements; ``from_row`` parses them to None, filtered here.
-    parsed = [fr for fr in map(FindingRow.from_row, rows) if fr is not None]
-    vuln_rows = [fr for fr in parsed if fr.is_vulnerable_dependency]
-    hygiene_rows = [fr for fr in parsed if fr.is_hygiene]
-    supply_rows = [fr for fr in parsed if fr.is_supply_chain]
-    license_rows = [fr for fr in parsed if fr.is_license]
-
-    suppressed_count = sum(1 for r in vuln_rows if r.suppressed)
-    severity_counts: Counter[str] = Counter()
-    kev_count = 0
-    for r in vuln_rows:
-        if r.suppressed:
-            continue
-        # Lowercase — LLM verdicts and hand-edited rows may capitalise
-        # ("Critical", "HIGH"); a case-sensitive counter would drop
-        # them from the summary while still surfacing them below.
-        severity_counts[r.severity.lower()] += 1
-        if r.sca.get("in_kev"):
-            kev_count += 1
-
-    buf = StringIO()
-    buf.write(f"# SCA Report — {target}\n\n")
-    buf.write(f"_Generated by `raptor-sca render` at "
-              f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}_\n\n")
-
-    buf.write("## Summary\n\n")
-    buf.write("| Severity | Count |\n|---|---|\n")
-    for sev in ("critical", "high", "medium", "low", "info", "none"):
-        n = severity_counts.get(sev, 0)
-        if n:
-            buf.write(f"| {_SEV_LABEL[sev]} | {n} |\n")
-    if not any(severity_counts.values()):
-        buf.write("| (none) | 0 |\n")
-    buf.write("\n")
-    buf.write(f"- Vulnerable findings: **{len(vuln_rows)}** "
-              f"(active: **{len(vuln_rows) - suppressed_count}**, "
-              f"suppressed: **{suppressed_count}**)\n")
-    buf.write(f"- KEV-listed: **{kev_count}**\n")
-    buf.write(f"- Supply-chain findings: **{len(supply_rows)}**\n")
-    buf.write(f"- Hygiene findings: **{len(hygiene_rows)}**\n")
-    if license_rows:
-        buf.write(f"- License findings: **{len(license_rows)}**\n")
-    buf.write("\n")
-    reach_table = _render_reachability_breakdown(vuln_rows)
-    if reach_table:
-        buf.write(reach_table)
-
-    if vuln_rows:
-        buf.write("## Vulnerable dependencies\n\n")
-        _render_vuln_table(buf, vuln_rows)
-    if supply_rows:
-        buf.write("## Supply-chain findings\n\n")
-        _render_kind_table(buf, supply_rows)
-    if hygiene_rows:
-        buf.write("## Hygiene findings\n\n")
-        _render_kind_table(buf, hygiene_rows)
-    if license_rows:
-        buf.write("## License findings\n\n")
-        _render_kind_table(buf, license_rows)
-    if not (vuln_rows or supply_rows or hygiene_rows or license_rows):
-        buf.write("No findings.\n")
-    return buf.getvalue()
-
-
-def _render_reachability_breakdown(rows: list[FindingRow]) -> str:
-    counts: Counter[str] = Counter()
-    for row in rows:
-        if row.suppressed:
-            continue
-        counts[row.reachability_verdict] += 1
-    if not counts:
-        return ""
-    buf = StringIO()
-    buf.write("### Reachability breakdown\n\n")
-    buf.write("| Verdict | Count |\n|---|---:|\n")
-    for verdict in REACHABILITY_ORDER:
-        if counts.get(verdict):
-            label = REACHABILITY_LABELS.get(verdict, verdict)
-            buf.write(f"| {label} | {counts[verdict]} |\n")
-    for verdict in sorted(set(counts) - set(REACHABILITY_ORDER)):
-        # Unknown verdicts come straight from (possibly hand-edited)
-        # row data — same table-cell treatment as the other columns.
-        buf.write(f"| {_cell(verdict)} | {counts[verdict]} |\n")
-    buf.write("\n")
-    return buf.getvalue()
-
-
-def _render_vuln_table(buf: StringIO, rows: list[FindingRow]) -> None:
-    ordered = sorted(
-        rows,
-        key=lambda r: (
-            -severity_rank(r.severity),
-            not r.sca.get("in_kev"),
-            -(r.sca.get("epss") or 0.0),
-            r.sca.get("name") or "",
-        ),
-    )
-    buf.write("| Severity | Dep | Advisory | Reachability | KEV | EPSS | Fix |\n")
-    buf.write("|---|---|---|---|---|---|---|\n")
-    for r in ordered:
-        sca = r.sca
-        adv = r.advisory
-        sev = _cell(r.severity.title())
-        if r.suppressed:
-            sev += " (suppressed)"
-        dep = _cell(
-            f"{sca.get('ecosystem','')}:{sca.get('name','')}"
-            f"@{sca.get('version','')}"
-        )
-        aliases = adv.get("aliases") or []
-        adv_id = adv.get("id") or ""
-        adv_label = _cell(adv_id + (
-            f" ({aliases[0]})" if aliases else ""
-        ))
-        kev = "yes" if sca.get("in_kev") else ""
-        epss_val = sca.get("epss")
-        epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
-        fix_value = sca.get("fixed_version") or ""
-        query = sca.get("advisory_package")
-        if fix_value and isinstance(query, dict) and (query.get("name"), query.get("version")) != (sca.get("name"), sca.get("version")):
-            fix_value = f"source {query.get('name', '')} {fix_value}"
-        fix = _cell(fix_value)
-        reach = _cell(REACHABILITY_LABELS.get(
-            r.reachability_verdict,
-            r.reachability_verdict,
-        ))
-        buf.write(
-            f"| {sev} | {dep} | {adv_label} | {reach} "
-            f"| {kev} | {epss} | {fix} |\n"
-        )
-    buf.write("\n")
-
-
-def _render_kind_table(buf: StringIO, rows: list[FindingRow]) -> None:
-    # Collapse identical (severity, kind, ecosystem, name) rows that
-    # share the same detail — a dep loose-pinned across both
-    # ``requirements.txt`` and ``requirements-dev.txt`` produces two
-    # findings with the same description; rendering both is just
-    # noise for human readers (the per-manifest detail is in
-    # findings.json for tooling). When multiple rows collapse, the
-    # detail is suffixed with `(in N manifests)`.
-    from collections import defaultdict
-
-    groups: dict[tuple[Any, ...], list[FindingRow]] = defaultdict(list)
-    for r in rows:
-        key = (
-            r.severity.lower(),
-            r.vuln_type,
-            r.sca.get("ecosystem") or "",
-            r.sca.get("name") or "",
-            r.description,
-            r.suppressed,
-        )
-        groups[key].append(r)
-
-    ordered_keys = sorted(
-        groups.keys(),
-        key=lambda k: (-severity_rank(k[0]), k[1], k[3]),
-    )
-
-    buf.write("| Severity | Kind | Dep | Detail |\n")
-    buf.write("|---|---|---|---|\n")
-    for key in ordered_keys:
-        members = groups[key]
-        first = members[0]
-        sev = _cell(first.severity.title())
-        if first.suppressed:
-            sev += " (suppressed)"
-        kind = _cell(first.vuln_type.rsplit(":", 1)[-1])
-        sca = first.sca
-        dep = _cell(f"{sca.get('ecosystem','')}:{sca.get('name','')}")
-        detail = _cell(first.description,
-                       max_chars=_DETAIL_MAX_CHARS)
-        if len(detail) > 90:
-            detail = detail[:87] + "..."
-        if len(members) > 1:
-            detail = f"{detail} (in {len(members)} manifests)"
-        buf.write(f"| {sev} | {kind} | {dep} | {detail} |\n")
-    buf.write("\n")
+    """Compatibility API over the same portable builder used by scan."""
+    from .reporting import build_sca_document
+    from core.reporting.renderers import render_document
+    _, document = build_sca_document(rows=rows, target=target, output_dir=target,
+                                      deps_analysed=None, cache_hits=None, cache_misses=None, rerender=True)
+    return render_document(document).content.decode("utf-8")
 
 
 __all__ = ["main"]

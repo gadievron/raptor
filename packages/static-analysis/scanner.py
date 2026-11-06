@@ -3090,7 +3090,10 @@ def main() -> None:
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(ap)
     args = ap.parse_args()
+    report_options = options_from_args(args, ap)
     apply_cli_args(args, parser=ap)
 
     # Also cover direct scanner/agentic workers that bypass raptor.py. Refuse
@@ -3912,11 +3915,34 @@ def main() -> None:
             # surface instead of silently dropping the summary.
             logger.debug("scanner: coverage summary unavailable: %s", exc)
 
+        # Capture finalized scanner evidence, independently of optional report
+        # formats. The operator's quick view does not depend on Claude prompts.
+        from core.reporting.adapters import context_from_sarif
+        from core.reporting.document import StageEnvelope
+        from core.reporting.service import complete_reporting
+        scan_stages = [StageEnvelope(
+            "semgrep", "failed" if all_semgrep_failed else ("partial" if semgrep_failed else ("completed" if semgrep_sarifs else "unknown")),
+            reason=f"{len(semgrep_failed)} failed pack(s)" if semgrep_failed else ("" if semgrep_sarifs else "No Semgrep artifact; execution is not attested"),
+        )]
+        if args.codeql and not args.no_codeql:
+            scan_stages.append(StageEnvelope("codeql", "completed" if codeql_sarifs else "unknown",
+                                             reason="No SARIF produced" if not codeql_sarifs else ""))
+        report_context = context_from_sarif(
+            [merged] if merged.exists() else [Path(p) for p in sarif_inputs],
+            kind="scan", target=str(repo_path), run_id=out_dir.name, stages=scan_stages,
+        )
+        from core.reporting.adapters import apply_scan_metrics
+        apply_scan_metrics(report_context, metrics)
+        from core.reporting.lifecycle import apply_lifecycle
+        apply_lifecycle(report_context, out_dir, scope={"mode": "scanner-invocation", "target": str(repo_path)})
+        reporting = complete_reporting(report_context, out_dir, stem="scan-report", options=report_options,
+                                       stream=sys.stdout, show_suppressed=getattr(args, "show_suppressed", False))
         result = {
             "status": metrics["execution_status"],
             "manifest": manifest,
             "metrics": metrics,
             "duration": duration,
+            "reporting": {"snapshot_id": reporting.summary.snapshot_id, "diagnostics": reporting.diagnostics},
         }
         # ensure_ascii: JSON escapes C0 but passes C1 terminal
         # controls raw when off — dumps_display is exactly that, and
