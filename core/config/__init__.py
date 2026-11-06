@@ -9,8 +9,6 @@ import os
 from pathlib import Path
 from typing import ClassVar
 
-from core.llm.model_brokers import MODEL_BROKERS
-
 # Imported at module level DELIBERATELY (stdlib-only leaf module, no
 # cycle risk): get_safe_env() runs inside post-fork sandbox children
 # (_spawn.run_sandboxed's env=None default), where a lazy first-time
@@ -1263,8 +1261,13 @@ class RaptorConfig:
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
         # Credential policy outranks safe prefixes (a registered key could
         # otherwise look like a locale variable, e.g. LC_BROKER_API_KEY).
-        for name in RaptorConfig.LLM_API_KEY_VARS:
+        for name in RaptorConfig._metadata_credential_names():
             env.pop(name, None)
+        # Every broker credential has one of these suffixes. Strip the whole
+        # secret-shaped family without loading or weakening the broker catalog.
+        for name in list(env):
+            if name.endswith(("_API_KEY", "_API_TOKEN")):
+                env.pop(name)
         # Replace ambient TMPDIR with the launcher-owned session workspace.
         # Do not initialize it here: this path also runs inside restricted,
         # post-fork children where imports/mkdir and inherited locks are unsafe.
@@ -1337,9 +1340,12 @@ class RaptorConfig:
     # Static-auth gateway keys come from the shared broker registry.
     # Keep them available for env-direct SDK calls as well as dispatcher
     # routes; untrusted-code subprocesses still never receive them.
-    _LLM_AGGREGATOR_KEYS = tuple(
-        broker.api_key_env for broker in MODEL_BROKERS
-    )
+    @classproperty
+    def _LLM_AGGREGATOR_KEYS(cls):
+        # Ownership validation scans installed Python source. Metadata-only
+        # imports must not do that work; credential consumers still validate.
+        from core.llm.model_brokers import MODEL_BROKERS
+        return tuple(broker.api_key_env for broker in MODEL_BROKERS)
 
     # Cloud gateway keys (Bedrock, Vertex AI, Azure OpenAI).
     _LLM_CLOUD_KEYS = (
@@ -1355,7 +1361,7 @@ class RaptorConfig:
         "GOOGLE_APPLICATION_CREDENTIALS",  # GCP service account JSON path
     )
 
-    LLM_API_KEY_VARS = (
+    _LLM_NATIVE_KEYS = (
         # First-party Claude/Anthropic auth — DERIVED from the
         # canonical vocabulary, never hand-typed: the trio must reach
         # LLM children as a unit. The strip twin
@@ -1374,9 +1380,19 @@ class RaptorConfig:
         "OPENAI_API_KEY",
         "MISTRAL_API_KEY",
         "COHERE_API_KEY",
-        *_LLM_AGGREGATOR_KEYS,
-        *_LLM_CLOUD_KEYS,
     )
+
+    @classproperty
+    def LLM_API_KEY_VARS(cls):
+        return (*cls._LLM_NATIVE_KEYS, *cls._LLM_AGGREGATOR_KEYS, *cls._LLM_CLOUD_KEYS)
+
+    @staticmethod
+    def _metadata_credential_names():
+        # Preserve explicit namespace overrides, including nonstandard auth
+        # names, without evaluating the default catalog-backed descriptor.
+        if isinstance(RaptorConfig.__dict__["LLM_API_KEY_VARS"], classproperty):
+            return (*RaptorConfig._LLM_NATIVE_KEYS, *RaptorConfig._LLM_CLOUD_KEYS)
+        return RaptorConfig.LLM_API_KEY_VARS
 
     # LLM transport/backend ROUTING env vars — selection flags and
     # names, not secrets (credentials stay in LLM_API_KEY_VARS; the
@@ -1535,7 +1551,13 @@ class RaptorConfig:
         LLM calls and have no business holding keys, backend
         selection, or a broken half-route).
         """
-        drop = set(RaptorConfig.LLM_API_KEY_VARS)
+        drop = set(RaptorConfig._metadata_credential_names())
+        # Resolve dynamic broker names only when one could be present. Unlike
+        # the untrusted safe-env baseline, these full-environ helpers may need
+        # application credentials such as NVD_API_KEY; never strip those merely
+        # because their names look secret-shaped.
+        if any(k not in drop and k.endswith(("_API_KEY", "_API_TOKEN")) for k in env):
+            drop.update(RaptorConfig.LLM_API_KEY_VARS)
         drop.update(RaptorConfig.LLM_ROUTING_ENV_VARS)
         # Credential-bearing family members not otherwise enumerated
         # above (the canonical vocabulary owns the names — e.g.

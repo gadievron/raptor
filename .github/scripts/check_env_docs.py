@@ -126,6 +126,8 @@ CONFIG_TABLES = (
     "PROXY_ENV_VARS",
     "GIT_ENV_VARS",
     "LLM_API_KEY_VARS",
+    "_LLM_NATIVE_KEYS",
+    "_LLM_CLOUD_KEYS",
     "LLM_ROUTING_ENV_VARS",
     "LLM_ROUTING_ENV_PREFIXES",
 )
@@ -559,6 +561,9 @@ def _parse_config_tables(root: Path, inv: Inventory) -> None:
             tname = target.attr
         if tname not in CONFIG_TABLES:
             continue
+        # These static tables back the lazily resolved public policy.
+        if tname in {"_LLM_NATIVE_KEYS", "_LLM_CLOUD_KEYS"}:
+            tname = "LLM_API_KEY_VARS"
         _collect(node.value, tname)
 
 
