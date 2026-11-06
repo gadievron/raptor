@@ -5332,7 +5332,7 @@ def disprove_integer_overflow(
         from packages.exploit_feasibility.smt_verbs import check_overflow
         result = check_overflow(
             operands, op_char, profile=profile, guards=premises,
-            kind=overflow_kind,
+            kind=overflow_kind, reduce_constraints=False,
         )
         from .integer_witness import validate_overflow_result
         result = validate_overflow_result(result, operation, operands, op_char, abi)

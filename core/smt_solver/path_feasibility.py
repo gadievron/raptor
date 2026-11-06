@@ -167,6 +167,7 @@ from core.smt_solver import (
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
+from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
 
 
@@ -1164,6 +1165,10 @@ def _classify_text_condition(
     :func:`check_verb_feasibility` share the same parse-and-classify
     semantics.
 
+    With ``solver=None``, parse and retain every supported condition without
+    an optional tautology query. All call-summary and rejection handling stays
+    active.
+
     ``dedup_window`` is threaded through to :func:`_substitute_calls`
     so the call-dedup scope is controllable by the outer iteration
     (see :func:`check_path_feasibility` for how it's reset at
@@ -1187,11 +1192,12 @@ def _classify_text_condition(
     # consistent until you realise we asserted ptr == 0 not ptr != NULL).
     display = f"NOT ({cond.text})" if cond.negated else cond.text
 
-    # Quick individual check: is this condition alone satisfiable?
-    with _scoped(solver):
-        solver.add(z3.Not(final_expr))
-        if solver.check() == z3.unsat:
-            return display, None, None  # tautology
+    # Optional classification: is this condition a tautology?
+    if solver is not None:
+        with _scoped(solver):
+            solver.add(z3.Not(final_expr))
+            if solver.check() == z3.unsat:
+                return display, None, None  # tautology
 
     return None, (display, final_expr), None
 
@@ -1287,6 +1293,7 @@ def _solve_pending(
     vars_: dict[str, Any] | None = None,
     axioms: list[tuple[str, Any]] | None = None,
     wp_timeout_ms: int | None = None,
+    reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -1306,6 +1313,7 @@ def _solve_pending(
     otherwise produce an objective on a freshly-minted variable
     decoupled from the path.
     """
+    require_bool(reduce_constraints, argument="reduce_constraints")
     mode = profile.describe()
 
     # Apply the witness-direction objective before solving.  Silently
@@ -1339,6 +1347,7 @@ def _solve_pending(
     if not pending:
         if unknown:
             return PathSMTResult(
+                wp_complete=reduce_constraints,
                 feasible=None,
                 satisfied=satisfied, unsatisfied=[], unknown=unknown,
                 unknown_reasons=unknown_reasons,
@@ -1351,6 +1360,7 @@ def _solve_pending(
                 summary_axioms=_axiom_labels,
             )
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=[],
             unknown_reasons=[],
@@ -1369,19 +1379,20 @@ def _solve_pending(
 
     if result == z3.sat:
         model_dict = _format_witness(solver.model(), signed=profile.signed)
-        # Phase 8: on sat, extract the weakest predicate over the path's
-        # symbolic variables (minimal sat-preserving conjunct subset). Its
-        # own fresh solver — the verdict above is unaffected.
-        try:
-            wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
-                pending, axioms=_axioms, timeout_ms=wp_timeout_ms,
-            )
-        except Exception:
-            # Reduction owns a separate solver. Its diagnostic failure
-            # cannot erase a definitive primary verdict and checked model.
-            _get_logger().debug("SMT conjunct reduction unavailable", exc_info=True)
-            wp_predicate, wp_conjuncts, wp_complete = None, [text for text, _ in pending], False
-        wp_complete = wp_complete and not unknown
+        # Optional implication-reduced constraint summary. Its fresh solver
+        # cannot change the primary verdict, but still consumes worker time.
+        wp_predicate, wp_conjuncts, wp_complete = None, [], False
+        if reduce_constraints:
+            try:
+                wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
+                    pending, axioms=_axioms, timeout_ms=wp_timeout_ms,
+                )
+            except Exception:
+                # Reduction owns a separate solver; preserve the primary
+                # verdict and its model if optional diagnostics fail.
+                _get_logger().debug("SMT conjunct reduction unavailable", exc_info=True)
+                wp_predicate, wp_conjuncts, wp_complete = None, [text for text, _ in pending], False
+            wp_complete = wp_complete and not unknown
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
@@ -1409,6 +1420,7 @@ def _solve_pending(
         if conflicts:
             reasoning += f"; conflict: {' ⊥ '.join(conflicts[:3])}"
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=False,
             satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
             unknown_reasons=unknown_reasons,
@@ -1435,6 +1447,7 @@ def _solve_pending(
         else "conditions outside the decidable bitvector fragment"
     )
     return PathSMTResult(
+        wp_complete=reduce_constraints,
         feasible=None,
         satisfied=satisfied, unsatisfied=[],
         unknown=unknown + pending_texts,
@@ -1489,6 +1502,7 @@ def check_verb_feasibility(
     vars_: dict[str, Any],
     *,
     profile: BVProfile = BV_C_UINT64,
+    reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """Feasibility analysis for a named SMT verb.
 
@@ -1503,9 +1517,14 @@ def check_verb_feasibility(
     share ``vars_`` so identifier-named operands resolve to the same
     Z3 BV regardless of which path created them.
 
+    ``reduce_constraints=False`` skips optional tautology and constraint-summary
+    queries. The full parsed obligation is still asserted; summary fields are
+    None/empty with ``wp_complete=False``.
+
     Always called with Z3 available; verbs short-circuit the
     ``smt_available=False`` case before calling this helper.
     """
+    require_bool(reduce_constraints, argument="reduce_constraints")
     mode = profile.describe()
     count = len(intrinsic) + len(text_guards)
     if count > _MAX_CONDITIONS_PER_CALL:
@@ -1515,13 +1534,14 @@ def check_verb_feasibility(
             hint="reduce the complete obligation; do not discard constraints to obtain a verdict",
         )
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=None, satisfied=[], unsatisfied=[],
             unknown=[text for text, _ in intrinsic] + [cond.text for cond in text_guards],
             unknown_reasons=[reason], model={}, smt_available=True,
             reasoning=f"refused: {reason.detail} ({mode})",
         )
     reserve_anon_names([cond.text for cond in text_guards], vars_)
-    tautology_solver = _new_solver()
+    tautology_solver = _new_solver() if reduce_constraints else None
     solver = _new_solver()
 
     satisfied: list[str] = []
@@ -1547,6 +1567,7 @@ def check_verb_feasibility(
         # error but we still return something coherent rather than
         # divide-by-zero in the verdict logic.
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=True,
             satisfied=[], unsatisfied=[], unknown=[],
             unknown_reasons=[],
@@ -1556,6 +1577,7 @@ def check_verb_feasibility(
 
     return _solve_pending(
         pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
+        reduce_constraints=reduce_constraints,
     )
 
 
@@ -1565,6 +1587,7 @@ def check_path_feasibility(
     profile: BVProfile = BV_C_UINT64,
     timeout_ms: int | None = None,
     prefer_witness: tuple[str, str] | None = None,
+    reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -1604,14 +1627,22 @@ def check_path_feasibility(
                     silently skipped and the witness reverts to the
                     default smallest-model behaviour.
 
+        reduce_constraints: Defaults to True. False skips individual tautology
+                    checks and post-SAT conjunct reduction, retaining the full
+                    parsed conjunction and background axioms. Witnesses and
+                    conflicts remain available; summary fields are None/empty
+                    and wp_complete=False. This is not a whole-call time limit.
+
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
         condition was unparseable.
     """
+    require_bool(reduce_constraints, argument="reduce_constraints")
     mode = profile.describe()
 
     if not _z3_available():
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=None,
             satisfied=[], unsatisfied=[],
             unknown=[c.text for c in conditions],
@@ -1639,6 +1670,7 @@ def check_path_feasibility(
             ),
         )
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=None,
             satisfied=[], unsatisfied=[],
             unknown=[c.text for c in conditions],
@@ -1653,6 +1685,7 @@ def check_path_feasibility(
 
     if not conditions:
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=True,
             satisfied=[], unsatisfied=[], unknown=[],
             unknown_reasons=[],
@@ -1673,10 +1706,9 @@ def check_path_feasibility(
     # previously kept the 5 s default regardless of timeout_ms,
     # making the documented per-call budget a fiction for the
     # per-condition lane.
-    tautology_solver = (
-        _new_solver(timeout_ms) if timeout_ms is not None
-        else _new_solver()
-    )
+    tautology_solver = None
+    if reduce_constraints:
+        tautology_solver = _new_solver(timeout_ms) if timeout_ms is not None else _new_solver()
     # Per-call timeout override. Default to the substrate's
     # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
     # solving-cost profile (CWE-190 wraparound is fast; CWE-787
@@ -1758,7 +1790,7 @@ def check_path_feasibility(
         pending, solver, satisfied, unknown, unknown_reasons,
         profile=profile, anon_map=anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
-        axioms=axioms, wp_timeout_ms=timeout_ms,
+        axioms=axioms, wp_timeout_ms=timeout_ms, reduce_constraints=reduce_constraints,
     )
 
 
@@ -1811,7 +1843,7 @@ def _exhibits_robust_contradiction(
         return False
     return all(
         check_path_feasibility(
-            subset, profile=p, timeout_ms=timeout_ms,
+            subset, profile=p, timeout_ms=timeout_ms, reduce_constraints=False,
         ).feasible is False
         for p in profiles
     )
@@ -1823,6 +1855,7 @@ def check_path_feasibility_dual(
     profile: BVProfile = BV_C_UINT64,
     timeout_ms: int | None = None,
     prefer_witness: tuple[str, str] | None = None,
+    reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """Signedness-agnostic feasibility check for callers whose profile
     signedness is a GUESS rather than a known fact.
@@ -1871,16 +1904,17 @@ def check_path_feasibility_dual(
     per-path hint) should call :func:`check_path_feasibility` directly
     with the known profile.
     """
+    require_bool(reduce_constraints, argument="reduce_constraints")
     primary = check_path_feasibility(
         conditions, profile=profile,
-        timeout_ms=timeout_ms, prefer_witness=prefer_witness,
+        timeout_ms=timeout_ms, prefer_witness=prefer_witness, reduce_constraints=reduce_constraints,
     )
     if primary.feasible is not False:
         return primary
     sibling_profile = BVProfile(width=profile.width, signed=not profile.signed)
     sibling = check_path_feasibility(
         conditions, profile=sibling_profile,
-        timeout_ms=timeout_ms, prefer_witness=prefer_witness,
+        timeout_ms=timeout_ms, prefer_witness=prefer_witness, reduce_constraints=reduce_constraints,
     )
     if sibling.feasible is False:
         # Both legs unsat is NOT signedness agreement by itself: each
@@ -1937,6 +1971,7 @@ def check_path_feasibility_dual(
             )
             return primary
         return PathSMTResult(
+            wp_complete=reduce_constraints,
             feasible=None,
             satisfied=primary.satisfied,
             unsatisfied=[],
@@ -1965,6 +2000,7 @@ def check_path_feasibility_dual(
         )
         return sibling
     return PathSMTResult(
+        wp_complete=reduce_constraints,
         feasible=None,
         satisfied=primary.satisfied,
         unsatisfied=primary.unsatisfied,
