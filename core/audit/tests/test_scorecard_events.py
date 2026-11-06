@@ -834,10 +834,11 @@ class TestOrchestratedRunBinding:
         monkeypatch.setattr(orch, "_run_mechanical_detectors",
                             lambda *a, **k: ({}, set()))
         from core.llm.client import LLMClient
-        monkeypatch.setattr(
-            LLMClient, "generate",
-            lambda *a, **k: pytest.fail("scorecard binding must remain LLM-free"),
-        )
+        for method in ("generate", "generate_structured"):
+            monkeypatch.setattr(
+                LLMClient, method,
+                lambda *a, **k: pytest.fail("scorecard binding must remain LLM-free"),
+            )
 
     @staticmethod
     def _setup_target(tmp_path: Path):
@@ -896,6 +897,8 @@ class TestOrchestratedRunBinding:
             # Discovery performs independent model reviews, outside the
             # injected review callback exercised by these binding checks.
             "open_discovery": False,
+            # Checker synthesis makes independent structured LLM requests.
+            "on_demand_synthesis": False,
             "joern_overrides": {"enabled": False},
         }
         defaults.update(kw)
