@@ -66,6 +66,7 @@ _JUDGEMENTS = frozenset({
 
 # Bound what the model sees and what it may persist.
 _MAX_DENIAL_CONTEXT_LINES = 20
+_MAX_DENIAL_COMMAND_CHARS = 300
 _MAX_RATIONALE_CHARS = 500
 
 _SYSTEM_PROMPT = (
@@ -141,9 +142,14 @@ def _denial_context(run_dir: Path, *, allow_legacy: bool = False) -> list:
     contract is that unverified content never reaches the model, and
     a target-planted unstamped summary (possible on a run whose real
     execution produced no denials) must not smuggle its cmd lines
-    into the prompt through this side door."""
+    into the prompt through this side door.
+
+    Commands retain a 300-character escaped prefix. Supported timestamps
+    render as bounded UTC ISO text; unsupported time metadata is omitted
+    without dropping the command. Stored evidence is never rewritten.
+    """
     from core.sandbox import telemetry_mac
-    from core.sandbox.triage import _load_json, _verify_summary
+    from core.sandbox.triage import _load_json, _parse_ts, _verify_summary
     from core.sandbox.summary import SUMMARY_FILE
 
     summary, _integrity = _verify_summary(
@@ -158,8 +164,24 @@ def _denial_context(run_dir: Path, *, allow_legacy: bool = False) -> list:
         if not isinstance(cmd, str) or not cmd:
             continue
         ts = d.get("ts")
-        prefix = f"[t={ts}] " if ts is not None else ""
-        lines.append(prefix + escape_nonprintable(cmd)[:300])
+        prefix = ""
+        if isinstance(ts, (str, int, float)):
+            try:
+                if isinstance(ts, str):
+                    # Avoid a float round-trip that loses ISO microseconds
+                    # near the supported year limits.
+                    stamp = datetime.fromisoformat(ts)
+                    stamp = (stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None
+                             else stamp.astimezone(timezone.utc))
+                else:
+                    stamp = datetime.fromtimestamp(_parse_ts(ts), timezone.utc)
+                prefix = f"[t={stamp.isoformat()}] "
+            except (TypeError, ValueError, OverflowError, OSError):
+                # Missing/unsupported time must not hide the command or
+                # invent a temporal cue. The original evidence stays intact.
+                pass
+        command = escape_nonprintable(cmd[:_MAX_DENIAL_COMMAND_CHARS])
+        lines.append(prefix + command[:_MAX_DENIAL_COMMAND_CHARS])
     return lines
 
 
