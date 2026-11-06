@@ -928,7 +928,7 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
               *result_blocks(selected, title="Provenance and selection"),
               *result_blocks(readj_records, title="Re-adjudication queue")]
     if sca_findings:
-        blocks.append(Block("code", title="Dependency findings", language="json", text=json.dumps(sca_findings, ensure_ascii=True, indent=2)))
+        blocks.append(Block("code", title="Dependency findings", language="json", text=dumps_artifact(sca_findings, ensure_ascii=True)))
     publication = complete_reporting(context, report_dir, stem="project-report", options=report_options, blocks=blocks, stream=stream,
                                       expected_generation=expected_generation)
     publication.errors.extend(_write_project_delta(baseline_context, context, report_dir, report_options))

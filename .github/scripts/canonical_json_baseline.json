@@ -20,7 +20,7 @@
   "dumps_flows_to_hash:core/sandbox/triage.py:_report_sha256": {
    "note": "sandbox-triage.json report sha (sort_keys, ensure_ascii=True) verified via telemetry_mac — frozen MAC canonical form"
   },
-  "dumps_flows_to_hash:core/sarif/parser.py:parse_sarif_findings": {
+  "dumps_flows_to_hash:core/sarif/parser.py:parse_sarif_document": {
    "note": "content-sha fallback for finding_id (sort_keys, default=str, DEFAULT separators) — artifact filenames and cross-run joins; dumps_canonical's compact separators would fork every id — frozen"
   },
   "dumps_flows_to_hash:core/witness/provenance.py:smt_conditions_hash": {
@@ -71,7 +71,7 @@
   "raw_dumps_in_canonical_module:core/sandbox/triage.py:_report_sha256": {
    "note": "same site as its dumps_flows_to_hash twin — frozen MAC canonical form"
   },
-  "raw_dumps_in_canonical_module:core/sarif/parser.py:parse_sarif_findings": {
+  "raw_dumps_in_canonical_module:core/sarif/parser.py:parse_sarif_document": {
    "note": "same site as its dumps_flows_to_hash twin — pinned default-separator identity form"
   },
   "raw_dumps_in_canonical_module:core/witness/provenance.py:smt_conditions_hash": {
