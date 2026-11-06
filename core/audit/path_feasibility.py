@@ -130,6 +130,10 @@ def extract_conditions_from_hypothesis(
     - "if (size > MAX_BUF)" or "when len < 0"
     - "assuming X is non-null" → X != NULL
     - "provided that Y > 0"
+
+    Extract atomic comparisons only; do not shorten arithmetic, call,
+    member-access, or Boolean expressions into different predicates.
+    These remain tentative predicates, not source reachability evidence.
     """
 
     # Gated optional paren — the naive ``\(?\s*`` pair was
@@ -138,18 +142,22 @@ def extract_conditions_from_hypothesis(
     # word run retries every suffix — quadratic. A mid-word keyword
     # ('elif' read as 'if') was a false token, not a condition.
     if_patterns = re.findall(
-        r'\b(?:if|when|where|provided that|assuming)\s*(?:\(\s*)?'
-        r'([a-zA-Z_]\w*\s*(?:[<>=!]+|!=|==)\s*(?:\w+|0x[0-9a-fA-F]+|\d+))',
+        r'\b(?:if|when|where|provided that|assuming)\s*(\(\s*)?'
+        r'([a-zA-Z_]\w*\s*(?:<=|>=|==|!=|<|>)\s*'
+        r'(?:0x[0-9a-fA-F]+|[a-zA-Z_]\w*|\d+))'
+        # A parenthesized atom must reach its closing delimiter. Otherwise
+        # prevent expression truncation and RHS-token backtracking.
+        r'(?(1)\s*\)|(?!\w)(?!\s*(?:[-+*/%&|^<>=!~?:\[(]|\.(?=\s*\w)|\b(?:and|or)\b)))',
         hypothesis,
         re.IGNORECASE,
     )
     conditions = [PathCondition(
             text=match.strip(),
             source="hypothesis",
-        ) for match in if_patterns]
+        ) for _, match in if_patterns]
 
     null_patterns = re.findall(
-        r'\b(\w+)\s+is\s+(?:non-null|not null|not NULL)',
+        r'\b(\w+)\s+is\s+(?:non-null|not null)(?![\w-])',
         hypothesis,
         re.IGNORECASE,
     )
@@ -159,14 +167,14 @@ def extract_conditions_from_hypothesis(
         ) for var in null_patterns)
 
     nonneg_patterns = re.findall(
-        r'\b(\w+)\s+(?:is|must be)\s+(?:non-negative|positive|greater than zero)',
+        r'\b(\w+)\s+(?:is|must be)\s+(non-negative|positive|greater than zero)(?![\w-])',
         hypothesis,
         re.IGNORECASE,
     )
     conditions.extend(PathCondition(
-            text=f"{var} > 0",
+            text=f"{var} {'>=' if phrase.lower() == 'non-negative' else '>'} 0",
             source="hypothesis",
-        ) for var in nonneg_patterns)
+        ) for var, phrase in nonneg_patterns)
 
     return conditions
 
