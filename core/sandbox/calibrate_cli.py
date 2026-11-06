@@ -48,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Home expansion failures and missing binaries exit 64. "
             "Input inspection failures exit 70. "
             "Cache cleanup exits 70 if an operation fails, including partial "
             "cleanup. Entry failures do not stop other entries.\n\n"
@@ -222,7 +223,13 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     if not args.bin:
         parser.error("--bin is required (except with --clear-all)")
 
-    bin_path = Path(args.bin).expanduser()
+    try:
+        bin_path = Path(args.bin).expanduser()
+    except RuntimeError as exc:
+        sys.stderr.write(
+            f"raptor-sandbox-calibrate: cannot expand binary path {_sft(str(args.bin))}: {_sft(str(exc))}\n"
+        )
+        return _USAGE_EX
     try:
         bin_exists = bin_path.exists()
     except OSError as exc:
@@ -267,7 +274,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             sys.stderr.write(
                 f"raptor-sandbox-calibrate: no cached profile for "
                 f"{_sft(str(bin_path))} (env keys: "
-                f"{list(env_keys) or '(none)'}). Run without --show "
+                f"{_sft(str(list(env_keys) or '(none)'))}). Run without --show "
                 f"to create one.\n"
             )
             return _SOFTWARE_EX
