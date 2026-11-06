@@ -119,7 +119,7 @@ from .defassign import (
     _substitute,
     _walk_nodes,
     function_local_names,
-    function_parameter_names,
+    function_scope_names,
 )
 from .defassign import (
     _TOKEN_RE as _DEFASSIGN_TOKEN_RE,
@@ -1656,8 +1656,7 @@ class _Analysis:
                 raise ProofRefusal(
                     f"claimed name {p} is itself a macro in the closure"
                 )
-        self.locals = function_local_names(func_source)
-        self.params = function_parameter_names(func_source)
+        self.locals, self.params = function_scope_names(func_source)
         plain_tokens = _defassign_tokenize(func_source)
         self.tracked_superset = _token_tracked_superset(
             plain_tokens, pointer_set,

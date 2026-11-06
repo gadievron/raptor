@@ -1996,12 +1996,9 @@ def _uninit_claim_variables(
     parameter-only "proof" is trivial and covers nothing (the
     prose-only-parameter laundering shape).
     """
-    from .defassign import (
-        function_local_names,
-        function_parameter_names,
-    )
+    from .defassign import function_scope_names
 
-    declared = function_local_names(source)
+    declared, parameters = function_scope_names(source)
     if not declared:
         return set()
     receipt_vars: set[str] = set()
@@ -2018,7 +2015,7 @@ def _uninit_claim_variables(
         w for w in _C_IDENT_RE.findall(mechanism or "") if w in declared
     }
     candidates = receipt_vars | prose_vars
-    if not candidates or candidates <= function_parameter_names(source):
+    if not candidates or candidates <= parameters:
         return set()
     return candidates
 
