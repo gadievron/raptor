@@ -653,6 +653,30 @@ This authenticates RAPTOR's producing workflow. It does not establish Node's
 upstream build provenance, prove compiled native dependency membership, or
 change the findings of `sbom verify-plan`, which checks local consistency.
 
+Image builds also check uv's publisher provenance automatically. The installed
+version selects its upstream container release; the check pins the fetched OCI
+index and platform manifest, verifies layer digests, and requires an exact uv
+binary hash match. GitHub CLI then verifies the index attestation against
+Astral's `build-docker.yml` workflow. Failures produce a warning and an unknown
+provenance result, while image publication continues.
+
+The `uv-provenance/` directory contains `uv-container-binding.json`, original OCI documents,
+`uv-publisher-attestation.jsonl` and the signature verifier's result. The binding alone is
+an unsigned byte comparison. To verify the publisher signature independently:
+
+```bash
+gh attestation verify uv-provenance/index.json --repo astral-sh/uv \
+  --signer-workflow astral-sh/uv/.github/workflows/build-docker.yml \
+  --deny-self-hosted-runners --bundle uv-provenance/uv-publisher-attestation.jsonl
+```
+
+The same trusted-root option supports offline verification. The source layer's
+binary bytes are checked during collection rather than retained in the download;
+RAPTOR's signed checksum manifest authenticates the resulting binding record.
+This establishes byte identity with a publisher image layer, separately from
+runtime visibility, source correspondence or compiled dependency completeness.
+
+
 ## Preparing RAPTOR inventory exports
 
 [Syft](https://github.com/anchore/syft) is an external SBOM generation tool;

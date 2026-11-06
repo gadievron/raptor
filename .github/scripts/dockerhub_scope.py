@@ -28,6 +28,8 @@ BUILD_INPUTS = [DOCKERFILE, '.github/workflows/dockerhub-publish.yml',
                 '.github/scripts/check_playwright_source.py',
                 '.github/scripts/check_node_release.py',
                 '.github/scripts/write_sbom_checksums.py',
+                '.github/scripts/check_uv_provenance.py',
+                'packages/sca/sbom_inventory/uv_provenance.py',
                 '.github/actions/enable-userns']
 
 

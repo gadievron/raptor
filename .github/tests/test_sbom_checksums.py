@@ -98,3 +98,22 @@ def test_attestation_uses_least_job_permissions_and_retains_bundle_before_upload
     # Authentication is visible but cannot turn coverage gaps into a publication gate.
     publishing = build.split("      - name: Publish verified image\n", 1)[1]
     assert "attestation" not in publishing
+
+
+def test_uv_signature_result_is_required_before_reporting_authenticated_origin():
+    workflow = (ROOT / ".github/workflows/dockerhub-publish.yml").read_text()
+    binding = workflow.index("      - name: Bind installed uv to its publisher image")
+    readable = workflow.index("      - name: Make audit artifacts readable")
+    verify = workflow.index("      - name: Verify and retain uv publisher attestation")
+    report = workflow.index("      - name: Report uv provenance status")
+    checksums = workflow.index("      - name: Hash retained container evidence")
+    assert binding < readable < verify < report < checksums
+    block = workflow[verify:report]
+    assert "steps.uv_binding.outcome == 'success'" in block
+    assert "set -euo pipefail" in block and "continue-on-error: true" in block
+    assert "gh attestation verify index.json --repo astral-sh/uv" in block
+    assert "GH_TOKEN" not in block and "github.token" not in block
+    assert "--signer-workflow astral-sh/uv/.github/workflows/build-docker.yml" in block
+    assert "--deny-self-hosted-runners --bundle uv-publisher-attestation.jsonl" in block
+    assert "steps.uv_attestation.outcome" in workflow[report:checksums]
+    assert "::warning::uv publisher provenance unavailable" in workflow[report:checksums]
