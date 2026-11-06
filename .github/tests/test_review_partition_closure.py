@@ -190,3 +190,57 @@ def test_git_mode_ls_files_and_changed_since(tmp_path):
     ])
     assert res.returncode == 1
     assert "CHANGED-UNCLAIMED: orphan/b.py" in res.stdout
+
+
+
+def test_git_paths_preserve_names_and_changed_ownership(tmp_path, capsys):
+    import importlib.util
+    import os
+    from unittest.mock import patch
+
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    spec = importlib.util.spec_from_file_location("partition_gate_under_test", SCRIPT)
+    gate = importlib.util.module_from_spec(spec)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(gate)
+    repo = init_scratch_repo(tmp_path)
+    expected = ["core/café.py", "core/line\nname.py", "core/tab\tname.py",
+                'core/quote"name.py', "core/space name.py"]
+    if os.name == "posix":
+        expected.append("core/" + os.fsdecode(b"raw-\xff.py"))
+    for rel in expected + ["vendored/café.py"]:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("before = 1\n")
+    git_run(repo, "add", "-A")
+    git_run(repo, "commit", "-qm", "base")
+    base = git_run(repo, "rev-parse", "HEAD")
+    for rel in expected:
+        (repo / rel).write_text("after = 2\n")
+    unit_map = tmp_path / "map.txt"
+    unit_map.write_text("U1: core/\n")
+    claims = tmp_path / "claims.tsv"
+    args = ["--map", str(unit_map), "--tree", str(repo),
+            "--changed-since", base, "--exclude", "vendored/*",
+            "--claims-out", str(claims)]
+    for quote_path in ("true", "false"):
+        git_run(repo, "config", "core.quotePath", quote_path)
+        assert set(gate.git_paths(str(repo), "ls-files")) == set(
+            expected + ["vendored/café.py"])
+        assert set(gate.git_paths(str(repo), "diff", "--name-only", base)) == set(expected)
+        assert gate.main(args) == 0
+        output = capsys.readouterr().out
+        for rel in expected:
+            displayed = rel.encode("utf-8", errors="backslashreplace").decode("utf-8")
+            assert f"REVIEW U1\t{displayed}" in output
+            assert os.fsencode(rel) + b"\tU1\n" in claims.read_bytes()
+        assert f"reviewable {len(expected)} (excluded 1)" in output
+        unit_map.write_text("U1: core/\nU2: core/*.py\n")
+        assert gate.main(args) == 1
+        assert "MULTI-CLAIMED:" in capsys.readouterr().out
+        unit_map.write_text("U1: core/\n")
+    # Removing the directory claim must still fail for changed unusual paths.
+    unit_map.write_text("U1: core/space*\n")
+    assert gate.main(args) == 1
+    assert "CHANGED-UNCLAIMED: core/café.py" in capsys.readouterr().out

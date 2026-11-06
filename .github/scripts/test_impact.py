@@ -89,16 +89,17 @@ def classify_env(path: Path, env_groups: dict[str, dict]) -> str:
 
 def get_changed_files_from_diff(diff_spec: str | None) -> list[str]:
     """Get changed files from git diff (staged + unstaged)."""
-    cmd = ["git", "diff", "--name-only"]
+    cmd = ["git", "diff", "--name-only", "-z"]
     if diff_spec:
         cmd.append(diff_spec)
     else:
         cmd.append("HEAD")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
-        print(f"git diff failed: {result.stderr}", file=sys.stderr)
+        print(f"git diff failed: {result.stderr.decode(errors='replace')}", file=sys.stderr)
         sys.exit(1)
-    return [f for f in result.stdout.strip().splitlines() if f.strip()]
+    return [raw.decode("utf-8", errors="surrogateescape")
+            for raw in result.stdout.split(b"\0") if raw]
 
 
 def tier_for_file(path: Path) -> str | None:
