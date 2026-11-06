@@ -3777,6 +3777,37 @@ def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monke
     assert len([c for c in calls if '-E' not in c]) == 2
 
 
+def test_failed_sarif_invocation_is_not_cached_as_refutation(tmp_path, monkeypatch):
+    import json
+
+    target = tmp_path / "repo"
+    target.mkdir()
+    source = target / "a.c"
+    source.write_text("void f(void) {}\n")
+    monkeypatch.setattr(compiler_sweep, "_gcc_analyzer", lambda: ("/owned/gcc", "sarif-file"))
+    monkeypatch.setattr(compiler_sweep, "_clang_path", lambda: None)
+    attempts = []
+
+    def run(command, **kwargs):
+        if "-E" in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', "")
+        attempts.append(command)
+        report = {"runs": [{"results": [], "invocations": [{"executionSuccessful": len(attempts) > 1}]}]}
+        (Path(kwargs["cwd"]) / "a.c.sarif").write_text(json.dumps(report))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("core.sandbox.context.run", run)
+    def sweep():
+        return run_compiler_analyzer_sweep(
+            target_path=target, file_path="a.c", function_name="f",
+            cwe="CWE-416", hypothesis="memory misuse", line_start=1, line_end=1,
+            out_dir=tmp_path,
+        )
+    assert sweep().outcome == "error"
+    assert sweep().outcome == "refuted"
+    assert len(attempts) == 2
+
+
 def test_missing_gcc_sarif_is_not_silence(tmp_path):
     from core.detectors.compiler import CompilerDiagnosticError
 
