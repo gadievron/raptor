@@ -307,30 +307,18 @@ SMT_INFEASIBLE_CONFIDENCE = 0.7
 MAX_SMT_PATHS = 3
 
 
-# Digit lookbehind so the identifier scan cannot start mid-literal
-# (``0x10`` must not yield ``x10``).
-_STEER_IDENT_RE = __import__("re").compile(r"(?<![0-9A-Za-z_])[A-Za-z_][A-Za-z0-9_]*")
-_STEER_NON_VARS = frozenset({"null", "not", "and", "or"})
-
-
 def _steering_target(conditions: list) -> str | None:
-    """Pick the variable to drive toward its maximum for overflow
-    witnesses: the first identifier of the LAST extracted condition
-    (the sink-adjacent guard). Returns the lowercased name (the SMT
-    parser interns variables lowercased) or None when the last
-    condition names no plain identifier — the caller then skips
-    steering rather than guessing."""
+    """Select a case-sensitive plain identifier from the sink-adjacent guard.
+
+    Calls and quoted literals are opaque. The solver still checks membership
+    in its parsed variable registry before adding an objective.
+    """
+    from core.smt_solver.condition_syntax import plain_condition_identifiers
+
     if not conditions:
         return None
-    for tok in _STEER_IDENT_RE.findall(conditions[-1].text):
-        low = tok.lower()
-        # Hex literals need no guard here: _STEER_IDENT_RE requires a
-        # leading letter/underscore, so a token can never start "0x",
-        # and the digit lookbehind stops a mid-literal "x10" match.
-        if low in _STEER_NON_VARS:
-            continue
-        return low
-    return None
+    names = plain_condition_identifiers(conditions[-1].text)
+    return names[0] if names else None
 
 
 def _is_overflow_rule(rule_id: str) -> bool:

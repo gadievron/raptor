@@ -655,7 +655,7 @@ class TestWitnessSteering:
             PathCondition("size > 0", step_index=0),
             PathCondition("Count * 16 < limit", step_index=1),
         ]
-        assert _steering_target(conds) == "count"
+        assert _steering_target(conds) == "Count"
 
     def test_steering_target_skips_null_and_literals(self):
         from packages.codeql.dataflow_validator import _steering_target
@@ -794,3 +794,45 @@ def test_unmodeled_scalar_mutation_cannot_short_circuit_dataflow_analysis(tmp_pa
     assert result.is_exploitable is True
     assert validator.llm.generate_structured.call_count == 1
     assert validator._extract_path_conditions.call_count == 1
+
+
+@pytest.mark.parametrize(('text', 'expected'), [
+    ('strlen("Count") < Limit', 'Limit'),
+    ('probe(Count) == probe(Count)', None),
+    ('NULL < Null', 'Null'),
+    ('not > 0', 'not'),
+    ('0x10 < Count', 'Count'),
+    ('Count is at least 1', 'Count'),
+])
+def test_steering_target_matches_plain_source_identity(text, expected):
+    from packages.codeql.dataflow_validator import _steering_target
+
+    assert _steering_target([PathCondition(text, 0)]) == expected
+
+
+@pytest.mark.skipif(not z3_available(), reason="Z3 unavailable")
+def test_codeql_steering_reaches_real_case_sensitive_solver(tmp_path):
+    from core.smt_solver.path_feasibility import check_path_feasibility
+
+    v = _validator()
+    conditions = [PathCondition('count == 2', 0), PathCondition('Count <= 9', 1)]
+    v._extract_path_conditions = MagicMock(return_value=(conditions, {'width': 8, 'signed': False}))
+    dp = v.extract_dataflow_from_sarif(_sarif_two_flows())
+    dp.rule_id = 'cpp/integer-overflow'
+    solved = []
+
+    def solve(*args, **kwargs):
+        result = check_path_feasibility(*args, **kwargs)
+        solved.append(result)
+        return result
+
+    with patch('packages.codeql.dataflow_validator.check_path_feasibility', side_effect=solve), patch(
+        'core.llm.scorecard.prefilter_decision', return_value=SimpleNamespace(short_circuit=False),
+    ), patch('core.llm.scorecard.record_prefilter_outcome'), patch(
+        'packages.codeql.dataflow_validator.load_methodology', return_value='',
+    ), patch.object(v, '_injection_prescreen', return_value=None):
+        result = v.validate_dataflow_path(dp, tmp_path)
+    assert result.is_exploitable is True
+    assert solved[0].feasible is True
+    assert solved[0].model == {'count': 2, 'Count': 9}
+    assert v.llm.generate_structured.call_count == 1
