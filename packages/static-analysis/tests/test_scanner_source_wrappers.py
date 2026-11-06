@@ -141,3 +141,32 @@ def test_source_wrapper_failed_invocations_produce_diagnostic_report(tmp_path, m
     assert metrics['total_findings'] == 0
     assert metrics['tool_execution_failures'] == {'raptor-source-wrappers': 1}
     assert scan_execution_status(metrics) == 'partial'
+
+
+
+def test_source_wrapper_export_retains_direct_source_span(tmp_path, monkeypatch):
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult, parse_sarif
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    out = tmp_path / 'out'
+    out.mkdir()
+    _wire_stage(monkeypatch, SemgrepResult(findings=[
+        SemgrepFinding('App.java', 7, rule_id='wrapper.xss', column=2, line_end=8, column_end=11),
+    ]))
+    paths, _ = _scanner.run_source_wrapper_stage(repo, out)
+    finding = parse_sarif(Path(paths[0]).read_text())[0]
+    assert (finding.line, finding.column, finding.line_end, finding.column_end) == (7, 2, 8, 11)
+
+
+
+def test_generated_export_does_not_invent_line_one_for_unknown_coordinates():
+    from packages.semgrep.models import parse_sarif_data
+
+    document = _scanner._stage_findings_to_sarif(
+        [('wrapper', {'file': 'App.java', 'line': 0, 'message': 'unlocated finding'})],
+        tool_name='raptor-source-wrappers', rule_prefix='source-wrapper',
+    )
+    region = document['runs'][0]['results'][0]['locations'][0]['physicalLocation']['region']
+    assert region == {}
+    assert parse_sarif_data(document)[0].line == 0

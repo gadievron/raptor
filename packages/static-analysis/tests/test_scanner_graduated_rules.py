@@ -348,3 +348,26 @@ def test_graduated_diagnostic_escapes_rule_names_and_tool_error_controls(tmp_pat
     assert 'parse error' in text
     assert '\n' not in text and '\x1b' not in text
     assert len(text) < 1000
+
+
+
+def test_graduated_export_retains_two_distinct_direct_source_spans(tmp_path, monkeypatch):
+    from core.sarif.parser import merge_sarif
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    project = tmp_path / 'project'
+    out = project / 'run'
+    out.mkdir(parents=True)
+    rules = _mk_rules_dir(project, 'spans')
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    _fake_runner(monkeypatch, {'spans': SemgrepResult(findings=[
+        SemgrepFinding('a.c', 7, rule_id='inner', column=2, line_end=7, column_end=5),
+        SemgrepFinding('a.c', 7, rule_id='inner', column=8, line_end=7, column_end=11),
+    ])})
+    paths = _scanner.run_graduated_rules_stage(repo, out, rules_dir=rules)
+    results = merge_sarif(paths)['runs'][0]['results']
+    assert [row['locations'][0]['physicalLocation']['region'] for row in results] == [
+        {'startLine': 7, 'endLine': 7, 'startColumn': 2, 'endColumn': 5},
+        {'startLine': 7, 'endLine': 7, 'startColumn': 8, 'endColumn': 11},
+    ]

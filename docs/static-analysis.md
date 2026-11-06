@@ -525,6 +525,12 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Semgrep findings resolve artifact and rule references within their own SARIF
+run, including URI bases. Direct-source generated-rule reports retain line
+and column spans, so separate matches on the same line survive merging.
+Expanded-source reports retain original line attribution; preprocessor
+columns are not treated as columns in the original source.
+
 Imported SARIF findings and scan metrics inherit missing severity from each
 report’s referenced rule, including indexed and extension rules. CWE labels
 come from that same descriptor unless the result supplies its own CWE.
