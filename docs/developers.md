@@ -48,11 +48,11 @@ provides the tool environment. It does not contain RAPTOR's source; mount your
 working checkout to run the code you are developing:
 
 ```bash
-docker pull docker.io/danielcuthbert/raptor:latest@sha256:fa09821d2a7328f2a4c9e9bc5b9e72ce598581282a8ca5d16ae8e2dff780431a
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:1887536162310b2ba841d4036f80b769dfcd4343a21a0d79985fec9f6a8bc1f2
 docker run -it \
   -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  docker.io/danielcuthbert/raptor:latest@sha256:fa09821d2a7328f2a4c9e9bc5b9e72ce598581282a8ca5d16ae8e2dff780431a
+  docker.io/danielcuthbert/raptor:latest@sha256:1887536162310b2ba841d4036f80b769dfcd4343a21a0d79985fec9f6a8bc1f2
 ```
 
 Run these commands from the checkout; replace the target path with your own or
