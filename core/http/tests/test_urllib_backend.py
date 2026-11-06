@@ -28,6 +28,16 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import core.http.urllib_backend as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_default_breaker(monkeypatch):
     from core.http import urllib_backend
     from core.testing.module_state import isolated_module_state
