@@ -492,3 +492,39 @@ value = nested_json.dumps([transform(item) for item in items])
         patcher.setattr(ast, "iter_child_nodes", statement_children)
         aliases = det._json_aliases(tree)
     assert aliases == ({"nested_json"}, {"nested_dumps", "nested_dump"})
+
+
+@pytest.mark.parametrize("source", [
+    "def value(): return 42\n",
+    "import hashlib\ndef value(): return hashlib.sha256(b'payload')\n",
+    "# 非 ASCII prose without serializer calls\ndef value(): return 42\n",
+])
+def test_unrelated_source_does_not_parse(det, tmp_path, monkeypatch, source):
+    from core.testing.module_bindings import patch_module_attribute
+
+    _tree(tmp_path, "core/example.py", source)
+
+    def unexpected_parse(*args, **kwargs):
+        pytest.fail("unrelated source reached the AST parser")
+
+    patch_module_attribute(monkeypatch, det, "ast", "parse", unexpected_parse)
+    assert det.scan_tree(tmp_path) == []
+
+
+@pytest.mark.parametrize("source,rule", [
+    ("from json import dumps as serialize\ndef value(x): return serialize(x)\n",
+     "raw_dumps_in_canonical_module"),
+    ("import json as j\ndef value(x): return j.ｄｕｍｐｓ(x)\n",
+     "raw_dumps_in_canonical_module"),
+    ("from json import ｄｕｍｐｓ as serialize\ndef value(x): return serialize(x)\n",
+     "raw_dumps_in_canonical_module"),
+    ("import json\ndef value(x, f): return json.ｄｕｍｐ(x, f)\n",
+     "raw_dumps_in_canonical_module"),
+    ("import hashlib\ndef value(x): return hashlib.sha256(ｄｕｍｐｓ＿ｄｉｓｐｌａｙ(x))\n",
+     "substrate_dumps_flows_to_hash"),
+    ("import hashlib\ndef value(x): return hashlib.sha256(ｄｕｍｐｓ＿ａｒｔｉｆａｃｔ(x))\n",
+     "substrate_dumps_flows_to_hash"),
+])
+def test_source_screen_preserves_aliases_and_normalized_names(det, tmp_path, source, rule):
+    _tree(tmp_path, "core/coverage/journal_mac.py", source)
+    assert rule in {finding["rule"] for finding in det.scan_tree(tmp_path)}

@@ -65,6 +65,7 @@ import argparse
 import ast
 import json
 import sys
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -372,8 +373,13 @@ def scan_tree(root: Path) -> list[dict]:
     for path in iter_python_files(root):
         rel = str(path.relative_to(root))
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8",
-                                            errors="replace"))
+            source = path.read_text(encoding="utf-8", errors="replace")
+            # Every recognized serializer needs a dump spelling, including
+            # aliased imports. Python normalizes identifier names with NFKC;
+            # screen normalized text but parse the untouched source below.
+            if "dump" not in source and "dump" not in unicodedata.normalize("NFKC", source):
+                continue
+            tree = ast.parse(source)
         except (SyntaxError, ValueError, OSError):
             continue
         aliases, bare_dumps = _json_aliases(tree)
