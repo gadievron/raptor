@@ -2101,6 +2101,11 @@
     "kind": "literal",
     "note": "closed schema for the private per-session context file: the exact JSON keys written by publish() and validated by read_context(); adding or removing a field is a format change, not vocabulary growth"
   },
+  "core/startup/codex_environment.py::_LIFECYCLE_ENV_KEYS": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Closed authenticated lifecycle environment allowlist for the Codex broker session operation. Fixed RAPTOR session, launcher, output and scratch metadata keys shared by the producer and validating consumer; provider credentials are excluded. Infrastructure security policy, not learned target function names."
+  },
   "core/startup/codex_environment.py::context": {
     "count": 10,
     "kind": "literal",

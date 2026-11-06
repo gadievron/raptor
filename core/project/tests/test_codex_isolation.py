@@ -191,7 +191,8 @@ def test_hook_only_finalizes_its_logical_owner(registry, tmp_path, monkeypatch, 
             runs.append(run)
             owners.append(owner)
     with registry(ROOT_A):
-        def restore(sid):
+        def restore(sid, *, lifecycle=False):
+            assert lifecycle is True
             assert sid == ROOT_A
         monkeypatch.setattr(codex_environment, "restore", restore)
         monkeypatch.setattr(sys, "argv", ["hook", event])
