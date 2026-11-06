@@ -46,7 +46,17 @@ from pathlib import Path
 def resolve_classname(dotted: str, repo: Path) -> tuple[str, list[str]] | None:
     """(repo-relative file path, trailing class components) for a
     junit dotted name, or None when no prefix is a file on disk."""
+    if any(char in dotted for char in ("/", "\\", "\0")):
+        return None
     parts = dotted.split(".")
+    if len(parts) > 1 and not parts[0]:
+        # Pytest preserves hidden roots: .github.tests becomes .github/tests,
+        # not /github/tests (which would escape the supplied repository).
+        parts = parts[1:]
+        if parts[0]:
+            parts[0] = "." + parts[0]
+    if not all(parts):
+        return None
     for i in range(len(parts), 0, -1):
         candidate = "/".join(parts[:i]) + ".py"
         if (repo / candidate).is_file():
@@ -61,6 +71,7 @@ def collect_run(
     per_file: dict[str, float] = defaultdict(float)
     per_nodeid: dict[str, float] = defaultdict(float)
     dropped = 0
+    resolutions = {}  # One immutable report/tree snapshot; include misses.
     root = ET.parse(xml_path).getroot()
     for tc in root.iter("testcase"):
         classname = tc.get("classname") or ""
@@ -73,14 +84,13 @@ def collect_run(
         if not math.isfinite(seconds) or seconds < 0:
             dropped += 1
             continue
-        if classname:
-            resolved = resolve_classname(classname, repo)
-        elif name:
+        dotted = classname or name
+        if dotted not in resolutions:
+            resolutions[dotted] = resolve_classname(dotted, repo) if dotted else None
+        resolved = resolutions[dotted]
+        if not classname:
             # Collection-skip rows: module dotted path rides in name.
-            resolved = resolve_classname(name, repo)
             name = ""
-        else:
-            resolved = None
         if resolved is None:
             dropped += 1
             continue
