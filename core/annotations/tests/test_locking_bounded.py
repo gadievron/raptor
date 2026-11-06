@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.annotations.storage import AnnotationFileError, _file_lock
 
@@ -30,7 +32,7 @@ def test_cross_uid_lock_file_is_still_adopted(
     target = tmp_path / "notes.md"
     (tmp_path / "notes.md.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     entered = False
     with _file_lock(target):
         entered = True

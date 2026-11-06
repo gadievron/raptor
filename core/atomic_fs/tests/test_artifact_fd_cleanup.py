@@ -5,6 +5,8 @@ import stat
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core import atomic_fs
 
 
@@ -32,9 +34,9 @@ def test_cancelled_permission_setup_closes_fd(tmp_path, monkeypatch, close_fails
     def cancel(*args):
         raise cancellation
 
-    monkeypatch.setattr(os, 'open', open_fd)
-    monkeypatch.setattr(os, 'close', close_fd)
-    monkeypatch.setattr(os, 'fchmod', cancel)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'open', open_fd)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'close', close_fd)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'fchmod', cancel)
     with pytest.raises(Cancelled) as raised:
         atomic_fs.open_exclusive_artifact(tmp_path / 'new', mode=0o600)
     assert raised.value is cancellation
@@ -59,8 +61,8 @@ def test_write_error_survives_close_error(tmp_path, monkeypatch, failure):
         closed.append(fd)
         raise OSError('secondary close failure')
 
-    monkeypatch.setattr(os, 'write', write)
-    monkeypatch.setattr(os, 'close', close)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'write', write)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'close', close)
     with pytest.raises(failure) as raised:
         atomic_fs.write_new_bytes(tmp_path / 'new', b'data')
     assert raised.value is error
@@ -74,7 +76,7 @@ def test_successful_write_still_reports_close_failure(tmp_path, monkeypatch):
         original_close(fd)
         raise OSError('close failure')
 
-    monkeypatch.setattr(os, 'close', close)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'close', close)
     with pytest.raises(OSError, match='close failure'):
         atomic_fs.write_new_bytes(tmp_path / 'new', b'data')
 
@@ -91,8 +93,8 @@ def test_refusal_error_survives_close_error(tmp_path, monkeypatch, opener):
         closed.append(fd)
         raise OSError('secondary close failure')
 
-    monkeypatch.setattr(os, 'fstat', lambda fd: SimpleNamespace(st_mode=stat.S_IFIFO))
-    monkeypatch.setattr(os, 'close', close)
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'fstat', lambda fd: SimpleNamespace(st_mode=stat.S_IFIFO))
+    patch_module_attribute(monkeypatch, atomic_fs, "os", 'close', close)
     with pytest.raises(OSError, match='not a regular file'):
         getattr(atomic_fs, opener)(path)
     assert len(closed) == 1

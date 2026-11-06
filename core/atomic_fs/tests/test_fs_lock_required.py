@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.atomic_fs import fs_lock
 
 
@@ -27,7 +29,7 @@ def test_untrusted_lock_refuses_required_mutation(tmp_path, monkeypatch, shape):
         os.mkfifo(lock)
     else:
         lock.touch()
-        monkeypatch.setattr(os, "geteuid", lambda: lock.stat().st_uid + 1)
+        patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: lock.stat().st_uid + 1)
     with pytest.raises(OSError, match="refusing unlocked operation"):
         with fs_lock.artifact_lock(artifact, required=True):
             artifact.write_text("unsafe mutation")

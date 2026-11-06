@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core import atomic_fs as fs
 
 
@@ -55,8 +57,8 @@ def test_filesystem_root_is_refused_before_any_mutation(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("unexpected filesystem mutation")
 
-    monkeypatch.setattr(fs.shutil, "rmtree", forbidden)
-    monkeypatch.setattr(os, "chmod", forbidden)
+    patch_module_attribute(monkeypatch, fs, "shutil", "rmtree", forbidden)
+    patch_module_attribute(monkeypatch, fs, "os", "chmod", forbidden)
     assert fs.rmtree_hardened(Path("/")) is False
 
 
@@ -71,7 +73,7 @@ def test_uninspectable_root_is_not_reported_gone(tmp_path, monkeypatch, failure)
             raise failure("cannot inspect")
         return lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "lstat", fail)
+    patch_module_attribute(monkeypatch, fs, "os", "lstat", fail)
     assert fs.rmtree_hardened(root) is False
     assert root.exists()
 
@@ -83,7 +85,7 @@ def test_removal_error_is_a_failed_receipt(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("removal unavailable")
 
-    monkeypatch.setattr(fs.shutil, "rmtree", fail)
+    patch_module_attribute(monkeypatch, fs, "shutil", "rmtree", fail)
     assert fs.rmtree_hardened(root) is False
     assert root.exists()
 
@@ -100,7 +102,7 @@ def test_replaced_root_is_not_permission_restored(tmp_path, monkeypatch):
             root.mkdir(mode=0o750)
             (root / "operator-data").write_text("keep")
 
-    monkeypatch.setattr(fs.shutil, "rmtree", replace)
+    patch_module_attribute(monkeypatch, fs, "shutil", "rmtree", replace)
     assert fs.rmtree_hardened(root) is False
     assert root.stat().st_mode & 0o777 == 0o750
     assert (root / "operator-data").read_text() == "keep"
@@ -125,9 +127,9 @@ def test_unlink_failure_does_not_mask_original_write_failure(
             raise PermissionError("secondary cleanup failure")
         return unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, phase, fail)
+    patch_module_attribute(monkeypatch, fs, "os", phase, fail)
     with monkeypatch.context() as fault:
-        fault.setattr(Path, "unlink", cannot_unlink)
+        fault.setattr(fs, "Path", type("FaultPath", (type(target),), {"unlink": cannot_unlink}))
         with pytest.raises(error) as caught:
             fs.write_bytes_atomically(target, b"new")
     assert caught.value is original
@@ -149,8 +151,8 @@ def test_close_error_does_not_mask_failed_write(tmp_path, monkeypatch, error):
         close(fd)
         raise OSError("secondary close failure")
 
-    monkeypatch.setattr(os, "write", fail_write)
-    monkeypatch.setattr(os, "close", fail_close)
+    patch_module_attribute(monkeypatch, fs, "os", "write", fail_write)
+    patch_module_attribute(monkeypatch, fs, "os", "close", fail_close)
     with pytest.raises(error) as caught:
         fs.write_bytes_atomically(target, b"new")
     assert caught.value is original
@@ -187,8 +189,8 @@ def test_inspection_failure_after_removal_attempt_is_not_a_success(
                 raise PermissionError("cannot confirm removal")
         return lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "lstat", inspect)
-    monkeypatch.setattr(fs.shutil, "rmtree", lambda *a, **kw: None)
+    patch_module_attribute(monkeypatch, fs, "os", "lstat", inspect)
+    patch_module_attribute(monkeypatch, fs, "shutil", "rmtree", lambda *a, **kw: None)
     assert fs.rmtree_hardened(root) is False
     assert root.exists()
 
@@ -205,7 +207,7 @@ def test_close_failure_without_failed_write_aborts_publication(
         close(fd)
         raise OSError("close failed")
 
-    monkeypatch.setattr(os, "close", fail_close)
+    patch_module_attribute(monkeypatch, fs, "os", "close", fail_close)
 
     def attempt():
         with pytest.raises(OSError, match="close failed"):
@@ -229,7 +231,7 @@ def test_directory_cleanup_does_not_swallow_cancellation(tmp_path, monkeypatch):
     def interrupt(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(fs.shutil, "rmtree", interrupt)
+    patch_module_attribute(monkeypatch, fs, "shutil", "rmtree", interrupt)
     with pytest.raises(KeyboardInterrupt):
         fs.rmtree_hardened(root)
     assert root.exists()

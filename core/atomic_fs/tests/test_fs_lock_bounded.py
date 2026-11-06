@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.atomic_fs.fs_lock import artifact_lock
 
@@ -88,12 +90,12 @@ class TestForeignUidRefusal:
         artifact = tmp_path / "store.json"
         lock = tmp_path / "store.json.lock"
         lock.write_bytes(b"")
-        # This process-wide identity patch requires no concurrent identity
-        # readers in this test; monkeypatch restores it before the next test.
+        # Change only the lock checker's identity view. Other consumers keep
+        # the real process identity throughout this test.
         # Simulate the foreign owner: the file's real uid is ours, so
         # shift what the checker believes OUR euid is.
         real_euid = os.geteuid()
-        monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+        patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
         entered = False
         with caplog.at_level("WARNING"):
             with artifact_lock(artifact):
@@ -125,7 +127,7 @@ class TestForeignUidRefusal:
         lock = tmp_path / "x.lock"
         lock.write_bytes(b"")
         real_euid = os.geteuid()
-        monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+        patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
         fd = os.open(str(lock), os.O_WRONLY)
         try:
             with pytest.raises(OSError, match="foreign lock file"):
@@ -481,7 +483,7 @@ class TestStampRewrite:
             calls.append(args)
             return real_ftruncate(*args)
 
-        monkeypatch.setattr(os, "ftruncate", counting_ftruncate)
+        patch_module_attribute(monkeypatch, fs_lock, "os", "ftruncate", counting_ftruncate)
         fd = os.open(str(lock), os.O_WRONLY)
         try:
             fs_lock.stamp_lock_holder(fd)

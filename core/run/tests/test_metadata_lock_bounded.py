@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.atomic_fs.fs_lock as fs_lock
 from core.run.metadata import _HAS_FCNTL, _metadata_lock
 
@@ -29,7 +31,7 @@ def test_foreign_uid_lock_sibling_degrades_unserialised(
     meta = tmp_path / ".raptor-run.json"
     (tmp_path / ".raptor-run.json.lock").write_bytes(b"")
     real_euid = os.geteuid()
-    monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+    patch_module_attribute(monkeypatch, fs_lock, "os", "geteuid", lambda: real_euid + 1)
     entered = False
     with caplog.at_level("WARNING"):
         with _metadata_lock(meta):
