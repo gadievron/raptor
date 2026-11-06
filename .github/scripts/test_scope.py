@@ -1064,6 +1064,7 @@ def _force_all_dispatch(repo: Path) -> dict[str, dict]:
 def _emit_outputs(
     result: dict[str, dict],
     set_output,
+    *, python_matrix_out: Path | None = None,
 ) -> None:
     """Write tier gates, file lists, and matrices to GITHUB_OUTPUT."""
     summary_parts = []
@@ -1082,7 +1083,17 @@ def _emit_outputs(
             summary_parts.append(f"  {tier_name}: skip")
         # Fast tier: emit the batch matrix as JSON.
         if "matrix" in info:
-            set_output(f"{tier_name}_matrix", json.dumps(info["matrix"]))
+            matrix_json = json.dumps(info["matrix"])
+            set_output(f"{tier_name}_matrix", matrix_json)
+            if tier_name == "python" and python_matrix_out is not None:
+                set_output("python_matrix_file", "")
+                try:
+                    python_matrix_out.write_text(matrix_json + "\n", encoding="utf-8")
+                    set_output("python_matrix_file", str(python_matrix_out))
+                except OSError as error:
+                    # Timing-based rebalancing is optional; retain the normal
+                    # outputs so a scratch-file failure cannot block dispatch.
+                    print(f"::warning::Cannot write optional Python matrix file: {error}")
 
     print("Tier dispatch:")
     for line in summary_parts:
@@ -1100,6 +1111,8 @@ def main() -> int:
         default=".",
         help="Repository root",
     )
+    parser.add_argument("--python-matrix-out", type=Path,
+                        help="Best-effort JSON file for downstream fast-tier rebalancing")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -1135,13 +1148,13 @@ def main() -> int:
     if full_dispatch:
         set_output("scope_mode", "full")
         result = _force_all_dispatch(repo)
-        _emit_outputs(result, set_output)
+        _emit_outputs(result, set_output, python_matrix_out=args.python_matrix_out)
         return 0
 
     result = compute_tier_dispatch(changed, repo)
     scope_mode = "full" if result.get("_scope", {}).get("full") else "scoped"
     set_output("scope_mode", scope_mode)
-    _emit_outputs(result, set_output)
+    _emit_outputs(result, set_output, python_matrix_out=args.python_matrix_out)
 
     active = sum(1 for t, i in result.items()
                  if not t.startswith("_") and i["run"])
