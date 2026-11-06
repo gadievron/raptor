@@ -268,6 +268,8 @@ _INCLUDE_RE = re.compile(
     r'^[ \t]*#[ \t]*include[ \t]*(<[^>\n]+>|"[^"\n]+")', re.MULTILINE,
 )
 _DIRECTIVE_RE = re.compile(r"^[ \t]*#[ \t]*(\w+)(.*)$")
+_DEFINE_DIRECTIVE_RE = re.compile(r"#[ \t]*define(?!\w)(.*)")
+_DIRECTIVE_INDENT_RE = re.compile(r"[ \t]*")
 
 
 @dataclass(frozen=True)
@@ -325,6 +327,21 @@ def _join_continuations(text: str) -> list[str]:
     if buf:
         lines.append(" ".join(buf))
     return lines
+
+
+def _iter_define_directives(text: str) -> Iterator[str]:
+    """Yield define bodies, retaining legacy continuation and subclass handling."""
+    if type(text) is str and "\\\n" not in text and not text.endswith("\\"):
+        for match in _DEFINE_DIRECTIVE_RE.finditer(text):
+            # Search the literal marker first, then validate its line prefix.
+            start = text.rfind("\n", 0, match.start()) + 1
+            if _DIRECTIVE_INDENT_RE.fullmatch(text, start, match.start()) is not None:
+                yield match.group(1)
+        return
+    for line in _join_continuations(text):
+        match = _DIRECTIVE_RE.match(line)
+        if match is not None and match.group(1) == "define":
+            yield match.group(2)
 
 
 def _parse_define(rest: str, path: str) -> MacroDef | None:
@@ -487,21 +504,16 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
         table.files_scanned += 1
         if parser is not None:
             table.function_names |= _declared_function_names(text, parser)
-        for line in _join_continuations(text):
-            dm = _DIRECTIVE_RE.match(line)
-            if dm is None:
+        for rest in _iter_define_directives(text):
+            parsed = _parse_define(rest, str(path))
+            if parsed is None:
+                nm = _MACRO_DEFINE_NAME_RE.match(rest)
+                if nm is not None:
+                    # Unparseable definition: poison the name so
+                    # any invocation refuses.
+                    table.poisoned.add(nm.group(1))
                 continue
-            directive, rest = dm.group(1), dm.group(2)
-            if directive == "define":
-                parsed = _parse_define(rest, str(path))
-                if parsed is None:
-                    nm = _MACRO_DEFINE_NAME_RE.match(rest)
-                    if nm is not None:
-                        # Unparseable definition: poison the name so
-                        # any invocation refuses.
-                        table.poisoned.add(nm.group(1))
-                    continue
-                table.defs.setdefault(parsed.name, []).append(parsed)
+            table.defs.setdefault(parsed.name, []).append(parsed)
     table.unresolved_includes = tuple(unresolved)
     return table
 

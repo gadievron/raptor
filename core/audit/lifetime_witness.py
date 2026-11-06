@@ -675,8 +675,7 @@ def _lifetime_macro_table(
             return cached
     base = _macro_table_for(target_path, rel_file)
     from .defassign import (
-        _DIRECTIVE_RE,
-        _join_continuations,
+        _iter_define_directives,
         _parse_define,
         _strip_comments,
         _iter_include_closure,
@@ -697,11 +696,7 @@ def _lifetime_macro_table(
                 continue
             text = got[0]
         scanned += 1
-        for line in _join_continuations(_strip_comments(text)):
-            dm = _DIRECTIVE_RE.match(line)
-            if dm is None or dm.group(1) != "define":
-                continue
-            rest = dm.group(2)
+        for rest in _iter_define_directives(_strip_comments(text)):
             parsed = _parse_define(rest, str(path))
             if parsed is None:
                 parsed = _reparse_named_variadic(rest, str(path))
