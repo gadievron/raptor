@@ -57,7 +57,7 @@ from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
-from core.sarif.parser import ResultRuleResolver, _result_rule_id, rule_default_level
+from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, rule_default_level
 from core.run.scratch import scratch_dir
 
 from ._util import safe_join
@@ -1759,13 +1759,19 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
         if not isinstance(run, dict) or not isinstance(run.get("results"), list):
             raise CompilerDiagnosticError("GCC SARIF run requires a result array")
         rule_resolver: ResultRuleResolver | None = None
+        uri_resolver: ArtifactUriResolver | None = None
         for result in run["results"]:
             if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
             locs = result.get("locations") or [{}]
             phys = (locs[0] or {}).get("physicalLocation", {}) if locs else {}
             region = phys.get("region", {})
-            uri = phys.get("artifactLocation", {}).get("uri", "") or ""
+            artifact = phys.get("artifactLocation", {})
+            uri = artifact.get("uri", "") or ""
+            if "index" in artifact or "uriBaseId" in artifact:
+                if uri_resolver is None:
+                    uri_resolver = ArtifactUriResolver(run)
+                uri = uri_resolver.resolve(artifact) or ""
             try:
                 filename = local_uri_path(uri) if uri else ""
             except ValueError as exc:
