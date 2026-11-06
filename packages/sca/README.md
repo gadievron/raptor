@@ -39,6 +39,7 @@ raptor-sca sbom diff old/inventory.json new/inventory.json
 raptor-sca sbom notices container-sbom.zip --out collected-notices
 raptor-sca sbom why sbom.cdx.json example
 raptor-sca sbom plan scan/sbom.cdx.json --findings scan/findings.json --out upgrade-plan
+raptor-sca sbom verify-plan upgrade-plan/upgrade-plan.json rebuilt/sbom.cdx.json --findings rebuilt/findings.json
 raptor-sca sbom collect --syft syft.json --oci-layout image-layout --out evidence
 
 # Compare two findings.json files (CI baseline vs current)

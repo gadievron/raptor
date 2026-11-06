@@ -147,3 +147,67 @@ def write_upgrade_plan(out, report):
         save_json(staging / "upgrade-plan.json", report, stream=True)
         write_text_atomically(staging / "upgrade-plan.md", upgrade_plan_markdown(report, limit=None))
         staging.rename(out)
+
+
+def verification_markdown(report, *, limit=50):
+    """Render observed changes and explicitly unverified advisory absences."""
+    lines = ["# SBOM upgrade verification", "", "Outcome: " + md_inline(report["status"].replace("_", " ")), "",
+             "| Check | Count |", "|---|---:|"]
+    for key, value in report["summary"].items():
+        lines.append("| " + md_inline(key.replace("_", " ")) + " | " + md_inline(value) + " |")
+    packages = [row for row in report["packages"] if limit is None or row["proposed_version"] is not None
+                or row["status"] in {"not_observed", "unavailable", "ambiguous"}]
+    shown = packages if limit is None else packages[:limit]
+    lines.extend(["", "## Planned targets", "", "| Package | Target scope | Planned | Observed | Outcome |", "|---|---|---|---|---|"])
+    for row in shown:
+        actual = []
+        for current in row["current"]:
+            value = current["version"]
+            if row["target_scope"] == "source_package":
+                value += " / source " + str((current["query"] or {}).get("version") or "unavailable")
+            actual.append(value)
+        lines.append("| " + " | ".join(md_inline(value) for value in (
+            row["name"], row["target_scope"].replace("_", " "), row["proposed_version"] or "not proposed",
+            ", ".join(actual) or "not listed", row["status"].replace("_", " "))) + " |")
+    for row in shown:
+        lines.extend("\n" + md_inline(row["name"]) + ": " + md_inline(note) for note in row["notes"])
+    if len(shown) < len(packages):
+        lines.extend(["", "Additional package outcomes are retained in the saved reports."])
+    if report.get("ambiguous_groups"):
+        lines.extend(["", "## Ambiguous package groups", ""])
+        groups = report["ambiguous_groups"] if limit is None else report["ambiguous_groups"][:limit]
+        for group in groups:
+            lines.append("- " + md_inline(str(group["identity"])) + ": " + str(len(group["baseline_occurrences"])) +
+                         " baseline occurrences; " + str(len(group["current"])) + " current version groups (not uniquely paired).")
+            current = group["current"] if limit is None else group["current"][:limit]
+            lines.extend("  - " + md_inline(row["version"]) + " (" + str(len(row["occurrences"])) + " occurrences)" for row in current)
+    for key, events in report["advisories"].items():
+        lines.extend(["", "## " + md_inline(key.replace("_", " ").capitalize()) + " advisories", ""])
+        for event in events if limit is None else events[:limit]:
+            line = "- " + md_inline(event["name"]) + ": " + md_inline(event["id"])
+            if event["suppressed"]:
+                line += " (suppressed)"
+            if event["reason"]:
+                line += " — " + md_inline(event["reason"])
+            lines.append(line)
+        if limit is not None and len(events) > limit:
+            lines.append("Additional advisory events are retained in the saved reports.")
+    lines.extend(["", "## Unavailable coverage", ""])
+    lines.extend("- " + md_inline(error) for error in report["coverage"]["errors"])
+    gaps = [*report["coverage"]["uncovered_packages"], *report["coverage"]["current_scan_gaps"], *report["unmatched_findings"], *report["coverage"]["baseline_unmatched_findings"]]
+    for row in gaps if limit is None else gaps[:limit]:
+        lines.append("- " + md_inline(row.get("name") or row.get("finding_id") or "scan") + ": " + md_inline(row["reason"]))
+    lines.extend(["", "## Scope", ""])
+    lines.extend("- " + md_inline(value) for value in report["limitations"])
+    return "\n".join(lines) + "\n"
+
+
+def write_verification(out, report):
+    if path_may_exist(out):
+        raise ValueError("verification output already exists; choose a new directory")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="raptor-sca-verification-", dir=out.parent) as temporary:
+        staging = Path(temporary)
+        save_json(staging / "upgrade-verification.json", report, stream=True)
+        write_text_atomically(staging / "upgrade-verification.md", verification_markdown(report, limit=None))
+        staging.rename(out)

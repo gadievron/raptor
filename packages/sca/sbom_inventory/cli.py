@@ -75,6 +75,16 @@ def parser():
     plan.add_argument("--max-queries", type=int, default=1000, help="total unique installed/candidate coordinates (default: 1000, maximum: 10000)")
     plan.add_argument("--format", choices=("text", "json"), default="text", help="stdout format (default: text)")
     plan.add_argument("--out", type=Path, help="new directory for upgrade-plan.json and upgrade-plan.md (default: stdout only)")
+    verify = commands.add_parser("verify-plan", help="verify an upgrade plan against a rebuilt SBOM scan",
+        description="Compare planned targets and advisory outcomes using local artifacts. Positive query coverage is required to confirm resolved findings; no network, source rewrite or image execution occurs.",
+        epilog="Examples:\n  raptor-sca sbom verify-plan upgrade-plan/upgrade-plan.json rebuilt/sbom.cdx.json --findings rebuilt/findings.json\n  raptor-sca sbom verify-plan plan.json rebuilt.spdx.json --findings findings.json --coverage advisory-coverage.json --out verification\n\nExit codes: 0 verified within recorded coverage; 1 unmet targets or advisory concerns; 2 unavailable or inconsistent evidence.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    verify.add_argument("plan", type=Path, help="saved upgrade-plan.json")
+    verify.add_argument("current", type=Path, help="rebuilt scan's SBOM or inventory snapshot")
+    verify.add_argument("--findings", type=Path, required=True, help="rebuilt scan's findings.json")
+    verify.add_argument("--coverage", type=Path, help="advisory coverage receipt (default: advisory-coverage.json alongside findings)")
+    verify.add_argument("--format", choices=("text", "json"), default="text", help="stdout format (default: text)")
+    verify.add_argument("--out", type=Path, help="new directory for upgrade-verification.json and upgrade-verification.md")
     return result
 
 
@@ -87,6 +97,26 @@ def main(argv=None):
     args = parser().parse_args(argv)
     configure_cli_logging(logging.WARNING)
     try:
+        if args.command == "verify-plan":
+            from .verification import read_plan, verify_plan
+            from .advisory_coverage import read_coverage
+            from .plan_inputs import read_findings
+            from .output import verification_markdown, write_verification
+            plan, plan_sha = read_plan(args.plan)
+            with Source(args.current) as source:
+                inventory, _ = read_inventory(source, require_scan_document=True)
+            findings, findings_sha = read_findings(args.findings)
+            coverage, coverage_sha, errors = read_coverage(
+                args.coverage or args.findings.parent / "advisory-coverage.json", inventory.source_sha256, findings_sha)
+            report = verify_plan(plan, plan_sha, inventory, findings, findings_sha,
+                                 coverage=coverage, coverage_sha=coverage_sha, coverage_errors=errors)
+            if args.out:
+                write_verification(args.out, report)
+            if args.format == "json":
+                _emit(report)
+            else:
+                print(escape_nonprintable(verification_markdown(report), preserve_newlines=True))
+            return report["exit_code"]
         if args.command == "plan":
             from .plan import build_plan
             from .plan_inputs import read_findings

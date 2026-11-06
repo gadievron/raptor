@@ -51,8 +51,9 @@ class Record:
         at = base.rfind("@")
         if at > base.rfind("/"):
             base = base[:at]
-        qualifiers = urllib.parse.urlencode(sorted((k, v) for k, v in urllib.parse.parse_qsl(query)
-                                                  if k != "package-id"))
+        qualifiers = urllib.parse.urlencode(sorted(
+            (k, v.rsplit("@", 1)[0] if k == "upstream" and base.startswith(("pkg:deb/", "pkg:apk/")) else v)
+            for k, v in urllib.parse.parse_qsl(query) if k != "package-id"))
         identity = base + ("?" + qualifiers if qualifiers else "") + (mark + fragment if mark else "")
         if self.scope == "source-candidates":
             return self.scope, self.evidence.get("tool", ""), self.evidence.get("source") or "", identity or (self.kind + ":" + self.name)
