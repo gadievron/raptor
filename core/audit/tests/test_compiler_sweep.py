@@ -3748,7 +3748,11 @@ def test_complete_empty_gcc_output_is_silence(tmp_path):
     assert compiler_sweep._parse_gcc_sarif(path) == []
 
 
-def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize("output", [
+    "[", '[{"message": "warning", "option": ["-Wanalyzer-use-after-free"]}]',
+    '[{"message": "warning", "locations": [{"caret": []}]}]',
+])
+def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monkeypatch, output):
     target = tmp_path / 'repo'
     target.mkdir()
     source = target / 'a.c'
@@ -3761,7 +3765,7 @@ def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monke
         calls.append(command)
         if '-E' in command:
             return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
-        return subprocess.CompletedProcess(command, 0, '', '[' if len(calls) == 1 else '[]')
+        return subprocess.CompletedProcess(command, 0, '', output if len(calls) == 1 else '[]')
 
     monkeypatch.setattr('core.sandbox.context.run', run)
     def sweep():

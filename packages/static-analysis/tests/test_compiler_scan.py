@@ -1538,7 +1538,11 @@ def test_conflicting_merged_cwes_do_not_choose_one_by_order(tmp_path, monkeypatc
     assert result.findings[0]["compiler_reported_cwes"] == ["CWE-126", "CWE-787"]
 
 
-def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("output", [
+    "[", '[{"message": "warning", "option": ["-Wanalyzer-use-after-free"]}]',
+    '[{"message": "warning", "locations": [{"caret": []}]}]',
+])
+def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch, output):
     from types import SimpleNamespace
 
     (tmp_path / 'a.c').write_text('void f(void) {}\n')
@@ -1546,7 +1550,7 @@ def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch):
     monkeypatch.setattr(_cs, '_clang_path', lambda: None)
     result = _cs.analyze_tu(
         tmp_path, 'a.c',
-        sandbox_run=lambda *a, **kw: SimpleNamespace(returncode=0, stderr='['),
+        sandbox_run=lambda *a, **kw: SimpleNamespace(returncode=0, stderr=output),
     )
     assert not result.ok
     assert 'diagnostics unavailable' in result.reason

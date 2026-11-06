@@ -1732,7 +1732,13 @@ def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
     for d in data:
         if not isinstance(d, dict) or not isinstance(d.get("message"), str):
             raise CompilerDiagnosticError("invalid GCC diagnostic record")
+        if any(d.get(key) is not None and not isinstance(d[key], str) for key in ("option", "kind")):
+            raise CompilerDiagnosticError("invalid GCC diagnostic identity or severity")
+        if d.get("locations") is not None and not isinstance(d["locations"], list):
+            raise CompilerDiagnosticError("invalid GCC diagnostic locations")
         locs = d.get("locations") or [{}]
+        if not isinstance(locs[0], dict) or not isinstance(locs[0].get("caret", {}), dict):
+            raise CompilerDiagnosticError("invalid GCC diagnostic location")
         caret = (locs[0] or {}).get("caret", {}) if locs else {}
         diags.append({
             "id": d.get("option") or "",
@@ -1777,8 +1783,18 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
         for result in run["results"]:
             if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
+            if any(result.get(key) is not None and not isinstance(result[key], str) for key in ("ruleId", "level")):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic identity or severity")
+            if "text" in result["message"] and not isinstance(result["message"]["text"], str):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic message")
+            if result.get("locations") is not None and not isinstance(result["locations"], list):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic locations")
             locs = result.get("locations") or [{}]
+            if not isinstance(locs[0], dict) or not isinstance(locs[0].get("physicalLocation", {}), dict):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic location")
             phys = (locs[0] or {}).get("physicalLocation", {}) if locs else {}
+            if any(not isinstance(phys.get(key, {}), dict) for key in ("region", "artifactLocation")):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic region or artifact")
             region = phys.get("region", {})
             artifact = phys.get("artifactLocation", {})
             uri = resolve_uri(artifact) or ""
