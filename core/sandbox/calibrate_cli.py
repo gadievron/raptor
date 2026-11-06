@@ -48,6 +48,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Cache cleanup exits 70 if an operation fails, including partial "
+            "cleanup. Entry failures do not stop other entries.\n\n"
             "Examples:\n"
             "  raptor-sandbox-calibrate --bin /usr/bin/true --json --timeout 15\n"
             "  raptor-sandbox-calibrate --bin /usr/bin/true --show"
@@ -172,6 +174,24 @@ def _profile_to_json(profile) -> str:
     return profile.to_json()
 
 
+def _print_clear_result(
+    cleared: int, errors: list[tuple[Path, OSError]], *, bin_path: Path | None = None,
+) -> int:
+    """Report successful removals and any incomplete cleanup separately."""
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
+    suffix = f" for {_sft(str(bin_path))}" if bin_path is not None else ""
+    sys.stdout.write(f"cleared {cleared} profile(s){suffix}\n")
+    if not errors:
+        return 0
+    path, error = errors[0]
+    sys.stderr.write(
+        f"raptor-sandbox-calibrate: {len(errors)} cache operation(s) failed; "
+        f"first failure for {_sft(str(path))}: {_sft(str(error))}\n"
+    )
+    return _SOFTWARE_EX
+
+
 def _cli_main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -188,9 +208,15 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
 
     # --clear-all takes the bin-less path.
     if args.clear_all:
-        n = cal.clear_cache(None)
-        sys.stdout.write(f"cleared {n} profile(s)\n")
-        return 0
+        errors: list[tuple[Path, OSError]] = []
+        try:
+            n = cal.clear_cache(None, errors=errors)
+        except OSError as exc:
+            sys.stderr.write(
+                f"raptor-sandbox-calibrate: cannot clear profiles: {_sft(str(exc))}\n"
+            )
+            return _SOFTWARE_EX
+        return _print_clear_result(n, errors)
 
     if not args.bin:
         parser.error("--bin is required (except with --clear-all)")
@@ -203,17 +229,15 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         return _USAGE_EX
 
     if args.clear:
+        errors = []
         try:
-            n = cal.clear_cache(bin_path)
+            n = cal.clear_cache(bin_path, errors=errors)
         except OSError as exc:
             sys.stderr.write(
                 f"raptor-sandbox-calibrate: cannot clear profiles for {_sft(str(bin_path))}: {_sft(str(exc))}\n"
             )
             return _SOFTWARE_EX
-        sys.stdout.write(
-            f"cleared {n} profile(s) for {_sft(str(bin_path))}\n"
-        )
-        return 0
+        return _print_clear_result(n, errors, bin_path=bin_path)
 
     probe_args = (
         tuple(args.probe_args.split()) if args.probe_args else ()

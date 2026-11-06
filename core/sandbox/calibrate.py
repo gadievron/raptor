@@ -40,7 +40,7 @@ API:
     load_or_calibrate(bin_path, probe_args, *, env_keys=(), force=False)
         Cache-first variant. The default cc_dispatch consumer
         path. ``force=True`` skips the cache and recalibrates.
-    clear_cache(bin_path=None)
+    clear_cache(bin_path=None, *, errors=None)
         Drop one or all cache entries. ``raptor sandbox calibrate
         --clear`` calls this.
 """
@@ -674,7 +674,26 @@ def _load_from_cache(fingerprint: str) -> SandboxProfile | None:
         return None
 
 
-def clear_cache(bin_path=None) -> int:
+@contextlib.contextmanager
+def _cache_entry_paths(*, report_errors: bool):
+    """Own diagnostic enumeration so filesystem errors cannot look empty."""
+    directory = _CACHE_DIR
+    if not report_errors:
+        yield directory.glob("*.json")
+        return
+    try:
+        entries = os.scandir(directory)
+    except FileNotFoundError:
+        yield ()
+        return
+    with entries as iterator:
+        yield (directory / entry.name for entry in iterator
+               if entry.name.endswith(".json"))
+
+
+def clear_cache(
+    bin_path=None, *, errors: list[tuple[Path, OSError]] | None = None,
+) -> int:
     """Delete one or all cache entries; return count removed.
 
     `bin_path=None` drops every entry. Otherwise the binary's sha
@@ -682,36 +701,53 @@ def clear_cache(bin_path=None) -> int:
     we drop EVERY env-variant of the named binary, since the
     operator's intent on `--clear <bin>` is "forget what we knew
     about this tool", not "forget one specific env shape").
+
+    Entry I/O failures leave that entry alone and cleanup continues. When
+    supplied, errors receives (path, original OSError) pairs so explicit
+    cleanup commands can distinguish partial failure from an empty cache.
+    Missing-entry races and unidentifiable corrupt profiles remain quiet.
+    With a collector, enumeration uses explicit scandir so native directory
+    errors propagate rather than appearing empty; its iterator always closes.
     """
-    if not _CACHE_DIR.exists():
+    if errors is None and not _CACHE_DIR.exists():
         return 0
 
-    if bin_path is None:
+    with _cache_entry_paths(report_errors=errors is not None) as paths:
+        if bin_path is None:
+            n = 0
+            for p in paths:
+                try:
+                    p.unlink()
+                    n += 1
+                except FileNotFoundError:
+                    pass  # Another cleanup already removed this entry.
+                except OSError as exc:
+                    if errors is not None:
+                        errors.append((p, exc))
+            return n
+
+        bin_real = Path(bin_path).resolve()
+        if not bin_real.exists():
+            return 0
+        target_sha = _sha256_file(bin_real)
         n = 0
-        for p in _CACHE_DIR.glob("*.json"):
+        for p in paths:
             try:
-                p.unlink()
-                n += 1
-            except OSError:
-                pass
+                cached = _read_cache_profile(p)
+                if cached.binary_sha256 == target_sha:
+                    p.unlink()
+                    n += 1
+            except FileNotFoundError:
+                continue  # Another cleanup already removed this entry.
+            except OSError as exc:
+                if errors is not None:
+                    errors.append((p, exc))
+                continue
+            except (ValueError, TypeError, KeyError):
+                # A corrupt profile cannot identify the requested binary.
+                # Leave it alone; --clear-all retains its existing reset role.
+                continue
         return n
-
-    bin_real = Path(bin_path).resolve()
-    if not bin_real.exists():
-        return 0
-    target_sha = _sha256_file(bin_real)
-    n = 0
-    for p in _CACHE_DIR.glob("*.json"):
-        try:
-            cached = _read_cache_profile(p)
-            if cached.binary_sha256 == target_sha:
-                p.unlink()
-                n += 1
-        except (OSError, ValueError, TypeError, KeyError):
-            # Unreadable entry — leave alone; operator can rm -rf
-            # the cache dir if they want a hard reset.
-            continue
-    return n
 
 
 def cache_dir() -> Path:
