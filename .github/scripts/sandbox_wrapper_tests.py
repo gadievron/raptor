@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,7 +23,9 @@ def policy_entrypoints(path: Path) -> list[str]:
     """
     try:
         text = path.read_text(encoding='utf-8')
-        if "sandbox" not in text:
+        # Python normalizes identifiers before building the AST. A raw-text
+        # shortcut must retain equivalent spellings such as fullwidth names.
+        if "sandbox" not in text and (text.isascii() or "sandbox" not in unicodedata.normalize("NFKC", text)):
             return []
         tree = ast.parse(text)
     except (SyntaxError, UnicodeError):

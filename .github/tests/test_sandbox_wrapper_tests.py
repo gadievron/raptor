@@ -16,7 +16,12 @@ with patch.object(sys, 'path', [str(SCRIPTS), *sys.path]):
     spec.loader.exec_module(runner)
 
 
-@pytest.mark.wall_budget(30)
+# The wrapper workflow's scope job runs this full registration census before
+# every selection, including selections that skip platform runners. Repeating
+# it in shuffled-fast adds a loaded-runner 20-30s scan without new PR coverage.
+# Keep the independent shipped-tree assertion in nightly's slow lane; the
+# hermetic fail-direction and registration-mechanics tests below stay fast.
+@pytest.mark.slow
 def test_all_policy_owners_have_reviewed_test_cases():
     assert inventory.registry_errors(ROOT, inventory.load_registry()) == []
 
@@ -194,3 +199,23 @@ def test_policy_census_keeps_file_wide_import_resolution(tmp_path):
     source = tmp_path / 'owned.py'
     source.write_text('def invoke():\n    sbx.run(["true"])\nimport core.sandbox as sbx\n')
     assert inventory.policy_entrypoints(source) == ['invoke']
+
+
+@pytest.mark.parametrize('source', [
+    'from core.ｓａｎｄｂｏｘ import run\ndef invoke():\n    run(["true"])\n',
+    'import core.ｓａｎｄｂｏｘ as jail\ndef invoke():\n    jail.run(["true"])\n',
+    'def invoke():\n    state.ｓａｎｄｂｏｘ_ｒｕｎ(["true"])\n',
+], ids=['normalized-import', 'normalized-module', 'normalized-injected-runner'])
+def test_policy_census_accepts_normalized_python_identifiers(tmp_path, source):
+    assert 'sandbox' not in source
+    path = tmp_path / 'owned.py'
+    path.write_text(source)
+    assert inventory.policy_entrypoints(path) == ['invoke']
+
+
+def test_normalized_unregistered_wrapper_fails_census(tmp_path):
+    registry = _fixture(tmp_path)
+    source = tmp_path / 'packages/new.py'
+    source.write_text('from core.ｓａｎｄｂｏｘ import run\ndef invoke():\n    run(["true"])\n')
+    assert 'packages/new.py: unregistered sandbox wrapper; add an owned test case' in (
+        inventory.registry_errors(tmp_path, registry))

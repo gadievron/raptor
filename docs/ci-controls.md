@@ -273,8 +273,10 @@ The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and th
 If one of these becomes a real gate, we should move it into the proper table above in the same change that wires the workflow in. Otherwise it is just theatre.
 
 Wrapper acceptance selection runs the full registration census before choosing
-per-platform contract selectors and native families. It follows shared Python
-imports and parent package initializers. Parent conftests attach to each
+per-platform contract selectors and native families. Its independent full-tree
+pytest assertion runs in the nightly slow tier instead of repeating the census
+in shuffled-fast; hermetic registration and failure-direction tests stay fast.
+Selection follows shared Python imports and parent package initializers. Parent conftests attach to each
 platform's collected test files, including platform-specific and native-only
 bindings. Importing a production or support module does not load its parent
 fixtures; explicit Python imports of conftests remain dependencies. Registered

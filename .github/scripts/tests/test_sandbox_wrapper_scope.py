@@ -139,11 +139,13 @@ def test_native_platform_exclusion_does_not_become_a_request(tree, cell):
     assert matrix[1]['families'] == []
 
 
-def test_new_unregistered_caller_fails_before_any_skipping(tree, monkeypatch):
+@pytest.mark.parametrize('module', ['core.sandbox', 'core.ｓａｎｄｂｏｘ'], ids=['ordinary-import', 'normalized-import'])
+def test_new_unregistered_caller_fails_before_any_skipping(tree, monkeypatch, module):
     root, _ = tree
-    (root / 'core/unrelated/module.py').write_text('from core.sandbox import run\ndef new():\n    run(["true"])\n')
+    (root / 'core/unrelated/module.py').write_text(f'from {module} import run\ndef new():\n    run(["true"])\n')
     monkeypatch.chdir(root)
     monkeypatch.setenv('EVENT', 'push')
+    monkeypatch.setattr(scope, 'changed_paths', lambda *args: pytest.fail('selection ran before registration'))
     with pytest.raises(SystemExit, match='unregistered sandbox wrapper'):
         scope.main()
 
