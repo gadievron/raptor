@@ -26,6 +26,42 @@ import yaml
 from core.container import compose as cco
 
 
+@pytest.fixture
+def _live_tool_probe_state():
+    """Give this live probe fresh caches and restore the borrowed state."""
+    from core.testing.module_state import isolated_module_state
+    import core.container.compose as consumer
+
+    from functools import lru_cache
+
+    borrowed = consumer._compose_invocation
+    fresh = lru_cache(**borrowed.cache_parameters())(borrowed.__wrapped__)
+    with isolated_module_state(consumer, {"_compose_invocation": fresh}):
+        yield
+
+
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home, _live_tool_probe_state):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not _compose_available():
+        pytest.skip('docker compose unavailable')
+
+
+
+
 def _identity_resolver(compose_file: Path) -> dict[str, Any]:
     """Hermetic stand-in for ``docker compose config`` (fixture treated
     as already resolved)."""
@@ -409,8 +445,7 @@ def _compose_available() -> bool:
     return probe.returncode == 0
 
 
-@pytest.mark.skipif(not _compose_available(),
-                    reason="docker compose unavailable")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 def test_real_resolver_defeats_interpolation_bypass(tmp_path: Path) -> None:
     """End-to-end inversion of the critical PoC: ``privileged:
     ${UNSET:-true}`` + CAP_-prefixed caps + host binds through the REAL
@@ -660,7 +695,8 @@ def test_resolver_scratch_home_cleaned_on_failure(tmp_path: Path) -> None:
         seen["home"] = Path(env["HOME"])
         raise cco.ComposeError("config exploded")
 
-    with patch.object(cco, "_run_resolver", failing_run_resolver), \
+    with patch.object(cco, "_compose_invocation", return_value=("docker", "compose")), \
+            patch.object(cco, "_run_resolver", failing_run_resolver), \
             pytest.raises(cco.ComposeError, match="config exploded"):
         cco._resolve_effective_model(compose)
     assert not seen["home"].exists()

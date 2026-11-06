@@ -9,6 +9,28 @@ import pytest
 from packages.ghidra.match_precision import Report, main
 
 
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not _toolchain_ready():
+        pytest.skip('needs cc, strip, and radare2')
+
+
+
+
 def _toolchain_ready() -> bool:
     if not ((shutil.which("cc") or shutil.which("gcc"))
             and shutil.which("strip")):
@@ -35,8 +57,7 @@ class TestReportMath:
         assert r.precision is None and r.recall is None
 
 
-@pytest.mark.skipif(not _toolchain_ready(),
-                    reason="needs cc, strip, and radare2")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestLiveMeasurement:
     def test_zero_wrong_pairs_on_stripped_cross_opt_build(self,
                                                           tmp_path):

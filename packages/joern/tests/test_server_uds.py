@@ -30,6 +30,45 @@ from packages.joern.server import JoernServer
 from core.testing.module_bindings import patch_module_attribute
 
 
+@pytest.fixture
+def _live_tool_probe_state():
+    """Give this live probe fresh caches and restore the borrowed state."""
+    from core.testing.module_state import isolated_module_state
+    import packages.joern.prereqs as consumer
+
+    with isolated_module_state(consumer, {
+        "_resolved_joern": None,
+        "_joern_resolved": False,
+        "_resolved_joern_parse": None,
+        "_joern_parse_resolved": False,
+        "_resolved_java": None,
+        "_java_resolved": False,
+    }):
+        yield
+
+
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home, _live_tool_probe_state):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not _live_ready():
+        pytest.skip('needs a joern install and user namespaces')
+
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_launch_patches(monkeypatch):
     """Keep launch mocks on consumer-owned subprocess module bindings."""
@@ -480,8 +519,7 @@ def _live_ready() -> bool:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _live_ready(),
-                    reason="needs a joern install and user namespaces")
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestLiveJoernOverUds:
     def test_boot_query_stop(self):
         srv = JoernServer(boot_timeout_s=240)

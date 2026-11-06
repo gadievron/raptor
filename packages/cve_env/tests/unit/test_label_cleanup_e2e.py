@@ -20,6 +20,28 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not _docker_reachable():
+        pytest.skip('real Docker daemon required (Colima up)')
+
+
+
+
 def _docker_reachable() -> bool:
     if not shutil.which("docker"):
         return False
@@ -39,9 +61,7 @@ pytestmark = [
     # This is a real-docker build test: slow (~seconds), registry-dependent, and
     # under xdist its heavy build starves neighbors. Run explicitly: pytest -m slow.
     pytest.mark.slow,
-    pytest.mark.skipif(
-        not _docker_reachable(), reason="real Docker daemon required (Colima up)"
-    ),
+    pytest.mark.usefixtures('_live_tool_prerequisite_0'),
 ]
 
 

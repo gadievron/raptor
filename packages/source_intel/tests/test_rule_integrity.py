@@ -23,6 +23,48 @@ from packages.coccinelle.runner import (
     meets_min_version as _meets_min_spatch,
 )
 
+
+@pytest.fixture
+def _live_tool_probe_state():
+    """Give this live probe fresh caches and restore the borrowed state."""
+    from core.testing.module_state import isolated_module_state
+    import packages.coccinelle.runner as consumer
+
+    with isolated_module_state(consumer, {
+        "_spatch_resolved": False,
+        "_resolved_spatch": None,
+    }):
+        yield
+
+
+@pytest.fixture
+def _live_tool_home(tmp_path, monkeypatch):
+    """Keep live prerequisite probes and their tests off operator state."""
+    root = tmp_path / "live-tool-state"
+    for key, leaf in {
+        "HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache",
+    }.items():
+        directory = root / leaf
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(key, str(directory))
+
+
+@pytest.fixture
+def _live_tool_prerequisite_0(_live_tool_home, _live_tool_probe_state):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if not shutil.which('spatch'):
+        pytest.skip('spatch not installed')
+
+
+@pytest.fixture
+def _live_tool_prerequisite_1(_live_tool_home, _live_tool_probe_state):
+    """Check this live-tool prerequisite only after owned state is ready."""
+    if shutil.which('spatch') is not None and (not _meets_min_spatch()):
+        pytest.skip(f"spatch < {'.'.join(map(str, MIN_SPATCH_VERSION))} cannot parse the prefix-attribute rules RAPTOR ships against (apt builds on Ubuntu 22.04/24.04 and Debian bookworm are 1.1.1); the run-time runner degrades per-rule on these. Re-runs in CI once the runner image carries spatch >= the floor.")
+
+
+
 _RULES_ROOT = Path(__file__).resolve().parents[3] / "engine" / "coccinelle" / "source_intel"
 
 
@@ -142,20 +184,8 @@ def test_total_rule_count_matches():
     )
 
 
-@pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed",
-)
-@pytest.mark.skipif(
-    shutil.which("spatch") is not None and not _meets_min_spatch(),
-    reason=(
-        f"spatch < {'.'.join(map(str, MIN_SPATCH_VERSION))} cannot parse the "
-        "prefix-attribute rules RAPTOR ships against (apt builds on Ubuntu "
-        "22.04/24.04 and Debian bookworm are 1.1.1); the run-time runner "
-        "degrades per-rule on these. Re-runs in CI once the runner image "
-        "carries spatch >= the floor."
-    ),
-)
+@pytest.mark.usefixtures('_live_tool_prerequisite_0')
+@pytest.mark.usefixtures('_live_tool_prerequisite_1')
 @pytest.mark.parametrize(
     "rule", sorted(_RULES_ROOT.rglob("*.cocci")),
     ids=lambda rule: str(rule.relative_to(_RULES_ROOT)),
