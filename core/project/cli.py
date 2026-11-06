@@ -16,6 +16,7 @@ from pathlib import Path
 import json
 from core.json import save_json as _save_summary_json
 from core.run.output import unique_run_suffix
+from core.run.scratch import temporary_text
 from core.security.log_sanitisation import sanitise_for_terminal
 
 from .oplock import OpLockContention, project_op_lock
@@ -1522,7 +1523,6 @@ def main() -> None:
                     return
                 import shlex
                 import subprocess
-                import tempfile
                 p = mgr.load(args.name)  # type: ignore[assignment]
                 if not p:
                     print(f"Project '{args.name}' not found.")
@@ -1585,17 +1585,9 @@ def main() -> None:
                         file=sys.stderr,
                     )
                     return
-                # Capture tf_path BEFORE tf.write so a failing write (disk
-                # full, etc.) still leaves tf_path set and the finally can
-                # unlink the stub. Keep tempfile creation inside the try so
-                # finally covers the whole create+write+use lifetime.
-                tf_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".md", mode="w", delete=False,
-                    ) as tf:
-                        tf_path = tf.name
-                        tf.write(p.notes or "")
+                with temporary_text(p.notes or "", prefix="raptor-notes-", suffix=".md",
+                                    strict_cleanup=False) as notes_path:
+                    tf_path = str(notes_path)
                     # Operator-launched editor invocation. The
                     # ``EDITOR`` env var is the operator's own
                     # choice; if it's compromised they have bigger
@@ -1608,9 +1600,6 @@ def main() -> None:
                     new_notes = Path(tf_path).read_text(encoding="utf-8").strip()
                     mgr.update_notes(args.name, new_notes)
                     print("Notes updated.")
-                finally:
-                    if tf_path:
-                        Path(tf_path).unlink(missing_ok=True)
             elif args.text:
                 mgr.update_notes(args.name, args.text)
                 print("Notes updated.")

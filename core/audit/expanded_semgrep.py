@@ -39,7 +39,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import tempfile
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -50,6 +49,7 @@ from core.atomic_fs import write_bytes_atomically
 from core.detectors.setup import AnalysisSetup
 from core.detectors.semgrep import define_semgrep_detector
 from core.sarif import emit
+from core.run.scratch import temporary_text
 from core.source import read_text_capped
 
 from ._util import safe_join
@@ -233,26 +233,16 @@ def run_expanded_semgrep_rule(
         if not is_available():
             raise PreparationUnavailable("semgrep not installed")
 
-        scratch = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w", prefix="expanded_", suffix=Path(file_path).suffix or ".c",
-                delete=False, encoding="utf-8", errors="replace",
-            ) as output:
-                scratch = Path(output.name)
-                output.write(view.text)
+        with temporary_text(
+            view.text, prefix="expanded_", suffix=Path(file_path).suffix or ".c",
+            errors="replace", strict_cleanup=False,
+        ) as scratch:
             yield PreparedInput(
                 scratch,
                 lambda findings: _translate_file_findings(
                     view, file_path, findings, line_start=line_start, line_end=line_end,
                 ),
             )
-        finally:
-            if scratch is not None:
-                try:
-                    os.unlink(scratch)
-                except OSError:
-                    pass
 
     execution = run_semgrep_analysis(
         detector=DETECTOR, prepare=prepare, rule_config=rule_config, timeout=timeout,

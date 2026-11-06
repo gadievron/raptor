@@ -14,7 +14,7 @@ rules must contain only declarative SmPL patterns.
 """
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from core.run.scratch import temporary_text
 
 from packages import coccinelle as coccinelle_pkg
 from packages.coccinelle.runner import contains_script_block
@@ -162,39 +162,24 @@ class CoccinelleAdapter(ToolAdapter):
             env = RaptorConfig.get_safe_env()
 
         # spatch needs the rule as a file. Write to temp then run.
-        rule_file: Path | None = None
         try:
-            with NamedTemporaryFile(
-                prefix="cocci_hv_", suffix=".cocci",
-                mode="w", delete=False,
-            ) as tmp:
-                # Record the path before writing so the finally-unlink
-                # below also covers a failed write — delete=False files
-                # otherwise leak on ENOSPC/EIO.
-                rule_file = Path(tmp.name)
-                tmp.write(rule)
-
-            subprocess_runner = (
-                make_sandbox_runner(target=target) if self._sandbox else None
-            )
-            result = coccinelle_pkg.run_rule(
-                target=target,
-                rule=rule_file,
-                timeout=timeout,
-                env=env,
-                subprocess_runner=subprocess_runner,
-            )
+            with temporary_text(rule, prefix="cocci_hv_", suffix=".cocci",
+                                strict_cleanup=False) as rule_file:
+                subprocess_runner = (
+                    make_sandbox_runner(target=target) if self._sandbox else None
+                )
+                result = coccinelle_pkg.run_rule(
+                    target=target,
+                    rule=rule_file,
+                    timeout=timeout,
+                    env=env,
+                    subprocess_runner=subprocess_runner,
+                )
         except OSError as e:
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
                 error=f"failed to invoke spatch: {e}",
             )
-        finally:
-            if rule_file is not None:
-                try:
-                    rule_file.unlink()
-                except OSError:
-                    pass
 
         if not result.ok:
             return ToolEvidence(

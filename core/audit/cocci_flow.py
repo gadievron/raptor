@@ -38,10 +38,10 @@ tests proving each template does NOT match correctly-guarded code.
 from __future__ import annotations
 
 import logging
-import os
 import re
-import tempfile
 from pathlib import Path
+
+from core.run.scratch import temporary_text
 
 from .substrate import file_substrate_coverage, license_refutation
 from .sweep import SweepResult, _check_path_containment, _match_in_range
@@ -623,17 +623,12 @@ def run_flow_cocci_sweep(
             rule_id=f"cocci-flow:{template}",
         )
 
-    fd, tmp_name = tempfile.mkstemp(
-        suffix=".cocci", prefix="raptor-cocci-flow-",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(rule_text)
-
+    with temporary_text(rule_text, prefix="raptor-cocci-flow-", suffix=".cocci",
+                        strict_cleanup=False) as rule_path:
         try:
             result = run_rule(
                 full_path,
-                Path(tmp_name),
+                rule_path,
                 no_includes=True,
                 timeout=timeout,
                 # In-repo flow templates (code trust) — their rendered
@@ -649,11 +644,6 @@ def run_flow_cocci_sweep(
                 errors=[str(exc)],
                 rule_id=f"cocci-flow:{template}",
             )
-    finally:
-        try:
-            Path(tmp_name).unlink()
-        except OSError:
-            pass
 
     # spatch failure / parse errors → error, never refuted (mirrors
     # the landed per-hypothesis semgrep semantics).

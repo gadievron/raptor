@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
+from core.run.scratch import temporary_text
 from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
@@ -347,8 +348,6 @@ def _sweep_callee_sites(
             run_rule_fn = None
 
     if run_rule_fn is not None:
-        import tempfile
-
         rule_yaml = (
             "rules:\n"
             f"  - id: fix-history-{re.sub(r'[^a-zA-Z0-9_-]', '', callee)}\n"
@@ -358,12 +357,8 @@ def _sweep_callee_sites(
             f"    pattern-regex: '\\b{re.escape(callee)}\\s*\\('\n"
         )
         try:
-            with tempfile.NamedTemporaryFile(
-                "w", suffix=".yml", prefix="fix_history_", delete=False,
-            ) as tmp:
-                tmp.write(rule_yaml)
-                rule_path = Path(tmp.name)
-            try:
+            with temporary_text(rule_yaml, prefix="fix_history_", suffix=".yml",
+                                strict_cleanup=False) as rule_path:
                 result = run_rule_fn(
                     Path(target_path), str(rule_path), timeout=300,
                 )
@@ -385,8 +380,6 @@ def _sweep_callee_sites(
                     sites.append((file_path, line))
                 if sites or getattr(result, "returncode", 1) == 0:
                     return sites
-            finally:
-                rule_path.unlink(missing_ok=True)
         except Exception:
             logger.debug("semgrep callee sweep failed", exc_info=True)
 

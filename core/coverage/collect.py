@@ -37,6 +37,7 @@ _TIMEOUT = 300
 
 
 import logging
+from core.run.scratch import temporary_text
 from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -233,16 +234,9 @@ def collect_llvm(binary, profdata, env: dict[str, str] | None = None) -> dict[st
     r_stdout = (r.stdout or b"").decode("utf-8", "replace")
     if not r_stdout.strip():
         return {}
-    fd, tmp = tempfile.mkstemp(suffix=".info")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(r_stdout)
-        return parse_lcov(tmp)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    with temporary_text(r_stdout, prefix="coverage-", suffix=".info",
+                        strict_cleanup=False) as report:
+        return parse_lcov(str(report))
 
 
 def _chunks(seq, n):
