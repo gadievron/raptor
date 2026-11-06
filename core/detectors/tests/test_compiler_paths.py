@@ -51,7 +51,10 @@ def test_foreign_path_omitted_and_local_file_uri_resolved(tmp_path):
     assert paths[0]["threadFlows"][0]["locations"][0]["location"]["physicalLocation"]["artifactLocation"]["uri"] == "a.c"
 
 
-@pytest.mark.parametrize("uri", ["file://remote/a.c", "https://example/a.c", "file:///a.c?query", "a\x00.c"])
+@pytest.mark.parametrize("uri", [
+    "file://remote/a.c", "https://example/a.c", "file:///a.c?query", "a\x00.c",
+    "file:////remote/a.c", "%2f%2fremote/a.c", "%5c%5cremote/a.c", "a%7f.c", "a\x7f.c",
+])
 def test_ambiguous_or_nonlocal_uri_cannot_be_reinterpreted_as_local(uri):
     paths, notes = normalize_paths([flow(uri)], lambda value: "a.c")
     assert not paths and notes
@@ -102,7 +105,9 @@ def test_json_filesystem_names_and_sarif_uris_round_trip_once():
     assert again == paths and not notes
 
 
-@pytest.mark.parametrize('name', ['a b.c', 'literal%20.c', 'hash#and?.c', 'snow-λ.c'])
+@pytest.mark.parametrize('name', [
+    'a b.c', 'literal%20.c', 'hash#and?.c', 'snow-λ.c', '%2f%2fremote.c', '%5c%5cremote.c',
+])
 def test_primary_locations_share_filesystem_identity_across_gcc_formats(tmp_path, name):
     from core.audit.compiler_sweep import _parse_gcc_json, _parse_gcc_sarif
 
@@ -121,6 +126,7 @@ def test_primary_locations_share_filesystem_identity_across_gcc_formats(tmp_path
 @pytest.mark.parametrize('uri', [
     'https://example/a.c', 'file://remote/a.c', 'file:///a.c?x',
     'file:///a.c#x', 'a%00.c', 'a%ff.c', 'a\n.c', ' a.c',
+    'file:////remote/a.c', '%2f%2fremote/a.c', '%5c%5cremote/a.c', 'a%7f.c', 'a\x7f.c',
 ])
 def test_bad_primary_uri_is_not_compiler_silence(tmp_path, uri):
     from core.audit.compiler_sweep import _parse_gcc_sarif
@@ -246,6 +252,9 @@ def test_compiler_event_paths_resolve_artifacts_and_bases(tmp_path, reference):
     ({'index': 99}, 'file:///local/'),
     ({'uri': 'a.c', 'uriBaseId': 'ROOT'}, 'https://example.test/'),
     ({'uri': 'a.c', 'uriBaseId': 'ROOT'}, 'file://remote/source/'),
+    ({'uri': '%2f%2fremote/a.c'}, 'file:///local/'),
+    ({'uri': '%5c%5cremote/a.c'}, 'file:///local/'),
+    ({'uri': 'a%7f.c'}, 'file:///local/'),
 ])
 def test_bad_compiler_event_reference_drops_whole_path_but_keeps_warning(tmp_path, reference, base):
     from core.audit.compiler_sweep import _parse_gcc_sarif
