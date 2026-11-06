@@ -468,7 +468,7 @@ _SESSIONS_DIR_SEQ = _itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def _registry_paths():
+def _registry_paths(_llm_egress_env_hermetic):
     """Keep registry isolation outside the test body's undo stack.
 
     A unique, never-created base avoids pytest's numbered-directory scan per
