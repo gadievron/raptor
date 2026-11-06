@@ -158,7 +158,7 @@ This page is split into:
   python3 -m pytest .github/tests/test_ci_controls_docs.py -v
   ```
 
-- **PR preflight hazards** — [`preflight.yml`](../.github/workflows/preflight.yml) on PRs. Re-runs the PR's changed tests under CI-reality hazards: hidden optional deps, hidden tree-sitter, duration guard, tree hygiene, two shuffle legs.
+- **PR preflight hazards** — [`preflight.yml`](../.github/workflows/preflight.yml) on PRs. Re-runs the PR's changed tests under CI-reality hazards: hidden optional deps, hidden tree-sitter, duration guard, tree hygiene, two shuffle legs. Each runner selects the complete immutable Git range and passes paths directly to pytest; unknown history fails selection instead of silently skipping simulations.
 
   **Run locally:** run the changed tests with the hazard env toggles from the workflow.
 

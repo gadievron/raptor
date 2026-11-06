@@ -17,14 +17,15 @@ Deliberately excluded:
   * deleted / renamed-away files (in the change list, absent on disk);
   * ``fixtures/`` trees and non-Python files (``is_test_file``).
 
-Outputs to GITHUB_OUTPUT:
-  run=true|false     whether any changed test file survives the filter
-  test_files=<paths> space-separated, sorted
+CI uses --base to select the complete Git range and emits only run=true|false.
+Unknown Git history fails selection rather than skipping the simulations.
+--run passes the selected paths directly to pytest in this interpreter, so
+filenames never travel through job outputs, environment variables or exec
+arguments. Empty selections never invoke pytest with an unbounded target.
 
-A missing changed-file list, an empty list, or no surviving test files
-all produce ``run=false`` — the preflight then skips cleanly. There is
-no full-dispatch fallback on purpose: running the entire suite under
-every simulation is exactly the latency the changed-file bound avoids.
+The legacy --changed-files line-list interface also emits a space-separated
+``test_files`` output. Its missing/empty lists still skip for compatibility;
+CI does not use that interface. No mode falls back to the entire suite.
 
 Usage:
     python3 .github/scripts/preflight_scope.py \
@@ -38,9 +39,13 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from test_scope import is_test_file
+_caller_path = sys.path
+try:
+    sys.path = [str(Path(__file__).resolve().parent), *_caller_path]
+    from ci_change_scope import changed_paths
+    from test_scope import is_test_file
+finally:
+    sys.path = _caller_path
 
 
 def changed_test_files(changed: list[str], repo: Path) -> list[str]:
@@ -58,21 +63,45 @@ def changed_test_files(changed: list[str], repo: Path) -> list[str]:
     return sorted(keep)
 
 
+def run_tests(files: list[str], repo: Path) -> int:
+    """Use pytest's argument-list API without an exec/environment size limit."""
+    caller_path = sys.path
+    caller_cwd = Path.cwd()
+    try:
+        sys.path = [str(repo), *caller_path]
+        os.chdir(repo)
+        import pytest
+        return int(pytest.main(files))
+    finally:
+        sys.path = caller_path
+        os.chdir(caller_cwd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Scope the PR preflight to the changed test files."
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--base", help="Immutable PR base commit (complete Git range)")
+    source.add_argument(
         "--changed-files",
         help="File listing changed paths, one per line",
     )
     parser.add_argument("--repo", default=".", help="Repository root")
+    parser.add_argument("--run", action="store_true", help="Run the selected files with pytest")
     args = parser.parse_args(argv)
 
     repo = Path(args.repo).resolve()
 
     changed: list[str] = []
-    if args.changed_files:
+    if args.base is not None:
+        selected = changed_paths(repo, args.base)
+        if selected is None:
+            print("Preflight scope: cannot determine complete Git changes; "
+                  "refusing to skip simulations on unknown history", file=sys.stderr)
+            return 2
+        changed = selected
+    elif args.changed_files:
         cf_path = Path(args.changed_files)
         if cf_path.is_file():
             changed = [
@@ -91,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
                 fh.write(f"{key}={val}\n")
 
     set_output("run", "true" if files else "false")
-    set_output("test_files", " ".join(files))
+    if args.base is None:
+        set_output("test_files", " ".join(files))
 
     if files:
         print(f"Preflight scope: {len(files)} changed test file(s):")
@@ -99,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {f}")
     else:
         print("Preflight scope: no changed test files — preflight skips")
+    if args.run and files:
+        return run_tests(files, repo)
     return 0
 
 
