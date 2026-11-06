@@ -857,12 +857,9 @@ class TestE2EEgressProxy(unittest.TestCase):
             self.skipTest("User namespaces not available")
         # Each test resets the proxy singleton so host registrations
         # from earlier tests don't leak into later ones.
-        from core.sandbox.proxy import _reset_for_tests
-        _reset_for_tests()
+        from core.testing.proxy_scope import isolated_proxy_scope
+        self.enterContext(isolated_proxy_scope())
 
-    def tearDown(self):
-        from core.sandbox.proxy import _reset_for_tests
-        _reset_for_tests()
 
     def test_denied_host_blocked_and_logged(self):
         """A host not in the allowlist must fail AND be recorded."""

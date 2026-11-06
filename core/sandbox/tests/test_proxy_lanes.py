@@ -18,6 +18,7 @@ import pytest
 
 import core.sandbox.proxy as proxy_mod
 from core.sandbox.tests.capability import requires_landlock
+from core.testing.proxy_scope import isolated_proxy_scope
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RAPTOR_SKIP_PROXY_TESTS") == "1",
@@ -36,11 +37,8 @@ def _confined_parser_floor(confined_parser_floor: None) -> None:
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 def _connect_tcp(port: int, target: str, timeout: float = 5.0) -> int:

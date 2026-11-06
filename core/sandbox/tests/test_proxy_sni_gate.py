@@ -28,6 +28,7 @@ import pytest
 from core.sandbox import proxy as proxy_mod
 from core.sandbox.proxy import _parse_tls_client_hello_sni
 from core.sandbox.tests.socket_server import SocketServer
+from core.testing.proxy_scope import isolated_proxy_scope
 
 
 def _client_hello(sni: str | None) -> bytes:
@@ -88,11 +89,8 @@ class _Backend:
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 @pytest.fixture

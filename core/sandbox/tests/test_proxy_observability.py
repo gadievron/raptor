@@ -56,6 +56,7 @@ import pytest
 from core.sandbox import proxy as proxy_mod
 from core.sandbox.tests.socket_server import SocketServer
 from core.testing.logging_state import owned_log_handler
+from core.testing.proxy_scope import isolated_proxy_scope
 
 # Far above a loopback round-trip, far below any proxy timeout —
 # same bound rationale as test_proxy_teardown.py.
@@ -64,11 +65,8 @@ _DEADLINE = 5.0
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 @pytest.fixture

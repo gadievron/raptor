@@ -29,6 +29,7 @@ import pytest
 from core.testing.processes import reap_on_exit
 
 import core.sandbox.proxy as proxy_mod
+from core.testing.proxy_scope import isolated_proxy_scope
 
 pytestmark = [
     pytest.mark.skipif(sys.platform != "linux",
@@ -43,11 +44,8 @@ _DENIED = "denied.invalid:443"
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 def _drive_connect(s: socket.socket, target: str) -> bytes:

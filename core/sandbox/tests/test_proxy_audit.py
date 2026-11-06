@@ -24,21 +24,13 @@ import pytest
 from core.sandbox import evidence as evidence_mod
 from core.sandbox import proxy as proxy_mod
 from core.sandbox import summary as summary_mod
+from core.testing.proxy_scope import isolated_proxy_scope
 
 
 @pytest.fixture
 def reset_proxy():
-    """Tear down the singleton before AND after each test.
-
-    Many proxy tests construct EgressProxy directly (not via get_proxy),
-    so this primarily exists to scrub any prior singleton state and
-    let each test be hermetic.
-    """
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 @pytest.fixture
