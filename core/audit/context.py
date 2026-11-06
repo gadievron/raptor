@@ -17,7 +17,7 @@ import re
 import sys
 from functools import partial
 from heapq import nsmallest
-from itertools import islice
+from itertools import chain, islice
 from pathlib import Path
 from typing import Any
 
@@ -5128,32 +5128,42 @@ _patterns_cache: "BoundedMemo[dict[str, Any] | None]" = BoundedMemo(32)
 _pattern_file_cache: "BoundedMemo[list[tuple]]" = BoundedMemo(32)
 
 _PATTERN_HEADING_RE = re.compile(r"^## \d+\.\s+(.+)$", re.MULTILINE)
+_PATTERN_SUMMARY_START_RE = re.compile(r"\S")
 
 
 def _parse_patterns(text: str) -> list[tuple]:
     """Split pattern markdown into (title, full_text, summary) tuples."""
-    headings = list(_PATTERN_HEADING_RE.finditer(text))
-    if not headings:
-        return []
+    headings = _PATTERN_HEADING_RE.finditer(text)
+    m = next(headings, None)
     patterns = []
-    for i, m in enumerate(headings):
+    while m is not None:
+        following = next(headings, None)
         title = m.group(1).strip()
         start = m.start()
-        end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        end = following.start() if following is not None else len(text)
         full_text = text[start:end].rstrip()
-        body_after_heading = text[m.end():end].strip()
         first_line = ""
-        for line in body_after_heading.split("\n"):  # line-model: RAPTOR-authored patterns markdown
-            line = line.strip()
-            if line and not line.startswith("---") and not line.startswith("```"):
+        cursor = m.end()
+        while cursor < end:
+            first = _PATTERN_SUMMARY_START_RE.search(text, cursor, end)
+            if first is None:
+                break
+            line_end = text.find("\n", first.start(), end)
+            if line_end < 0:
+                line_end = end
+            line = text[first.start():line_end].strip()
+            if not line.startswith("---") and not line.startswith("```"):
                 first_line = line
                 break
+            cursor = line_end + 1
         patterns.append((title, full_text, first_line))
+        m = following
     return patterns
 
 
 def _is_tier1(title: str, tier1_set: set) -> bool:
-    return any(keyword.lower() in title.lower() for keyword in tier1_set)
+    title_lower = title.lower()
+    return any(keyword.lower() in title_lower for keyword in tier1_set)
 
 
 def _match_trigger_keywords(title: str) -> list[str] | None:
@@ -5182,18 +5192,19 @@ def _load_language_patterns(
     cache_key = lang_key if not source else None
 
     def _compute() -> dict[str, Any] | None:
-        all_patterns: list[tuple] = []
+        pattern_groups: list[list[tuple]] = []
         for name in ("common", lang_key):
             pats, _cached = _pattern_file_cache.get_or_compute(
                 name, partial(_load_pattern_file, name),
             )
-            all_patterns.extend(pats)
+            pattern_groups.append(pats)
 
         tier1_parts: list[str] = []
         tier2_parts: list[str] = []
         source_lower = source.lower()
 
-        for title, full_text, summary, is_t1 in all_patterns:
+        # Cached pattern lists are read-only; preserve load and iteration order.
+        for title, full_text, summary, is_t1 in chain.from_iterable(pattern_groups):
             if is_t1:
                 tier1_parts.append(full_text)
                 continue
@@ -5483,14 +5494,27 @@ def _read_flow_node_source(
         return ""
 
     line_end = None
-    if checklist and node_line:
-        for file_info in checklist.get("files", []):
-            if file_info.get("path") != node_file:
-                continue
-            for item in file_info.get("items", file_info.get("functions", [])):
-                if item.get("name") == node_name:
-                    line_end = item.get("line_end")
-                    break
+    if checklist:
+        item = _find_checklist_item(checklist, node_file, node_name, node_line or 0)
+        if item is None and node_line:
+            # Legacy rows may omit a start; a unique containing span also
+            # supports traces whose line points inside the function.
+            unique = _find_checklist_item(checklist, node_file, node_name)
+            if unique is not None:
+                first = unique.get("line_start")
+                last = unique.get("line_end")
+                if (not first or (isinstance(first, int) and isinstance(last, int)
+                                  and first <= node_line <= last)):
+                    item = unique
+        if item is not None:
+            if not node_line:
+                first = item.get("line_start")
+                last = item.get("line_end")
+                if (isinstance(first, int) and first > 0
+                        and (last is None or isinstance(last, int))):
+                    node_line = first
+            if node_line:
+                line_end = item.get("line_end")
 
     start = max(0, node_line - 1) if node_line else 0
     end = min(line_end or start + max_lines, start + max_lines)
