@@ -73,11 +73,14 @@ def test_full_sample_bucket_does_not_format_remaining_paths(monkeypatch):
 def test_discarded_reasons_never_format_their_paths(monkeypatch):
     entries = [{"reason": f"reason-{i:03d}", "path": f"/target/{i}/" + "x" * 400}
                for i in reversed(range(64))]
+    expected = reference_summary(entries)
     formatted = track_path_formatting(monkeypatch)
     result = models._summarise_skipped(entries)
     assert list(result["reasons"]) == [f"reason-{i:03d}" for i in range(12)]
     assert result["total"] == 64 and result["reasons_truncated"] == 52
-    assert formatted == [entry["path"] for entry in entries if entry["reason"] in result["reasons"]]
+    selected = [entry["path"] for entry in entries if entry["reason"] in result["reasons"]]
+    assert formatted == [path[:300] for path in selected]
+    assert result == expected
 
 
 def test_late_frequent_reason_keeps_earliest_samples():
