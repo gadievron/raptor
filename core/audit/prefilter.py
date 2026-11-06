@@ -22,7 +22,7 @@ import re
 import textwrap
 import threading
 from dataclasses import dataclass, field, fields
-from functools import cached_property
+from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -859,10 +859,19 @@ _CWE_FAMILY: dict[int, str] = {
 }
 
 
-def _keyword_in_text(kw: str, text: str) -> bool:
-    if " " in kw or "-" in kw or kw == "..":
-        return kw in text
-    return re.search(r"\b" + re.escape(kw), text) is not None
+_RULE_ID_SEPARATOR_RE = re.compile(r"[._\-/]+")
+_CWE_NUMBER_RE = re.compile(r"cwe[-_ ]?(\d+)")
+
+
+@lru_cache(maxsize=16)
+def _family_keyword_search(keywords: frozenset[str]) -> _Search:
+    """Bounded matcher cache keyed by vocabulary, never by source text."""
+    branches = (
+        re.escape(kw) if " " in kw or "-" in kw or kw == ".."
+        else r"\b" + re.escape(kw)
+        for kw in sorted(keywords)
+    )
+    return re.compile("|".join(branches) or r"(?!)").search
 
 
 def family_for_rule(rule_id: str) -> str:
@@ -877,11 +886,11 @@ def family_for_rule(rule_id: str) -> str:
     family = PREFILTER_RULE_FAMILY.get(rule_id)
     if family:
         return family
-    text = re.sub(r"[._\-/]+", " ", rule_id.lower())
+    text = _RULE_ID_SEPARATOR_RE.sub(" ", rule_id.lower())
     for fam, keywords in _FAMILY_KEYWORDS.items():
         if fam == "other":
             continue
-        if any(_keyword_in_text(kw, text) for kw in keywords):
+        if _family_keyword_search(keywords)(text):
             return fam
     return "other"
 
@@ -901,10 +910,16 @@ def evidence_matches_hypothesis(
     if not keywords:
         return False
     text = f"{hypothesis_text} {vuln_type}".lower()
-    m = re.search(r"cwe[-_ ]?(\d+)", text)
-    if m and _CWE_FAMILY.get(int(m.group(1))) == rule_family:
-        return True
-    return any(_keyword_in_text(kw, text) for kw in keywords)
+    m = _CWE_NUMBER_RE.search(text)
+    if m:
+        try:
+            cwe_family = _CWE_FAMILY.get(int(m.group(1)))
+        except ValueError:
+            # Oversized untrusted decimal identifiers must not abort correlation.
+            cwe_family = None
+        if cwe_family == rule_family:
+            return True
+    return _family_keyword_search(keywords)(text) is not None
 
 
 @dataclass
@@ -2462,6 +2477,7 @@ _LIFECYCLE_OPS = frozenset({
 })
 
 _AUTH_RE = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in _AUTH_KEYWORDS) + r")")
+_CONCURRENCY_RE = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in _CONCURRENCY_OPS) + r")")
 _CRYPTO_RE = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in _CRYPTO_APIS) + r")")
 _LIFECYCLE_RE = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in _LIFECYCLE_OPS) + r")")
 
@@ -2523,8 +2539,10 @@ def _is_sink_unreachable_clean(
     if _CRYPTO_RE.search(source_lower):
         return False
 
-    all_concurrency = _CONCURRENCY_OPS | extra_concurrency
-    if any(re.search(rf"\b{re.escape(op)}", source_lower) for op in all_concurrency):
+    if _CONCURRENCY_RE.search(source_lower):
+        return False
+
+    if any(re.search(rf"\b{re.escape(op)}", source_lower) for op in extra_concurrency):
         return False
 
     if _LIFECYCLE_RE.search(source_lower):
