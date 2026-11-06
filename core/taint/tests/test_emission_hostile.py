@@ -288,6 +288,27 @@ class TestHostileBytes:
             dp = f["dataflow_path"]
             assert "\x1b" not in dp["source"]["label"]
 
+    @pytest.mark.parametrize("file,expected_uri", [
+        pytest.param("dir/space name.py", "dir/space%20name.py", id="space"),
+        pytest.param("dir/percent%23#?.py", "dir/percent%2523%23%3F.py", id="reserved"),
+        pytest.param("scheme:name.py", "scheme%3Aname.py", id="colon"),
+        pytest.param("dir/control\x1b.py", "dir/control%1B.py", id="control"),
+    ])
+    def test_file_locations_are_encoded_as_uris(self, tmp_path, packs, file, expected_uri):
+        steps = _chain_steps("f", file, 2)
+        rep = emit(_result([_candidate("f", file, steps=steps)]), packs)
+        result = rep.sarif["runs"][0]["results"][0]
+        primary = result["locations"][0]["physicalLocation"]["artifactLocation"]
+        assert primary["uri"] == expected_uri
+        flow = result["codeFlows"][0]["threadFlows"][0]["locations"]
+        assert all(step["location"]["physicalLocation"]["artifactLocation"]["uri"]
+                   == expected_uri for step in flow)
+        out = tmp_path / "encoded.sarif"
+        out.write_bytes(sarif_bytes(rep))
+        parsed = parse_sarif_findings(out)
+        assert len(parsed) == 1
+        assert parsed[0]["dataflow_path"] is not None
+
     def test_megabyte_prose_is_windowed_not_scanned(
             self, packs) -> None:
         """A crafted megabyte sink match cannot buy a full escape
