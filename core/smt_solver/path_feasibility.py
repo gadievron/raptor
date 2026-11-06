@@ -1202,6 +1202,52 @@ def _classify_text_condition(
     return None, (display, final_expr), None
 
 
+@dataclass
+class _ConditionBatch:
+    """One parsed guard frame shared by path and intrinsic queries."""
+
+    pending: list[tuple[str, Any]] = field(default_factory=list)
+    satisfied: list[str] = field(default_factory=list)
+    unknown: list[str] = field(default_factory=list)
+    rejections: list[Rejection] = field(default_factory=list)
+    anon_map: dict[str, str] = field(default_factory=dict)
+    axioms: list[tuple[str, Any]] = field(default_factory=list)
+
+
+def _classify_conditions(
+    conditions: list[PathCondition], vars_: dict[str, Any], solver: Any,
+    *, profile: BVProfile,
+) -> _ConditionBatch:
+    """Parse a complete guard frame without dropping its background theory.
+
+    Reserve source names before allocating any placeholders. Calls share the
+    existing SSA-style identity only within each mutation-free window. An
+    assignment-shaped rejection ends that window without erasing labels or
+    axioms already collected. Every rejection remains visible to the caller.
+    A None solver disables only optional tautology queries.
+    """
+    reserve_anon_names([cond.text for cond in conditions], vars_)
+    batch = _ConditionBatch()
+    dedup_window: dict[str, str] = {}
+    for cond in conditions:
+        sat_display, pending_pair, rejection = _classify_text_condition(
+            cond, vars_, solver, profile=profile,
+            anon_map=batch.anon_map, dedup_window=dedup_window,
+            axiom_sink=batch.axioms,
+        )
+        if sat_display is not None:
+            batch.satisfied.append(sat_display)
+        elif rejection is not None:
+            batch.unknown.append(cond.text)
+            batch.rejections.append(rejection)
+            if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
+                dedup_window.clear()
+        else:
+            assert pending_pair is not None
+            batch.pending.append(pending_pair)
+    return batch
+
+
 def _extract_wp(
     pending: list[tuple[str, Any]],
     *,
@@ -1540,43 +1586,15 @@ def check_verb_feasibility(
             unknown_reasons=[reason], model={}, smt_available=True,
             reasoning=f"refused: {reason.detail} ({mode})",
         )
-    reserve_anon_names([cond.text for cond in text_guards], vars_)
     tautology_solver = _new_solver() if reduce_constraints else None
     solver = _new_solver()
-
-    satisfied: list[str] = []
-    unknown: list[str] = []
-    unknown_reasons: list[Rejection] = []
-    pending: list[tuple[str, Any]] = list(intrinsic)  # intrinsic always solved
-
-    for cond in text_guards:
-        sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, tautology_solver, profile=profile,
-        )
-        if sat_display is not None:
-            satisfied.append(sat_display)
-        elif rejection is not None:
-            unknown.append(cond.text)
-            unknown_reasons.append(rejection)
-        else:
-            assert pending_pair is not None
-            pending.append(pending_pair)
-
-    if not intrinsic and not pending and not unknown and not satisfied:
-        # Defensive: a verb with no intrinsic and no guards is a usage
-        # error but we still return something coherent rather than
-        # divide-by-zero in the verdict logic.
-        return PathSMTResult(
-            wp_complete=reduce_constraints,
-            feasible=True,
-            satisfied=[], unsatisfied=[], unknown=[],
-            unknown_reasons=[],
-            model={}, smt_available=True,
-            reasoning=f"no predicates ({mode}) — vacuously satisfiable",
-        )
-
+    batch = _classify_conditions(text_guards, vars_, tautology_solver, profile=profile)
+    # Intrinsic predicates and guards are asserted together with the guards'
+    # call-summary axioms. Each query owns its labels and mutation windows.
     return _solve_pending(
-        pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
+        list(intrinsic) + batch.pending, solver,
+        batch.satisfied, batch.unknown, batch.rejections,
+        profile=profile, anon_map=batch.anon_map, axioms=batch.axioms,
         reduce_constraints=reduce_constraints,
     )
 
@@ -1694,7 +1712,6 @@ def check_path_feasibility(
         )
 
     vars_: dict[str, Any] = {}
-    reserve_anon_names([cond.text for cond in conditions], vars_)
     # Tautology checks (push/add(Not(expr))/check/pop) run on a
     # throwaway solver so residual push/pop state cannot leak into
     # the final solve.  Z3 4.15.4.0 has been observed to return
@@ -1730,67 +1747,12 @@ def check_path_feasibility(
             _new_solver(timeout_ms) if timeout_ms is not None
             else _new_solver()
         )
-    # Per-check anon-var mapping. Populated by `_substitute_calls`
-    # as it allocates `_anon_N` placeholders for function-call
-    # subterms; threaded into the PathSMTResult so downstream
-    # consumers (witness PoC seed renderer) can show meaningful
-    # labels like `_anon_0 (= strlen(argv[1])) = 32` instead of
-    # bare `_anon_0 = 32`. Accumulates EVERY allocation across the
-    # whole batch — including allocations on either side of a
-    # mutation barrier — so labels remain complete for the result.
-    anon_map: dict[str, str] = {}
-    # The call-dedup window controls *which* placeholders the current
-    # condition's parser may reuse. Distinct from `anon_map` (the
-    # label store) so we can reset it at mutation barriers without
-    # erasing labels. Pre-D2 the substitution derived its
-    # reverse-lookup directly from `anon_map`, so dedup was forced to
-    # span the whole batch — a path like
-    # ``[strlen(input) > 100, input = realloc(input,...),
-    # strlen(input) < 50]`` then merged the two `strlen(input)`
-    # references under one Z3 var, refuting the (actually feasible)
-    # path under the broken SSA assumption. Post-D2 the parser
-    # consults this window instead; ASSIGNMENT_SHAPED rejections
-    # clear it so post-mutation calls allocate fresh placeholders.
-    dedup_window: dict[str, str] = {}
-    # Call-summary axioms accumulated by _substitute_calls as it
-    # allocates placeholders for recognised libc/POSIX calls.  Asserted
-    # (tracked) alongside the pending conditions and carried as
-    # background theory through the WP pass — see _solve_pending.
-    axioms: list[tuple[str, Any]] = []
-
-    satisfied: list[str] = []
-    unknown: list[str] = []
-    unknown_reasons: list[Rejection] = []
-    pending: list[tuple[str, Any]] = []
-
-    for cond in conditions:
-        sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, tautology_solver, profile=profile,
-            anon_map=anon_map, dedup_window=dedup_window,
-            axiom_sink=axioms,
-        )
-        if sat_display is not None:
-            satisfied.append(sat_display)
-        elif rejection is not None:
-            unknown.append(cond.text)
-            unknown_reasons.append(rejection)
-            # Mutation barrier: an assignment-shaped step means
-            # subsequent identifiers may denote post-mutation values,
-            # so identical-text calls after this point must NOT dedup
-            # with earlier ones. Clear the window; `anon_map` (label
-            # store) is untouched, so all placeholders (before and
-            # after the barrier) remain visible in the final result.
-            if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
-                dedup_window.clear()
-        else:
-            assert pending_pair is not None
-            pending.append(pending_pair)
-
+    batch = _classify_conditions(conditions, vars_, tautology_solver, profile=profile)
     return _solve_pending(
-        pending, solver, satisfied, unknown, unknown_reasons,
-        profile=profile, anon_map=anon_map,
+        batch.pending, solver, batch.satisfied, batch.unknown, batch.rejections,
+        profile=profile, anon_map=batch.anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
-        axioms=axioms, wp_timeout_ms=timeout_ms, reduce_constraints=reduce_constraints,
+        axioms=batch.axioms, wp_timeout_ms=timeout_ms, reduce_constraints=reduce_constraints,
     )
 
 
