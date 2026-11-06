@@ -1288,6 +1288,47 @@ def test_relay_scan_default_parents_builds_attribution():
 import core.security.report_writer_audit as rwa  # noqa: E402
 
 
+@pytest.mark.parametrize("scanner,kind", [
+    ("_mermaid_scan", "unsanitised_mermaid_embed"),
+    ("_sanitiser_shadow_scan", "sanitiser_shadow"),
+    ("_wrong_slot_scan", "wrong_slot_sanitiser"),
+    ("_exception_relay_scan", "unsanitised_exception_text"),
+])
+def test_shared_node_walk_matches_independent_scans(scanner, kind):
+    source = (
+        "class Outer:\n"
+        "    async def render(self, value):\n"
+        "        def _line(text):\n"
+        "            return text\n"
+        "        diagram = f'```mermaid\\n{value}\\n```'\n"
+        "        heading = f'### {md_fence(value)}'\n"
+        "        try:\n"
+        "            work()\n"
+        "        except Exception as exc:\n"
+        "            print(f'failed: {exc}')\n"
+    )
+    independent = getattr(rwa, scanner)(rwa.ast.parse(source), "nested.py")
+    assert independent
+    combined = rwa.audit_source(source, "nested.py")
+    assert [v for v in combined if v.kind == kind] == independent
+
+
+def test_ancillary_scans_share_one_full_tree_walk(monkeypatch):
+    from core.testing.module_bindings import patch_module_attribute
+
+    original_walk = rwa.ast.walk
+    root_walks = []
+
+    def observed_walk(node):
+        if isinstance(node, rwa.ast.Module):
+            root_walks.append(node)
+        return original_walk(node)
+
+    patch_module_attribute(monkeypatch, rwa, "ast", "walk", observed_walk)
+    assert rwa.audit_source("class Outer:\n    async def render(self):\n        return 42\n") == []
+    assert len(root_walks) == 1
+
+
 class TestWrongSlotSanitiser:
     """Fence-lane sanitisers (md_fence / sanitise_code) in a heading,
     table-cell, or bold-label slot pass the flat sanitiser vocabulary

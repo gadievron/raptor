@@ -2046,7 +2046,8 @@ _SANITISER_DEFINITION_MODULES = frozenset({
 })
 
 
-def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
+def _sanitiser_shadow_scan(tree: ast.AST, rel: str,
+                           nodes: Iterable[ast.AST] | None = None) -> list[Violation]:
     """Flag local function definitions that SHADOW a recognised
     sanitiser name without building on any canonical sanitiser.
 
@@ -2064,7 +2065,7 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
     if rel in _SANITISER_DEFINITION_MODULES:
         return []
     out: list[Violation] = []
-    for node in ast.walk(tree):
+    for node in (ast.walk(tree) if nodes is None else nodes):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if node.name not in _SANITISERS:
@@ -2114,7 +2115,8 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
 
 
 def _exception_relay_scan(tree: ast.AST, rel: str,
-                          parents: dict | None = None) -> list[Violation]:
+                          parents: dict | None = None,
+                          nodes: Iterable[ast.AST] | None = None) -> list[Violation]:
     """Mechanism arm: exception-text indirection.
 
     ``except Exception as e: print(f"...{e}")`` relays whatever the
@@ -2138,7 +2140,7 @@ def _exception_relay_scan(tree: ast.AST, rel: str,
     line, so a per-site arm would double-cover with heavy noise.
     """
     out: list[Violation] = []
-    for node in ast.walk(tree):
+    for node in (ast.walk(tree) if nodes is None else nodes):
         if not (isinstance(node, ast.ExceptHandler) and node.name
                 and _is_broad_handler(node)):
             continue
@@ -2721,7 +2723,8 @@ class _Scanner(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _mermaid_scan(tree: ast.AST, rel: str) -> list[Violation]:
+def _mermaid_scan(tree: ast.AST, rel: str,
+                  nodes: Iterable[ast.AST] | None = None) -> list[Violation]:
     """Flag f-string interpolations inside ```mermaid fences that are
     not sanitiser calls."""
     # First pass: collect hits without attribution. The parents map
@@ -2731,7 +2734,7 @@ def _mermaid_scan(tree: ast.AST, rel: str) -> list[Violation]:
     # all of them are fence-free) — so it is built lazily, only when
     # a violation actually needs a function name.
     hits: list[tuple[ast.FormattedValue, ast.JoinedStr]] = []
-    for node in ast.walk(tree):
+    for node in (ast.walk(tree) if nodes is None else nodes):
         if not isinstance(node, ast.JoinedStr):
             continue
         in_fence = False
@@ -2798,7 +2801,8 @@ _TABLE_SLOT_RE = re.compile(r".*\|[ \t]*\Z")
 _BOLD_SLOT_RE = re.compile(r".*\*\*\Z")
 
 
-def _wrong_slot_scan(tree: ast.AST, rel: str) -> list[Violation]:
+def _wrong_slot_scan(tree: ast.AST, rel: str,
+                     nodes: Iterable[ast.AST] | None = None) -> list[Violation]:
     """Flag fence-lane sanitiser calls interpolated into heading /
     table-cell / bold-label f-string slots (``f"### {md_fence(x)}"``).
 
@@ -2809,7 +2813,7 @@ def _wrong_slot_scan(tree: ast.AST, rel: str) -> list[Violation]:
     live links. Allowlistable like every other kind.
     """
     hits: list[tuple[ast.FormattedValue, ast.JoinedStr, str, str]] = []
-    for node in ast.walk(tree):
+    for node in (ast.walk(tree) if nodes is None else nodes):
         if not isinstance(node, ast.JoinedStr):
             continue
         before: list[str] = []
@@ -2885,11 +2889,17 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
         scanner = _Scanner(rel, frozenset(pre.tainted_return_funcs))
         scanner.visit(tree)
     violations = scanner.violations
-    violations.extend(_mermaid_scan(tree, rel))
-    violations.extend(_sanitiser_shadow_scan(tree, rel))
-    violations.extend(_wrong_slot_scan(tree, rel))
+    # These four arms inspect only f-strings, function definitions and
+    # exception handlers. Share one breadth-first walk, retaining order and
+    # nested nodes; each arm still performs its own complete subtree checks.
+    nodes = tuple(node for node in ast.walk(tree) if isinstance(node, (
+        ast.JoinedStr, ast.FunctionDef, ast.AsyncFunctionDef, ast.ExceptHandler,
+    )))
+    violations.extend(_mermaid_scan(tree, rel, nodes))
+    violations.extend(_sanitiser_shadow_scan(tree, rel, nodes))
+    violations.extend(_wrong_slot_scan(tree, rel, nodes))
     _parents: dict = {}
-    violations.extend(_exception_relay_scan(tree, rel, _parents))
+    violations.extend(_exception_relay_scan(tree, rel, _parents, nodes))
     return violations
 
 
