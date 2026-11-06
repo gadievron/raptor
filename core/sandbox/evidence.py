@@ -239,6 +239,9 @@ class EvidenceFile:
         regular files, but inheritors of the fd shouldn't see a
         surprising flag state).
 
+        Both paths validate safety metadata on the acquired descriptor
+        before returning it, including files just created with O_EXCL.
+
         Both opens are RELATIVE to the validated ``.audit`` dirfd
         (:func:`ensure_audit_dirfd`), so a raced swap of an
         intermediate path component between directory validation and
@@ -252,27 +255,31 @@ class EvidenceFile:
         dirfd = ensure_audit_dirfd(run_dir)
         try:
             path = evidence_write_path(run_dir, filename)
+            reopened = False
             try:
                 fd = os.open(filename, flags | os.O_CREAT | os.O_EXCL,
                              0o600, dir_fd=dirfd)
             except FileExistsError:
                 fd = os.open(filename, flags | os.O_NONBLOCK,
                              dir_fd=dirfd)
-                st = os.fstat(fd)
-                if not _safe_evidence_file_metadata(st):
-                    raise OSError(
-                        f"existing evidence file {path} failed validation "
-                        f"(mode={oct(st.st_mode)}, uid={st.st_uid}, "
-                        f"nlink={st.st_nlink}) — refusing to append"
-                    ) from None
+                reopened = True
+            # Exclusive creation does not freeze metadata: validate the
+            # descriptor on both paths before any append can be attempted.
+            st = os.fstat(fd)
+            if not _safe_evidence_file_metadata(st):
+                raise OSError(
+                    f"evidence file {path} failed validation "
+                    f"(mode={oct(st.st_mode)}, uid={st.st_uid}, "
+                    f"nlink={st.st_nlink}) — refusing to append"
+                ) from None
+            if reopened:
                 # Clear O_NONBLOCK now that we know it's a regular
                 # file (no-op semantically; keeps the fd's flag state
                 # unsurprising for inheritors like the tracer).
                 import fcntl as _fcntl
                 fl = _fcntl.fcntl(fd, _fcntl.F_GETFL)
                 _fcntl.fcntl(fd, _fcntl.F_SETFL, fl & ~os.O_NONBLOCK)
-                return cls(fd, path, st)
-            return cls(fd, path, os.fstat(fd))
+            return cls(fd, path, st)
         except BaseException:
             # Ownership transfers only after construction succeeds.
             # Metadata/flag setup failures must release the file as
