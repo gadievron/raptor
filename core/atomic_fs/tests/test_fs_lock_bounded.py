@@ -16,7 +16,9 @@ shapes must never stall a writer silently:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
+import selectors
 import subprocess
 import sys
 import threading
@@ -26,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import reap_on_exit
 
 import core.atomic_fs.fs_lock as fs_lock
 from core.atomic_fs.fs_lock import artifact_lock
@@ -35,33 +38,38 @@ if not fs_lock._HAS_FCNTL:  # pragma: no cover — non-POSIX
 
 
 _HOLDER_SCRIPT = """\
-import fcntl, os, sys, time
+import fcntl, os, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o600)
 try:
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except OSError:
     sys.exit(3)
 print("held", flush=True)
-time.sleep(float(sys.argv[2]))
+assert sys.stdin.readline() == "release\\n"
 """
 
 
+@contextmanager
 def _spawn_holder(
-    lock_path: Path, hold_s: float, tmp_path: Path,
-) -> subprocess.Popen:
-    """Child process that flocks *lock_path* and holds it *hold_s*."""
+    lock_path: Path, tmp_path: Path,
+):
+    """Hold a real process lock until explicitly released or reaped."""
     script = tmp_path / "holder.py"
     script.write_text(_HOLDER_SCRIPT)
     proc = subprocess.Popen(
-        [sys.executable, str(script), str(lock_path), str(hold_s)],
-        stdout=subprocess.PIPE, text=True,
+        [sys.executable, str(script), str(lock_path)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
     )
-    from core.testing.processes import cleanup_on_startup_error
-    with cleanup_on_startup_error(proc):
+    with reap_on_exit(proc):
         assert proc.stdout is not None
-        line = proc.stdout.readline().strip()
-        assert line == "held", f"holder failed to take the lock: {line!r}"
-        return proc
+        with selectors.DefaultSelector() as ready:
+            ready.register(proc.stdout, selectors.EVENT_READ)
+            assert ready.select(timeout=5), "holder did not report readiness"
+            # Read bounded bytes rather than waiting forever for a newline
+            # if the owned child fails while reporting readiness.
+            line = os.read(proc.stdout.fileno(), 64)
+        assert line == b"held\n", f"holder failed to take the lock: {line!r}"
+        yield proc
 
 
 def _flock_is_free(lock_path: Path) -> bool:
@@ -144,17 +152,34 @@ class TestBoundedAcquisition:
     ):
         """A briefly-held lock produces exactly ONE 'waiting' warning,
         then the waiter acquires — never a silent block."""
-        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.001,
                             raising=False)
         artifact = tmp_path / "store.json"
         lock = tmp_path / "store.json.lock"
-        holder = _spawn_holder(lock, 1.0, tmp_path)
-        try:
+        with _spawn_holder(lock, tmp_path) as holder:
+            real_try = fs_lock._try_flock_nb
+            attempts = []
+
+            def release_after_contention(fd):
+                acquired = real_try(fd)
+                attempts.append(acquired)
+                if not acquired:
+                    assert holder.stdin is not None
+                    holder.stdin.write("release\n")
+                    holder.stdin.flush()
+                    assert holder.wait(timeout=5) == 0
+                return acquired
+
+            # Observe real contention before releasing the holder. Scheduling
+            # variance cannot turn this into an uncontended passing test.
+            monkeypatch.setattr(fs_lock, "_try_flock_nb", release_after_contention)
             entered = False
             with caplog.at_level("WARNING"):
                 with artifact_lock(artifact):
                     entered = True
+                    assert not _flock_is_free(lock)
             assert entered
+            assert attempts == [False, True]
             waiting = [
                 r for r in caplog.records
                 if "held by another process" in r.message
@@ -167,8 +192,6 @@ class TestBoundedAcquisition:
             # The holder released within the deadline: acquired, so no
             # degrade fired.
             assert not any("WITHOUT" in r.message for r in caplog.records)
-        finally:
-            holder.wait(timeout=10)
 
     def test_wedged_holder_never_blocks_unboundedly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -184,7 +207,6 @@ class TestBoundedAcquisition:
         lock = tmp_path / "store.json.lock"
         # A parseable stale stamp: the wait diagnostic must echo it.
         lock.write_bytes(b"99999\n")
-        holder = _spawn_holder(lock, 30.0, tmp_path)
         entered = threading.Event()
 
         def waiter() -> None:
@@ -193,30 +215,31 @@ class TestBoundedAcquisition:
 
         thread = threading.Thread(target=waiter, daemon=True)
         try:
-            with caplog.at_level("WARNING"):
-                start = time.monotonic()
-                thread.start()
-                assert entered.wait(timeout=10), (
-                    "writer still blocked on a wedged holder — "
-                    "no bounded deadline fired"
+            with _spawn_holder(lock, tmp_path):
+                with caplog.at_level("WARNING"):
+                    start = time.monotonic()
+                    thread.start()
+                    assert entered.wait(timeout=10), (
+                        "writer still blocked on a wedged holder — "
+                        "no bounded deadline fired"
+                    )
+                    elapsed = time.monotonic() - start
+                assert elapsed < 10
+                waiting = [
+                    r for r in caplog.records
+                    if "held by another process" in r.message
+                ]
+                assert len(waiting) == 1
+                assert "99999" in waiting[0].getMessage()
+                assert any(
+                    "still held" in r.getMessage()
+                    and "WITHOUT" in r.getMessage()
+                    for r in caplog.records
                 )
-                elapsed = time.monotonic() - start
-            assert elapsed < 10
-            waiting = [
-                r for r in caplog.records
-                if "held by another process" in r.message
-            ]
-            assert len(waiting) == 1
-            assert "99999" in waiting[0].getMessage()
-            assert any(
-                "still held" in r.getMessage()
-                and "WITHOUT" in r.getMessage()
-                for r in caplog.records
-            )
         finally:
-            holder.kill()
-            holder.wait(timeout=10)
-            thread.join(timeout=10)
+            if thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
 
     def test_holder_pid_is_stamped_into_lock_file(self, tmp_path: Path):
         """The acquirer records its pid (advisory, possibly stale)."""
@@ -239,7 +262,6 @@ class TestBoundedAcquisition:
         artifact = tmp_path / "store.json"
         lock = tmp_path / "store.json.lock"
         lock.write_bytes(b"\x1b]0;pwned\x07 not-a-pid")
-        holder = _spawn_holder(lock, 30.0, tmp_path)
         entered = threading.Event()
 
         def waiter() -> None:
@@ -248,16 +270,17 @@ class TestBoundedAcquisition:
 
         thread = threading.Thread(target=waiter, daemon=True)
         try:
-            with caplog.at_level("WARNING"):
-                thread.start()
-                assert entered.wait(timeout=10)
-            assert not any(
-                "pwned" in r.getMessage() for r in caplog.records
-            )
+            with _spawn_holder(lock, tmp_path):
+                with caplog.at_level("WARNING"):
+                    thread.start()
+                    assert entered.wait(timeout=10)
+                assert not any(
+                    "pwned" in r.getMessage() for r in caplog.records
+                )
         finally:
-            holder.kill()
-            holder.wait(timeout=10)
-            thread.join(timeout=10)
+            if thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
 
 
 class TestLimits:
@@ -327,7 +350,9 @@ class TestHintContainment:
         finally:
             os.close(holder_fd)
             os.close(victim_fd)
-            thread.join(timeout=10)
+            if thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
 
     @pytest.mark.skipif(not os.path.exists("/proc/self/io"),
                         reason="procfs io counters unavailable")
