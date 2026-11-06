@@ -23,6 +23,7 @@ import atexit
 from concurrent.futures import Future
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -203,7 +204,19 @@ def _probe_scope_version(key: tuple[object, ...] | None) -> tuple[int, ...] | No
     info = _version_probe()
     if info is None or info.returncode != 0:
         return None
-    parsed = info.version_tuple()
+    # Semgrep emits a bare release on either stream. Dependency warnings and
+    # prereleases are not evidence that a stable CLI capability is present.
+    releases = set()
+    for stream in (info.stdout, info.stderr):
+        if not isinstance(stream, str) or len(stream) >= 64 * 1024:
+            return None
+        for line in stream.splitlines():
+            match = re.fullmatch(r"v?([0-9]{1,6})\.([0-9]{1,6})(?:\.([0-9]{1,6}))?", line.strip())
+            if match:
+                releases.add(tuple(int(part or 0) for part in match.groups()))
+            elif re.match(r"v?[0-9]+\.[0-9]+", line.strip()):
+                return None
+    parsed = next(iter(releases)) if len(releases) == 1 else None
     if key is None or parsed is None:
         return parsed
     try:
