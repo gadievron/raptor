@@ -334,3 +334,33 @@ def test_every_bash_launcher_has_manual_audit_entry():
          / "report_writer_closure_baseline.json").read_text())
     assert baseline.get("bash_manual_audit"), (
         "bash_manual_audit section missing")
+
+
+def test_candidates_preserve_git_filename_bytes(tmp_path, monkeypatch):
+    """Quoted or multiline paths must reach the real report detector."""
+    import os
+
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    names = ["space name", "café", "tab\tname", "line\nname", 'quote"name']
+    if os.name == "posix":
+        names.append(os.fsdecode(b"raw-\xff"))
+    expected = {f"core/sample/{name}.py" for name in names}
+    excluded = {"core/tests/café.py", "core/fixtures/line\nname.py",
+                ".github/café.py", "core/sample/test_café.py"}
+    for rel in expected | excluded:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def show(finding):\n    print(finding.get('title'))\n")
+    git_run(repo, "add", "-A")
+    gate = _load_gate_module()
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    for quote_path in ("true", "false"):
+        git_run(repo, "config", "core.quotePath", quote_path)
+        candidates = gate._candidates(repo)
+        assert set(candidates) == expected
+        assert len(candidates) == len(expected)
+        gate._init_worker(str(repo))
+        for rel in candidates:
+            assert any(v.detail == "title" for v in gate._audit_one(rel)), repr(rel)

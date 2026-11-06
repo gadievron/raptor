@@ -107,14 +107,18 @@ def _candidates(repo: Path) -> list[str]:
     # closure claim is tree-wide, so a new runtime tree must be added
     # HERE (and a fixture row in the candidate-universe test) or the
     # gate silently never sees it.
+    # Git quotes unusual names in line output; NUL records preserve paths.
     proc = subprocess.run(
-        ["git", "-C", str(repo), "ls-files",
+        ["git", "-C", str(repo), "ls-files", "-z",
          "core", "packages", "engine", "plugins", "libexec",
          "raptor*.py"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, check=True,
     )
     rels = []
-    for rel in proc.stdout.splitlines():
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = raw.decode("utf-8", errors="surrogateescape")
         parts = rel.split("/")
         if ("tests" in parts or "scripts" in parts
                 or parts[-1].startswith("test_")
