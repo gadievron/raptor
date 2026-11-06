@@ -1193,3 +1193,19 @@ run outside the function-only sweep memo, so editing a caller cannot reuse
 an earlier tuple's result. Persisted literal-call receipts require fresh
 source revalidation because the journal's function hash does not bind the
 whole caller file.
+
+Source integer obligations support different promoted widths when all
+variable operands have the same promoted signedness. The result frame
+comes from the operation's operands under the explicit target ABI, rather
+than from a guard variable or the alphabetically first declaration. For
+example, `int + long` uses 64-bit signed arithmetic on LP64 and 32-bit
+signed arithmetic on LLP64. Small supported literals retain C `int`
+semantics before value-preserving conversion to that result frame.
+
+Every narrower input keeps its declared storage range in the wider SMT
+frame, including guard-only inputs. The independent mathematical witness
+check derives the result range from the actual operands too. Array models
+select their frame from the index, while validating all guard inputs;
+a narrower flag can guard a wider index without changing its bounds
+obligation. Mixed promoted signedness and guard variables wider than the
+result frame remain unsupported by this single-profile comparison model.

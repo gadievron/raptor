@@ -233,7 +233,7 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
     if guards.status == "unavailable":
         return ArrayAccess("unavailable", "reaching guards unavailable")
     terms = sorted({text(node) for node in body_nodes if node.type == "identifier" and text(node) != claim[0]})
-    model = model_for_integer_terms(target, data, terms, guards.premises, abi, language=language)
+    model = model_for_integer_terms(target, data, terms, guards.premises, abi, language=language, result_operands=[claim[1]])
     if model.status != "bound" or any(declarations[name][1].type != "parameter_declaration" for name, _ in model.types):
         return ArrayAccess("unavailable", "immutable builtin parameter types required")
     kind = integer_type(dict(model.types)[claim[1]], abi)
