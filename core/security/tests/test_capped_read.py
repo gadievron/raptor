@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 
+from core.testing.module_bindings import patch_module_attribute
+import core.security.capped_read as capped_read_module
+
 from core.security.capped_read import read_capped
 
 
@@ -68,7 +71,7 @@ def test_fd_closed_exactly_once_by_owner(tmp_path, monkeypatch):
             raise
         closed.append(fd)
 
-    monkeypatch.setattr(os, "close", spying_close)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "close", spying_close)
     assert read_capped(p, 100) == b"content"
     assert failed == [], "explicit close hit an already-closed fd"
     assert len(closed) == 1
@@ -151,7 +154,7 @@ def test_raise_mode_grew_past_cap(tmp_path, monkeypatch):
             (st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid,
              st.st_gid, 5, st.st_atime, st.st_mtime, st.st_ctime))
 
-    monkeypatch.setattr(os, "fstat", lying_fstat)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "fstat", lying_fstat)
     with pytest.raises(CappedReadRefused) as ei:
         read_capped(f, 10, raise_on_refusal=True)
     assert ei.value.reason == "grew_past_cap"
@@ -169,7 +172,7 @@ def test_over_cap_refused_before_any_read(tmp_path, monkeypatch):
         opened.append(fd)
         return real_fdopen(fd, *a, **kw)
 
-    monkeypatch.setattr(os, "fdopen", spying_fdopen)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "fdopen", spying_fdopen)
     assert read_capped(f, 10) is None
     assert opened == [], "over-cap file was read before refusal"
 
@@ -188,7 +191,7 @@ def test_open_flags_carry_cloexec_nofollow_nonblock(tmp_path, monkeypatch):
         seen.append(flags)
         return real_open(path, flags, *a, **kw)
 
-    monkeypatch.setattr(os, "open", spying_open)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "open", spying_open)
     assert read_capped(f, 100) == b"data"
     assert len(seen) == 1
     assert seen[0] & os.O_CLOEXEC

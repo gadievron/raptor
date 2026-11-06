@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 import core.security.rule_of_two as r2
 from core.security.rule_of_two import (
     HITL_REQUIRED_AGENTS,
@@ -271,7 +273,7 @@ class TestTtyRecency:
         chain = {100: (self.TTY_NR, 200),   # stale tty
                  200: (self.TTY_NR + 5, 300),  # fresh tty
                  300: (0, 300)}
-        monkeypatch.setattr(r2.os, "getpid", lambda: 100)
+        patch_module_attribute(monkeypatch, r2, "os", "getpid", lambda: 100)
         monkeypatch.setattr(r2, "_proc_tty_and_ppid",
                             lambda pid: chain.get(pid))
         recency = {100: False, 200: True}
@@ -283,7 +285,7 @@ class TestTtyRecency:
 
     def test_ancestor_walk_all_stale_returns_false(self, monkeypatch):
         chain = {100: (self.TTY_NR, 200), 200: (0, 200)}
-        monkeypatch.setattr(r2.os, "getpid", lambda: 100)
+        patch_module_attribute(monkeypatch, r2, "os", "getpid", lambda: 100)
         monkeypatch.setattr(r2, "_proc_tty_and_ppid",
                             lambda pid: chain.get(pid))
         monkeypatch.setattr(r2, "_tty_recently_active",

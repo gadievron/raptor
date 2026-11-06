@@ -25,6 +25,10 @@ from __future__ import annotations
 
 import json
 import os
+
+from core.testing.module_bindings import patch_module_attribute
+from core.security import _trust_common
+import core.security.capped_read as capped_read_module
 import shutil
 from pathlib import Path
 
@@ -136,7 +140,7 @@ def _spoof_lstat_uid(
             return _uid_shifted(st, delta)
         return st
 
-    monkeypatch.setattr(os, "lstat", fake_lstat)
+    patch_module_attribute(monkeypatch, _trust_common, "os", "lstat", fake_lstat)
 
 
 def _spoof_read_fd_uid(
@@ -170,9 +174,9 @@ def _spoof_read_fd_uid(
             return _uid_shifted(st, delta)
         return st
 
-    monkeypatch.setattr(os, "open", fake_open)
-    monkeypatch.setattr(os, "close", fake_close)
-    monkeypatch.setattr(os, "fstat", fake_fstat)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "open", fake_open)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "close", fake_close)
+    patch_module_attribute(monkeypatch, capped_read_module, "os", "fstat", fake_fstat)
 
 
 # ---------------------------------------------------------------------------

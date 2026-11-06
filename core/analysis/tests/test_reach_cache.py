@@ -12,6 +12,8 @@ from typing import Any, Dict
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.analysis import _reach_cache
 from core.analysis.reachability import (
     InternalFunction,
@@ -228,7 +230,7 @@ def test_load_refuses_foreign_uid(tmp_path, monkeypatch):
     import os
     real_uid = os.stat(path).st_uid
     foreign_uid = real_uid + 12345
-    monkeypatch.setattr(os, "getuid", lambda: foreign_uid)
+    patch_module_attribute(monkeypatch, _reach_cache, "os", "getuid", lambda: foreign_uid)
 
     result = _reach_cache.load_index(fp)
     assert result is None, "load_index must refuse foreign-owned cache file"
