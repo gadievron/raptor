@@ -1,11 +1,11 @@
 """Invariant step savings preserve input coverage and fail-open execution gates."""
 
 from pathlib import Path
+import re
 import sys
 from unittest.mock import patch
 
 import pytest
-import yaml
 
 from core.testing.gitrepo import git_run, init_scratch_repo
 
@@ -146,23 +146,36 @@ def test_real_git_uses_full_push_range_and_both_rename_paths(tmp_path):
 
 
 def test_workflow_gates_only_reviewed_steps_and_preserves_failure_reporting():
-    jobs = yaml.safe_load((SCRIPTS.parent / 'workflows/lint.yml').read_text())['jobs']
+    # This lane installs pytest only. Check the workflow's block-style fields
+    # directly, as the other CI workflow contracts do, without a YAML runtime.
+    workflow = (SCRIPTS.parent / 'workflows/lint.yml').read_text()
+    _, separator, job_source = workflow.partition('\njobs:\n')
+    assert separator, 'workflow jobs block is missing'
+    jobs = dict(re.findall(r'^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)',
+                           job_source, re.M | re.S))
     assert len(jobs) == 5
     job = jobs['repo-invariants']
-    assert 'needs' not in job  # Independent of command-metadata's runner queue.
-    step = next(s for s in job['steps'] if s.get('id') == 'invariant_scope')
-    assert 'github.event.merge_group.base_sha' in step['env']['BASE_SHA']
-    assert step['run'] == 'python3 .github/scripts/repo_invariant_scope.py'
-    steps = {s['name']: s for s in job['steps']}
+    assert not re.search(r'^    needs:', job)  # Independent runner queue.
+    steps = dict(re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)',
+                            job, re.M | re.S))
+
+    def field(step, name):
+        match = re.search(r'^        ' + re.escape(name) + r': (.+)$', step, re.M)
+        return match[1].strip() if match else None
+
+    selected = [step for step in steps.values() if field(step, 'id') == 'invariant_scope']
+    assert len(selected) == 1
+    assert 'github.event.merge_group.base_sha' in selected[0]
+    assert field(selected[0], 'run') == 'python3 .github/scripts/repo_invariant_scope.py'
     for name, output in [('Run env-var documentation drift check', 'env_docs_run'),
                          ('Install pytest', 'redos_run'), ('Run ReDoS idiom census', 'redos_run')]:
-        assert steps[name]['if'] == "${{ steps.invariant_scope.outputs." + output + " != 'false' }}"
-    for step in job['steps']:
-        if 'run' in step and 'python3 .github/scripts/check_' in step['run']:
-            if 'check_env_docs.py' in step['run']:
+        assert field(steps[name], 'if') == "${{ steps.invariant_scope.outputs." + output + " != 'false' }}"
+    for name, step in steps.items():
+        if 'python3 .github/scripts/check_' in step:
+            if 'check_env_docs.py' in step:
                 continue
-            if 'check_skip_budget.py' in step['run']:
-                assert "steps.redos_census.outcome == 'failure'" in step['if']
+            if 'check_skip_budget.py' in step:
+                assert "steps.redos_census.outcome == 'failure'" in field(step, 'if')
             else:
-                assert 'if' not in step, step['name']
-    assert 'repo-invariants' in jobs['lint-passed']['needs']
+                assert field(step, 'if') is None, name
+    assert re.search(r'^    needs: .*\brepo-invariants\b', jobs['lint-passed'], re.M)
