@@ -29,9 +29,9 @@ name: PR preflight
 # statically; the hidden-deps legs are its dynamic counterpart. Scope
 # comes from .github/scripts/preflight_scope.py (reuses test_scope.py's
 # is_test_file); a PR with no changed test files skips every leg
-# cleanly. All legs use the _tier.yml "runner" path shape (uv --system)
-# so fork PRs — which cannot pull the private GHCR deps image — get
-# identical coverage.
+# cleanly. All legs reuse the exact-key base venv and rebuild locked
+# dependencies on a cache miss, so fork PRs do not need access to
+# the private GHCR deps image.
 
 on:
   pull_request:
@@ -43,6 +43,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.14'
+  VENV_PATH: .venv
   # Same CI hang net as tests.yml: dump every Python stack if a single
   # test runs >120s, then let it continue.
   PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
@@ -107,17 +108,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
         with:
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            pyproject.toml
-            uv.toml
-
-      - name: Install deps
-        run: uv sync --locked
+          install-method: sync
+          save-on-rebuild: 'true'
 
       - name: Run changed tests under simulation
         env:
@@ -127,6 +122,7 @@ jobs:
           SHUFFLE_SEED: ${{ matrix.shuffle_seed }}
         run: |
           set -euo pipefail
+          source "$VENV_PATH/bin/activate"
           if [ -n "${HIDE_SET:-}" ]; then
             stub_dir=$(python3 .github/scripts/hide_modules.py \
               --dest "$RUNNER_TEMP/preflight-stubs" --set "$HIDE_SET")
@@ -149,7 +145,7 @@ jobs:
           # shuffle legs; the changed-file bound keeps this cheap.
           # Recompute the same immutable range locally; never transfer a bulk
           # filename list through job outputs, the environment or exec argv.
-          uv run --locked python .github/scripts/preflight_scope.py \
+          python .github/scripts/preflight_scope.py \
             --base "$BASE_SHA" --repo . --run || rc=$?
           # Exit 5 = "no tests collected" — legitimate when every
           # changed test file is deselected by the default markers

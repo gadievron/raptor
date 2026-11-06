@@ -40,7 +40,7 @@ def key(repo, **kwargs):
 
 def test_unchanged_inputs_share_the_exact_identity(repo):
     assert key(repo) == cache.venv_key(repo, deepcopy(HOST), deepcopy(PYTHON))
-    assert key(repo).startswith('venv-v2-')
+    assert key(repo).startswith('venv-v3-')
 
 
 @pytest.mark.parametrize('name', ['uv.lock', 'pyproject.toml', 'uv.toml', '.github/actions/setup-venv/action.yml'])
@@ -71,7 +71,7 @@ def test_interpreter_build_and_location_changes_invalidate_the_environment(repo,
     assert cache.venv_key(repo, HOST, interpreter) != key(repo)
 
 
-@pytest.mark.parametrize('kwargs', [dict(export_args='--extra web'), dict(prefix='venv-web'), dict(venv_path='other-venv')])
+@pytest.mark.parametrize('kwargs', [dict(export_args='--extra web'), dict(prefix='venv-web'), dict(venv_path='other-venv'), dict(install_method='sync')])
 def test_profile_and_workspace_locations_cannot_collide(repo, kwargs):
     assert key(repo, **kwargs) != key(repo)
 
@@ -273,3 +273,25 @@ if sys.argv[1] == 'export':
     else:
         assert observed[-1] == ['pip', 'sync', '--system', str(tmp_path / 'tier-requirements.txt')]
         assert (tmp_path / 'tier-requirements.txt').read_text() == 'owned==1.0\n'
+
+
+@pytest.mark.parametrize('method', ['', 'invalid', 'sync\nkey'])
+def test_invalid_install_method_cannot_create_a_cache_identity(repo, method):
+    with pytest.raises(ValueError, match='invalid venv install method'):
+        key(repo, install_method=method)
+
+
+def test_cli_includes_selected_install_method_in_the_exact_key(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cache, 'host_identity', lambda: deepcopy(HOST))
+    monkeypatch.setattr(cache, 'interpreter_identity', lambda: deepcopy(PYTHON))
+    monkeypatch.setenv('VENV_CACHE_INSTALL_METHOD', 'sync')
+    monkeypatch.setenv('VENV_CACHE_PREFIX', 'venv')
+    monkeypatch.setenv('VENV_CACHE_EXPORT_ARGS', '')
+    monkeypatch.setenv('VENV_PATH', '.venv')
+    output = repo / 'output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    assert cache.main([]) == 0
+    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert values['key'] == key(repo, install_method='sync')
+    assert values['key'] != key(repo)

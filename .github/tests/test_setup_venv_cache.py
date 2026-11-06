@@ -148,3 +148,94 @@ def test_no_executable_environment_can_restore_an_old_lock_prefix():
 def test_rebuild_does_not_add_a_second_owner_for_an_existing_uv_cache(existing, expected):
     step = next(step for step in _steps() if step[0].startswith('Install uv (rebuild'))
     assert _expression(_field(step, 'enable-cache', indent=8), {'env.UV_CACHE_DIR': existing}) is expected
+
+
+@pytest.mark.parametrize('method', ['export', 'sync'])
+@pytest.mark.parametrize('status', [0, 23])
+def test_native_rebuild_keeps_method_extras_active_env_and_failure_status(tmp_path, method, status):
+    import json
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    rebuild = next(lines for lines in _steps() if lines[0].startswith('Rebuild venv ('))
+    start = rebuild.index('      run: |')
+    script = textwrap.dedent('\n'.join(rebuild[start + 1:]))
+    tools = tmp_path / 'tools with spaces'
+    tools.mkdir()
+    (tools / 'python3').symlink_to(sys.executable)
+    uv = tools / 'uv'
+    uv.write_text(f'''#!{sys.executable}
+import json, os, pathlib, shlex, sys
+args = sys.argv[1:]
+with pathlib.Path(os.environ['UV_RECORD']).open('a') as record:
+    record.write(json.dumps({{'args': args, 'active': os.environ.get('VIRTUAL_ENV')}}) + '\\n')
+if args[0] == 'venv':
+    target = pathlib.Path(args[-1])
+    (target / 'bin').mkdir(parents=True)
+    (target / 'bin/activate').write_text('export VIRTUAL_ENV=' + shlex.quote(str(target)) + '\\n')
+elif args[0] == 'export':
+    print('pytest==9.1.1')
+    raise SystemExit(int(os.environ['INSTALL_EXIT']))
+elif args[0] == 'sync':
+    raise SystemExit(int(os.environ['INSTALL_EXIT']))
+else:
+    assert args == ['pip', 'install', '-r', '-']
+    assert sys.stdin.read().strip() == 'pytest==9.1.1'
+''')
+    uv.chmod(0o755)
+    venv = tmp_path / 'project environment'
+    record = tmp_path / 'uv-record.jsonl'
+    env = dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin', VENV_PATH=str(venv),
+               VENV_CACHE_INSTALL_METHOD=method, UV_EXPORT_EXTRA_ARGS='--extra grammars',
+               UV_RECORD=str(record), INSTALL_EXIT=str(status))
+    env.pop('VIRTUAL_ENV', None)
+    result = subprocess.run(
+        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == status, result.stdout + result.stderr
+    calls = [json.loads(line) for line in record.read_text().splitlines()]
+    assert calls[0] == {'args': ['venv', '--clear', '--python', str(tools / 'python3'), str(venv)],
+                        'active': None}
+    assert all(call['active'] == str(venv) for call in calls[1:])
+    if method == 'sync':
+        assert [call['args'] for call in calls[1:]] == [
+            ['sync', '--locked', '--active', '--extra', 'grammars'],
+        ]
+    else:
+        assert sorted(call['args'] for call in calls[1:]) == sorted([
+            ['export', '--locked', '--no-hashes', '--extra', 'grammars'],
+            ['pip', 'install', '-r', '-'],
+        ])
+
+
+def test_native_permission_repair_handles_a_venv_path_with_spaces(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    repair = next(lines for lines in _steps() if lines[0] == 'Restore venv permissions and fix symlinks')
+    start = repair.index('      run: |')
+    script = textwrap.dedent('\n'.join(repair[start + 1:]))
+    venv = tmp_path / 'project environment'
+    binary = venv / 'bin'
+    binary.mkdir(parents=True)
+    tool = binary / 'owned-console'
+    tool.write_text('#!/bin/sh\nexit 0\n')
+    tool.chmod(0o600)
+    (binary / 'python').symlink_to('/owned/missing-interpreter')
+    tools = tmp_path / 'tools with spaces'
+    tools.mkdir()
+    (tools / 'python3').symlink_to(sys.executable)
+    result = subprocess.run(
+        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+        cwd=tmp_path, env=dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin', VENV_PATH=str(venv)),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name in ['python', 'python3', f'python{sys.version_info.major}.{sys.version_info.minor}']:
+        assert (binary / name).resolve() == Path(sys.executable).resolve()
+    assert tool.stat().st_mode & 0o111 == 0o111

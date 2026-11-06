@@ -240,11 +240,13 @@ Caches accelerate setup; a failed restore must leave the checks runnable.
 Assembled virtualenvs use exact keys only. Misses rebuild with the selected
 interpreter and locked dependencies; restore errors retry that exact key before
 rebuilding. Old-lock prefix hits are never accepted as executable environments.
-The first run after this key migration rebuilds the affected caches.
+The first run after this key migration rebuilds the affected caches. Sync-mode
+callers retain `uv sync --locked` on misses; their environments cannot collide
+with export/install-mode caches.
 
 | Cache family | Identity and validation |
 |---|---|
-| Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe and selected extras; producers and consumers share `ci_cache_key.py`, including the self-test nightly and Ubuntu 26 canary |
+| Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe/method and selected extras; producers and consumers share `ci_cache_key.py`, including PR preflight, the self-test nightly, Ubuntu 26 canary and weekly corpus; shuffled-fast uses the grammar sync profile; callers needing only the restored Python defer uv setup/download-cache restore to cache misses |
 | uv downloads/builds | setup-uv supplies platform/architecture/Python identity and explicit keys cover lock, project and uv config; nested setup respects an existing cache owner; parser jobs also hash their installation requirements, separating them from base-only jobs; Semgrep consumers include the shared `semgrep-cli.txt` pin; macOS retains source-built wheels |
 | Python bytecode | Exact venv identity plus core/package/root Python source hashes; checked-hash imports validate restored files; misses, prefix hits and restore errors recompile |
 | Native APT packages | Host image/architecture and toolchain generation, refreshed weekly; partial restores are discarded and only successful installs are saved |
