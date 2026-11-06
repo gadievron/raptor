@@ -3684,7 +3684,10 @@ def main() -> None:
         # files scanned, emissions, per-refusal resolver counts.
         metrics["config_resolved"] = config_resolved_stats
         metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
-        save_json(out_dir / "scan_metrics.json", metrics)
+        metrics["sarif_merge_failed"] = bool(sarif_inputs and not merge_completed)
+        metrics["codeql_no_output"] = bool(run_codeql_stage and not codeql_sarifs)
+        metrics["semgrep_dropped_files"] = 0
+        metrics["analysis_gaps"] = {}
 
         # Write coverage records and derive total_files_scanned from them
         try:
@@ -3709,6 +3712,7 @@ def main() -> None:
             # "succeeded" — silent coverage loss unless said out loud.
             _dropped = _semgrep_dropped_files(_all_semgrep_jsons)
             if _dropped:
+                metrics["semgrep_dropped_files"] = len(_dropped)
                 # Dropped-file paths come from the semgrep error JSON
                 # over the (hostile) target tree — escape before the
                 # operator's stderr.
@@ -3778,24 +3782,8 @@ def main() -> None:
                 all_covered.update(rec.get("files_examined", []))
             if all_covered:
                 metrics["total_files_scanned"] = len(all_covered)
-                save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:  # noqa: BLE001
             logger.debug("Coverage record write failed (non-fatal): %s", e)
-
-        if nosemgrep_count:
-            _active = metrics['total_findings'] - nosemgrep_count
-            logger.info(
-                "Scan complete: %s findings + %s developer-suppressed in %s files",
-                _active,
-                nosemgrep_count,
-                metrics['total_files_scanned']
-            )
-        else:
-            logger.info(
-                "Scan complete: %s findings in %s files",
-                metrics['total_findings'],
-                metrics['total_files_scanned']
-            )
 
         # Analysis gaps: files a parser abandoned during the scan's
         # inventory/analysis passes (budget exceeded, stalled worker).
@@ -3807,6 +3795,7 @@ def main() -> None:
             _gap_dir = get_active_run_dir() or out_dir
             _gap_counts = gap_summary(_gap_dir)
             if _gap_counts:
+                metrics["analysis_gaps"] = _gap_counts
                 _gap_desc = ", ".join(
                     f"{n} {reason}"
                     for reason, n in sorted(_gap_counts.items())
@@ -3819,6 +3808,31 @@ def main() -> None:
                 )
         except Exception as e:  # noqa: BLE001
             logger.debug("Analysis-gap summary failed (non-fatal): %s", e)
+
+        # Exit policy is independent of retained findings and coverage. Partial
+        # scans keep the existing exit policy but must not advertise success.
+        exit_code = 4 if all_semgrep_failed or (RaptorConfig.SEMGREP_OFFLINE and semgrep_failed) else 0
+        from core.reporting.scan_coverage import scan_execution_status
+        metrics["execution_status"] = "error" if exit_code else "ok"
+        metrics["execution_status"] = scan_execution_status(metrics)
+        save_json(out_dir / "scan_metrics.json", metrics)
+
+        if nosemgrep_count:
+            _active = metrics['total_findings'] - nosemgrep_count
+            logger.info(
+                "Scan finished (%s): %s findings + %s developer-suppressed in %s files",
+                metrics["execution_status"],
+                _active,
+                nosemgrep_count,
+                metrics['total_files_scanned']
+            )
+        else:
+            logger.info(
+                "Scan finished (%s): %s findings in %s files",
+                metrics["execution_status"],
+                metrics['total_findings'],
+                metrics['total_files_scanned']
+            )
 
         # Persist provenance before deleting any intermediate. A failed
         # merge must keep its per-tool fallback, even if an older combined
@@ -3864,7 +3878,7 @@ def main() -> None:
             logger.debug("scanner: coverage summary unavailable: %s", exc)
 
         result = {
-            "status": "ok",
+            "status": metrics["execution_status"],
             "manifest": manifest,
             "metrics": metrics,
             "duration": duration,
@@ -3894,7 +3908,7 @@ def main() -> None:
         # semgrep pack failed (CI-gate signal — exit 4 distinct from
         # the sandbox-engagement-failure exit code which is reserved
         # for the SandboxSetupError path at __main__).
-        sys.exit(4 if all_semgrep_failed or (RaptorConfig.SEMGREP_OFFLINE and semgrep_failed) else 0)
+        sys.exit(exit_code)
     finally:
         if not args.keep:
             try:
