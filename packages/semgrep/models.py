@@ -435,10 +435,24 @@ def parse_json_output(text: str) -> dict[str, Any]:
     if not isinstance(scanned, list):
         out["errors"].append("Semgrep scanned paths must be an array")
         scanned = []
-    if any(not isinstance(path, str) for path in scanned):
+    examined: list[str] = []
+    invalid_scanned = False
+    for path in scanned:
+        if isinstance(path, str) and path and "\x00" not in path:
+            examined.append(path)
+        else:
+            invalid_scanned = True
+    if invalid_scanned:
         out["errors"].append("Semgrep scanned paths contain invalid entries")
-    out["files_examined"] = sorted(path for path in scanned if isinstance(path, str) and path)
-    out["skipped_summary"] = _summarise_skipped(paths.get("skipped"))
+    out["files_examined"] = sorted(examined)
+    skipped = paths.get("skipped", [])
+    if not isinstance(skipped, list):
+        out["errors"].append("Semgrep skipped paths must be an array")
+        skipped = []
+    if any(not isinstance(entry, dict) or not isinstance(entry.get("path"), str)
+           or not entry["path"] or "\x00" in entry["path"] for entry in skipped):
+        out["errors"].append("Semgrep skipped paths contain invalid entries")
+    out["skipped_summary"] = _summarise_skipped(skipped)
 
     errors = data.get("errors", [])
     if not isinstance(errors, list):
