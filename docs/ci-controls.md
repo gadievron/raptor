@@ -178,6 +178,8 @@ This page is split into:
   python3 .github/scripts/check_skip_budget.py --lane <name> --junit-xml <pytest junitxml>
   ```
 
+- **Nightly integration retries** — a full first pass records every result. Only ordinary test failures with a matching isolated pytest cache qualify for one failed-case retry; collection and session-level failures return immediately. The effective `integration.xml` retains first-pass successes and skips, replacing only failed cases. Missing, extra or skipped retry cases fail validation. Both raw attempts are retained for diagnosis, and skip budgeting uses the complete effective report.
+
 ## Stuff That Runs On A Timer
 
 | Workflow | Purpose | Cadence | Output / evidence |
