@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.concepts.tests._study_cli import run_prep_main
+from core.concepts.tests._study_cli import run_study_main
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
@@ -246,7 +246,7 @@ class TestChaseSubprocessEnv:
 
 def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
     if in_process:
-        return run_prep_main(_load_prep, _PREP_PATH, args)
+        return run_study_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -596,7 +596,7 @@ def test_main_runner_restores_borrowed_process_state(monkeypatch, args, status):
     argv, path = sys.argv, sys.path
     argv_values, path_values = argv.copy(), path.copy()
     streams = sys.stdout, sys.stderr
-    result = run_prep_main(_load_prep, _PREP_PATH, args)
+    result = run_study_main(_load_prep, _PREP_PATH, args)
     assert result.returncode == status
     assert result.args == [sys.executable, str(_PREP_PATH), *args]
     assert sys.argv is argv and argv == argv_values
@@ -627,7 +627,7 @@ def test_main_runner_propagates_failures_and_closes_owned_streams(monkeypatch, p
         return module
 
     with pytest.raises(RuntimeError, match="planted study invocation failure"):
-        run_prep_main(load, _PREP_PATH, [])
+        run_study_main(load, _PREP_PATH, [])
     assert owned and all(stream.closed for stream in owned)
     assert sys.argv is argv and argv == argv_values
     assert sys.path is path and path == path_values
