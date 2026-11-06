@@ -115,6 +115,7 @@ def skipped_on_macos(path: Path) -> bool:
     skip_names = set()
     top_stores = set()
     marker_reads = set()
+    available_imports = set()
 
     def record_reads(node):
         if isinstance(node, ast.Name):
@@ -130,11 +131,12 @@ def skipped_on_macos(path: Path) -> bool:
             return any(marker(child) for child in node.elts)
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'mark'
-                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in pytest_names):
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in pytest_names & available_imports):
             if node.func.attr == 'skip':
                 return True
             if node.func.attr == 'skipif' and node.args:
-                return _condition(node.args[0], sys_names, platform_names) is True
+                return _condition(node.args[0], sys_names & available_imports,
+                                  platform_names & available_imports) is True
         return False
 
     for node in ast.walk(tree):
@@ -161,6 +163,10 @@ def skipped_on_macos(path: Path) -> bool:
                     and node.func.value.id == 'pytestmark'):
                 return False
     for node in tree.body:
+        # Imports after a marker cannot supply its factory or condition.
+        # Keep collection failures visible instead of proving a later skip.
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            available_imports.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
         targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
         if len(targets) != 1 or not isinstance(targets[0], ast.Name):
             continue

@@ -211,3 +211,19 @@ def test_ambiguous_aliases_keep_existing_mutation_guards(scope, tmp_path, mutati
             'from sys import platform as host\nimport pytest\n'
             'pytestmark = pytest.mark.skipif(host != "linux", reason="owned")\n')
     assert not scope.skipped_on_macos(_module(tmp_path, text))
+
+
+@pytest.mark.parametrize('text', [
+    'import pytest\npytestmark = pytest.mark.skipif(sys.platform != "linux", reason="owned")\nimport sys',
+    'import pytest\npytestmark = pytest.mark.skipif(host != "linux", reason="owned")\nfrom sys import platform as host',
+    'pytestmark = pytest.mark.skipif(True, reason="owned")\nimport pytest',
+    'import pytest\nlinux = pytest.mark.skipif(sys.platform != "linux", reason="owned")\nimport sys\npytestmark = linux',
+], ids=['module', 'platform-value', 'marker-factory', 'intermediate-marker'])
+def test_imports_after_marker_keep_collection_failures_visible(scope, tmp_path, text):
+    path = _module(tmp_path, text)
+    # Execute only this owned module; no real platform state is changed.
+    with pytest.raises(NameError):
+        exec(compile(text, str(path), 'exec'), {'__name__': '_owned_late_import'})
+    assert not scope.skipped_on_macos(path)
+    assert scope.selection(tmp_path, [path.name]) == {
+        'run': True, 'files': [path.name], 'native_audit': False}
