@@ -145,6 +145,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Sequence
 
+from core.smt_solver.condition_syntax import MAX_CONDITION_CHARS as _MAX_CONDITION_CHARS
+from core.smt_solver.witness_preferences import parse_witness_preference
 from core.logging import get_logger as _get_logger
 from core.smt_solver import (
     BV_C_UINT64,
@@ -306,15 +308,6 @@ _PRECEDENCE: dict[str, int] = {
 # input with deep nesting can blow the Python call stack.  64 levels is
 # far more than any real C condition would ever need.
 _MAX_PAREN_DEPTH = 64
-
-# Maximum length in characters of a single condition string.  Defends the
-# parser against pathological inputs whose runtime is linear in length but
-# whose total length is unboundedly large (e.g. a 1 MB string of operators).
-# Real path-conditions extracted from source rarely exceed a few hundred
-# characters even with verbose chained predicates; 2048 is generously above
-# any observed legitimate input.  Companion bound to ``_MAX_PAREN_DEPTH``
-# (depth) — together they cap both axes of parser cost.
-_MAX_CONDITION_CHARS = 2048
 
 # Maximum number of conditions accepted in a single ``check_path_feasibility``
 # call.  Real findings carry 1-10 conditions; tens of thousands signals
@@ -1332,7 +1325,7 @@ def _solve_pending(
     *,
     profile: BVProfile,
     anon_map: dict[str, str] | None = None,
-    prefer_witness: tuple[str, str] | None = None,
+    prefer_witness: str | tuple[str, str] | None = None,
     vars_: dict[str, Any] | None = None,
     axioms: list[tuple[str, Any]] | None = None,
     wp_timeout_ms: int | None = None,
@@ -1360,6 +1353,7 @@ def _solve_pending(
     otherwise produce an objective on a freshly-minted variable
     decoupled from the path.
     """
+    prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
     mode = profile.describe()
 
@@ -1369,7 +1363,9 @@ def _solve_pending(
     # confirm the variable is present, and the unsat-core /
     # smallest-model behaviour still produces a valid (just not
     # extremal) witness.
-    if prefer_witness is not None and (pending or axioms) and vars_ is not None:
+    objective_active = False
+    if (prefer_witness is not None and vars_ is not None
+            and not (unknown and not pending and not axioms)):
         var_name, direction = prefer_witness
         target = vars_.get(var_name)
         if target is not None:
@@ -1380,10 +1376,7 @@ def _solve_pending(
                 solver.maximize(objective)
             elif direction == "min":
                 solver.minimize(objective)
-            # Any other direction value is silently ignored — the
-            # caller's API (validate_path / shim) is responsible for
-            # vetting; defensive ignore avoids partial-objective
-            # state if a stray string gets here.
+            objective_active = True
 
     # Default to empty dict so the field is always present on the
     # PathSMTResult — downstream consumers never need to None-check.
@@ -1391,7 +1384,7 @@ def _solve_pending(
     _axioms = axioms or []
     _axiom_labels = [label for label, _ in _axioms]
 
-    if not pending and not _axioms:
+    if not pending and not _axioms and not objective_active:
         if unknown:
             return PathSMTResult(
                 wp_complete=reduce_constraints,
@@ -1665,7 +1658,7 @@ def check_path_feasibility(
     *,
     profile: BVProfile = BV_C_UINT64,
     timeout_ms: int | None = None,
-    prefer_witness: tuple[str, str] | None = None,
+    prefer_witness: str | tuple[str, str] | None = None,
     reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """
@@ -1691,7 +1684,8 @@ def check_path_feasibility(
                     the bound is per SOLVER CALL — a call with many
                     conditions can still spend
                     ``O(len(conditions)) x timeout_ms`` overall.
-        prefer_witness: When set to ``(var_name, "max")`` or
+        prefer_witness: Accepts ``"max:name"`` / ``"min:name"`` strings
+                    or tuples. When set to ``(var_name, "max")`` or
                     ``(var_name, "min")``, drive the satisfying witness
                     toward an extreme value of ``var_name`` instead of
                     Z3's default (smallest model).  Useful for CWE-190
@@ -1716,6 +1710,7 @@ def check_path_feasibility(
         PathSMTResult.  feasible=None when Z3 is unavailable or every
         condition was unparseable.
     """
+    prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
     mode = profile.describe()
 
@@ -1878,7 +1873,7 @@ def check_path_feasibility_dual(
     *,
     profile: BVProfile = BV_C_UINT64,
     timeout_ms: int | None = None,
-    prefer_witness: tuple[str, str] | None = None,
+    prefer_witness: str | tuple[str, str] | None = None,
     reduce_constraints: bool = True,
 ) -> PathSMTResult:
     """Signedness-agnostic feasibility check for callers whose profile
@@ -1928,6 +1923,7 @@ def check_path_feasibility_dual(
     per-path hint) should call :func:`check_path_feasibility` directly
     with the known profile.
     """
+    prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
     primary = check_path_feasibility(
         conditions, profile=profile,
