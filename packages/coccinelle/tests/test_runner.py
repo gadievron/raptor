@@ -3505,3 +3505,58 @@ def test_incomplete_rule_run_cannot_claim_examined_silence(tmp_path, damage):
     assert result.files_examined == ([] if damage == 'timeout' else [str(source)])
     if damage != 'engine-error':
         assert any('malformed structured result' in error for error in result.errors)
+
+
+def test_source_inventory_walks_once_and_excludes_source_shaped_directories(tmp_path, monkeypatch):
+    target = tmp_path / 'source'
+    target.mkdir()
+    expected = set()
+    for name in ('a.c', 'a.h', '.c', '.h', '.hidden.c'):
+        path = target / name
+        path.write_text('/* source */\n')
+        expected.add(str(path))
+    (target / 'directory.c').mkdir()
+    child = target / 'directory.c' / 'child.c'
+    child.write_text('/* source */\n')
+    expected.add(str(child))
+    (target / 'ignored.cpp').write_text('/* not part of the C inventory */\n')
+    original = Path.rglob
+    walks = []
+
+    def counted(root, pattern, *args, **kwargs):
+        if root == target:
+            walks.append(root)
+        return original(root, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'rglob', counted)
+    assert runner_mod._walk_c_h(target) == expected
+    assert len(walks) == 1
+    assert set(_collect_files_examined(target, set(), tree_files=expected)) == expected
+    assert set(_collect_files_examined(target, set(), tree_files=expected, no_includes=True)) == {
+        path for path in expected if not path.endswith('.h')}
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='FIFO requires POSIX')
+def test_source_inventory_does_not_claim_fifo_as_examined_file(tmp_path):
+    source = tmp_path / 'real.c'
+    source.write_text('void f(void) {}\n')
+    os.mkfifo(tmp_path / 'pipe.c')
+    os.mkfifo(tmp_path / 'pipe.h')
+    assert runner_mod._walk_c_h(tmp_path) == {str(source)}
+    assert _collect_files_examined(tmp_path, set()) == [str(source)]
+
+
+def test_source_inventory_metadata_failure_preserves_other_files(tmp_path, monkeypatch):
+    good = tmp_path / 'good.c'
+    unavailable = tmp_path / 'unavailable.h'
+    good.write_text('void f(void) {}\n')
+    unavailable.write_text('/* header */\n')
+    original = Path.is_file
+
+    def inspect(path, *args, **kwargs):
+        if path == unavailable:
+            raise PermissionError('metadata unavailable')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'is_file', inspect)
+    assert runner_mod._walk_c_h(tmp_path) == {str(good)}
