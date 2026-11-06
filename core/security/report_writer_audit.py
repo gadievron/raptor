@@ -539,6 +539,8 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Native hook JSON; title components are bounded and terminal-sanitised.
+    "core/startup/session_title.py",
     "packages/sca/sbom_inventory/cli.py",
     "packages/sca/sbom_inventory/output.py",
     # Corpus CLI progress/failures are bounded terminal text. Replay record
