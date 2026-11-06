@@ -43,6 +43,7 @@ def _type_names(tree, data: bytes) -> list[str]:
                     arguments.extend(child.named_children)
             pending.extend(node.named_children)
     names = []
+    seen_names = set()
     stack = [tree.root_node]
     visited = 0
     while stack and visited < 8192:
@@ -52,8 +53,9 @@ def _type_names(tree, data: bytes) -> list[str]:
             continue  # A same-named local type is not an imported type.
         if node.type == "type_identifier":
             name = data[node.start_byte:node.end_byte].decode("utf-8", "replace")
-            if name not in _PREDECLARED and name not in local_parameters and name not in names:
+            if name not in _PREDECLARED and name not in local_parameters and name not in seen_names:
                 names.append(name)
+                seen_names.add(name)
         stack.extend(reversed(node.named_children))
     return names
 
@@ -146,6 +148,7 @@ def resolve_go_types(target_path: Path, file_path: str, metadata: dict, source: 
     definitions: dict[str, tuple[dict, list[str]]] = {}
     package = None
     seen = set()
+    queued = set(names)
     results = []
     for candidate in candidates():
         if remaining <= 0:
@@ -164,20 +167,27 @@ def resolve_go_types(target_path: Path, file_path: str, metadata: dict, source: 
         parsed, language = parse_source_cached(str(path), text)
         if parsed is None or language != "go":
             continue
-        current_package = _package(parsed, text.encode("utf-8", "replace"))
+        # Tree offsets describe repaired text, so raw bytes cannot be reused.
+        encoded = text.encode("utf-8", "replace")
+        current_package = _package(parsed, encoded)
         if candidate == anchor:
             package = current_package
         if package is None or current_package != package:
+            del encoded
             continue
-        for name, (definition, references) in _definitions(parsed, text.encode("utf-8", "replace"), text).items():
+        for name, (definition, references) in _definitions(parsed, encoded, text).items():
             definitions.setdefault(name, (definition | {"file": str(path.relative_to(target_path.resolve()))}, references))
+        del encoded  # Release the file-sized buffer before the next read.
         for name in names:
             if name in seen or name not in definitions:
                 continue
             definition, references = definitions[name]
             results.append(definition)
             seen.add(name)
-            names.extend(reference for reference in references if reference not in names)
+            for reference in references:
+                if reference not in queued:
+                    queued.add(reference)
+                    names.append(reference)
             if len(results) >= max_types:
                 return results
         if all(name in seen for name in names):
