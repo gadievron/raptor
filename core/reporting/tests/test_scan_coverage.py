@@ -314,3 +314,31 @@ def test_malformed_failed_packs_do_not_break_summary(tmp_path):
     _write(tmp_path, 'coverage-semgrep.json', {'tool': 'semgrep'})
     _write(tmp_path, 'scan_metrics.json', {'semgrep_failed_packs': ['pack', {}, None, 'pack']})
     assert '1 pack(s) failed: pack' in render_scan_coverage(tmp_path)
+
+
+@pytest.mark.parametrize('snapshot', [{}, [], None, {'semgrep': []}])
+def test_present_snapshot_never_resurrects_old_coverage_files(tmp_path, monkeypatch, snapshot):
+    import core.reporting.scan_coverage as coverage
+    _write(tmp_path, 'coverage-semgrep.json', {'tool': 'semgrep', 'rules_applied': 999})
+    _write(tmp_path, 'scan_metrics.json', {'tool_coverage': snapshot, 'execution_status': 'ok'})
+    def forbidden(*args):
+        pytest.fail('modern summary must not reopen historical coverage records')
+    monkeypatch.setattr(coverage, '_load_coverage_record', forbidden)
+    assert render_scan_coverage(tmp_path) == 'Scan execution: ok'
+
+
+def test_snapshot_replays_counts_without_full_coverage_records(tmp_path):
+    from core.reporting.scan_coverage import summarize_tool_coverage
+    record = {'tool': 'codeql', 'files_examined': ['private/path.java'],
+              'rules_applied': ['java/example', 'java/example'],
+              'files_failed': [{'path': 'private/path.java', 'reason': 'private diagnostic'}]}
+    snapshot = summarize_tool_coverage(record)
+    assert snapshot == {'rules_applied': 1, 'paths_with_issues': 1}
+    assert summarize_tool_coverage(snapshot) == snapshot
+    _write(tmp_path, 'scan_metrics.json', {
+        'tool_coverage': {'codeql': snapshot}, 'findings_by_tool': {'codeql': 2},
+    })
+    text = render_scan_coverage(tmp_path)
+    assert 'CodeQL' in text and '2 findings' in text
+    assert '1 rule group' in text and '1 path(s) with tool warnings or errors' in text
+    assert 'private/' not in text and 'private diagnostic' not in text

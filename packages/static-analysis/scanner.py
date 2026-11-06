@@ -1834,6 +1834,8 @@ def run_cocci(
     out_dir: Path,
     rules_dir: Path | None = None,
     timeout: int = 300,
+    *,
+    on_coverage: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[str]:
     """Run Coccinelle's shipped rule set against ``repo_path`` and
     emit SARIF.
@@ -1850,6 +1852,9 @@ def run_cocci(
     when skipped — same shape as ``run_codeql`` so the caller's
     ``sarif_inputs = semgrep_sarifs + codeql_sarifs + cocci_sarifs``
     union works without special-cases.
+
+    ``on_coverage``, when supplied, receives this invocation's derived
+    coverage record before its best-effort disk write.
 
     Errors during individual rule runs are captured into the SARIF
     ``invocations[].toolExecutionNotifications`` so operators see
@@ -1903,6 +1908,8 @@ def run_cocci(
         from packages.coccinelle.runner import version as _spatch_version
         cov = build_from_cocci(results, spatch_version=_spatch_version())
         if cov:
+            if on_coverage is not None:
+                on_coverage(cov)
             write_record(out_dir, cov, tool_name="coccinelle")
     except Exception:
         logger.debug("cocci: coverage record write failed", exc_info=True)
@@ -3456,9 +3463,10 @@ def main() -> None:
         # the shipped rule set is small and AST-level matching is
         # fast — but the opt-out exists for unattended pipelines
         # where any extra signal is noise.
+        current_coverage_records: list[dict[str, Any]] = []
         cocci_sarifs = []
         if not args.no_cocci:
-            cocci_sarifs = run_cocci(repo_path, out_dir)
+            cocci_sarifs = run_cocci(repo_path, out_dir, on_coverage=current_coverage_records.append)
 
         # Compiler-analyzer stage (opt-in). Same channel as /audit's
         # compiler_sweep, opposite direction — per-TU gcc -fanalyzer /
@@ -3693,9 +3701,15 @@ def main() -> None:
         try:
             from core.coverage.record import (
                 read_semgrep_outputs,
-                load_records,
                 write_record,
             )
+            def persist_current_coverage(record, tool):
+                current_coverage_records.append(record)
+                try:
+                    write_record(out_dir, record, tool_name=tool)
+                except Exception:
+                    logger.debug("%s: coverage record write failed", tool, exc_info=True)
+
             # Semgrep coverage — find JSON outputs alongside SARIFs.
             # See ``_resolve_rules_applied`` for why this isn't just
             # ``groups`` or rule-dir names.
@@ -3767,22 +3781,21 @@ def main() -> None:
                     file=sys.stderr,
                 )
             if semgrep_summary.record:
-                write_record(out_dir, semgrep_summary.record, tool_name="semgrep")
+                persist_current_coverage(semgrep_summary.record, "semgrep")
 
             # Reuse original reports decoded for metrics, covering every
             # dispatched language without reopening the SARIF files.
             if codeql_coverage is not None:
                 record = codeql_coverage.build_record()
                 if record:
-                    write_record(out_dir, record, tool_name="codeql")
+                    persist_current_coverage(record, "codeql")
 
-            # Derive total_files_scanned from coverage records — these are
-            # the canonical source of what was examined (not SARIF artifacts,
-            # which Semgrep doesn't populate).
+            # Derive file totals only from this invocation's coverage facts.
+            # Reusing --out must not import old top-level or nested records.
             from core.paths import to_repo_relative
             all_covered = set()
             has_file_coverage = False
-            for rec in load_records(out_dir):
+            for rec in current_coverage_records:
                 examined = rec.get("files_examined")
                 if not isinstance(examined, list):
                     continue
@@ -3798,6 +3811,12 @@ def main() -> None:
                 metrics["total_files_scanned"] = len(all_covered)
         except Exception as e:  # noqa: BLE001
             logger.debug("Coverage record write failed (non-fatal): %s", e)
+
+        from core.reporting.scan_coverage import summarize_tool_coverage
+        metrics["tool_coverage"] = {
+            record["tool"]: summarize_tool_coverage(record)
+            for record in current_coverage_records
+        }
 
         # Analysis gaps: files a parser abandoned during the scan's
         # inventory/analysis passes (budget exceeded, stalled worker).

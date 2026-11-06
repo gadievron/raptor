@@ -212,7 +212,8 @@ def test_run_cocci_skips_when_no_shipped_rules_dir(tmp_path):
 # ---------------------------------------------------------------------
 
 
-def test_run_cocci_writes_sarif_with_matches(tmp_path):
+@pytest.mark.parametrize("coverage_write_fails", [False, True])
+def test_run_cocci_writes_sarif_with_matches(tmp_path, monkeypatch, coverage_write_fails):
     """Mocked ``spatch_run_rules`` returns synthetic results;
     ``run_cocci`` must emit a valid SARIF at out_dir/cocci.sarif
     containing the rule + match."""
@@ -229,13 +230,21 @@ def test_run_cocci_writes_sarif_with_matches(tmp_path):
         matches=[SpatchMatch(file="x.c", line=1, message="found")],
     )]
 
+    if coverage_write_fails:
+        def fail_write(*args, **kwargs):
+            raise OSError('planted coverage write failure')
+        monkeypatch.setattr('core.coverage.record.write_record', fail_write)
     with patch(
         "packages.coccinelle.runner.is_available", return_value=True,
     ), patch(
         "packages.coccinelle.runner.run_rules", return_value=fake_results,
     ):
-        sarifs = _scanner.run_cocci(tmp_path, out, rules_dir=rules_dir)
+        coverage = []
+        sarifs = _scanner.run_cocci(tmp_path, out, rules_dir=rules_dir, on_coverage=coverage.append)
 
+    assert len(coverage) == 1
+    assert coverage[0]['tool'] == 'coccinelle'
+    assert coverage[0]['rules_applied'] == ['stub']
     assert len(sarifs) == 1
     sarif_path = Path(sarifs[0])
     assert sarif_path.name == "cocci.sarif"
