@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
@@ -39,6 +38,8 @@ from core.analysis.binary_oracle import (
     _strip_impl_block_brackets,  # noqa: F401  (re-export for tests)
     _strip_rust_crate_hash,
 )
+from core.inventory.binary_oracle_corpora._cache import prepared_corpus
+
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
     run_tool,
@@ -126,31 +127,37 @@ class _RegexRustDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / REGEX_TAG
-        sentinel = tag_dir / "sentinel.ok"
         target_dir = tag_dir / "target"
         profdata = tag_dir / "merged.profdata"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_and_run(tag_dir, target_dir, profdata)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
+        with prepared_corpus(
+            tag_dir, version=CACHE_VERSION, build=lambda: _build_and_run(tag_dir, target_dir, profdata),
+            persistent=(target_dir, profdata), required=(profdata,),
+            transient=(tag_dir / "src", tag_dir / "cargo-home"), profile_pattern="cov-*.profraw",
+            ready=lambda: bool(_test_binaries(target_dir)),
+        ):
+            # Test binary path (hash suffix; glob to find latest).
+            candidates = _test_binaries(target_dir)
+            if not candidates:
+                msg = f"regex-rust: no test binary at {target_dir}/release/deps/"
+                raise RuntimeError(msg)
+            test_bin = candidates[-1]
 
-        # Test binary path (hash suffix; glob to find latest).
-        candidates = sorted((target_dir / "release" / "deps").glob("regex-*"))
-        candidates = [c for c in candidates if c.is_file()
-                      and os.access(c, os.X_OK)
-                      and "." not in c.name[6:]]  # skip regex-XXX.d / .rmeta
-        if not candidates:
-            msg = f"regex-rust: no test binary at {target_dir}/release/deps/"
-            raise RuntimeError(msg)
-        test_bin = candidates[-1]
+            live, candidates_set = _liveness_from_llvm_cov(test_bin, profdata)
+            return {
+                "o2_binary":            test_bin,
+                "candidate_functions":  sorted(candidates_set),
+                "live_set":             live,
+            }
 
-        live, candidates_set = _liveness_from_llvm_cov(test_bin, profdata)
-        return {
-            "o2_binary":            test_bin,
-            "candidate_functions":  sorted(candidates_set),
-            "live_set":             live,
-        }
+
+def _test_binaries(target_dir: Path) -> list[Path]:
+    return [
+        path for path in sorted((target_dir / "release/deps").glob("regex-*"))
+        if path.is_file() and path.stat().st_size > 0 and os.access(path, os.X_OK)
+        and "." not in path.name[6:]
+        and path.resolve().is_relative_to(target_dir.resolve())
+    ]
 
 
 def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
@@ -162,8 +169,6 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
     logger.info("regex-rust: cloning %s (tag %s) → %s",
                 REGEX_URL, REGEX_TAG, src)
     if not clone_repository(REGEX_URL, src, depth=1):
@@ -181,8 +186,6 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
         env=get_safe_git_env(), check=True, timeout=60,
     )
 
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
 
     # Rust release profile strips DWARF + LLVM coverage instrumentation
@@ -245,7 +248,6 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
         timeout=120,
     )
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 # NB: ``_strip_rust_crate_hash`` was promoted to ``binary_oracle``

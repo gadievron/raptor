@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from core.inventory.binary_oracle_corpora._cache import clear_build_paths, has_gcov_data, prepared_corpus
 
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
@@ -72,26 +73,25 @@ class _ZlibDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         sha_dir = work_dir / ZLIB_SHA[:12]
-        sentinel = sha_dir / "sentinel.ok"
         build_o0 = sha_dir / "build_o0"
         build_o2 = sha_dir / "build_o2"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_fresh(sha_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
-
-        live = _collect_gcov_liveness(build_o0)
-        candidates = _enumerate_candidates(build_o0)
-        # Toolchain block: makes the precision number reproducible
-        # (zlib's configure picks cc; liveness comes from gcov).
-        from .toolchain import record_toolchain
-        return {
-            "o2_binary": build_o2 / "example",
-            "candidate_functions": candidates,
-            "live_set": live,
-            "toolchain": record_toolchain(cc="cc", gcov="gcov"),
-        }
+        with prepared_corpus(
+            sha_dir, version=CACHE_VERSION, build=lambda: _build_fresh(sha_dir, build_o0, build_o2),
+            persistent=(build_o0, build_o2), required=(build_o0 / "example", build_o2 / "example"),
+            transient=(sha_dir / "src",), ready=lambda: has_gcov_data(build_o0),
+        ):
+            live = _collect_gcov_liveness(build_o0)
+            candidates = _enumerate_candidates(build_o0)
+            # Toolchain block: makes the precision number reproducible
+            # (zlib's configure picks cc; liveness comes from gcov).
+            from .toolchain import record_toolchain
+            return {
+                "o2_binary": build_o2 / "example",
+                "candidate_functions": candidates,
+                "live_set": live,
+                "toolchain": record_toolchain(cc="cc", gcov="gcov"),
+            }
 
 
 def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
@@ -106,7 +106,6 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    shutil.rmtree(src, ignore_errors=True)
     logger.info("zlib: cloning %s → %s", ZLIB_URL, src)
     if not clone_repository(ZLIB_URL, src, depth=1):
         msg = f"zlib: clone failed for {ZLIB_URL}"
@@ -122,7 +121,7 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
         safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
         env=get_safe_git_env(), check=True, timeout=60,
     )
-    shutil.rmtree(src / ".git", ignore_errors=True)
+    clear_build_paths([src / ".git"])
 
     for build_dir, cflags, ldflags, run_tests in [
         (build_o0,
@@ -131,7 +130,6 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        shutil.rmtree(build_dir, ignore_errors=True)
         build_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["cp", "-a", f"{src}/.", str(build_dir)],
@@ -153,7 +151,6 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
             run_build_step(["./example"], cwd=build_dir,
                            writable_paths=[build_dir], timeout=60)
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
+
+from core.inventory.binary_oracle_corpora._cache import clear_build_paths, has_gcov_data, prepared_corpus
 
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
@@ -50,24 +51,23 @@ class _ZstdHoldoutDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / ZSTD_TAG.replace(".", "_")
-        sentinel = tag_dir / "sentinel.ok"
         build_o0 = tag_dir / "build_o0"
         build_o2 = tag_dir / "build_o2"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
-
-        live = _collect_gcov_liveness(build_o0)
-        candidates = _enumerate_candidates(build_o0)
-        from .toolchain import record_toolchain
-        return {
-            "o2_binary":            build_o2 / "programs" / "zstd",
-            "candidate_functions":  candidates,
-            "live_set":             live,
-            "toolchain":            record_toolchain(cc="gcc", gcov="gcov"),
-        }
+        with prepared_corpus(
+            tag_dir, version=CACHE_VERSION, build=lambda: _build_fresh(tag_dir, build_o0, build_o2),
+            persistent=(build_o0, build_o2), required=(build_o0 / "programs/zstd", build_o2 / "programs/zstd"),
+            transient=(tag_dir / "src",), ready=lambda: has_gcov_data(build_o0),
+        ):
+            live = _collect_gcov_liveness(build_o0)
+            candidates = _enumerate_candidates(build_o0)
+            from .toolchain import record_toolchain
+            return {
+                "o2_binary":            build_o2 / "programs" / "zstd",
+                "candidate_functions":  candidates,
+                "live_set":             live,
+                "toolchain":            record_toolchain(cc="gcc", gcov="gcov"),
+            }
 
 
 def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
@@ -77,7 +77,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    shutil.rmtree(src, ignore_errors=True)
     logger.info("zstd_holdout: cloning %s → %s", ZSTD_URL, src)
     if not clone_repository(ZSTD_URL, src, depth=None):
         msg = f"zstd_holdout: clone failed for {ZSTD_URL}"
@@ -86,7 +85,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
         safe_git_command("-C", str(src), "checkout", ZSTD_TAG),
         env=get_safe_git_env(), check=True, timeout=60,
     )
-    shutil.rmtree(src / ".git", ignore_errors=True)
+    clear_build_paths([src / ".git"])
 
     for build_dir, cflags, ldflags, run_target in [
         (build_o0, "-O0 -g --coverage", "--coverage", True),
@@ -94,7 +93,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        shutil.rmtree(build_dir, ignore_errors=True)
         # zstd's Makefile build can't take an out-of-tree dir, so we
         # copy the source into the build dir each time. ``cp -a`` via
         # subprocess (rather than ``shutil.copytree``) — on Python 3.14
@@ -197,7 +195,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
                 _z("-d", "-f", "-o",
                    str(tmp / f"{compressed.stem}.out"), str(compressed))
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 _GCOV_FN_RE = re.compile(r"^Function '([^']+)'")

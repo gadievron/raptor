@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
@@ -26,6 +25,8 @@ from core.analysis.binary_oracle import (
     _demangle_linkage_names,
     _qualified_from_demangled,
 )
+from core.inventory.binary_oracle_corpora._cache import prepared_corpus
+
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
     run_tool,
@@ -71,22 +72,21 @@ class _LeveldbDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         sha_dir = work_dir / LEVELDB_SHA[:12]
-        sentinel = sha_dir / "sentinel.ok"
         build_dir = sha_dir / "build"
         profdata = sha_dir / "merged.profdata"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_and_run(sha_dir, build_dir, profdata)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
-
-        binary = build_dir / "leveldb_tests"
-        live, candidates = _liveness_from_llvm_cov(binary, profdata)
-        return {
-            "o2_binary":            binary,
-            "candidate_functions":  sorted(candidates),
-            "live_set":             live,
-        }
+        with prepared_corpus(
+            sha_dir, version=CACHE_VERSION, build=lambda: _build_and_run(sha_dir, build_dir, profdata),
+            persistent=(build_dir, profdata), required=(build_dir / "leveldb_tests", profdata),
+            transient=(sha_dir / "src",), profile_pattern="leveldb_*.profraw",
+        ):
+            binary = build_dir / "leveldb_tests"
+            live, candidates = _liveness_from_llvm_cov(binary, profdata)
+            return {
+                "o2_binary":            binary,
+                "candidate_functions":  sorted(candidates),
+                "live_set":             live,
+            }
 
 
 def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
@@ -98,8 +98,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
     logger.info("leveldb: cloning %s → %s", LEVELDB_URL, src)
     if not clone_repository(LEVELDB_URL, src, depth=1):
         msg = f"leveldb: clone failed for {LEVELDB_URL}"
@@ -132,8 +130,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     # actually use benchmark.
     _patch_drop_benchmark(src / "CMakeLists.txt")
 
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
 
     cxxflags = ("-O2 -g -ffunction-sections -fdata-sections "
@@ -182,7 +178,6 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
         timeout=120,
     )
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 _BENCHMARK_LINK_RE = re.compile(r"leveldb gmock gtest benchmark")

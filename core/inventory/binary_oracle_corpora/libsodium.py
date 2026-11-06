@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
+
+from core.inventory.binary_oracle_corpora._cache import has_gcov_data, prepared_corpus
 
 from core.inventory.binary_oracle_corpora._sandbox_exec import (
     run_build_step,
@@ -53,30 +54,29 @@ class _LibsodiumDriver:
     def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / LIBSODIUM_TAG.replace("-", "_")
-        sentinel = tag_dir / "sentinel.ok"
         build_o0 = tag_dir / "build_o0"
         build_o2 = tag_dir / "build_o2"
 
-        if (not sentinel.exists()
-                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
-            _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
-
-        live = _collect_gcov_liveness(build_o0)
-        candidates = _enumerate_candidates(build_o0)
-        from .toolchain import record_toolchain
-        toolchain = record_toolchain(cc="gcc", gcov="gcov")
-        return {
-            # ``aead_aegis128l`` is one of the test executables — it's
-            # statically linked against libsodium.a and exercises a broad
-            # slice of the library, so ``--gc-sections`` produces a
-            # realistic mix of absent / inlined / symbol_present.
-            "o2_binary":            build_o2 / "test" / "default"
-                                    / "aead_aegis128l",
-            "candidate_functions":  candidates,
-            "live_set":             live,
-            "toolchain":            toolchain,
-        }
+        with prepared_corpus(
+            tag_dir, version=CACHE_VERSION, build=lambda: _build_fresh(tag_dir, build_o0, build_o2),
+            persistent=(build_o0, build_o2), required=(build_o0 / "test/default/aead_aegis128l", build_o2 / "test/default/aead_aegis128l"),
+            transient=(tag_dir / "src",), ready=lambda: has_gcov_data(build_o0),
+        ):
+            live = _collect_gcov_liveness(build_o0)
+            candidates = _enumerate_candidates(build_o0)
+            from .toolchain import record_toolchain
+            toolchain = record_toolchain(cc="gcc", gcov="gcov")
+            return {
+                # ``aead_aegis128l`` is one of the test executables — it's
+                # statically linked against libsodium.a and exercises a broad
+                # slice of the library, so ``--gc-sections`` produces a
+                # realistic mix of absent / inlined / symbol_present.
+                "o2_binary":            build_o2 / "test" / "default"
+                                        / "aead_aegis128l",
+                "candidate_functions":  candidates,
+                "live_set":             live,
+                "toolchain":            toolchain,
+            }
 
 
 def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
@@ -88,7 +88,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    shutil.rmtree(src, ignore_errors=True)
     logger.info("libsodium: cloning %s (tag %s) → %s",
                 LIBSODIUM_URL, LIBSODIUM_TAG, src)
     if not clone_repository(LIBSODIUM_URL, src, depth=1):
@@ -116,7 +115,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        shutil.rmtree(build_dir, ignore_errors=True)
         build_dir.mkdir(parents=True)
         flags = {"CFLAGS": cflags, "LDFLAGS": ldflags}
         # scope=tag_dir: out-of-tree autotools build — under mount-ns
@@ -171,7 +169,6 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
                 timeout=60,
             )
 
-    shutil.rmtree(src, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
