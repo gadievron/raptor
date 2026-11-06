@@ -240,6 +240,11 @@ class PathSMTResult:
     wp_complete: bool = True
     # Deterministic reduction order, retained for wire compatibility.
     wp_ordering: str = WP_ORDERING
+    # Native core dependency, not a source type or reachability proof.
+    # False: every core assertion is a parsed guard without call terms.
+    # True: at least one core assertion uses a call term or call axiom.
+    # None: unavailable core or unclassified intrinsic assertion.
+    refutation_uses_call_terms: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1094,6 +1099,7 @@ class _ConditionBatch:
     rejections: list[Rejection] = field(default_factory=list)
     anon_map: dict[str, str] = field(default_factory=dict)
     axioms: list[tuple[str, Any]] = field(default_factory=list)
+    pending_call_terms: list[bool] = field(default_factory=list)
     pending_epochs: list[int] = field(default_factory=list)
     axiom_epochs: list[int] = field(default_factory=list)
 
@@ -1117,6 +1123,7 @@ def _classify_conditions(
     batch = _ConditionBatch()
     epoch = 0
     for cond in conditions:
+        previous_calls = len(batch.anon_map)
         previous_axioms = len(batch.axioms)
         sat_display, pending_pair, rejection = _classify_text_condition(
             cond, vars_, solver, profile=profile,
@@ -1135,6 +1142,7 @@ def _classify_conditions(
             assert pending_pair is not None
             batch.pending.append(pending_pair)
             batch.pending_epochs.append(epoch)
+            batch.pending_call_terms.append(len(batch.anon_map) > previous_calls)
     return batch
 
 
@@ -1230,6 +1238,7 @@ def _solve_pending(
     axioms: list[tuple[str, Any]] | None = None,
     wp_timeout_ms: int | None = None,
     reduce_constraints: bool = True,
+    pending_call_terms: Sequence[bool | None] | None = None,
     pending_epochs: Sequence[int | None] | None = None,
     axiom_epochs: Sequence[int | None] | None = None,
 ) -> PathSMTResult:
@@ -1241,7 +1250,8 @@ def _solve_pending(
     pending list into a sat/unsat/unknown verdict and packages the
     result. Optional epoch metadata records each assertion's ownership for
     mutation-aware core checks; unowned predicates cannot establish an
-    independent contradiction across rejected scalar updates.
+    independent contradiction across rejected scalar updates. Call flags
+    describe parsed guards; unclassified intrinsics retain None provenance.
 
     When ``prefer_witness`` is set, ``solver`` is expected to be a
     ``z3.Optimize`` instance (the caller is responsible for the
@@ -1255,6 +1265,11 @@ def _solve_pending(
     """
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
+    call_flags = tuple(pending_call_terms) if pending_call_terms is not None else (None,) * len(pending)
+    if len(call_flags) != len(pending):
+        raise ValueError("call dependency count must match pending constraints")
+    if any(flag is not None and type(flag) is not bool for flag in call_flags):
+        raise ValueError("call dependencies must be booleans or None")
     mode = profile.describe()
 
     # Apply the witness-direction objective before solving.  Silently
@@ -1350,6 +1365,14 @@ def _solve_pending(
         )
 
     if result == z3.unsat:
+        indices = tracked.core_indices(solver)
+        flags = call_flags + (True,) * len(_axioms)
+        core_flags = tuple(flags[index] for index in indices) if indices is not None else ()
+        uses_calls = (
+            True if any(flag is True for flag in core_flags)
+            else False if core_flags and all(flag is False for flag in core_flags)
+            else None
+        )
         conflicts = _core_names(solver, tracked.labels)
         conflict_set = conflicts or [t for t, _ in pending]
         # Rejecting a mutation does not make scalar identities SSA-correct.
@@ -1377,6 +1400,7 @@ def _solve_pending(
             reasoning += f"; {label}: {' ⊥ '.join(conflicts[:3])}"
         return PathSMTResult(
             wp_complete=reduce_constraints and not has_mutation,
+            refutation_uses_call_terms=uses_calls,
             feasible=None if unmodeled_mutation else False,
             satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
             unknown_reasons=unknown_reasons,
@@ -1547,6 +1571,7 @@ def check_verb_feasibility(
         batch.satisfied, batch.unknown, batch.rejections,
         profile=profile, anon_map={**operand_model.anon_var_map, **batch.anon_map},
         axioms=operand_axioms + batch.axioms,
+        pending_call_terms=[None] * len(intrinsic) + batch.pending_call_terms,
         pending_epochs=[None] * len(intrinsic) + batch.pending_epochs,
         axiom_epochs=[None] * len(operand_axioms) + batch.axiom_epochs,
         reduce_constraints=reduce_constraints,
@@ -1718,19 +1743,22 @@ def check_path_feasibility(
         profile=profile, anon_map=batch.anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
         axioms=batch.axioms, wp_timeout_ms=timeout_ms, reduce_constraints=reduce_constraints,
+        pending_call_terms=batch.pending_call_terms,
         pending_epochs=batch.pending_epochs, axiom_epochs=batch.axiom_epochs,
     )
 
 
-def _exhibits_robust_contradiction(
+def _robust_contradiction_result(
     candidate: frozenset[str],
     conditions: list[PathCondition],
     profiles: tuple[BVProfile, BVProfile],
     timeout_ms: int | None,
     *, use_call_summaries: bool = True,
-) -> bool:
-    """Does this unsat-core subset exhibit a contradiction that is
-    independent of the signedness guess?
+) -> PathSMTResult | None:
+    """Return a subset proof independent of the signedness guess.
+
+    Preserve the native-core dependencies of both re-solves. A caller must
+    report this exhibited proof rather than a different original core.
 
     ``candidate`` holds display texts from a leg's ``unsatisfied``
     list; they are matched back to the original conditions by the same
@@ -1739,7 +1767,7 @@ def _exhibits_robust_contradiction(
     condition and simply drop out — the shrunken subset is weaker, so
     the check can only fail toward refusal, never toward suppression.
 
-    True only when BOTH hold:
+    Return the exhibited proof only when BOTH hold:
 
     * the subset mentions at most ONE identifier. Each profile forces
       every variable to one signedness, so for a single variable the
@@ -1762,7 +1790,7 @@ def _exhibits_robust_contradiction(
         if (f"NOT ({c.text})" if c.negated else c.text) in candidate
     ]
     if not subset:
-        return False
+        return None
     idents = {
         tok
         for c in subset
@@ -1770,14 +1798,23 @@ def _exhibits_robust_contradiction(
         if _IDENT_RE.match(tok) and not _NULL_RE.match(tok)
     }
     if len(idents) > 1:
-        return False
-    return all(
-        check_path_feasibility(
-            subset, profile=p, timeout_ms=timeout_ms, reduce_constraints=False,
+        return None
+    proofs = []
+    for profile in profiles:
+        proof = check_path_feasibility(
+            subset, profile=profile, timeout_ms=timeout_ms, reduce_constraints=False,
             use_call_summaries=use_call_summaries,
-        ).feasible is False
-        for p in profiles
+        )
+        if proof.feasible is not False:
+            return None
+        proofs.append(proof)
+    flags = [proof.refutation_uses_call_terms for proof in proofs]
+    proofs[0].refutation_uses_call_terms = (
+        True if any(flag is True for flag in flags)
+        else False if all(flag is False for flag in flags)
+        else None
     )
+    return proofs[0]
 
 
 def check_path_feasibility_dual(
@@ -1811,7 +1848,7 @@ def check_path_feasibility_dual(
       signedness-flipped sibling profile ALSO reports ``False``
       AND a core subset exhibits a single-identifier contradiction
       that re-solves unsat under BOTH profiles on its own
-      (:func:`_exhibits_robust_contradiction`).
+      (:func:`_robust_contradiction_result`).
       Both-legs-unsat alone is NOT agreement: each shared profile
       forces EVERY variable to one signedness, so a mixed set like
       ``[ret < 0, size > SSIZE_MAX]`` — a signed error-guard beside
@@ -1836,7 +1873,8 @@ def check_path_feasibility_dual(
     per-path hint) should call :func:`check_path_feasibility` directly
     with the known profile. ``use_call_summaries`` follows that API's
     conditional-model policy and is preserved in both legs and every
-    contradiction-subset probe.
+    contradiction-subset probe. Agreement still assumes the selected width;
+    it does not establish an opaque call's source return type.
     """
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
@@ -1867,7 +1905,7 @@ def check_path_feasibility_dual(
         # some candidate core subset — the cores' intersection or
         # either leg's core — EXHIBITS a single-identifier
         # contradiction that re-solves unsat under BOTH profiles on
-        # its own (see _exhibits_robust_contradiction). Checking the
+        # its own (see _robust_contradiction_result). Checking the
         # legs' cores individually is load-bearing: Z3's minimal core
         # under the unsigned default is the lone signed guard whenever
         # one rides beside an independent contradiction ([ret < 0,
@@ -1895,10 +1933,14 @@ def check_path_feasibility_dual(
                 candidates.append(candidate)
         exhibited: frozenset[str] | None = None
         for candidate in candidates:
-            if _exhibits_robust_contradiction(
+            proof = _robust_contradiction_result(
                 candidate, conditions, (profile, sibling_profile),
                 timeout_ms, use_call_summaries=use_call_summaries,
-            ):
+            )
+            if proof is not None:
+                primary.unsatisfied = proof.unsatisfied
+                primary.reasoning = proof.reasoning
+                primary.refutation_uses_call_terms = proof.refutation_uses_call_terms
                 exhibited = candidate
                 break
         if exhibited is not None:

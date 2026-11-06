@@ -17,16 +17,32 @@ class TrackedFrames:
     _solver: Any = field(default=None, repr=False)
     _assertion_ids: tuple[int, ...] = ()
 
-    def single_core_origin(self, solver: Any) -> int | None:
-        """Return the core's sole known owner, failing closed on missing data."""
+    def core_indices(self, solver: Any) -> tuple[int, ...] | None:
+        """Return native core assertion positions only for this exact frame.
+
+        Display texts can repeat; only owned native markers identify inputs.
+        An unavailable, empty, or foreign core carries no provenance.
+        """
         if solver is not self._solver:
             return None
-        if tuple(expr.get_id() for expr in solver.assertions()) != self._assertion_ids:
-            return None
         try:
-            owners = {self.origins.get(str(marker)) for marker in solver.unsat_core()}
+            if tuple(expr.get_id() for expr in solver.assertions()) != self._assertion_ids:
+                return None
+            positions = {marker: index for index, marker in enumerate(self.labels)}
+            markers = tuple(str(marker) for marker in solver.unsat_core())
+            if not markers or any(marker not in positions for marker in markers):
+                return None
+            return tuple(positions[marker] for marker in markers)
         except (z3.Z3Exception, AttributeError):
             return None
+
+    def single_core_origin(self, solver: Any) -> int | None:
+        """Return the core's sole known owner, failing closed on missing data."""
+        indices = self.core_indices(solver)
+        if indices is None:
+            return None
+        origins = tuple(self.origins.get(marker) for marker in self.labels)
+        owners = {origins[index] for index in indices}
         if len(owners) == 1 and None not in owners:
             return next(iter(owners))
         return None

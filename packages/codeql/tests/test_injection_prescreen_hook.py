@@ -9,13 +9,13 @@ untouched.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytest.importorskip("z3")
 
+from core.smt_solver.path_feasibility import PathSMTResult
 from packages.codeql.dataflow_validator import (
     SMT_INFEASIBLE_CONFIDENCE,
     DataflowPath,
@@ -96,9 +96,9 @@ class TestPrescreenHook:
             v, "_extract_path_conditions", return_value=([], {}),
         ) as extract, patch(
             "packages.codeql.dataflow_validator.check_path_feasibility_dual",
-            return_value=SimpleNamespace(
-                feasible=False, reasoning="stub", unsatisfied=[],
-                smt_available=True, model=None,
+            return_value=PathSMTResult(
+                feasible=False, reasoning="stub", satisfied=[], unknown=[], unsatisfied=[],
+                smt_available=True, model={},
             ),
         ):
             result = v.validate_dataflow_path(dp, guard_repo)
@@ -113,9 +113,9 @@ class TestPrescreenHook:
             v, "_extract_path_conditions", return_value=([], {}),
         ), patch(
             "packages.codeql.dataflow_validator.check_path_feasibility_dual",
-            return_value=SimpleNamespace(
-                feasible=False, reasoning="stub", unsatisfied=[],
-                smt_available=True, model=None,
+            return_value=PathSMTResult(
+                feasible=False, reasoning="stub", satisfied=[], unknown=[], unsatisfied=[],
+                smt_available=True, model={},
             ),
         ):
             result = v.validate_dataflow_path(dp, guard_repo)
@@ -131,9 +131,9 @@ class TestPrescreenHook:
             v, "_extract_path_conditions", return_value=([], {}),
         ), patch(
             "packages.codeql.dataflow_validator.check_path_feasibility_dual",
-            return_value=SimpleNamespace(
-                feasible=False, reasoning="stub", unsatisfied=[],
-                smt_available=True, model=None,
+            return_value=PathSMTResult(
+                feasible=False, reasoning="stub", satisfied=[], unknown=[], unsatisfied=[],
+                smt_available=True, model={},
             ),
         ):
             result = v.validate_dataflow_path(_dataflow(), guard_repo)
@@ -149,9 +149,9 @@ class TestPrescreenHook:
             v, "_extract_path_conditions", return_value=([], {}),
         ), patch(
             "packages.codeql.dataflow_validator.check_path_feasibility_dual",
-            return_value=SimpleNamespace(
-                feasible=False, reasoning="stub", unsatisfied=[],
-                smt_available=True, model=None,
+            return_value=PathSMTResult(
+                feasible=False, reasoning="stub", satisfied=[], unknown=[], unsatisfied=[],
+                smt_available=True, model={},
             ),
         ):
             result = v.validate_dataflow_path(
