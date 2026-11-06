@@ -124,6 +124,7 @@ class TestDirReaping:
 
     def test_stale_prefixed_dirs_reaped(self, tmp_root):
         dirs = [
+            _make_old_dir(tmp_root, "expanded_semgrep_abc12345"),
             _make_old_dir(tmp_root, "raptor-rootfs-export-abc12345"),
             _make_old_dir(tmp_root, "raptor-rootfs-extract-abc12345"),
             _make_old_dir(tmp_root, "raptor-native-ns-probe-abc12345"),

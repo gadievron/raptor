@@ -302,6 +302,7 @@ _DIR_PREFIXES = (
     "raptor-gcov-",
     "raptor-joern-uds-",
     "raptor-ls-remote-",
+    "expanded_semgrep_",
     "raptor-resolver-home-",
     "raptor-rootfs-export-",
     "raptor-rootfs-extract-",

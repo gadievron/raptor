@@ -43,6 +43,7 @@ from core.json import load_json, loads, save_json
 from core.source import open_regular_gated, read_bytes_gated
 from core.logging import get_logger
 from core.run.output import unique_run_suffix
+from core.run.scratch import scratch_dir
 from core.run.parent_liveness import maybe_start_orphan_watchdog
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError, set_pdeathsig
@@ -2084,8 +2085,7 @@ def run_expanded_semgrep_stage(
         return _write_stage_report(out_dir / "expanded_semgrep.sarif", es.findings_to_sarif([]),
                                    [_stage_diagnostic("Semgrep not installed", failed=True)])
 
-    scratch = Path(tempfile.mkdtemp(prefix="expanded_semgrep_", dir=str(out_dir)))
-    try:
+    with scratch_dir("expanded_semgrep_", dir=out_dir, keepalive=True) as scratch:
         kwargs: dict[str, Any] = {} if max_tus is None else {"max_tus": max_tus}
         if setup is not None:
             kwargs["setup"] = setup
@@ -2187,8 +2187,6 @@ def run_expanded_semgrep_stage(
             len(all_findings), total_dropped, sarif_path,
         )
         return paths
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

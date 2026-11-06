@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import logging
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Protocol
 
 from core.atomic_fs import write_text_atomically
+from core.run.scratch import scratch_dir
 from packages.coccinelle.runner import RESULT_PREFIX, contains_script_block
 
 from .languages import detect_engine, fallback_engine
@@ -411,7 +411,7 @@ def _dual_control(
     errors: list[str] = []
     dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
 
-    with tempfile.TemporaryDirectory(prefix="raptor_dc_") as tmp:
+    with scratch_dir("raptor_dc_") as tmp:
         tmp_path = Path(tmp)
         pos_file = tmp_path / f"test_positive{ext}"
         neg_file = tmp_path / f"test_negative{ext}"
@@ -463,7 +463,7 @@ def _run_on_fixture_text(
 ) -> tuple[list, list[str]]:
     """Run the rule against fixture text materialised in a temp file."""
     dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
-    with tempfile.TemporaryDirectory(prefix="raptor_gt_") as tmp:
+    with scratch_dir("raptor_gt_") as tmp:
         fixture = Path(tmp) / f"fixture{ext}"
         fixture.write_text(text, encoding="utf-8")
         return _run_engine(dummy, rule_path, fixture)
@@ -593,7 +593,7 @@ def _fix_mutant_control(
 
     ext = Path(seed.file).suffix or _fixture_ext(seed, engine)
     dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
-    with tempfile.TemporaryDirectory(prefix="raptor_fm_") as tmp:
+    with scratch_dir("raptor_fm_") as tmp:
         patched_file = Path(tmp) / f"fix_mutant{ext}"
         patched_file.write_text(patched, encoding="utf-8")
         matches, run_errors = _run_engine(dummy, rule_path, patched_file)
