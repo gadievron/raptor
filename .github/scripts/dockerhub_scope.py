@@ -77,14 +77,39 @@ def fingerprint(repo: Path, ref: str) -> str:
         return subprocess.check_output(['git', *args], cwd=repo, stderr=subprocess.DEVNULL, timeout=30)
     dockerfile = git('show', f'{ref}:{DOCKERFILE}').decode()
     inputs = sorted(set(BUILD_INPUTS + copy_sources(dockerfile)))
+    optional = sorted(set(OPTIONAL_INPUTS + attribute_inputs(inputs)))
+    sources = sorted(set(inputs + optional))
+    # Only canonical literal paths use prefix matching below. Leave unusual
+    # pathspecs to Git, and bound the optimization's argument-list size.
+    literal = all(source.rstrip('/') not in ('', '.')
+                  and source in (str(PurePosixPath(source)), str(PurePosixPath(source)) + '/')
+                  and not any(char in source for char in ':*?[\\') for source in sources)
+    if (literal and not os.environ.get('GIT_ICASE_PATHSPECS')
+            and sum(len(source.encode()) + 1 for source in sources) <= 32768):
+        rows = git('ls-tree', '-r', '-z', ref, '--', *sources).split(b'\0')
+        entries = [(row.partition(b'\t')[2], row + b'\0') for row in rows if row]
+        records_by_source = {}
+        for source in sources:
+            exact = source.rstrip('/').encode()
+            prefix = exact + b'/'
+            directory_only = source.endswith('/')
+            # Gitlinks match a trailing slash too; regular files do not.
+            records_by_source[source] = b''.join(
+                row for name, row in entries
+                if name.startswith(prefix) or name == exact
+                and (not directory_only or row.startswith(b'160000 ')))
+        records_for = records_by_source.__getitem__
+    else:
+        def records_for(source):
+            return git('ls-tree', '-r', '-z', ref, '--', source)
     digest = hashlib.sha256()
     for source in inputs:
-        records = git('ls-tree', '-r', '-z', ref, '--', source)
+        records = records_for(source)
         if not records:
             raise ValueError('missing image input: ' + source)
         digest.update(source.encode() + b'\0' + records)
-    for source in sorted(set(OPTIONAL_INPUTS + attribute_inputs(inputs))):
-        digest.update(source.encode() + b'\0' + git('ls-tree', '-r', '-z', ref, '--', source))
+    for source in optional:
+        digest.update(source.encode() + b'\0' + records_for(source))
     return digest.hexdigest()
 
 
