@@ -1553,6 +1553,24 @@ def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch):
     assert not result.diagnostics
 
 
+def test_failed_sarif_invocation_is_a_scan_limitation(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    (tmp_path / "a.c").write_text("void f(void) {}\n")
+    monkeypatch.setattr(_cs, "_gcc_analyzer", lambda: ("/owned/gcc", "sarif-file"))
+    monkeypatch.setattr(_cs, "_clang_path", lambda: None)
+
+    def run(command, **kwargs):
+        report = {"runs": [{"results": [], "invocations": [{"executionSuccessful": False}]}]}
+        (Path(kwargs["cwd"]) / "a.c.sarif").write_text(json.dumps(report))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    result = _cs.analyze_tu(tmp_path, "a.c", sandbox_run=run)
+    assert not result.ok and "execution" in result.reason
+    assert not result.diagnostics
+
+
 def test_encoded_sarif_diagnostic_is_reported_at_its_real_source_path(tmp_path):
     import json
 

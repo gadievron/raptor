@@ -17,6 +17,42 @@ def flow(uri="a.c", line=3, message="following the error branch"):
     }]}]}
 
 
+@pytest.mark.parametrize("invocations", [
+    [{"executionSuccessful": False}],
+    [{"executionSuccessful": "true"}],
+    [{"toolExecutionNotifications": [{"level": "error"}]}],
+    [{"toolConfigurationNotifications": [{"level": "error"}]}],
+    [{"toolExecutionNotifications": [{"level": "warning", "properties": {"coverage_limitation": "budget"}}]}],
+    [{"toolConfigurationNotifications": None}],
+    [None],
+    {},
+])
+@pytest.mark.parametrize("with_result", [False, True])
+def test_incomplete_gcc_sarif_cannot_establish_diagnostic_census(tmp_path, invocations, with_result):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    report = tmp_path / "compiler.sarif"
+    report.write_text(json.dumps({"runs": [{"invocations": invocations,
+        "results": [{"message": {"text": "warning"}}] if with_result else []}]}))
+    with pytest.raises(CompilerDiagnosticError, match="execution"):
+        _parse_gcc_sarif(report)
+
+
+@pytest.mark.parametrize("invocation", [
+    {}, {"executionSuccessful": True},
+    {"toolExecutionNotifications": [{"level": "warning"}]},
+    {"toolConfigurationNotifications": [{"level": "warning"}]},
+    {"toolExecutionNotifications": [{"properties": {"coverage_limitation": "review_candidates"}}]},
+])
+def test_ordinary_gcc_notifications_do_not_invalidate_analysis(tmp_path, invocation):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+
+    report = tmp_path / "compiler.sarif"
+    report.write_text(json.dumps({"runs": [{"invocations": [invocation], "results": []}]}))
+    assert _parse_gcc_sarif(report) == []
+
+
 def test_both_gcc_formats_retain_same_event_context():
     old, notes = json_paths([{"location": {"file": "a.c", "line": 3},
                              "function": "caller", "depth": 2, "description": "following the error branch"}])
