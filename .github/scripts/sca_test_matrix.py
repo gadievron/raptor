@@ -31,10 +31,10 @@ def sca_matrix(files: list[str], durations_path: Path) -> list[dict[str, int]]:
         cases = 0
         covered = set()
         for nodeid, duration in durations.items():
-            filename, separator, _ = nodeid.partition("::")
+            filename, separator, case = nodeid.partition("::")
             if filename not in selected:
                 continue
-            if (not separator or isinstance(duration, bool)
+            if (not separator or not case or isinstance(duration, bool)
                     or not isinstance(duration, (int, float))
                     or not math.isfinite(duration) or duration < 0):
                 raise ValueError("invalid timing record")
@@ -47,7 +47,7 @@ def sca_matrix(files: list[str], durations_path: Path) -> list[dict[str, int]]:
             groups = min(MAX_GROUPS, max(
                 1, math.ceil(seconds / TARGET_SECONDS), math.ceil(cases / TARGET_CASES),
             ))
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
         pass  # Performance hints must never prevent test dispatch.
     return [{"group": group, "groups": groups} for group in range(1, groups + 1)]
 

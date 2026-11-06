@@ -67,10 +67,10 @@ DEFAULT_BASELINE = Path(__file__).resolve().parent / "skip_budget_baseline.json"
 
 
 def count_skips(junit_path: Path) -> int:
-    """Sum the ``skipped`` attributes over every testsuite element.
+    """Count detailed skip records and verify suite counters agree.
 
-    pytest writes one ``<testsuite>`` (inside ``<testsuites>``); the
-    sum-over-all shape also covers tools that emit several.
+    Nested suite rollups must not count the same skip twice. Summary-only
+    reports retain the historical attribute-based counting behavior.
     """
     try:
         root = ET.parse(junit_path).getroot()
@@ -84,6 +84,9 @@ def count_skips(junit_path: Path) -> int:
     if not suites:
         msg = f"no <testsuite> element in {junit_path}"
         raise ValueError(msg)
+    cases = list(root.iter("testcase"))
+    if cases:
+        suites = list(root.iter("testsuite"))
     total = 0
     for suite in suites:
         raw = suite.get("skipped", "0")
@@ -95,6 +98,14 @@ def count_skips(junit_path: Path) -> int:
         except ValueError as exc:
             msg = f"invalid skipped= attribute (expected a non-negative integer) in {junit_path}: {raw!r}"
             raise ValueError(msg) from exc
+        if cases:
+            observed = sum(len(case.findall("skipped")) for case in suite.iter("testcase"))
+            if observed != count:
+                raise ValueError(
+                    f"skipped= counter does not match testcase records in {junit_path}: "
+                    f"reported {count}, observed {observed}")
+    if cases:
+        return sum(len(case.findall("skipped")) for case in cases)
     return total
 
 
