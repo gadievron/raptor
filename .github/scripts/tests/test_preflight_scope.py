@@ -283,28 +283,49 @@ def test_real_cli_runs_whitespace_paths_and_propagates_pytest_status(tmp_path, f
 
 
 def test_workflow_uses_local_git_ranges_and_retains_all_simulations():
-    import yaml
+    import re
 
     path = _SCRIPT.parents[1] / 'workflows/preflight.yml'
-    workflow = yaml.safe_load(path.read_text())
-    jobs = workflow['jobs']
-    assert jobs['changes']['outputs'] == {'run': '${{ steps.scope.outputs.run }}'}
+    source = path.read_text().split('\njobs:\n', 1)[1]
+
+    def job(name):
+        match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  [\w-]+:|\Z)',
+                          source, re.M | re.S)
+        assert match is not None
+        return match[1]
+
+    def steps(name):
+        return re.split(r'^      - ', job(name), flags=re.M)[1:]
+
+    def step(name, first_line):
+        matches = [body for body in steps(name) if body.splitlines()[0] == first_line]
+        assert len(matches) == 1
+        return matches[0]
+
+    changes = job('changes')
+    outputs = re.search(r'^    outputs:\n((?:      .+\n)+)', changes, re.M)
+    assert outputs is not None
+    assert outputs[1] == '      run: ${{ steps.scope.outputs.run }}\n'
     for name in ('changes', 'preflight'):
-        checkout = next(step for step in jobs[name]['steps']
-                        if step.get('uses', '').startswith('actions/checkout@'))
-        assert checkout['with']['fetch-depth'] == 2
-    scope = next(step for step in jobs['changes']['steps'] if step.get('id') == 'scope')
-    run = next(step for step in jobs['preflight']['steps']
-               if step.get('name') == 'Run changed tests under simulation')
-    for step in (scope, run):
-        assert step['env']['BASE_SHA'] == '${{ github.event.pull_request.base.sha }}'
-        assert '--base "$BASE_SHA" --repo .' in step['run']
-    assert '--run' in run['run']
-    assert 'TEST_FILES' not in run['env']
-    assert 'gh api --paginate' not in '\n'.join(step.get('run', '') for step in jobs['changes']['steps'])
-    assert {row['sim'] for row in jobs['preflight']['strategy']['matrix']['include']} == {
+        checkouts = [body for body in steps(name)
+                     if re.search(r'^(?:uses:|        uses:) actions/checkout@', body, re.M)]
+        assert len(checkouts) == 1
+        assert re.search(r'^          fetch-depth: 2$', checkouts[0], re.M)
+    scope = step('changes', 'id: scope')
+    run = step('preflight', 'name: Run changed tests under simulation')
+    for body in (scope, run):
+        env = re.search(r'^        env:\n((?:          .+\n)+)', body, re.M)
+        assert env is not None
+        assert '          BASE_SHA: ${{ github.event.pull_request.base.sha }}\n' in env[1]
+        script = body.split('        run: ', 1)[1]
+        assert '--base "$BASE_SHA" --repo .' in script
+    assert '--run' in run.split('        run: ', 1)[1]
+    assert not re.search(r'^          TEST_FILES:', run, re.M)
+    assert 'gh api --paginate' not in changes
+    assert set(re.findall(r'^          - sim: (.+)$', job('preflight'), re.M)) == {
         'hidden-optional-deps', 'hidden-tree-sitter', 'duration-guard',
         'tree-hygiene', 'shuffle-a', 'shuffle-b',
     }
-    assert jobs['preflight-passed']['if'] == 'always()'
-    assert jobs['preflight-passed']['needs'] == ['changes', 'preflight']
+    aggregate = job('preflight-passed')
+    assert re.search(r'^    if: always\(\)$', aggregate, re.M)
+    assert re.search(r'^    needs: \[changes, preflight\]$', aggregate, re.M)

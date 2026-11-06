@@ -4,9 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import re
+import textwrap
 
 import pytest
-import yaml
 
 from core.testing.gitrepo import git_run, init_scratch_repo
 
@@ -14,13 +15,30 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/sca-pr-gate.yml'
 
 
-def workflow():
-    return yaml.safe_load(WORKFLOW.read_text())
+def workflow_steps():
+    # Read this workflow's literal job/step layout without an optional YAML
+    # dependency: ci-lint-tests intentionally installs only its test tools.
+    jobs = WORKFLOW.read_text().split('\njobs:\n', 1)[1]
+    job = re.search(r'^  diff:\n(.*?)(?=^  [\w-]+:|\Z)', jobs, re.M | re.S)
+    assert job is not None
+    return re.split(r'^      - ', job[1], flags=re.M)[1:]
+
+
+def named_step(name):
+    matches = [step for step in workflow_steps()
+               if step.splitlines()[0] == f'name: {name}']
+    assert len(matches) == 1
+    return matches[0]
+
+
+def run_script(step):
+    run = re.search(r'^        run: \|\n((?:          .*\n|\n)+)', step, re.M)
+    assert run is not None, 'expected a literal shell script'
+    return textwrap.dedent(run[1])
 
 
 def baseline_step():
-    steps = workflow()['jobs']['diff']['steps']
-    return next(step for step in steps if step['name'] == 'Scan PR base tree')
+    return named_step('Scan PR base tree')
 
 
 def scanner(label):
@@ -101,7 +119,7 @@ def run_baseline(repo, tmp_path, *, status=0):
         env.pop(name, None)
     result = subprocess.run(
         ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c',
-         baseline_step()['run']], cwd=repo, env=env, capture_output=True,
+         run_script(baseline_step())], cwd=repo, env=env, capture_output=True,
         text=True, timeout=10,
     )
     assert list(runner_temp.iterdir()) == [], result.stderr
@@ -143,15 +161,19 @@ def test_missing_merge_parents_refuse_before_scanning(history, tmp_path, depth, 
 
 
 def test_workflow_keeps_merge_checkout_and_shallow_history():
-    steps = workflow()['jobs']['diff']['steps']
-    checkout_step = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
-    assert checkout_step['with']['fetch-depth'] == 2
-    assert 'ref' not in checkout_step['with']
-    assert checkout_step['with']['persist-credentials'] is False
+    checkouts = [step for step in workflow_steps()
+                 if re.search(r'^        uses: actions/checkout@', step, re.M)]
+    assert len(checkouts) == 1
+    options = re.search(r'^        with:\n((?:          .*\n|\n)+)', checkouts[0], re.M)
+    assert options is not None
+    assert re.search(r'^          fetch-depth: 2$', options[1], re.M)
+    assert not re.search(r'^          ref:', options[1], re.M)
+    assert re.search(r'^          persist-credentials: false$', options[1], re.M)
     step = baseline_step()
-    assert step['shell'] == 'bash'
-    assert 'git fetch' not in step['run']
-    assert step['run'].index('trap cleanup_baseline EXIT') < step['run'].index('git worktree add')
+    assert re.search(r'^        shell: bash$', step, re.M)
+    script = run_script(step)
+    assert 'git fetch' not in script
+    assert script.index('trap cleanup_baseline EXIT') < script.index('git worktree add')
 
 
 @pytest.mark.parametrize('existing', [False, True])
@@ -191,11 +213,10 @@ else:
 ''')
     gh.chmod(0o755)
     body_checked = tmp_path / 'body-checked'
-    step = next(step for step in workflow()['jobs']['diff']['steps']
-                if step['name'] == 'Post PR comment')
-    assert step['continue-on-error'] is True
+    step = named_step('Post PR comment')
+    assert re.search(r'^        continue-on-error: true$', step, re.M)
     # Relocate only the fixed report fixture; execute the actual shell block.
-    script = step['run'].replace('/tmp/sca-diff.md', '"$GH_REPORT"')
+    script = run_script(step).replace('/tmp/sca-diff.md', '"$GH_REPORT"')
     env = dict(os.environ, PATH=str(gh.parent) + os.pathsep + os.environ['PATH'],
                RUNNER_TEMP=str(runner_temp), GITHUB_OUTPUT=str(output),
                REPO='fixture/owned', PR='42', GH_CALLS=str(calls),
