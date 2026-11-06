@@ -615,19 +615,21 @@ class TestJoinCodeQLStage:
         )
 
 
-@pytest.mark.parametrize('merge_fails,removed_lines,failed_count,dropped,gaps,offline,codeql_empty', [
-    (merge_fails, removed_lines, 0, False, {}, False, False)
+@pytest.mark.parametrize('merge_fails,removed_lines,failed_count,dropped,gaps,offline,codeql_empty,metadata_state', [
+    (merge_fails, removed_lines, 0, False, {}, False, False, None)
     for merge_fails in (False, True) for removed_lines in ([], [1], [1, 2])
 ] + [
-    (False, [], 1, False, {}, False, False),
-    (False, [], 2, False, {}, False, False),
-    (False, [], 1, False, {}, True, False),
-    (False, [], 0, True, {}, False, False),
-    (False, [], 0, False, {'timeout': 1}, False, False),
-    (False, [], 0, False, {}, False, True),
+    (False, [], 1, False, {}, False, False, None),
+    (False, [], 2, False, {}, False, False, None),
+    (False, [], 1, False, {}, True, False, None),
+    (False, [], 0, True, {}, False, False, None),
+    (False, [], 0, False, {'timeout': 1}, False, False, None),
+    (False, [], 0, False, {}, False, True, None),
+    (False, [], 0, False, {}, False, False, 'missing'),
+    (False, [], 0, False, {}, False, False, 'partial'),
 ])
 def test_scan_metrics_follow_committed_report_or_raw_fallback(
-    tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, codeql_empty,
+    tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, codeql_empty, metadata_state,
 ):
     import json
     import core.project.trust
@@ -653,6 +655,11 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
             'tool': {'driver': {'name': 'Semgrep', 'rules': [{'id': 'rule-a'}]}},
             'artifacts': [{'location': {'uri': f'pack-{index}.py'}}], 'results': rows,
         }]}))
+        if metadata_state != 'missing':
+            metadata = {'paths': {'scanned': []}, 'errors': [{
+                'path': 'source.py', 'type': 'PartialParsing', 'level': 'warn', 'message': 'partial parse',
+            }]} if metadata_state == 'partial' else {}
+            path.with_suffix('.json').write_text(json.dumps(metadata))
         inputs.append(str(path))
     # An earlier run's report must not become authoritative on merge failure.
     (out / 'combined.sarif').write_text(json.dumps({'version': '2.1.0', 'runs': []}))
@@ -690,7 +697,7 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     expected_exit = 4 if failed_count == 2 or (offline and failed_count) else 0
     assert exit_info.value.code == expected_exit
     metrics = json.loads((out / 'scan_metrics.json').read_text())
-    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or codeql_empty else 'ok'
+    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or codeql_empty or metadata_state else 'ok'
     assert metrics['execution_status'] == status
     stdout = capsys.readouterr().out
     result = json.loads(stdout[stdout.rfind('\n{') + 1:])
@@ -698,6 +705,8 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert metrics['sarif_merge_failed'] is merge_fails
     assert metrics['analysis_gaps'] == gaps
     assert metrics['codeql_no_output'] is codeql_empty
+    assert metrics['semgrep_metadata_errors'] == (2 if metadata_state == 'missing' else 0)
+    assert metrics['semgrep_partial_files'] == (1 if metadata_state == 'partial' else 0)
     expected_count = 4 if merge_fails else 2 - len(removed_lines)
     expected_suppressed = 0 if merge_fails else expected_count
     assert metrics['nosemgrep_suppressed_count'] == expected_suppressed

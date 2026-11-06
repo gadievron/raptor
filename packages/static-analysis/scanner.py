@@ -815,55 +815,16 @@ def _semgrep_jobs_per_worker(
     return max(1, cpu_count // active)
 
 
-# Semgrep error types that mean a FILE was dropped for resource
-# reasons — the scan "succeeded" while silently not analysing it.
-_SEMGREP_RESOURCE_DROP_TYPES = frozenset({
-    "Timeout", "OutOfMemory", "FixpointTimeout", "TimeoutDuringInterfile",
-})
-
-
 def _semgrep_dropped_files(json_paths: list) -> dict:
-    """Files dropped by per-rule timeouts / memory caps, across packs.
-
-    Returns ``{path: sorted list of error types}``. Errors are
-    per-pack, so every pack's JSON must be swept — a file dropped
-    under one pack's rules is invisible in the others'. Unreadable
-    JSONs are skipped (that pack already failed loudly elsewhere).
-    """
-    dropped: dict = {}
-    for jp in json_paths:
-        data = load_json(jp, max_bytes=_MAX_TOOL_JSON_BYTES)
-        for e in data.get("errors", []) if isinstance(data, dict) else []:
-            etype = str(e.get("type", ""))
-            if etype in _SEMGREP_RESOURCE_DROP_TYPES and e.get("path"):
-                dropped.setdefault(e["path"], set()).add(etype)
-    return {p: sorted(t) for p, t in sorted(dropped.items())}
+    """Compatibility wrapper for callers requesting only resource failures."""
+    from core.coverage.record import read_semgrep_outputs
+    return read_semgrep_outputs(json_paths, max_bytes=_MAX_TOOL_JSON_BYTES).dropped_files
 
 
 def _semgrep_skipped_paths(json_paths: list) -> dict:
-    """Unique skipped-path count per skip reason, across packs.
-
-    Semgrep's ``paths.skipped`` (populated at --verbose — see
-    packages.semgrep.runner.build_cmd) records every path the scan
-    did NOT examine and why: RAPTOR's own exclude baseline
-    (``cli_exclude_flags_match``), size limits, unparsable files.
-    Every pack walks the same tree, so the same skip repeats once per
-    pack — dedupe by (reason, path) so counts mean paths, not
-    paths x packs. Unreadable JSONs are skipped (that pack already
-    failed loudly elsewhere).
-
-    Returns ``{reason: unique path count}``.
-    """
-    seen: dict = {}
-    for jp in json_paths:
-        data = load_json(jp, max_bytes=_MAX_TOOL_JSON_BYTES)
-        paths = data.get("paths") if isinstance(data, dict) else None
-        skipped = paths.get("skipped") if isinstance(paths, dict) else None
-        for e in skipped if isinstance(skipped, list) else []:
-            if isinstance(e, dict) and e.get("path"):
-                reason = str(e.get("reason") or "unspecified")
-                seen.setdefault(reason, set()).add(str(e["path"]))
-    return {r: len(ps) for r, ps in seen.items()}
+    """Compatibility wrapper for callers requesting only unique skip counts."""
+    from core.coverage.record import read_semgrep_outputs
+    return read_semgrep_outputs(json_paths, max_bytes=_MAX_TOOL_JSON_BYTES).skipped_paths
 
 
 def _semgrep_max_memory_mb(
@@ -3714,12 +3675,14 @@ def main() -> None:
         metrics["codeql_no_output"] = bool(run_codeql_stage and not codeql_sarifs)
         metrics["semgrep_dropped_files"] = 0
         metrics["analysis_gaps"] = {}
+        metrics["semgrep_metadata_errors"] = 0
+        metrics["semgrep_partial_files"] = 0
 
         # Write coverage records and derive total_files_scanned from them
         try:
             from core.coverage.record import (
                 build_from_codeql,
-                build_from_semgrep,
+                read_semgrep_outputs,
                 load_records,
                 write_record,
             )
@@ -3731,12 +3694,22 @@ def main() -> None:
             )
             _all_semgrep_jsons = [
                 Path(sp).with_suffix(".json") for sp in semgrep_sarifs
-                if Path(sp).with_suffix(".json").exists()
             ]
             # Degradation visibility: a file dropped by rule timeouts /
             # memory caps was NOT analysed even though the pack
             # "succeeded" — silent coverage loss unless said out loud.
-            _dropped = _semgrep_dropped_files(_all_semgrep_jsons)
+            semgrep_summary = read_semgrep_outputs(_all_semgrep_jsons, rules_applied=_rules_applied)
+            metrics["semgrep_metadata_errors"] = semgrep_summary.input_errors
+            if semgrep_summary.input_errors:
+                print(f"⚠️  semgrep: {semgrep_summary.input_errors} metadata output(s) unreadable or malformed; "
+                      "coverage is incomplete", file=sys.stderr)
+            _dropped = semgrep_summary.dropped_files
+            failed_files = {failure["path"] for failure in semgrep_summary.files_failed}
+            metrics["semgrep_partial_files"] = len(failed_files)
+            partial_only = failed_files - _dropped.keys()
+            if partial_only:
+                print(f"⚠️  semgrep: {len(partial_only)} file(s) have incomplete analysis or parser errors; "
+                      "details in the per-pack JSON metadata", file=sys.stderr)
             if _dropped:
                 metrics["semgrep_dropped_files"] = len(_dropped)
                 # Dropped-file paths come from the semgrep error JSON
@@ -3761,7 +3734,7 @@ def main() -> None:
             # Reason NAMES only on this line (bounded, escaped) —
             # skipped paths are target-chosen strings and stay in the
             # per-pack JSONs.
-            _skipped_by_reason = _semgrep_skipped_paths(_all_semgrep_jsons)
+            _skipped_by_reason = semgrep_summary.skipped_paths
             if _skipped_by_reason:
                 from core.security.log_sanitisation import (
                     sanitise_for_terminal,
@@ -3783,15 +3756,8 @@ def main() -> None:
                     + ". Paths in semgrep_<pack>.json paths.skipped.",
                     file=sys.stderr,
                 )
-            for json_path in _all_semgrep_jsons:
-                record = build_from_semgrep(
-                    out_dir, json_path,
-                    rules_applied=_rules_applied,
-                    extra_error_json_paths=_all_semgrep_jsons,
-                )
-                if record:
-                    write_record(out_dir, record, tool_name="semgrep")
-                    break  # one record covers all (paths.scanned is cumulative; errors merged above)
+            if semgrep_summary.record:
+                write_record(out_dir, semgrep_summary.record, tool_name="semgrep")
 
             # CodeQL coverage — from SARIF artifacts
             for sarif_path in codeql_sarifs:

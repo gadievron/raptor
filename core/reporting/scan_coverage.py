@@ -83,6 +83,14 @@ def _findings_for_tool(metrics: dict, tool: str) -> int:
     return total
 
 
+_EXECUTION_FAILURE_FIELDS = (
+    "semgrep_failed_packs", "dropped_registry_packs", "sarif_merge_failed",
+    "analysis_gaps", "semgrep_dropped_files", "codeql_no_output",
+    "tool_execution_failures", "tool_coverage_limitations", "sarif_input_errors",
+    "semgrep_metadata_errors", "semgrep_partial_files",
+)
+
+
 def scan_execution_status(metrics: dict) -> str:
     """Summarise known execution failures, without claiming complete coverage.
 
@@ -94,11 +102,7 @@ def scan_execution_status(metrics: dict) -> str:
         return "error"
     if "execution_status" in metrics and recorded not in ("ok", "partial"):
         return "partial"
-    if recorded == "partial" or any(metrics.get(key) for key in (
-        "semgrep_failed_packs", "dropped_registry_packs", "sarif_merge_failed",
-        "analysis_gaps", "semgrep_dropped_files", "codeql_no_output",
-        "tool_execution_failures", "tool_coverage_limitations", "sarif_input_errors",
-    )):
+    if recorded == "partial" or any(metrics.get(key) for key in _EXECUTION_FAILURE_FIELDS):
         return "partial"
     return "ok"
 

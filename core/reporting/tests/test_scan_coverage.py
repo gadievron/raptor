@@ -236,6 +236,8 @@ class TestRobustness:
     ({'tool_execution_failures': {'coccinelle': 1}}, 'partial'),
     ({'tool_coverage_limitations': {'compiler': 2}}, 'partial'),
     ({'sarif_input_errors': 1}, 'partial'),
+    ({'semgrep_metadata_errors': 1}, 'partial'),
+    ({'semgrep_partial_files': 1}, 'partial'),
     ({'execution_status': 'ok', 'semgrep_failed_packs': ['a']}, 'partial'),
     ({'execution_status': 'error', 'sarif_merge_failed': True}, 'error'),
 ])
