@@ -1304,3 +1304,22 @@ mutations.
 This rule adds no solver passes and preserves independently contradictory
 segments. Recovering cross-segment proofs requires a proper scalar value-flow
 model rather than dropping the mutation.
+
+Named numeric checks apply optional call summaries to each function-call
+operand, retaining a separate native symbol and source label for every
+occurrence. Matching operand or guard text does not prove the same execution
+and never merges those values. Operand theory has no established scalar
+segment across rejected mutations. The full obligation includes that theory
+even when no ordinary predicates remain after tautology filtering.
+
+Call boundaries respect quoted strings, character literals, and escapes.
+English operator normalization and whitespace collapse preserve quoted bytes,
+so distinct literal arguments cannot accidentally become one shared call.
+These changes refine the supplied model; they do not verify callee definitions
+or widen the source-bound audit proof contract.
+
+Named numeric operands accept representable signed decimal literals under
+signed profiles, using the same validation as condition literals. Unsigned
+profiles reject negative decimal inputs rather than wrapping them. Generic
+signed bounds checks include both negative indices and indices at or above
+the extent; a narrowed call result cannot hide a lower-bound violation.

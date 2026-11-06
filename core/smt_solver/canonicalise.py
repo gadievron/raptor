@@ -168,6 +168,33 @@ def canonicalise(text: str) -> str:
     # care about.
     _CANONICALISE_INPUT_CAP = 256 * 1024
     out = text if len(text) <= _CANONICALISE_INPUT_CAP else text[:_CANONICALISE_INPUT_CAP]
-    for pat, repl in _REWRITES:
-        out = pat.sub(repl, out)
-    return _WHITESPACE_RUN.sub(' ', out).strip()
+    def rewrite_code(code):
+        if code and not code.isspace():
+            for pat, repl in _REWRITES:
+                code = pat.sub(repl, code)
+        return _WHITESPACE_RUN.sub(' ', code)
+
+    # Preserve quoted source bytes. Rewriting English or collapsing spaces
+    # inside a call's literal arguments can merge distinct calls into one
+    # symbolic value and manufacture a contradiction.
+    pieces = []
+    start = index = 0
+    while index < len(out):
+        if out[index] not in {"'", '"'}:
+            index += 1
+            continue
+        pieces.append(rewrite_code(out[start:index]))
+        quote_start = index
+        quote = out[index]
+        index += 1
+        while index < len(out):
+            char = out[index]
+            index += 1
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                break
+        pieces.append(out[quote_start:index])
+        start = index
+    pieces.append(rewrite_code(out[start:]))
+    return ''.join(pieces).strip()
