@@ -10,7 +10,7 @@ from pathlib import Path
 
 from core.logging import get_logger
 from core.sarif.parser import (
-    _sarif_content_identity, get_result_rule, load_sarif, rule_default_level,
+    ResultRuleResolver, _sarif_content_identity, get_result_rule, load_sarif, rule_default_level,
 )
 
 logger = get_logger()
@@ -168,7 +168,20 @@ def _scan_file(
         run_key: str | None = None
         rule_owners: dict[int, dict] = {}
         context_keys: dict[tuple[str, int], str] = {}
-        resolved_rules: dict[str, dict] = {}
+        rule_resolver: ResultRuleResolver | None = None
+
+        def resolve_rule(result: dict) -> dict:
+            nonlocal rule_resolver
+            index = result.get("ruleIndex")
+            # A single result cannot amortize an ID index. Ordinary indexed
+            # references already validate in constant time without a cache.
+            if (len(run["results"]) == 1 or ("rule" not in result
+                    and type(index) is int and index >= 0)):
+                return get_result_rule(run, result)
+            if rule_resolver is None:
+                rule_resolver = ResultRuleResolver(run)
+            return rule_resolver.resolve(result)
+
         tool = run.get("tool")
         if isinstance(tool, dict):
             extensions = tool.get("extensions")
@@ -180,12 +193,7 @@ def _scan_file(
         analysis_run = None
         for result in chain((first_result,), results):
             candidate_count += 1
-            reference_key = _content_key({
-                key: result[key] for key in ("ruleId", "ruleIndex", "rule") if key in result
-            })
-            if reference_key not in resolved_rules:
-                resolved_rules[reference_key] = get_result_rule(run, result)
-            rule = resolved_rules[reference_key]
+            rule = resolve_rule(result)
             duplicate_key = _duplicate_key(run, result, rule, rule_owners.get(id(rule)), context_keys)
             if duplicate_key is not None:
                 if duplicate_key in seen_duplicates:
