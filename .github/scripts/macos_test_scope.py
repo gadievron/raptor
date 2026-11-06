@@ -71,24 +71,43 @@ def skipped_on_macos(path: Path) -> bool:
         tree = ast.parse(path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, SyntaxError, ValueError, RecursionError):
         return False
+    # Only direct module assignments can establish a file-wide skip below.
+    # Per-test/class/conditional marks keep the file without whole-tree walks.
+    if not any(isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Name) and target.id == 'pytestmark'
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]))
+            for node in tree.body):
+        return False
     bindings = {}
+    guarded_aliases = set()
+
+    def bind(name, target):
+        # Mark arguments are evaluated when assigned. A final import cannot
+        # prove what a differently bound alias meant at an earlier marker.
+        if target in {'sys', 'pytest', 'sys.platform'}:
+            guarded_aliases.add(name)
+        if name in bindings and bindings[name] != target:
+            target = None
+        bindings[name] = target
+
     imports = set()
     for node in tree.body:
         if isinstance(node, ast.Import):
             imports.add(id(node))
             for alias in node.names:
                 name = alias.asname or alias.name.split('.')[0]
-                bindings[name] = alias.name if alias.asname else alias.name.split('.')[0]
+                bind(name, alias.name if alias.asname else alias.name.split('.')[0])
         elif isinstance(node, ast.ImportFrom):
             imports.add(id(node))
             if any(alias.name == '*' for alias in node.names):
                 return False
             for alias in node.names:
-                bindings[alias.asname or alias.name] = f'{node.module}.{alias.name}' if node.level == 0 else None
+                bind(alias.asname or alias.name, f'{node.module}.{alias.name}' if node.level == 0 else None)
     sys_names = {name for name, target in bindings.items() if target == 'sys'}
     pytest_names = {name for name, target in bindings.items() if target == 'pytest'}
     platform_names = {name for name, target in bindings.items() if target == 'sys.platform'}
-    aliases = sys_names | pytest_names | platform_names
+    # Keep mutation guards even for bindings excluded from skip proofs.
+    aliases = sys_names | pytest_names | platform_names | guarded_aliases
     writes = {id(node) for node in ast.walk(tree) if isinstance(node, ast.Name)
               and node.id == 'pytestmark' and isinstance(node.ctx, (ast.Store, ast.Del))}
     recognized = set()

@@ -144,3 +144,70 @@ def test_forced_or_unknown_scope_keeps_full_macos_backstop(scope, tmp_path, monk
         monkeypatch.setenv('SCOPE_MODE', mode)
     scope.main()
     assert output.read_text() == f'run=true\nfiles={path.name}\nnative_audit=true\n'
+
+
+@pytest.mark.parametrize('kind', ['module', 'platform-value', 'pytest-factory'])
+def test_restored_import_cannot_rewrite_an_earlier_marker(scope, tmp_path, monkeypatch, kind):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    platform_module = ModuleType('_owned_marker_platform')
+    platform_module.platform = 'linux'
+    marker_module = ModuleType('_owned_marker_factory')
+    marker_module.mark = SimpleNamespace(skipif=lambda *args, **kwargs: pytest.mark.skipif(False, reason='owned'))
+    monkeypatch.setitem(sys.modules, platform_module.__name__, platform_module)
+    monkeypatch.setitem(sys.modules, marker_module.__name__, marker_module)
+    if kind == 'module':
+        text = ('import _owned_marker_platform as sys\nimport pytest\n'
+                'pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="owned")\n'
+                'import sys\n')
+    elif kind == 'platform-value':
+        text = ('from _owned_marker_platform import platform as host\nimport pytest\n'
+                'pytestmark = pytest.mark.skipif(host != "linux", reason="owned")\n'
+                'from sys import platform as host\n')
+    else:
+        text = ('import _owned_marker_factory as pytest\n'
+                'pytestmark = pytest.mark.skipif(True, reason="owned")\n'
+                'import pytest\n')
+    path = _module(tmp_path, text)
+    # Execute only this owned fixture, with real pytest marker objects. Its
+    # earlier skip condition remains False after the later import restores.
+    namespace = {'__name__': '_owned_marker_fixture'}
+    exec(compile(text, str(path), 'exec'), namespace)
+    assert namespace['pytestmark'].mark.args == (False,)
+    assert not scope.skipped_on_macos(path)
+    assert scope.selection(tmp_path, [path.name]) == {
+        'run': True, 'files': [path.name], 'native_audit': False}
+
+
+@pytest.mark.parametrize('text', [
+    'import sys, pytest\npytestmark = pytest.mark.skipif(sys.platform != "linux", reason="owned")\nimport sys\nimport pytest',
+    'from sys import platform as host\nimport pytest\npytestmark = pytest.mark.skipif(host != "linux", reason="owned")\nfrom sys import platform as host',
+    'import os as helper\nimport json as helper\nimport sys, pytest\npytestmark = pytest.mark.skipif(sys.platform != "linux", reason="owned")',
+    'import sys, pytest\nｐｙｔｅｓｔｍａｒｋ = pytest.mark.skipif(sys.platform != "linux", reason="owned")',
+], ids=['identical-module-imports', 'identical-value-imports', 'unrelated-alias-collision', 'normalized-marker-name'])
+def test_unambiguous_skip_proofs_still_omit_runner(scope, tmp_path, text):
+    path = _module(tmp_path, text)
+    assert scope.skipped_on_macos(path)
+    assert not scope.selection(tmp_path, [path.name])['run']
+
+
+def test_no_module_marker_needs_no_whole_tree_walk(scope, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    path = _module(tmp_path, 'import pytest\nclass TestOne:\n    pytestmark = pytest.mark.skip\n    def test_a(self): pass\n')
+    facade = SimpleNamespace(**vars(scope.ast))
+    facade.walk = lambda *args: pytest.fail('walked a file without a module marker')
+    monkeypatch.setattr(scope, 'ast', facade)
+    assert not scope.skipped_on_macos(path)
+
+
+@pytest.mark.parametrize('mutation', [
+    'sys.platform = "linux"', 'setattr(sys, "platform", "linux")', 'sys = proxy',
+], ids=['attribute-write', 'dynamic-write', 'name-write'])
+def test_ambiguous_aliases_keep_existing_mutation_guards(scope, tmp_path, mutation):
+    # Inspect only: executing this fixture would mutate the real sys module.
+    text = ('import other as sys\nimport sys\n' + mutation + '\n'
+            'from sys import platform as host\nimport pytest\n'
+            'pytestmark = pytest.mark.skipif(host != "linux", reason="owned")\n')
+    assert not scope.skipped_on_macos(_module(tmp_path, text))
