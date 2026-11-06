@@ -53,6 +53,35 @@ def test_ordinary_gcc_notifications_do_not_invalidate_analysis(tmp_path, invocat
     assert _parse_gcc_sarif(report) == []
 
 
+@pytest.mark.parametrize("fields", [
+    {"option": ["-Wanalyzer-use-after-free"]}, {"kind": {"text": "warning"}},
+    {"locations": {}}, {"locations": [None]}, {"locations": [{"caret": []}]},
+])
+def test_malformed_gcc_json_fields_are_diagnostic_errors(fields):
+    from core.audit.compiler_sweep import _parse_gcc_json
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    with pytest.raises(CompilerDiagnosticError):
+        _parse_gcc_json(json.dumps([{"message": "warning", **fields}]))
+
+
+@pytest.mark.parametrize("fields", [
+    {"ruleId": ["-Wanalyzer-use-after-free"]}, {"level": {"text": "warning"}},
+    {"message": {"text": ["warning"]}}, {"locations": {}}, {"locations": [None]},
+    {"locations": [{"physicalLocation": []}]},
+    {"locations": [{"physicalLocation": {"region": []}}]},
+    {"locations": [{"physicalLocation": {"artifactLocation": []}}]},
+])
+def test_malformed_gcc_sarif_fields_are_diagnostic_errors(tmp_path, fields):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    report = tmp_path / "compiler.sarif"
+    report.write_text(json.dumps({"runs": [{"results": [{"message": {"text": "warning"}, **fields}]}]}))
+    with pytest.raises(CompilerDiagnosticError):
+        _parse_gcc_sarif(report)
+
+
 def test_both_gcc_formats_retain_same_event_context():
     old, notes = json_paths([{"location": {"file": "a.c", "line": 3},
                              "function": "caller", "depth": 2, "description": "following the error branch"}])
