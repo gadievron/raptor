@@ -2069,15 +2069,18 @@ def _arm_freepath(an: _Analysis, pointer: str) -> LifetimeProof:
         raise ProofRefusal(
             f"fewer than two visible release sites of {pointer}"
         )
+    site_set = set(sites)
+    shared_path = False
     for s in sites:
-        if s in an.after(s):
+        region = an.after(s)
+        if s in region:
             raise ProofRefusal("a release site is inside a loop")
-    for i, s1 in enumerate(sites):
-        for s2 in sites[i + 1:]:
-            if s2 in an.after(s1) or s1 in an.after(s2):
-                raise ProofRefusal(
-                    "two release sites lie on one path"
-                )
+        if not region.isdisjoint(site_set):
+            shared_path = True
+    # Loop refusals have priority over path-sharing refusals. Finish the
+    # original loop-check pass before reporting any reachable site pair.
+    if shared_path:
+        raise ProofRefusal("two release sites lie on one path")
     return LifetimeProof(
         arm="freepath",
         pointer=pointer,
