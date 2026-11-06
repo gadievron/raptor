@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from unittest.mock import patch
 import subprocess
 import sys
 import types
@@ -23,13 +24,18 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    script = REPO_ROOT / "libexec" / "raptor-review"
-    mod = types.ModuleType("raptor_review_cli_toolruns")
-    mod.__file__ = str(script)
-    code = compile(script.read_text(), str(script), "exec")
-    exec(code, mod.__dict__)
-    return mod
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            patch.object(sys, "path", sys.path.copy()):
+        # The review CLI rejects interpreter startup overrides. Restore the
+        # caller's exact environment when this import scope exits.
+        for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+            os.environ.pop(name, None)
+        script = REPO_ROOT / "libexec" / "raptor-review"
+        mod = types.ModuleType("raptor_review_cli_toolruns")
+        mod.__file__ = str(script)
+        code = compile(script.read_text(), str(script), "exec")
+        exec(code, mod.__dict__)
+        return mod
 
 
 _cli = _load_cli()
@@ -189,6 +195,8 @@ class TestToolsCommand:
         # command (not swallowed by the bare-path → show fallback).
         _seed_toolrun_records(tmp_path)
         env = dict(os.environ)
+        for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(name, None)
         env["_RAPTOR_TRUSTED"] = "1"
         proc = subprocess.run(
             [sys.executable, str(REPO_ROOT / "libexec" / "raptor-review"),

@@ -18,15 +18,15 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_helper():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    script = str(REPO_ROOT / "libexec" / "raptor-validation-helper")
-    loader = SourceFileLoader("raptor_validation_helper", script)
-    spec = importlib.util.spec_from_loader(
-        "raptor_validation_helper", loader)
-    mod = importlib.util.module_from_spec(spec)
-    with patch.object(sys, "path", sys.path.copy()):
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            patch.object(sys, "path", sys.path.copy()):
+        script = str(REPO_ROOT / "libexec" / "raptor-validation-helper")
+        loader = SourceFileLoader("raptor_validation_helper", script)
+        spec = importlib.util.spec_from_loader(
+            "raptor_validation_helper", loader)
+        mod = importlib.util.module_from_spec(spec)
         loader.exec_module(mod)
-    return mod
+        return mod
 
 
 def _graph():

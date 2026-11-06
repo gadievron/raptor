@@ -8,6 +8,8 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+from unittest.mock import patch
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -35,16 +37,17 @@ def monkeypatch(_user_state_in_tmp):
 
 
 def _load_raptor_audit() -> ModuleType:
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    loader = importlib.machinery.SourceFileLoader(
-        "raptor_audit", str(_AUDIT_PATH),
-    )
-    spec = importlib.util.spec_from_file_location(
-        "raptor_audit", str(_AUDIT_PATH), loader=loader,
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            patch.object(sys, "path", sys.path.copy()):
+        loader = importlib.machinery.SourceFileLoader(
+            "raptor_audit", str(_AUDIT_PATH),
+        )
+        spec = importlib.util.spec_from_file_location(
+            "raptor_audit", str(_AUDIT_PATH), loader=loader,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
 
 audit_cli = _load_raptor_audit()

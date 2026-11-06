@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -22,14 +23,19 @@ TS_NEW = "2026-01-02T00:00:00.000000Z"
 
 
 def _load_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
-    script = REPO_ROOT / "libexec" / "raptor-review"
-    # Extensionless script — no default loader; exec it by hand.
-    mod = types.ModuleType("raptor_review_cli_layers")
-    mod.__file__ = str(script)
-    code = compile(script.read_text(), str(script), "exec")
-    exec(code, mod.__dict__)
-    return mod
+    with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
+            patch.object(sys, "path", sys.path.copy()):
+        # The review CLI rejects interpreter startup overrides. Restore the
+        # caller's exact environment when this import scope exits.
+        for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+            os.environ.pop(name, None)
+        script = REPO_ROOT / "libexec" / "raptor-review"
+        # Extensionless script — no default loader; exec it by hand.
+        mod = types.ModuleType("raptor_review_cli_layers")
+        mod.__file__ = str(script)
+        code = compile(script.read_text(), str(script), "exec")
+        exec(code, mod.__dict__)
+        return mod
 
 
 _cli = _load_cli()
