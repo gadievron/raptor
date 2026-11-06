@@ -1957,6 +1957,34 @@ def _discharge_with_smt(
 # ---------------------------------------------------------------------------
 
 
+def _function_name_sets(
+    func_source: str, *, include_locals: bool, include_parameters: bool,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Collect requested declaration sets from one best-effort parse."""
+    parser = _c_parser()
+    if parser is None:
+        return frozenset(), frozenset()
+    try:
+        tree = parser.parse(func_source.encode("utf-8"))
+    except Exception:
+        return frozenset(), frozenset()
+    locals_: set[str] = set()
+    parameters: set[str] = set()
+    for n in _walk_nodes(tree.root_node):
+        if include_locals and n.type in ("declaration", "parameter_declaration"):
+            for c in n.named_children:
+                nm = _declarator_name(c)
+                if nm is not None:
+                    locals_.add(_node_text(nm))
+        if include_parameters and n.type == "parameter_declaration":
+            nm = _declarator_name(
+                n.child_by_field_name("declarator") or n,
+            )
+            if nm is not None:
+                parameters.add(_node_text(nm))
+    return frozenset(locals_), frozenset(parameters)
+
+
 def function_local_names(func_source: str) -> frozenset[str]:
     """Names of locals and parameters declared by *func_source*.
 
@@ -1964,21 +1992,9 @@ def function_local_names(func_source: str) -> frozenset[str]:
     match claim prose against candidate variable names — the proof
     itself re-parses strictly.
     """
-    parser = _c_parser()
-    if parser is None:
-        return frozenset()
-    try:
-        tree = parser.parse(func_source.encode("utf-8"))
-    except Exception:
-        return frozenset()
-    names: set[str] = set()
-    for n in _walk_nodes(tree.root_node):
-        if n.type in ("declaration", "parameter_declaration"):
-            for c in n.named_children:
-                nm = _declarator_name(c)
-                if nm is not None:
-                    names.add(_node_text(nm))
-    return frozenset(names)
+    return _function_name_sets(
+        func_source, include_locals=True, include_parameters=False,
+    )[0]
 
 
 def function_parameter_names(func_source: str) -> frozenset[str]:
@@ -1989,22 +2005,21 @@ def function_parameter_names(func_source: str) -> frozenset[str]:
     flag a parameter, so a candidate set consisting solely of
     parameters can never cover such a receipt.
     """
-    parser = _c_parser()
-    if parser is None:
-        return frozenset()
-    try:
-        tree = parser.parse(func_source.encode("utf-8"))
-    except Exception:
-        return frozenset()
-    names: set[str] = set()
-    for n in _walk_nodes(tree.root_node):
-        if n.type == "parameter_declaration":
-            nm = _declarator_name(
-                n.child_by_field_name("declarator") or n,
-            )
-            if nm is not None:
-                names.add(_node_text(nm))
-    return frozenset(names)
+    return _function_name_sets(
+        func_source, include_locals=False, include_parameters=True,
+    )[1]
+
+
+def function_scope_names(func_source: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Return (locals including parameters, parameters) from one parse.
+
+    Like the single-set helpers, this tolerates parse errors and returns
+    empty sets when parsing is unavailable or fails. These names select
+    claim candidates; proofs still perform their own strict parse.
+    """
+    return _function_name_sets(
+        func_source, include_locals=True, include_parameters=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2162,5 +2177,6 @@ __all__ = [
     "check_definite_assignment",
     "function_local_names",
     "function_parameter_names",
+    "function_scope_names",
     "resolve_include_closure",
 ]
