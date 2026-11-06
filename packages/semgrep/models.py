@@ -6,6 +6,7 @@ from heapq import nsmallest
 from typing import Any
 
 from core.json.bounded import loads_bounded
+from core.run.toolprobe import reported_version
 from core.security.log_sanitisation import escape_nonprintable
 
 # Byte ceiling for semgrep tool output (SARIF on stdout and the
@@ -484,7 +485,11 @@ def parse_json_output(text: str) -> dict[str, Any]:
         and _diagnostic_level(e) in ("error", "fatal", None)
     )
 
-    out["semgrep_version"] = str(data.get("version", ""))
+    version = reported_version(data.get("version"))
+    if version is None:
+        out["errors"].append("Semgrep version metadata is invalid or overlong")
+    else:
+        out["semgrep_version"] = version
     return out
 
 
@@ -520,5 +525,13 @@ def _render_error(entry: dict[str, Any]) -> str:
     ``long_msg``/``short_msg``; runtime errors carry ``message``.
     """
     msg = _diagnostic_message(entry, default="semgrep error")
-    etype = entry.get("type") or "error"
+    etype = entry.get("type")
+    if isinstance(etype, list):
+        etype = etype[0] if etype else None
+    if not isinstance(etype, str) or not etype:
+        etype = "error"
+    # Variant payloads can contain large snippets or rule metadata. Only the
+    # type tag belongs in this bounded, single-line diagnostic summary.
+    etype = escape_nonprintable(etype[:100])[:100]
+    msg = escape_nonprintable(msg)
     return f"{etype}: {msg}"[:500]
