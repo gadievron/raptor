@@ -104,7 +104,13 @@ class Catalogue:
             self._discover(path)
             row = self.db.execute("SELECT sha,status FROM files WHERE path=?",(path,)).fetchone()
             if row and (row["sha"] != sha or row["status"] != "indexed"):
-                self._store(path,body)
+                if type(source) is str:
+                    if row["sha"] != sha:
+                        self.changed.add(path)
+                    self._write_snapshot(path,body,sha,source)
+                else:
+                    # Custom encoders may not round-trip their original text.
+                    self._store(path,body)
         self.db.commit()
 
     def _store(self,path,body):
@@ -112,10 +118,16 @@ class Catalogue:
         old = self.db.execute("SELECT sha FROM files WHERE path=?",(path,)).fetchone()
         if old and old[0] != sha:
             self.changed.add(path)
+        self._write_snapshot(path,body,sha)
+
+    def _write_snapshot(self,path,body,sha,source=None):
+        """Persist a snapshot using already-computed bytes, hash and text."""
         self.db.execute("UPDATE files SET sha=?,body=?,status='indexed',error='',version=? WHERE path=?",
                         (sha,zlib.compress(body),VERSION,path))
         self.db.execute("DELETE FROM terms WHERE path=?",(path,))
-        self.db.executemany("INSERT INTO terms VALUES (?,?)",[(t,path) for t in sorted(retrieval_terms(body.decode(errors="replace")))])
+        self.db.executemany("INSERT INTO terms VALUES (?,?)",[(t,path) for t in sorted(retrieval_terms(
+            body.decode(errors="replace") if source is None else source
+        ))])
 
     def advance(self, limits, should_stop=None):
         start = time.monotonic()
