@@ -44,6 +44,7 @@ def test_pattern_groups_load_before_processing_and_stay_unchanged(monkeypatch):
     language = [('Language', 'lang full', 'lang summary', False)]
     loads = []
     monkeypatch.setattr(context, '_pattern_file_cache', context.BoundedMemo(32))
+    monkeypatch.setattr(context, '_pattern_render_cache', context.BoundedMemo(32))
     monkeypatch.setattr(context, '_patterns_cache', context.BoundedMemo(32))
 
     def load(name):
