@@ -7,7 +7,7 @@ promoted profiles require a richer model. No host or C32 default is used.
 import re
 from dataclasses import dataclass
 
-from .arithmetic_operation import _INTEGER_LITERAL_RE
+from .integer_literals import integer_literal_value
 from .narrowing_bindings import visible_declarations
 from .integer_abi import resolve_integer_abi
 
@@ -86,8 +86,8 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
     names = set()
     literals = []
     for atom in operands:
-        if _INTEGER_LITERAL_RE.fullmatch(atom):
-            literals.append(atom)
+        if (value := integer_literal_value(atom)) is not None:
+            literals.append(value)
         elif _IDENTIFIER.fullmatch(atom):
             names.add(atom)
         else:
@@ -97,8 +97,8 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
         if len(parts) != 3:
             return ArithmeticModel("unavailable")
         for atom in (parts[0], parts[2]):
-            if _INTEGER_LITERAL_RE.fullmatch(atom):
-                literals.append(atom)
+            if (value := integer_literal_value(atom)) is not None:
+                literals.append(value)
             elif _IDENTIFIER.fullmatch(atom):
                 names.add(atom)
             else:
@@ -107,8 +107,8 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
         return ArithmeticModel("unavailable")
     # Larger unsuffixed literals change C's comparison/arithmetic type. Do not
     # model them at a guessed width merely because a bit pattern fits.
-    for literal in literals:
-        if len(literal) > 22 or int(literal, 16 if literal.lower().startswith("0x") else 10) > (1 << (abi.int_bits - 1)) - 1:
+    for value in literals:
+        if abs(value) > (1 << (abi.int_bits - 1)) - 1:
             return ArithmeticModel("unavailable")
     resolved = {}
     spellings = {}
@@ -140,6 +140,8 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
     if len(profiles) != 1:
         return ArithmeticModel("unavailable")
     profile = profiles.pop()
+    if profile.startswith("uint") and any(value < 0 for value in literals):
+        return ArithmeticModel("unavailable")  # mixed signed/unsigned literal conversion is not modeled
     domains = []
     for name, kind in resolved.items():
         if kind.width == kind.promoted_width:

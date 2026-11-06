@@ -1127,3 +1127,45 @@ holds. It assumes entry to that wrapper; application-entry reachability is
 not established. Safe or excluded tuples never clear the function or rule
 out external callers. A `sizeof` argument without a numeric relation stays
 inconclusive under the generic bounded-contract channel.
+
+### Signed guard constants and solver symbol identity
+
+Signed source obligations admit canonical negative target-int constants in
+atomic comparisons, including numeric unary minus and negative hex spelled
+in source. Guard extraction normalizes negative atoms to decimal; typed
+admission, Z3 encoding, independent witness checks, and literal caller
+checks use the same value. This covers lower-bound errors such as
+`Index >= -1` and signed arithmetic behind negative thresholds.
+
+The predicate language accepts a signed decimal minimum at its exact
+bitvector width. C source admission is stricter: the positive magnitude
+must fit the target's signed `int`, so the literal's C evaluation type is
+justified. Wider literals, macros, compound negation, and mixed unsigned
+comparisons remain inconclusive. No host type or wrapped negative value is
+substituted for an unsupported conversion. Bitvector profiles require an
+integer width and boolean signedness.
+
+Generated call symbols cannot consume source identifier spellings.
+Predicate batches reserve source `_anon_N` names before allocating parser
+aliases; direct intrinsic call operands use fresh internal symbols outside
+the parsed identifier namespace. Sparse numeric suffixes cannot inflate
+new labels, and unused reservations do not create witness values or
+optimization objectives. Unresolved calls still carry the generic model's
+existing SSA/purity assumptions; source-bound proofs do not admit them.
+
+The scalar guard bridge's arithmetic fallback also handles equality and
+finite `!=` exclusions. It returns a checked integer assignment when the
+supported model is satisfiable, detects exhausted finite intervals, and
+keeps unsupported constraints inconclusive. A missing worker cannot turn
+contradictory equalities into a feasible result. This bridge models
+unbounded integer constraints; it does not establish C conversion rules
+or source reachability.
+
+Default guard-consistency SMT partners remain predicate models. Their SAT
+points do not establish an unsafe access, and abstract UNSAT does not refute
+an actual source bug. Guard-presence and guard-predicate checks retain these
+results as diagnostic corroboration, including the mathematical witness,
+without promoting them into source verification or refutation. The legacy
+bare guard receipt IDs and suffixed variants are detection-grade as well;
+source safety verifiers must earn their own source-bound receipts. Old clean
+journal entries credited to these predicate receipts require fresh review.

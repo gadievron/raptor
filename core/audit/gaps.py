@@ -2945,6 +2945,9 @@ def _reuse_ineligibility(
         # credited to it. Source hashes and clean_basis alone cannot restore
         # proof authority that the underlying model never established.
         receipts = getattr(entry, "evidence_tools", None) or []
+        if any("consistency:guard-presence" in receipt or "consistency:guard-predicate" in receipt
+               for receipt in receipts if isinstance(receipt, str)):
+            return "predicate consistency receipt requires source revalidation"
         if any(part.strip().startswith("smt:") and is_diagnostic_smt_rule(part.strip())
                for receipt in receipts if isinstance(receipt, str)
                for part in receipt.split("+")):
@@ -3010,6 +3013,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("predicate consistency"):
+        return "predicate_consistency"
     if reason.startswith("diagnostic SMT"):
         return "diagnostic_smt"
     if reason.startswith("integer disproof"):

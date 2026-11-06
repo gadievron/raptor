@@ -51,8 +51,9 @@ mis-encoded):
     (``*p``), ``sizeof``.  Any token containing ``.``, ``->``, ``[``,
     ``]`` still triggers rejection.  Function calls are an exception —
     see the free-variable fallback below.
-  - **Negative integer literals** (e.g. ``!= -1``) — write the
-    bit-pattern in hex instead (``!= 0xFFFFFFFF`` at uint32).
+  - **Negative literals outside a signed profile's range**, or negative
+    values at unsigned profiles. Signed decimal atoms such as ``-1``
+    are supported; arbitrary unary negation remains unsupported.
   - **Leading-zero decimals** (e.g. ``01234``) — ambiguous with C
     octal; use hex or remove the leading zero.
   - **Literals outside the profile's width range** — ``0x100`` at
@@ -385,6 +386,13 @@ def _parse_expr(
                 "unexpected end of expression — operand expected",
             )
         tok = tokens[pos[0]]
+        if tok == '-' and pos[0] + 1 < len(tokens) and _INT_RE.fullmatch(tokens[pos[0] + 1]):
+            literal = '-' + tokens[pos[0] + 1]
+            value = _parse_literal_value(literal, profile)
+            if isinstance(value, Rejection):
+                return _propagate(text, value)
+            pos[0] += 2
+            return _mk_val(value, profile.width)
         if tok == '(':
             paren_depth[0] += 1
             if paren_depth[0] > _MAX_PAREN_DEPTH:
@@ -532,28 +540,28 @@ def _parse_expr(
 
 
 _CALL_HEAD_RE = re.compile(r'[a-z_][a-z0-9_]*', re.IGNORECASE)
+_ANON_SOURCE_RE = re.compile(r'(?<![A-Za-z0-9_])_anon_[0-9]+(?![A-Za-z0-9_])')
+
+
+def reserve_anon_names(texts: list[str], vars_: dict[str, Any]) -> None:
+    """Reserve source spellings before allocating generated call symbols.
+
+    None is a lazy reservation, not a Z3 value. Only make_var materializes
+    a source variable, so unused reservations cannot become objectives or
+    witness values. Oversized guards will be rejected before parsing.
+    """
+    for text in texts:
+        if len(text) <= _MAX_CONDITION_CHARS:
+            for match in _ANON_SOURCE_RE.finditer(text):
+                vars_.setdefault(match.group(), None)
 
 
 def _next_anon_index(vars_: dict[str, Any]) -> int:
-    """Return the next free ``_anon_<N>`` index for ``vars_``.
-
-    Seeds from ``max(existing index) + 1`` rather than ``len(existing)``
-    so names stay unique even if a caller has deleted entries from
-    ``vars_`` (a sparse range would otherwise collide with a live anon
-    name).  Defensive against ``_anon_<non-int>`` keys: ignored.
-
-    Shared between :func:`_substitute_calls` (parser-side) and
-    :func:`make_anon_call_var` (verb-side) so both paths allocate from
-    the same counter.
-    """
-    existing_indices: list[int] = []
-    for k in vars_:
-        if k.startswith('_anon_'):
-            try:
-                existing_indices.append(int(k[len('_anon_'):]))
-            except ValueError:
-                pass
-    return max(existing_indices, default=-1) + 1
+    """Lowest unused index; sparse or huge source suffixes cannot inflate it."""
+    index = 0
+    while f'_anon_{index}' in vars_:
+        index += 1
+    return index
 
 
 def is_balanced_call(text: str) -> bool:
@@ -580,7 +588,7 @@ def is_balanced_call(text: str) -> bool:
 
 
 def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
-    """Allocate a fresh ``_anon_N`` Z3 BV for a function-call operand.
+    """Allocate a fresh internal Z3 BV for a function-call operand.
 
     Each call allocates a new variable.  This is the verb-path
     allocator (one BV per operand the verb's caller hands it); it has
@@ -594,14 +602,13 @@ def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     will produce two independent anon vars.  Tracked as a follow-on
     to the path-validator dedup landed alongside this comment.
 
-    Shares the ``_anon_*`` namespace with the parser-side substitution
-    in :func:`_substitute_calls`, so a verb can build an operand and
-    then a guard that references the same call without index collision.
+    The native name contains ``!`` and cannot be a parsed source identifier.
+    It stays separate from parser aliases and from source names introduced
+    later, even when a low-level caller has not pre-reserved its guards.
     """
-    counter = _next_anon_index(vars_)
-    name = f"_anon_{counter}"
-    vars_[name] = _mk_var(name, profile.width)
-    return vars_[name]
+    variable = z3.FreshConst(z3.BitVecSort(profile.width), prefix="_anon_operand")
+    vars_[str(variable.decl().name())] = variable
+    return variable
 
 
 # Detects program-statement shapes that aren't valid Boolean path-
@@ -873,6 +880,7 @@ def _substitute_calls(
     compatibility for callers that don't manage their own window).
     When both are omitted, dedup is intra-invocation only.
     """
+    reserve_anon_names([text], vars_)
     counter = _next_anon_index(vars_)
     # Reverse lookup from call-text to existing placeholder.
     # Preference order (most to least specific):
@@ -910,6 +918,8 @@ def _substitute_calls(
                     out.append(existing)
                     i = j
                     continue
+                while f'_anon_{counter}' in vars_:
+                    counter += 1
                 placeholder = f'_anon_{counter}'
                 counter += 1
                 vars_[placeholder] = _mk_var(placeholder, profile.width)
@@ -1479,7 +1489,7 @@ def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     Names retain case, matching the parser and source identifier identity.
     """
     key = name
-    if key not in vars_:
+    if vars_.get(key) is None:
         vars_[key] = _mk_var(key, profile.width)
     return vars_[key]
 
@@ -1537,6 +1547,7 @@ def check_verb_feasibility(
             unknown_reasons=[reason], model={}, smt_available=True,
             reasoning=f"refused: {reason.detail} ({mode})",
         )
+    reserve_anon_names([cond.text for cond in text_guards], vars_)
     tautology_solver = _new_solver()
     solver = _new_solver()
 
@@ -1677,6 +1688,7 @@ def check_path_feasibility(
         )
 
     vars_: dict[str, Any] = {}
+    reserve_anon_names([cond.text for cond in conditions], vars_)
     # Tautology checks (push/add(Not(expr))/check/pop) run on a
     # throwaway solver so residual push/pop state cannot leak into
     # the final solve.  Z3 4.15.4.0 has been observed to return

@@ -27,9 +27,11 @@ class BVProfile:
     signed: bool = False
 
     def __post_init__(self):
-        if self.width <= 0:
+        if type(self.width) is not int or self.width <= 0:
             msg = f"width must be positive, got {self.width}"
             raise ValueError(msg)
+        if type(self.signed) is not bool:
+            raise ValueError("signed must be a boolean")
 
     def mode_tag(self) -> str:
         """Compact tag like ``bv64u`` / ``bv32s`` — useful when brevity matters."""

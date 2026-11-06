@@ -7,6 +7,7 @@ Unsupported control flow and invalidated values decline guard credit.
 from dataclasses import dataclass
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
+from .integer_literals import source_integer_atom
 
 _MAX_PREMISES = 8
 _MAX_CONDITION_NODES = 128
@@ -69,14 +70,12 @@ def guards_for_operation(body, target, data, operands):
         left, right = _unwrap(left), _unwrap(right)
         if left is None or right is None:
             return None
-        if left.type not in {"identifier", "number_literal"} or right.type not in {"identifier", "number_literal"}:
-            return None
         # Do not flatten suffixes, character constants, or C octal syntax into
         # a different numeric value. The solver gate validates width as well.
-        for item in (left, right):
-            if item.type == "number_literal" and not _INTEGER_LITERAL_RE.fullmatch(text(item)):
-                return None
-        return [(f"{text(left)} {operator if truth else inverse[operator]} {text(right)}", names(node))]
+        atoms = [text(item) if item.type == "identifier" else source_integer_atom(item, data) for item in (left, right)]
+        if any(atom is None for atom in atoms):
+            return None
+        return [(f"{atoms[0]} {operator if truth else inverse[operator]} {atoms[1]}", names(node))]
 
     def exits(node):
         if node is None:
@@ -99,7 +98,8 @@ def guards_for_operation(body, target, data, operands):
             }:
                 return True  # arithmetic definedness/value flow is not encoded
             if item.type == "unary_expression" and text(item.child_by_field_name("operator")) in {"*", "-"}:
-                return True
+                if source_integer_atom(item, data) is None:
+                    return True
             if item.type in {"assignment_expression", "update_expression", "new_expression", "delete_expression"}:
                 return True  # no alias/evaluation-order model, including C++ references
             if item.type == "declaration":

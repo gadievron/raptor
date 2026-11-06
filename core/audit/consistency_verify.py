@@ -1029,11 +1029,19 @@ def _searched_set_note(walk: dict[str, Any]) -> str:
     )
 
 
+def _predicate_model_note(smt: Any) -> dict | None:
+    """Scalar feasibility and comparison models do not prove source bugs."""
+    scope = getattr(smt, "oracle_scope", "")
+    if scope not in {"integer-constraints", "signed-comparison-model"}:
+        return None
+    return {"oracle_scope": scope, "modeled_feasible": getattr(smt, "feasible", None),
+            "reasoning": getattr(smt, "reasoning", ""), "witness": getattr(smt, "witness", None)}
+
+
 def _default_guard_smt(deviation: Any) -> Any:
     """Hand the deviant's own dominating guards to the existing
-    ``condition_smt`` sufficiency machinery (§3.4): feasible = the
-    path to the access is reachable under every guard that IS there,
-    so the missing majority guard is load-bearing."""
+    ``condition_smt`` integer model for diagnostic corroboration (§3.4).
+    This does not establish that a missing guard is load-bearing."""
     guards = list(getattr(deviation, "deviant_guards", []) or [])
     if not guards:
         return None
@@ -1066,14 +1074,12 @@ def guard_presence_verdict(
        precedent) searches the caller set for the guard shape. A
        guarding caller ⇒ enumerated ``guard-elsewhere`` inconclusive;
        either way the receipt names the searched set.
-    2. **SMT escalation** — the deviant's own dominating guards go to
-       the ``condition_smt`` sufficiency checker. Feasible ⇒ the
-       statistical outlier is upgraded to a witnessed promote-capable
-       confirmation (``consistency:guard-presence``, contract source
-       ``smt_witness``) when the majority meets the promote-adjacent
-       floor; infeasible ⇒ refuted (``deviant-path-infeasible``);
-       solver unavailable / unconstrained ⇒ the confirmation stays
-       detection-grade (``-majority``), aggregation-eligible only.
+    2. **Predicate diagnostics** — the deviant's dominating guards go
+       to ``condition_smt``. Its integer-constraint model cannot establish
+       a source safety violation or refute one. Keep model results as
+       corroboration and the statistical confirmation detection-grade.
+       Legacy injected oracle results retain their local return shape;
+       guard consistency receipt IDs remain detection-grade globally.
     """
     ctx = context or RoleContext()
     walk_note = ""
@@ -1105,6 +1111,9 @@ def guard_presence_verdict(
     feasible = getattr(smt, "feasible", None)
     smt_reason = getattr(smt, "reasoning", "") or ""
     witness = getattr(smt, "witness", None)
+    model_note = _predicate_model_note(smt)
+    if model_note is not None:
+        feasible, witness = None, None
 
     if feasible is False:
         return ConsistencyResult(
@@ -1180,6 +1189,8 @@ def guard_presence_verdict(
         callee=deviation.group_key,
         peer_evidence=deviation.peer_evidence,
     )
+    if model_note is not None:
+        result.corroboration.append({"smt_model": model_note})
     if walk is not None:
         result.corroboration.append({"caller_guard_walk": walk})
     # Detection-grade never reaches `finding` — cheap leg only.
@@ -1271,6 +1282,7 @@ def _signedness_mismatch_smt(
         feasible=True if res.mismatch else None,
         reasoning=res.reasoning,
         witness=res.witness,
+        oracle_scope="signed-comparison-model",
     )
 
 
@@ -1299,12 +1311,11 @@ def guard_predicate_verdict(
     * ``guard-variable-mismatch`` → no deterministic partner; stays
       detection-grade.
 
-    A concrete witness upgrades the deviant to a promote-capable
-    ``smt_witness`` confirmation when the majority meets the
-    promote-adjacent floor; provable infeasibility refutes
-    (``deviant-path-infeasible``); everything else is a
-    detection-grade ``-majority`` confirmation, aggregation-eligible
-    only.
+    Default predicate models remain diagnostic: a boundary value or
+    signed-comparison mismatch does not establish a source safety
+    violation, and model infeasibility does not refute one. Legacy
+    injected oracle results retain their local return shape; guard
+    consistency receipt IDs remain detection-grade globally.
     """
     from .guard_predicate import (
         KIND_MISSING_NULL_ARM,
@@ -1327,6 +1338,9 @@ def guard_predicate_verdict(
     feasible = getattr(smt, "feasible", None)
     smt_reason = getattr(smt, "reasoning", "") or ""
     witness = getattr(smt, "witness", None)
+    model_note = _predicate_model_note(smt)
+    if model_note is not None:
+        feasible, witness = None, None
 
     if feasible is False:
         if deviation.kind in (KIND_OFF_BY_ONE, KIND_OPERATOR_MISMATCH):
@@ -1407,6 +1421,8 @@ def guard_predicate_verdict(
         callee=deviation.group_key,
         peer_evidence=deviation.peer_evidence,
     )
+    if model_note is not None:
+        result.corroboration.append({"smt_model": model_note})
     # Detection-grade never reaches `finding` — cheap leg only.
     result.reachability = _entry_reachability(
         ctx, inventory, deviation.file, deviation.enclosing_function,

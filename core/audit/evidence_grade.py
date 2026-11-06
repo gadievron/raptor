@@ -380,8 +380,7 @@ _CLASSIFIER_FALLBACK_VERIFICATION: dict[str, frozenset[str]] = {
     "consistency": frozenset({
         "consistency:return-check", "consistency:flag-mode",
         "consistency:cleanup", "consistency:argument-shape",
-        "consistency:sanitize-sink", "consistency:guard-presence",
-        "consistency:clone-drift", "consistency:guard-predicate",
+        "consistency:sanitize-sink", "consistency:clone-drift",
     }),
     "fail_open": frozenset({
         "fail_open:handler-outcome", "fail_open:ignored-return",
@@ -445,6 +444,8 @@ def _is_detection_variant(part: str) -> bool:
     # unavailable — mirrors each channel's DETECTION_VARIANT_SUFFIX
     # contract.
     if part in ("joern:live", "joern:pre_sweep", "joern:flow-encoding"):
+        return True
+    if part.startswith("consistency:") and part.split(":", 2)[1].removesuffix("-majority") in {"guard-presence", "guard-predicate"}:
         return True
     if part.startswith("sanwit:"):
         # The whole sanwit namespace is detection-grade (mirrors
@@ -1140,9 +1141,9 @@ _RECEIPT_MAP: dict[str, tuple] = {
     "consistency:guard-presence": (
         EvidenceSource.TREE_SITTER,
         (
-            "an access site lacks the bounds/null guard its sibling "
-            "sites apply and condition_smt proves the unguarded path "
-            "feasible (solver witness + caller-walk receipts)"
+            "a site lacks the bounds/null guard its peers apply; "
+            "predicate feasibility is diagnostic and does not "
+            "establish a source safety violation"
         ),
     ),
     "consistency:clone-drift": (
@@ -1157,9 +1158,9 @@ _RECEIPT_MAP: dict[str, tuple] = {
         EvidenceSource.TREE_SITTER,
         (
             "a guard predicate deviates from its peers' (off-by-one "
-            "operator, missing null arm, signedness mix) and "
-            "condition_smt witnesses the value space the deviant "
-            "admits beyond them (solver witness + peer receipts)"
+            "operator, missing null arm, signedness mix); predicate "
+            "models corroborate the deviation without proving the "
+            "source bug"
         ),
     ),
     "consistency": (
