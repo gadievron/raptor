@@ -25,6 +25,16 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import packages.binary_analysis.radare2_understand as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_shutil_patch_targets(monkeypatch):
     """Keep shutil patch decorators and contexts on consumer-owned views."""
     import packages.binary_analysis.radare2_understand as consumer_0

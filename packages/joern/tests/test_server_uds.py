@@ -27,6 +27,21 @@ import pytest
 from packages.joern import server as server_mod
 from packages.joern.server import JoernServer
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_subprocess_launch_patches(monkeypatch):
+    """Keep launch mocks on consumer-owned subprocess module bindings."""
+    import packages.joern.server as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "Popen", consumer_0.subprocess.Popen,
+    )
+    patch_module_attribute(
+        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
+    )
+
 
 # ── stub unix-socket HTTP server ────────────────────────────────────
 
