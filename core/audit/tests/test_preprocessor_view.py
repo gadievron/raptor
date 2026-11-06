@@ -29,8 +29,6 @@ from typing import Any
 
 import pytest
 
-from core.testing.module_state import isolated_module_state
-
 from core.audit import preprocessor_view as pv
 from core.audit.preprocessor_view import (
     ExpandedView,
@@ -51,8 +49,8 @@ from core.audit.tests._live_transport import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "preprocessor_view"
 
-with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
-    HAVE_CPP = pv._preprocessor_for(False) is not None
+pv._reset_probe_cache()
+HAVE_CPP = pv._preprocessor_for(False) is not None
 
 needs_cpp = pytest.mark.skipif(
     not HAVE_CPP, reason="no C preprocessor (gcc/cpp) installed",
@@ -89,8 +87,9 @@ def _probe_cpp(tmp_path: Path, spy_calls: list, *, context: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
-    with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
-        yield
+    pv._reset_probe_cache()
+    yield
+    pv._reset_probe_cache()
 
 
 @pytest.fixture
@@ -859,3 +858,96 @@ def test_single_consumer_does_not_hash_or_retain_prepared_views(prepared_reuse, 
     setup = AnalysisSetup()
     assert expand(setup=setup).ok and expand(setup=setup).ok
     assert len(calls) == 2 and setup.preprocessed_views is None
+
+
+@pytest.mark.parametrize("payload, expected", [
+    (b"int one;\r\nint two;\rint three;\n", "int one;\nint two;\nint three;\n"),
+    (b"int bad; // \xff\n", "int bad; // \ufffd\n"),
+])
+def test_output_read_preserves_decoding_and_newlines(prepared_reuse, monkeypatch, payload, expected):
+    from types import SimpleNamespace
+    source, _, _, _, expand = prepared_reuse
+
+    def run(command, **kwargs):
+        output = Path(command[command.index('-o') + 1])
+        output.write_bytes(f'# 1 "{source}"\n'.encode() + payload)
+        return SimpleNamespace(returncode=0, stderr='')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    view = expand()
+    assert view.ok, view.errors
+    assert view.text == expected
+    assert view.origin_of(2) == (source.name, 2)
+
+
+def test_output_growth_over_byte_budget_is_refused_and_retried(prepared_reuse, monkeypatch):
+    from core.source import gated
+    _, setup, calls, _, expand = prepared_reuse
+    original = gated._open_gated
+    monkeypatch.setattr(pv, '_MAX_EXPANDED_BYTES', 512)
+
+    def grow(path, **kwargs):
+        handle, snapshot = original(path, **kwargs)
+        if Path(path).name == 'expanded.i':
+            try:
+                with Path(path).open('ab') as output:
+                    output.write(b'x' * 513)
+            except BaseException:
+                handle.close()
+                raise
+        return handle, snapshot
+
+    monkeypatch.setattr(gated, '_open_gated', grow)
+    rejected = expand()
+    assert not rejected.ok
+    assert any('exceeds 512 bytes' in error for error in rejected.errors)
+    assert setup.preprocessed_views.retained_bytes == 0
+    monkeypatch.setattr(gated, '_open_gated', original)
+    assert expand().ok
+    assert len(calls) == 2
+
+
+def test_nonregular_preprocessor_output_is_refused(prepared_reuse, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    _, setup, _, _, expand = prepared_reuse
+
+    def run(command, **kwargs):
+        output = Path(command[command.index('-o') + 1])
+        output.unlink(missing_ok=True)
+        os.mkfifo(output)
+        return SimpleNamespace(returncode=0, stderr='')
+
+    def unbounded_read(*args, **kwargs):
+        pytest.fail('preprocessor output must use a nonblocking bounded reader')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    monkeypatch.setattr(Path, 'read_text', unbounded_read)
+    view = expand()
+    assert not view.ok
+    assert any('not a regular file' in error for error in view.errors)
+    assert setup.preprocessed_views.retained_bytes == 0
+
+
+def test_output_growth_within_budget_is_read_completely(prepared_reuse, monkeypatch):
+    from core.source import gated
+    source, _, _, _, expand = prepared_reuse
+    original = gated._open_gated
+    monkeypatch.setattr(pv, '_MAX_EXPANDED_BYTES', 512)
+
+    def grow(path, **kwargs):
+        handle, snapshot = original(path, **kwargs)
+        if Path(path).name == 'expanded.i':
+            try:
+                with Path(path).open('ab') as output:
+                    output.write(b'int appended;\n')
+            except BaseException:
+                handle.close()
+                raise
+        return handle, snapshot
+
+    monkeypatch.setattr(gated, '_open_gated', grow)
+    view = expand()
+    assert view.ok, view.errors
+    assert view.text.endswith('int appended;\n')
+    assert view.origin_of(2) == (source.name, 2)

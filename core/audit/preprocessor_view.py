@@ -56,7 +56,9 @@ from typing import Any, TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
 from core.source.lines import splitlines_prefix
-from core.source import read_text_capped, open_regular
+from core.source import (
+    ReadBudgetExceededError, read_bytes_gated, read_text_capped, open_regular,
+)
 
 from ._util import safe_join
 from .compiler_sweep import _derive_include_dirs, _cached_include_dirs
@@ -592,14 +594,19 @@ def expand_translation_unit(
             )
 
         try:
-            if out_file.stat().st_size > _MAX_EXPANDED_BYTES:
-                return _degraded(
-                    file_path,
-                    f"expanded output exceeds {_MAX_EXPANDED_BYTES} bytes",
-                    tool=Path(pre[0]).name,
-                )
-            output = out_file.read_text(errors="replace")  # raw-open: cpp output written by this module into run scratch
-        except OSError as exc:
+            output = read_bytes_gated(
+                out_file, _MAX_EXPANDED_BYTES, follow_symlinks=False,
+            ).decode("utf-8", errors="replace")
+            # Match read_text's replacement decoding and universal newlines:
+            # source maps must retain the same line coordinates.
+            output = output.replace("\r\n", "\n").replace("\r", "\n")
+        except ReadBudgetExceededError:
+            return _degraded(
+                file_path,
+                f"expanded output exceeds {_MAX_EXPANDED_BYTES} bytes",
+                tool=Path(pre[0]).name,
+            )
+        except (OSError, ValueError) as exc:
             return _degraded(
                 file_path,
                 f"could not read preprocessor output: {exc}",
