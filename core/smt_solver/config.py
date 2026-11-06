@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ._validation import require_bool, require_width
+
 
 @dataclass(frozen=True)
 class BVProfile:
@@ -27,11 +29,8 @@ class BVProfile:
     signed: bool = False
 
     def __post_init__(self):
-        if type(self.width) is not int or self.width <= 0:
-            msg = f"width must be positive, got {self.width}"
-            raise ValueError(msg)
-        if type(self.signed) is not bool:
-            raise ValueError("signed must be a boolean")
+        require_width(self.width)
+        require_bool(self.signed, argument="signed")
 
     def mode_tag(self) -> str:
         """Compact tag like ``bv64u`` / ``bv32s`` — useful when brevity matters."""

@@ -1209,3 +1209,19 @@ select their frame from the index, while validating all guard inputs;
 a narrower flag can guard a wider index without changing its bounds
 obligation. Mixed promoted signedness and guard variables wider than the
 result frame remain unsupported by this single-profile comparison model.
+
+The shared SMT conversion predicate `truncation_loses_bits` requires both
+`to_signed` and an explicit `from_signed` keyword. A bit pattern alone
+does not establish the source integer value: unsigned `65535` and signed
+`-1` have the same 16-bit representation but different narrowing results.
+The predicate compares both interpreted values in a frame one bit wider
+than the source, covering narrowing and same-width signedness changes.
+It models the specified bit-pattern conversion; an actual C-source
+conversion still needs its source, target ABI and definedness obligations.
+
+Low-level SMT widths are exact positive Python integers, and signedness
+and model-completion flags are exact booleans. Witness signedness maps
+are validated before extraction, including unused entries. Generated
+witness aliases reserve all real declaration names; aliases for duplicate
+names are display labels, while source-sensitive consumers use a named
+expression registry through `format_vars`.

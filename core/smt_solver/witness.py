@@ -7,12 +7,11 @@ high-bit-set values as two's-complement negatives when ``signed=True``.
 """
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from collections.abc import Mapping
+from typing import Any
 
 from .availability import z3
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from ._validation import require_bool, require_width
 
 
 def bv_to_int(raw: int, width: int, signed: bool) -> int:
@@ -38,9 +37,10 @@ def bv_to_int(raw: int, width: int, signed: bool) -> int:
       declared width — width/raw mismatch from a wrong decl size or
       a hand-constructed test). Same: silent truncation hides the bug.
     """
-    if width <= 0:
-        msg = f"bv_to_int: width={width} must be positive (degenerate decl?)"
-        raise ValueError(msg)
+    require_width(width)
+    require_bool(signed, argument="signed")
+    if type(raw) is not int:
+        raise ValueError("bv_to_int: raw must be an integer")
     upper = 1 << width
     if not 0 <= raw < upper:
         msg = f"bv_to_int: raw={raw} out of range [0, {upper}) for width={width}"
@@ -48,6 +48,20 @@ def bv_to_int(raw: int, width: int, signed: bool) -> int:
     if signed and raw >= (1 << (width - 1)):
         return raw - upper
     return raw
+
+
+def _signedness_context(signed):
+    """Snapshot explicit flags, including entries absent from this model."""
+    if type(signed) is bool:
+        return signed
+    if not isinstance(signed, Mapping):
+        raise ValueError("signed must be a boolean or a mapping of names to booleans")
+    context = dict(signed)
+    for name, value in context.items():
+        if not isinstance(name, str):
+            raise ValueError("signedness map names must be strings")
+        require_bool(value, argument=f"signed[{name!r}]")
+    return context
 
 
 def _resolve_signedness(
@@ -74,7 +88,9 @@ def _resolve_signedness(
     """
     if isinstance(signed, bool):
         return signed
-    return bool(signed.get(name, False))
+    if not isinstance(signed, Mapping):
+        raise ValueError("signed must be a boolean or a mapping of names to booleans")
+    return require_bool(signed.get(name, False), argument=f"signed[{name!r}]")
 
 
 def format_witness(
@@ -86,35 +102,29 @@ def format_witness(
     `signed` accepts either a global `bool` (legacy) or a
     `Mapping[str, bool]` per-decl signedness map (preferred for
     mixed-type constraint sets). See `_resolve_signedness`.
+
+    Aliases for repeated names are display labels. Consumers that need
+    source-variable identity should use ``format_vars`` with their own
+    expression registry, not infer identity from a generated alias.
     """
-    # Collision detection on `name = str(decl)`. Z3 decls with the
-    # same name in different scopes (e.g. a constraint set that
-    # combined two parsed expressions, each with its own `x`) all
-    # stringify to `"x"` — pre-fix the second decl's value silently
-    # OVERWROTE the first in `out[name] = ...`. The model then
-    # appeared to have one variable when it really had two, and
-    # consumers comparing constraints against the witness saw the
-    # wrong value for one of them. Surface the collision via a
-    # disambiguating suffix (`x`, `x__1`, `x__2`, ...) so all values
-    # survive and the operator can see the multiplicity in the
-    # output.
+    signed = _signedness_context(signed)
+    declarations = model.decls()
+    entries = [(decl, model[decl]) for decl in declarations]
+    entries = [(decl, value) for decl, value in entries if z3.is_bv_value(value)]
+    # Generated display aliases must not take any declaration's real name,
+    # even when that declaration occurs later in the model's traversal.
+    reserved = {str(decl) for decl in declarations}
     out: dict[str, int] = {}
-    for decl in model.decls():
-        val = model[decl]
-        if not z3.is_bv_value(val):
-            continue
+    next_suffix: dict[str, int] = {}
+    for decl, val in entries:
         base_name = str(decl)
         name = base_name
-        # Disambiguate same-named decls.
         if name in out:
-            suffix = 1
-            while f"{name}__{suffix}" in out:
+            suffix = next_suffix.get(base_name, 1)
+            while f"{base_name}__{suffix}" in reserved or f"{base_name}__{suffix}" in out:
                 suffix += 1
-            name = f"{name}__{suffix}"
-        # Signedness resolves on the BASE name: the caller's
-        # signedness map is keyed by declaration names, so looking up
-        # the disambiguation-suffixed "x__1" missed the entry for "x"
-        # and silently rendered the second same-named decl unsigned.
+            name = f"{base_name}__{suffix}"
+            next_suffix[base_name] = suffix + 1
         out[name] = bv_to_int(
             val.as_long(), val.size(), _resolve_signedness(base_name, signed),
         )
@@ -158,6 +168,8 @@ def format_vars(
     line on each silent skip lets operators investigate
     suspicious witness gaps without changing the public API.
     """
+    signed = _signedness_context(signed)
+    require_bool(completion, argument="completion")
     out: dict[str, int] = {}
     for name, var in vars_.items():
         val = model.eval(var, model_completion=True) if completion else model[var]

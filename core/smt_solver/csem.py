@@ -35,7 +35,7 @@ Usage::
     from core.smt_solver.csem import truncation_loses_bits
 
     value32 = z3.BitVec("value32", 32)
-    s.add(truncation_loses_bits(value32, to_width=8, to_signed=False))
+    s.add(truncation_loses_bits(value32, to_width=8, to_signed=False, from_signed=False))
     # SAT when a uint32→uint8 narrowing changes the value
 
     # Sign-preserving widening composed with arithmetic right shift
@@ -50,6 +50,7 @@ from __future__ import annotations
 from typing import Any
 
 from .availability import z3
+from ._validation import require_bool, require_width
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ def truncate(bv: Any, to_width: int) -> Any:
     ValueError pointing at THIS function with both widths in the
     message — the caller backtrace identifies the upstream bug.
     """
+    require_width(to_width, argument="to_width")
     src_width = bv.size()
     if to_width <= 0 or to_width > src_width:
         msg = (
@@ -95,6 +97,7 @@ def sign_extend(bv: Any, to_width: int) -> Any:
     a negative ext-width and a Z3 assertion failure from inside
     the C++ layer.
     """
+    require_width(to_width, argument="to_width")
     src_width = bv.size()
     if to_width < src_width:
         msg = (
@@ -113,6 +116,7 @@ def zero_extend(bv: Any, to_width: int) -> Any:
     bv.size()`` produced a negative ext-width and a Z3 assertion
     failure.
     """
+    require_width(to_width, argument="to_width")
     src_width = bv.size()
     if to_width < src_width:
         msg = (
@@ -123,27 +127,25 @@ def zero_extend(bv: Any, to_width: int) -> Any:
     return z3.ZeroExt(to_width - src_width, bv)
 
 
-def truncation_loses_bits(bv: Any, to_width: int, to_signed: bool) -> Any:
-    """Predicate: does truncating ``bv`` to ``to_width`` lose information?
+def truncation_loses_bits(bv: Any, to_width: int, to_signed: bool, *, from_signed: bool) -> Any:
+    """Predicate: does this narrowing/reinterpretation change the integer value?
 
-    True exactly when the narrow value, re-extended to the original width
-    under the *narrow (destination) type's* signedness, differs from the
-    original — i.e. the C "value changes when assigned to a narrower type"
-    semantic.  ``to_signed`` names the narrow type's signedness to
-    parallel ``cast(..., from_signed=...)``.
+    Both source and destination signedness are required. The same source
+    bits can denote -1 or an unsigned maximum, with different narrowing
+    outcomes. Compare both values after extending to one bit wider than
+    the source: that frame distinguishes negative values from every
+    unsigned source value. A same-width signedness change is covered too.
 
-    Pre-fix this assumed ``to_width <= bv.size()`` (truncation must
-    narrow). When called with ``to_width > bv.size()`` (e.g. from a
-    miscalibrated overflow check that swapped the from/to widths),
-    the ``truncate(bv, to_width)`` call would have crashed inside Z3
-    with an opaque assertion error from C++. Now ``truncate``'s own
-    width guard fires first with a Python-readable ValueError that
-    pinpoints THIS predicate as the caller, so an incorrectly-flipped
-    width pair is debuggable from the traceback.
+    This models a specified bit-pattern conversion; it does not bind an
+    actual C cast or establish language/target-specific definedness.
     """
+    require_bool(from_signed, argument="from_signed")
+    require_bool(to_signed, argument="to_signed")
     narrow = truncate(bv, to_width)
-    wide = sign_extend(narrow, bv.size()) if to_signed else zero_extend(narrow, bv.size())
-    return wide != bv
+    compare_width = bv.size() + 1
+    source = sign_extend(bv, compare_width) if from_signed else zero_extend(bv, compare_width)
+    converted = sign_extend(narrow, compare_width) if to_signed else zero_extend(narrow, compare_width)
+    return source != converted
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +224,7 @@ def ashr(a: Any, b: Any) -> Any:
     helper exists so call sites read the intent rather than relying on
     the reader to remember the Python-operator-to-Z3-semantics mapping.
     """
+    # Z3 shifts are total. C shift-count/definedness obligations are separate.
     return a >> b
 
 
@@ -247,6 +250,8 @@ def cast(bv: Any, to_width: int, from_signed: bool) -> Any:
     callers interpret the result with the semantics they want (via
     signed/unsigned comparisons downstream), so it's not a parameter.
     """
+    require_width(to_width, argument="to_width")
+    require_bool(from_signed, argument="from_signed")
     from_width = bv.size()
     if to_width > from_width:
         return sign_extend(bv, to_width) if from_signed else zero_extend(bv, to_width)
