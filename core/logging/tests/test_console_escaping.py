@@ -275,3 +275,30 @@ def test_candidate_universe_covers_every_runtime_tree(tmp_path):
         assert rel in rels, f"runtime tree not walked: {rel}"
     assert not any(r.startswith(("docs/", "core/logging/")) for r in rels)
     assert not any("tests" in r or "scripts" in r for r in rels)
+
+
+def test_console_sweep_preserves_git_filename_bytes(tmp_path):
+    """Every unusual tracked path still participates in the actual sweep."""
+    import os
+
+    from core.logging.console_audit import _candidates
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    names = ["space name", "café", "tab\tname", "line\nname", 'quote"name']
+    if os.name == "posix":
+        names.append(os.fsdecode(b"raw-\xff"))
+    expected = {f"core/sample/{name}.py" for name in names}
+    excluded = {"core/tests/café.py", "core/logging/line\nname.py",
+                "core/scripts/café.py", "docs/café.py"}
+    for rel in expected | excluded:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("import logging\nlogging.basicConfig()\n")
+    git_run(repo, "add", "-A")
+    for quote_path in ("true", "false"):
+        git_run(repo, "config", "core.quotePath", quote_path)
+        candidates = _candidates(repo)
+        assert set(candidates) == expected
+        assert len(candidates) == len(expected)
+        assert set(runtime_console_offences(repo)) == {f"{rel}:2" for rel in expected}

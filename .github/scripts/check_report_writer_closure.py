@@ -125,12 +125,16 @@ def _audit_candidates(root: Path, rels: list[str]) -> list[list]:
 
 def _candidates(root: Path) -> list[str]:
     """Git-tracked python-ish files that can host a report writer."""
+    # Git quotes unusual names in line output; NUL records preserve paths.
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files"],
-        capture_output=True, text=True, check=True,
-    ).stdout.splitlines()
+        ["git", "-C", str(root), "ls-files", "-z"],
+        capture_output=True, check=True,
+    ).stdout.split(b"\0")
     result = []
-    for rel in out:
+    for raw in out:
+        if not raw:
+            continue
+        rel = raw.decode("utf-8", errors="surrogateescape")
         if not (rel.endswith(".py") or rel.startswith(("libexec/", "bin/"))):
             continue
         if rel.startswith(".github/"):
