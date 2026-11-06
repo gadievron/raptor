@@ -18,10 +18,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 __all__ = [
     "join_lf_slice",
+    "join_lines_prefix",
     "number_lines",
     "read_context",
     "read_lines",
@@ -120,6 +122,32 @@ def splitlines_prefix(text: str, limit: int) -> list[str]:
             # prefix line when consecutive separators occur at the cut.
             return text[:end].splitlines()[:limit]
     return text.splitlines()[:limit]
+
+
+def join_lines_prefix(lines: Iterable[str], max_chars: int) -> str:
+    """Return a nonnegative character prefix of LF-joined lines.
+
+    Stop consuming lines once the prefix is complete. Unused lines are not
+    validated or materialized; callers may request cap + 1 to detect overflow.
+    """
+    if max_chars < 0:
+        raise ValueError("max_chars must be nonnegative")
+    if max_chars == 0:
+        return ""
+    parts: list[str] = []
+    remaining = max_chars
+    for line in lines:
+        if parts:
+            parts.append("\n")
+            remaining -= 1
+            if remaining == 0:
+                break
+        prefix = line[:remaining]
+        parts.append(prefix)
+        remaining -= len(prefix)
+        if remaining == 0:
+            break
+    return "".join(parts)
 
 
 def join_lf_slice(text: str, start: int, end: int) -> str:

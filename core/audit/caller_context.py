@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.source.lines import join_lines_prefix
+
 
 CALLER_ENTRY_LINES = 12
 CALLER_ENTRY_CHARS = 1200
@@ -68,9 +70,10 @@ def enrich_caller_entries(callers: list[dict], target_path: Path, inventory: dic
         entry = lines[entry_start:]
         # Clipping each line after the global limit preserves the final prefix
         # and overflow decision without formatting arbitrarily large source lines.
-        excerpt = "\n".join(
-            f"{first + i:4d}  {line[:CALLER_ENTRY_CHARS + 1]}"
-            for i, line in enumerate(entry)
+        excerpt = join_lines_prefix(
+            (f"{first + i:4d}  {line[:CALLER_ENTRY_CHARS + 1]}"
+             for i, line in enumerate(entry)),
+            CALLER_ENTRY_CHARS + 1,
         )
         if summary is not None:
             i, text = summary
