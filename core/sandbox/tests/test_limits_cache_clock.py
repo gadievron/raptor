@@ -6,6 +6,8 @@ import pytest
 
 from core.sandbox import preexec, state
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class TestLimitsCacheClock:
     @pytest.fixture(autouse=True)
@@ -15,8 +17,8 @@ class TestLimitsCacheClock:
         monkeypatch.setattr(preexec, "_CONFIG_PATH", self.path)
         monkeypatch.setattr(state, "_user_limits_cache", None)
         monkeypatch.setattr(state, "_user_limits_cache_decided_at", 0.0)
-        monkeypatch.setattr(preexec.time, "monotonic", lambda: self.clock["monotonic"])
-        monkeypatch.setattr(preexec.time, "time", lambda: self.clock["wall"])
+        patch_module_attribute(monkeypatch, preexec, "time", "monotonic", lambda: self.clock["monotonic"])
+        patch_module_attribute(monkeypatch, preexec, "time", "time", lambda: self.clock["wall"])
 
     @pytest.mark.parametrize("wall_jump", [-86400, 86400])
     def test_corrected_config_retries_at_elapsed_deadline(self, wall_jump):

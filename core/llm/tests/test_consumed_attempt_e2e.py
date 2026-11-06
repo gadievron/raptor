@@ -26,6 +26,8 @@ import pytest
 
 from core.testing.fds import read_and_close
 
+from core.testing.module_bindings import patch_module_attribute
+
 anthropic = pytest.importorskip("anthropic")
 
 import core.llm.dispatcher.client as dispatcher_client  # noqa: E402
@@ -59,7 +61,7 @@ def fake_creds():
 @pytest.fixture
 def _no_sleep(monkeypatch):
     import core.llm.client as client_mod
-    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
 
 def _wire(fake_creds, tmp_path, upstream, monkeypatch) -> LLMDispatcher:

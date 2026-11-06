@@ -37,6 +37,8 @@ import pytest
 from core.llm.client import LLMClient
 from core.llm.config import LLMConfig, ModelConfig
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _captured_logger(monkeypatch, module):
     """Patch every log-level method on ``module.logger`` and return
@@ -89,7 +91,7 @@ class TestClientRetryLogCluster:
         # Patch time.sleep to instant — the retry backoff would
         # otherwise add 6+ seconds per test.
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         primary = _model("anthropic", "primary")
         config = _config(primary, max_retries=3)
@@ -206,7 +208,7 @@ class TestTimeoutAttemptVisibility:
         self, monkeypatch,
     ):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         primary = _model("anthropic", "primary")
         config = _config(primary, max_retries=3)
@@ -251,7 +253,7 @@ class TestTimeoutAttemptVisibility:
         """The carve-out is timeout-only — the 429/5xx storm dedup
         must not regress."""
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         primary = _model("anthropic", "primary")
         config = _config(primary, max_retries=2)
@@ -291,7 +293,7 @@ class TestStructuredTimeoutAttemptVisibility:
 
     def _run(self, monkeypatch, error, *, max_retries: int = 3) -> dict:
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         client = LLMClient(
             _config(_model("anthropic", "primary"),
                     max_retries=max_retries))

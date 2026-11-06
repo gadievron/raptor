@@ -125,7 +125,6 @@ def _load_user_limits() -> dict:
 
     Missing keys use defaults. Invalid file logs a WARNING and falls back.
     """
-    import time
     with state._cache_lock:
         # Cached SUCCESS: return immediately. No TTL — we trust the
         # operator who edited the config to clear the cache (or

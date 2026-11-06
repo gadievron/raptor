@@ -15,6 +15,8 @@ import pytest
 from core.llm.client import LLMClient, is_timeout_error
 from core.llm.config import LLMConfig, ModelConfig
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _model(provider: str, name: str) -> ModelConfig:
     return ModelConfig(
@@ -71,7 +73,7 @@ class TestIsTimeoutError:
 class TestGenerateTimeoutRetryCap:
     def test_timeout_capped_at_one_retry(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -88,7 +90,7 @@ class TestGenerateTimeoutRetryCap:
 
     def test_non_timeout_retryable_keeps_full_budget(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -104,7 +106,7 @@ class TestGenerateTimeoutRetryCap:
 
     def test_timeout_then_success_recovers(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         good = MagicMock()
@@ -134,7 +136,7 @@ class TestPerCallTimeoutRetryCap:
 
     def test_cap_zero_means_no_identical_retry(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -150,7 +152,7 @@ class TestPerCallTimeoutRetryCap:
 
     def test_cap_zero_structured(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -173,7 +175,7 @@ class TestPerCallTimeoutRetryCap:
         # timeout_retry_cap only constrains timeout-class failures;
         # 5xx-style retryables keep the full max_retries budget.
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -189,7 +191,7 @@ class TestPerCallTimeoutRetryCap:
 
     def test_invalid_cap_falls_back_to_default(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -219,7 +221,7 @@ class TestPerCallTimeoutRetryCap:
 class TestGenerateStructuredTimeoutRetryCap:
     def test_timeout_capped_at_one_retry(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
@@ -237,7 +239,7 @@ class TestGenerateStructuredTimeoutRetryCap:
 
     def test_parse_failure_keeps_full_budget(self, monkeypatch):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
         import json as _json
 

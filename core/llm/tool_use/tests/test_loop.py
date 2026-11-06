@@ -35,6 +35,8 @@ from core.llm.tool_use import (
 )
 from core.llm.tool_use.loop import ToolUseLoop
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 # ---------------------------------------------------------------------------
 # Fake provider — records calls, replays scripted responses
@@ -539,7 +541,7 @@ def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
     # at the ``.loop`` step. Using the module object directly skips
     # the resolver and works on every pytest version.
     from core.llm.tool_use import loop as _loop_mod
-    monkeypatch.setattr(_loop_mod.time, "monotonic", _tick)
+    patch_module_attribute(monkeypatch, _loop_mod, "time", "monotonic", _tick)
 
     fp = _FakeProvider([
         _tool_call_response(("c1", "echo", {})),

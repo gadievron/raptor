@@ -27,6 +27,8 @@ import pytest
 from core.http import HttpError
 from packages.sca.bump import cli as bump_cli
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class _StubHttp:
     """Serves the GitHub-release, PyPI-metadata, and OSV endpoints
@@ -137,7 +139,7 @@ def test_no_cache_does_not_serve_stale_entries(
     import core.json.cache as cache_mod
     real_time = _time.time
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(cache_mod.time, "time", lambda: real_time() - 60)
+        patch_module_attribute(mp, cache_mod, "time", "time", lambda: real_time() - 60)
         rc, _, http_seed = _run_cli(
             monkeypatch, capsys, bump_target, cache_root,
         )
