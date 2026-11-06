@@ -31,8 +31,11 @@ class _LedgerCase(unittest.TestCase):
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.home = Path(self._tmp.name)
-        self.sessions_dir = (self.home / ".local" / "share" / "raptor"
-                             / "sessions.d")
+        self.registry = self.home / ".raptor"
+        registry_env = patch.dict(os.environ, {"RAPTOR_REGISTRY_HOME": str(self.registry)})
+        self.addCleanup(registry_env.stop)
+        registry_env.start()
+        self.sessions_dir = self.registry / "sessions.d"
         self.sessions_dir.mkdir(parents=True)
         self.pid = 424242
 
@@ -273,6 +276,7 @@ class BashHookSessionTest(_LedgerCase):
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": str(self.home),
+            "RAPTOR_REGISTRY_HOME": str(self.registry),
             "RAPTOR_SESSION_PID": str(self.pid),
         }
         if extra_env:

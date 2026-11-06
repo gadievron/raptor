@@ -44,6 +44,7 @@ class TestMismatchMenuDisplay(unittest.TestCase):
 
             env = dict(os.environ)
             env["HOME"] = str(home)
+            env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
             env["_RAPTOR_TRUSTED"] = "1"
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT),
