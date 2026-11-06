@@ -104,6 +104,11 @@ def _duplicate_key(
         # Hash shared tables once per run, never once per finding: large
         # artifact tables otherwise multiply serialization work by results.
         context_keys[source_key] = _content_key({
+            # Equal numeric regions need not denote equal source spans when
+            # runs use different column units, line separators, or defaults.
+            "text_context": {key: run[key] for key in (
+                "columnKind", "newlineSequences", "defaultEncoding", "defaultSourceLanguage",
+            ) if key in run},
             "tables": {key: run[key] for key in (
                 "originalUriBaseIds", "artifacts", "logicalLocations",
                 "addresses", "specialLocations", "taxonomies", "graphs",

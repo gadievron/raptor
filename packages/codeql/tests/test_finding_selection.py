@@ -309,6 +309,42 @@ def _located_result(identity="shared", level=None):
     return result
 
 
+@pytest.mark.parametrize("field,first_value,second_value", [
+    ("columnKind", "utf16CodeUnits", "unicodeCodePoints"),
+    ("newlineSequences", ["\r\n", "\n"], ["\r\n", "\n", "\u2028"]),
+    ("defaultEncoding", "utf-8", "utf-16"),
+    ("defaultSourceLanguage", "python", "javascript"),
+])
+@pytest.mark.parametrize("known_first_context", [False, True])
+def test_source_interpretation_context_prevents_unsafe_deduplication(
+    tmp_path, field, first_value, second_value, known_first_context,
+):
+    first = _run(_located_result())
+    second = copy.deepcopy(first)
+    if known_first_context:
+        first[field] = first_value
+    second[field] = second_value
+    path = _write(tmp_path, "contexts.sarif", first, second)
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+    assert (len(selected), count, duplicates) == (2, 2, 0)
+    assert len({id(candidate.run) for candidate in selected}) == 2
+
+
+@pytest.mark.parametrize("field,value", [
+    ("columnKind", "unicodeCodePoints"),
+    ("newlineSequences", ["\r\n", "\n", "\u2028"]),
+    ("defaultEncoding", "utf-16"),
+    ("defaultSourceLanguage", "javascript"),
+])
+def test_identical_source_interpretation_still_deduplicates(tmp_path, field, value):
+    run = _run(_located_result())
+    run[field] = value
+    path = _write(tmp_path, "matching-contexts.sarif", run, copy.deepcopy(run))
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+    assert (len(selected), count, duplicates) == (1, 2, 1)
+    assert selected[0].run[field] == value
+
+
 def test_duplicates_do_not_crowd_distinct_bug_out_of_cap(tmp_path):
     paths = [
         _write(tmp_path, "default.sarif", _run(_located_result(level="error"))),
