@@ -202,8 +202,10 @@ class WorkQueue:
         active = set(files)
         for row in self.db.execute("SELECT id,extra_file,status FROM views WHERE namespace=?",(self.namespace,)).fetchall():
             if row["extra_file"] not in active:
-                self.db.execute("UPDATE views SET status='obsolete' WHERE namespace=? AND id=?",(self.namespace,row["id"]))
-                self.db.execute("UPDATE jobs SET status='obsolete' WHERE namespace=? AND view_id=?",(self.namespace,row["id"]))
+                if row["status"] != "obsolete":
+                    self.db.execute("UPDATE views SET status='obsolete' WHERE namespace=? AND id=?",(self.namespace,row["id"]))
+                # Include legacy NULL statuses when retiring remaining jobs.
+                self.db.execute("UPDATE jobs SET status='obsolete' WHERE namespace=? AND view_id=? AND status IS NOT 'obsolete'",(self.namespace,row["id"]))
         self.add_views(active)
         self.db.commit()
 
