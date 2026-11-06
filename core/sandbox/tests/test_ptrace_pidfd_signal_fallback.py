@@ -8,6 +8,8 @@ import pytest
 
 from core.sandbox import ptrace_probe as probe
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture
 def calls(monkeypatch):
@@ -105,6 +107,6 @@ def test_ownership_check_respects_cleanup_deadline(monkeypatch, calls):
     monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
     monkeypatch.setattr(probe.os, 'waitpid', Mock(side_effect=InterruptedError()))
     with monkeypatch.context() as scoped:
-        scoped.setattr(probe.time, 'monotonic', Mock(side_effect=[100.0, 106.0]))
+        patch_module_attribute(scoped, probe, "time", 'monotonic', Mock(side_effect=[100.0, 106.0]))
         probe._try_kill_and_reap(123)
     killed.assert_not_called()

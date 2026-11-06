@@ -16,6 +16,8 @@ from core.audit.joern_backend import (
     import_sibling_joern_flows,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 _FLOWS = {"src/a.c": [{"source_method": "read_input", "sink": "memcpy"}]}
 
 
@@ -358,9 +360,7 @@ class TestStartJoernServerCpgTiming:
         monkeypatch.setattr(jb, "install_flow_semantics", lambda *a, **k: 0)
 
         state = {"now": 50.0}
-        monkeypatch.setattr(
-            jb.time, "monotonic", lambda: state["now"],
-        )
+        patch_module_attribute(monkeypatch, jb, "time", "monotonic", lambda: state["now"])
 
         def fake_ensure(srv, target_path, tunables=None, exclude_dirs=(),
                         scope_exclude_dirs=(), out_dir=None):

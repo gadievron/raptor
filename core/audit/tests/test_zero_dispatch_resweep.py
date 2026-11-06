@@ -24,6 +24,8 @@ from core.audit.orchestrator import (
     _resweep_zero_dispatch_suspicious,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _outcome(name: str, status: str = "suspicious") -> ReviewOutcome:
     o = ReviewOutcome(
@@ -169,7 +171,7 @@ class TestBounds:
         # bound — when the first sweep actually completes:
         # call-count-independent in any environment.
         clock = {"now": 0.0}
-        monkeypatch.setattr(orch.time, "monotonic", lambda: clock["now"])
+        patch_module_attribute(monkeypatch, orch, "time", "monotonic", lambda: clock["now"])
         swept_chain = orch._run_tool_chain  # the _patch_mechanical stub
 
         def chain_then_burn_bound(chain, **kw):

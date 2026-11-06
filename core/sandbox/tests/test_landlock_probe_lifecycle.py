@@ -13,6 +13,8 @@ import pytest
 
 from core.sandbox import landlock, probes
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux Landlock probes")
 PID = 424242
 
@@ -170,7 +172,7 @@ def test_parent_action_and_exit_share_deadline(monkeypatch):
         deadlines.append(deadline)
         return 0
 
-    monkeypatch.setattr(probes.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, probes, "time", "monotonic", lambda: clock[0])
     monkeypatch.setattr(probes.os, "pidfd_open", no_pidfd, raising=False)
     monkeypatch.setattr(probes, "_poll_probe_child_exit", wait)
     monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 5.0)

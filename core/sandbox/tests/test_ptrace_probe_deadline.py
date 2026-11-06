@@ -11,6 +11,8 @@ import pytest
 
 from core.sandbox import ptrace_probe as probe
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux ptrace probe internals")
 
 
@@ -120,8 +122,8 @@ def test_nonblocking_wait_honors_deadline(monkeypatch):
         return 0, 0
 
     monkeypatch.setattr(probe.os, "waitpid", wait)
-    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    patch_module_attribute(monkeypatch, probe, "time", "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, probe, "time", "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     with pytest.raises(TimeoutError):
         probe._waitpid_eintr_safe(PID, os.WUNTRACED, deadline=0.025)
     assert clock[0] == pytest.approx(0.025)
@@ -140,7 +142,7 @@ def test_eintr_retries_cannot_extend_deadline(monkeypatch):
         raise InterruptedError()
 
     monkeypatch.setattr(probe.os, "waitpid", wait)
-    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, probe, "time", "monotonic", lambda: clock[0])
     with pytest.raises(TimeoutError):
         probe._waitpid_eintr_safe(PID, 0, deadline=1.0)
     assert len(calls) == 2
@@ -149,7 +151,7 @@ def test_eintr_retries_cannot_extend_deadline(monkeypatch):
 
 def test_terminal_result_can_be_collected_without_waiting(monkeypatch):
     monkeypatch.setattr(probe.os, "waitpid", lambda pid, flags: (pid, 0))
-    monkeypatch.setattr(probe.time, "monotonic", lambda: 10.0)
+    patch_module_attribute(monkeypatch, probe, "time", "monotonic", lambda: 10.0)
     assert probe._waitpid_eintr_safe(PID, 0, deadline=1.0) == (PID, 0)
 
 
@@ -278,7 +280,7 @@ def test_repeated_nonterminal_cleanup_events_cannot_extend_budget(
         return pid, STOPPED
 
     monkeypatch.setattr(probe, "_waitpid_eintr_safe", wait)
-    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, probe, "time", "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe, "_REAP_TIMEOUT_S", 1.0)
     with caplog.at_level(logging.WARNING, logger=probe.__name__):
         probe._try_kill_and_reap(PID)

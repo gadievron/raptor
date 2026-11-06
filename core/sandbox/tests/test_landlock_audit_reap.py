@@ -12,6 +12,8 @@ import pytest
 
 from core.sandbox import _landlock_audit as audit
 
+from core.testing.module_bindings import patch_module_attribute
+
 PID = 1 << 30
 
 
@@ -70,8 +72,8 @@ def test_unreapable_child_stops_after_both_budgets(pid_fallback, monkeypatch, ca
     clock = iter(i / 100 for i in range(100))
     wait = Mock(return_value=(0, 0))
     kill = Mock()
-    monkeypatch.setattr(audit.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(audit.time, "sleep", lambda delay: None)
+    patch_module_attribute(monkeypatch, audit, "time", "monotonic", lambda: next(clock))
+    patch_module_attribute(monkeypatch, audit, "time", "sleep", lambda delay: None)
     monkeypatch.setattr(audit.os, "waitpid", wait)
     monkeypatch.setattr(audit.os, "kill", kill)
     audit._kill_and_reap(PID, timeout_s=0.02)
@@ -145,7 +147,7 @@ def test_repeated_interruptions_are_bounded_without_signaling(
 ):
     clock = iter(i / 100 for i in range(100))
     kill = Mock()
-    monkeypatch.setattr(audit.time, "monotonic", lambda: next(clock))
+    patch_module_attribute(monkeypatch, audit, "time", "monotonic", lambda: next(clock))
     monkeypatch.setattr(audit.os, "waitpid", Mock(side_effect=InterruptedError()))
     monkeypatch.setattr(audit.os, "kill", kill)
     audit._kill_and_reap(PID, timeout_s=0.02)

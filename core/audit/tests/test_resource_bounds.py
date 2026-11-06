@@ -27,6 +27,8 @@ from core.audit.resource_bounds import (
     seed_budget_violations,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytest.importorskip("tree_sitter_c", reason="CFG leg needs tree-sitter")
 
 
@@ -571,7 +573,7 @@ class TestCallerWalkDeadline:
             return 100.0 if in_walk["flag"] else 0.0
 
         monkeypatch.setattr(rb, "_adjudicate_site", spy_adjudicate)
-        monkeypatch.setattr(rb.time, "monotonic", fake_monotonic)
+        patch_module_attribute(monkeypatch, rb, "time", "monotonic", fake_monotonic)
         res = rb.run_resource_bounds_check(
             tmp_path, "src/inner.c", "cache_insert",
             "items list grows without limit", budget_s=10.0,

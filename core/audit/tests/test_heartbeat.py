@@ -20,6 +20,8 @@ from core.audit.heartbeat import (
     _MAX_DETAIL_CHARS,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _read(run_dir: Path) -> dict:
     return json.loads((run_dir / HEARTBEAT_FILENAME).read_text())
@@ -49,7 +51,7 @@ def test_throttle_two_directions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = [1000.0]
-    monkeypatch.setattr(hb_mod.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, hb_mod, "time", "monotonic", lambda: clock[0])
     hb = Heartbeat(tmp_path, "cocci_sweep")
     hb.beat(done=1)
     # Under the interval: suppressed (old payload survives).

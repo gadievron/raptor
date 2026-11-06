@@ -8,6 +8,8 @@ import pytest
 
 from core.sandbox import telemetry_mac as tmac
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
@@ -114,7 +116,7 @@ class TestKeyCreationRace:
             if key.read_bytes() != winner_key:
                 key.write_bytes(winner_key)
 
-        monkeypatch.setattr(tmac.time, "sleep", finish_write)
+        patch_module_attribute(monkeypatch, tmac, "time", "sleep", finish_write)
         assert tmac._load_or_create_key() == winner_key
 
     def test_stable_short_key_refused_after_retry_budget(
@@ -123,7 +125,7 @@ class TestKeyCreationRace:
         key.write_bytes(b"k" * 7)  # stable wrong-length content
         key.chmod(0o600)
         sleeps: list = []
-        monkeypatch.setattr(tmac.time, "sleep", sleeps.append)
+        patch_module_attribute(monkeypatch, tmac, "time", "sleep", sleeps.append)
         assert tmac._load_or_create_key() is None
         assert sleeps, "short content must be retried before refusal"
 
@@ -135,7 +137,7 @@ class TestKeyCreationRace:
         key.write_bytes(b"k" * 64)
         key.chmod(0o600)
         sleeps: list = []
-        monkeypatch.setattr(tmac.time, "sleep", sleeps.append)
+        patch_module_attribute(monkeypatch, tmac, "time", "sleep", sleeps.append)
         fresh = tmac._load_or_create_key()
         assert isinstance(fresh, bytes) and len(fresh) == 32
         assert sleeps == [], "over-length content must not ride the race retry"

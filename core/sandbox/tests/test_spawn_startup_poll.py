@@ -10,6 +10,8 @@ import pytest
 
 from core.sandbox import _spawn as spawn
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture
 def high_pipe():
@@ -65,7 +67,7 @@ def test_interrupted_wait_rechecks_original_deadline(monkeypatch):
     poller.poll.side_effect = InterruptedError()
     monkeypatch.setattr(spawn._select_mod, 'poll', lambda: poller)
     with monkeypatch.context() as scoped:
-        scoped.setattr(spawn.time, 'monotonic', Mock(side_effect=[100.0, 106.0]))
+        patch_module_attribute(scoped, spawn, "time", 'monotonic', Mock(side_effect=[100.0, 106.0]))
         assert spawn._pipe_readable_until(31, 105.0) is False
     assert poller.poll.call_count == 1
 
