@@ -10,6 +10,11 @@ import pytest
 from core.inventory import perlasm
 
 
+import core.inventory.perlasm as _os_fault_consumer0
+import core.atomic_fs as _os_fault_consumer1
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def generation(tmp_path, monkeypatch):
     import core.sandbox.context as context
@@ -55,7 +60,7 @@ def test_cancelled_cache_copy_reclaims_temporary(generation, monkeypatch):
     def cancel(*args):
         raise KeyboardInterrupt("cancelled copy")
 
-    monkeypatch.setattr(os, "read", cancel)
+    patch_module_attribute(monkeypatch, _os_fault_consumer0, "os", "read", cancel)
     with pytest.raises(KeyboardInterrupt, match="cancelled copy"):
         perlasm.generate_asm(gen, "elf", target, cache)
     assert not list(cache.iterdir())
@@ -130,7 +135,7 @@ def test_growth_during_copy_never_publishes_changed_output(generation, monkeypat
                 output.write(b"x" * (64 if over_budget else 4))
         return chunk
 
-    monkeypatch.setattr(os, "read", grow_after_read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer0, "os", "read", grow_after_read)
     cached, gap = perlasm.generate_asm(gen, "elf", target, cache)
     assert cached is None and gap is not None
     assert grown and consumed <= limit + 1
@@ -151,7 +156,7 @@ def test_partial_copy_failure_reclaims_temp_and_source_fd(generation, monkeypatc
             raise OSError("partial copy failed")
         return read(fd, min(size, 4))
 
-    monkeypatch.setattr(os, "read", fail_second_read)
+    patch_module_attribute(monkeypatch, _os_fault_consumer0, "os", "read", fail_second_read)
     if cancel:
         with pytest.raises(KeyboardInterrupt, match="partial copy cancelled"):
             perlasm.generate_asm(gen, "elf", target, cache)
@@ -178,7 +183,7 @@ def test_failed_replacement_keeps_previous_entry(generation, monkeypatch, cancel
             raise KeyboardInterrupt("replacement cancelled")
         raise OSError("replacement failed")
 
-    monkeypatch.setattr(os, "replace", fail_replace)
+    patch_module_attribute(monkeypatch, _os_fault_consumer1, "os", "replace", fail_replace)
     if cancel:
         with pytest.raises(KeyboardInterrupt, match="replacement cancelled"):
             perlasm.generate_asm(gen, "elf", target, cache)
@@ -191,7 +196,7 @@ def test_failed_replacement_keeps_previous_entry(generation, monkeypatch, cancel
 
 def test_no_progress_write_leaves_no_partial_cache(generation, monkeypatch):
     target, gen, cache, state = generation
-    monkeypatch.setattr(os, "write", lambda *args: 0)
+    patch_module_attribute(monkeypatch, _os_fault_consumer1, "os", "write", lambda *args: 0)
     cached, gap = perlasm.generate_asm(gen, "elf", target, cache)
     assert cached is None and "short write" in gap
     assert not list(cache.iterdir())

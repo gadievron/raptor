@@ -26,6 +26,10 @@ from core.testing import (
 )
 
 
+import core.security.mac_key as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _isolated_mac_key(tmp_path_factory, monkeypatch):
     """Fresh per-test key dir: never touch the developer's real key."""
@@ -247,7 +251,7 @@ def test_chunked_key_read_loads_full_key(tmp_path: Path, monkeypatch) -> None:
     key_file.write_bytes(data)
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     assert cache_integrity._read_existing_key(key_file) == data
 
 
@@ -260,7 +264,7 @@ def test_truncated_key_file_reads_exact_length(
     key_file.write_bytes(os.urandom(10))
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     got = cache_integrity._read_existing_key(key_file)
     assert isinstance(got, bytes)
     assert len(got) == 10

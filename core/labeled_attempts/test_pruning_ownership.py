@@ -8,6 +8,10 @@ from core.labeled_attempts import pruning, write
 from core.labeled_attempts.test_pruning import _attempt
 
 
+import core.labeled_attempts.pruning as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def records(tmp_path):
     project = tmp_path / "project"
@@ -38,7 +42,7 @@ def test_failed_unlink_is_not_reported_as_removal(records, monkeypatch, error):
         return unlink(path, *args, **kwargs)
 
     with monkeypatch.context() as fault:
-        fault.setattr(os, "unlink", fail)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "unlink", fail)
         report = pruning.prune_pool(project, n_per_bucket=1)
     assert report.records_removed == 0
     assert report.removed_paths == ()
@@ -88,7 +92,7 @@ def test_directory_enumeration_failure_is_best_effort(records, monkeypatch, loca
             raise PermissionError("unreadable directory")
         return original(path)
 
-    monkeypatch.setattr(os, "scandir", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "scandir", fail)
     report = pruning.prune_pool(project, n_per_bucket=0)
     assert report.records_removed == 0
     assert all(p.exists() for p in paths)
@@ -154,7 +158,7 @@ def test_replacement_in_stat_rename_gap_is_restored(
                     (target / "keep").write_bytes(b"operator directory")
         return rename(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", update)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", update)
     report = pruning.prune_pool(project, n_per_bucket=1)
     assert report.records_removed == 1
     if kind == "directory":
@@ -209,7 +213,7 @@ def test_cancelled_removal_restores_owned_record(records, monkeypatch, error, af
             raise failure
         return rename(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     with pytest.raises(error) as caught:
         pruning.prune_pool(project, n_per_bucket=1)
     assert caught.value is failure
@@ -233,8 +237,8 @@ def test_stream_setup_failure_closes_acquired_descriptors(records, monkeypatch, 
         raise failure
 
     with monkeypatch.context() as fault:
-        fault.setattr(os, "open", track)
-        fault.setattr(os, "fdopen", fail)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "open", track)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "fdopen", fail)
         if error is OSError:
             report = pruning.prune_pool(project, n_per_bucket=0)
             assert report.records_seen == 0
@@ -301,9 +305,9 @@ def test_dry_run_does_not_quarantine_or_remove(records, monkeypatch):
         pytest.fail("dry-run must not mutate pool entries")
 
     with monkeypatch.context() as fault:
-        fault.setattr(os, "rename", forbidden)
-        fault.setattr(os, "unlink", forbidden)
-        fault.setattr(os, "rmdir", forbidden)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "rename", forbidden)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "unlink", forbidden)
+        patch_module_attribute(fault, _os_fault_consumer, "os", "rmdir", forbidden)
         report = pruning.prune_pool(project, n_per_bucket=1, dry_run=True)
     assert report.records_removed == 2 and report.records_kept == 1
     assert all(p.exists() for p in paths)
@@ -335,7 +339,7 @@ def test_recovery_collision_preserves_both_new_publications(
             target.write_bytes(second)
         return loaded
 
-    monkeypatch.setattr(os, "rename", replace)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", replace)
     monkeypatch.setattr(pruning, "_read_record", publish)
     report = pruning.prune_pool(project, n_per_bucket=1)
     assert report.records_removed == 1

@@ -15,6 +15,9 @@ from core.witness import provenance as prov
 from core.testing.module_bindings import patch_module_attribute
 
 
+import core.security.mac_key as _os_fault_consumer
+
+
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
     """Every test gets its own key under a private XDG_DATA_HOME."""
@@ -559,7 +562,7 @@ def test_chunked_key_read_loads_full_key(tmp_path, monkeypatch) -> None:
     key_file.write_bytes(data)
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     assert prov._read_existing_key(key_file) == data
 
 
@@ -570,7 +573,7 @@ def test_truncated_key_file_reads_exact_length(tmp_path, monkeypatch) -> None:
     key_file.write_bytes(os.urandom(10))
     key_file.chmod(0o600)
     real_read = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "read", lambda fd, n: real_read(fd, min(n, 5)))
     got = prov._read_existing_key(key_file)
     assert isinstance(got, bytes)
     assert len(got) == 10
@@ -643,7 +646,7 @@ class TestKeyCreationRace:
                 raise FileExistsError(path)
             return real_open(path, flags, mode)
 
-        monkeypatch.setattr(os, "open", fake_open)
+        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", fake_open)
         patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
     def test_race_loser_retries_through_empty_read(

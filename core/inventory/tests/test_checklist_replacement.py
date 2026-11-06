@@ -12,6 +12,10 @@ import core.inventory as inv
 from core.testing.restricted_tree import restricted_tree
 
 
+import core.inventory as _os_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 1024)
@@ -73,8 +77,8 @@ def test_failed_publication_restores_old_sharded_checklist(
 
         return move
 
-    monkeypatch.setattr(os, "rename", fault(rename))
-    monkeypatch.setattr(os, "replace", fault(replace))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fault(rename))
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", fault(replace))
     with pytest.raises(error):
         inv.save_checklist(cache, document("new", big))
     assert inv.read_checklist(cache) == before
@@ -98,7 +102,7 @@ def test_failed_retirement_is_not_reported_as_success(cache, monkeypatch, big):
         if Path(path) != active:
             return rmtree(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
     monkeypatch.setattr(shutil, "rmtree", blocked)
     with pytest.raises(OSError):
         inv.save_checklist(cache, document("new", big))
@@ -273,8 +277,8 @@ def test_failed_rollback_retains_recovery_copy_and_original_error(cache, monkeyp
             raise original
         return replace(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", move)
-    monkeypatch.setattr(os, "replace", publish)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", move)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", publish)
     with pytest.raises(OSError) as caught:
         inv.save_checklist(cache, document("new"))
     assert caught.value is original
@@ -356,7 +360,7 @@ def test_error_immediately_after_retirement_still_restores_old_form(
             raise error("retirement completed before error")
         return result
 
-    monkeypatch.setattr(os, "rename", retire)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", retire)
     with pytest.raises(error):
         inv.save_checklist(cache, document("new", big))
     assert inv.read_checklist(cache) == before
