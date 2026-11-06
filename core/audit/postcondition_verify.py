@@ -850,10 +850,13 @@ def _extract_consumer_preconditions(
     for p in preconds:
         conds = getattr(p, "conditions", [])
         for c in conds:
+            # Preserve generic conversions even past the visible cap.
+            if len(result) >= 10 and type(c) is str:
+                continue
             text = str(c)[:200]
-            if text:
+            if text and len(result) < 10:
                 result.append(text)
-    return result[:10]
+    return result
 
 
 # Vocabulary of representations _extract_handled_representations can emit.

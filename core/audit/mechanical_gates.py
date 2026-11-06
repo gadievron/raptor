@@ -301,17 +301,25 @@ def format_callee_defenses(
             param = getattr(pre, "param", "?")
             conditions = getattr(pre, "conditions", [])
             if conditions:
-                cond_str = ", ".join(str(c)[:80] for c in conditions[:3])
-                obligations.append(
+                selected = conditions[:3]
+                # Generic values retain conversion callbacks and errors.
+                if (len(obligations) >= 10 and type(func_name) is str
+                        and type(param) is str and type(selected) in (list, tuple)
+                        and all(type(c) is str for c in selected)):
+                    continue
+                cond_str = ", ".join(str(c)[:80] for c in selected)
+                obligation = (
                     f"CALLEE ASSUMPTION{tier_tag}: `{func_name}()` "
                     f"ASSUMES param `{param}` satisfies: {cond_str} — "
                     f"the callee does not itself guarantee this; check "
                     f"whether THIS function establishes it before the "
                     f"call."
                 )
+                if len(obligations) < 10:
+                    obligations.append(obligation)
     if not obligations:
         return ""
-    return "\n".join(obligations[:10])
+    return "\n".join(obligations)
 
 
 # ── C: Security-decision reachability ─────────────────────────────
