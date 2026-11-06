@@ -276,7 +276,8 @@ def _hex_literal_forces_unsigned(tok: str, profile: "BVProfile") -> bool:
     return int(tok, 16) >= (1 << (profile.width - 1))
 _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
-_NULL_RE = re.compile(r'^NULL$', re.IGNORECASE)
+# Source identifiers are case-sensitive; English aliases canonicalise to NULL.
+_NULL_RE = re.compile(r'^NULL$')
 
 # Tokenise: identifiers, hex literals, decimal literals, operators, parens.
 # '>>' and '<<' appear before '[<>&|]' so they are matched as two-char tokens
@@ -1519,7 +1520,10 @@ def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     ``count < MAX`` constrain the *same* Z3 variable.
 
     Names retain case, matching the parser and source identifier identity.
+    The reserved NULL literal cannot denote a source variable.
     """
+    if is_literal_identifier(name):
+        raise ValueError("NULL is a reserved zero literal, not a source variable")
     key = name
     if vars_.get(key) is None:
         vars_[key] = _mk_var(key, profile.width)

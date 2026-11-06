@@ -95,7 +95,7 @@ def test_unreachable_access_keeps_all_path_constraints():
     pytest.param(source(extent="04"), "Data[Index]", id="ambiguous-octal"),
     pytest.param(source(extent="4U"), "Data[Index]", id="literal-suffix"),
     pytest.param(source(index_type="size_t"), "Data[Index]", id="unresolved-type-alias"),
-    pytest.param(source().replace("Index", "Null"), "Data[Null]", id="reserved-parser-identifier"),
+    pytest.param(source().replace("Index", "NULL"), "Data[NULL]", id="reserved-parser-identifier"),
     pytest.param(source("if(Index >= 0 || Flag > 0) return Data[Index]; return 0;"), "Data[Index]", id="disjunctive-path"),
 ])
 def test_unsupported_frames_never_grant_proof(text, hypothesis):
@@ -170,13 +170,13 @@ def test_access_claim_never_borrows_a_name_from_a_qualified_object(claim):
     assert bounds.parse_array_access_claim(claim) is None
 
 
-@pytest.mark.parametrize("name", ["NULL", "Null", "null"])
-def test_source_integer_terms_cannot_collide_with_solver_literal_aliases(name):
+@pytest.mark.parametrize("name,outcome", [("NULL", "inconclusive"), ("Null", "refuted"), ("null", "refuted")])
+def test_source_integer_terms_respect_the_reserved_literal_spelling(name, outcome):
     pytest.importorskip("z3")
     text = f"int Read(int {name}, int Step) {{ if({name} >= 0 && {name} < 4 && Step <= 1) return {name} + Step; return 0; }}"
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read", verb="check-overflow",
                                      source=text, hypothesis=f"integer overflow in `{name} + Step`", integer_abi="ilp32")
-    assert result.outcome == "inconclusive"
+    assert result.outcome == outcome, result.details
 
 
 def test_preceding_undefined_arithmetic_is_not_hidden_by_a_nonreaching_guard():
