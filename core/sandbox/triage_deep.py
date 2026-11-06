@@ -46,9 +46,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
-from core.orchestration.llm_json import strip_json_fences
+from core.orchestration.llm_json import list_at, strip_json_fences
 from core.json import dumps_artifact
 from core.sandbox import telemetry_mac
+from core.sandbox.evidence import _unique_evidence_object
 from core.sandbox.triage import TRIAGE_FILE, verify_triage_report
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -169,6 +170,13 @@ def _response_text(response) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _known_signal_types(report: dict) -> set[str]:
+    """Index usable signal types without letting malformed rows hide neighbors."""
+    return {signal["type"] for signal in list_at(report, "signals")
+            if isinstance(signal, dict)
+            and isinstance(signal.get("type"), str) and signal["type"]}
+
+
 def _parse_assessments(text: str, report: dict) -> tuple:
     """Ground the model's output against the report. Returns
     ``(assessments, overall_note, dropped)`` — unknown signal types
@@ -176,19 +184,20 @@ def _parse_assessments(text: str, report: dict) -> tuple:
     coerced to the enum, rationales sanitised and capped."""
     raw = strip_json_fences(text)
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw, object_pairs_hook=_unique_evidence_object)
     except (ValueError, RecursionError):
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
             return [], "", 0
         try:
-            parsed = json.loads(raw[start:end + 1])
+            parsed = json.loads(raw[start:end + 1],
+                                object_pairs_hook=_unique_evidence_object)
         except (ValueError, RecursionError):
             return [], "", 0
     if not isinstance(parsed, dict):
         return [], "", 0
 
-    known_types = {s.get("type") for s in report.get("signals", [])}
+    known_types = _known_signal_types(report)
     assessments, dropped = [], 0
     raw_items = parsed.get("assessments")
     for item in raw_items if isinstance(raw_items, list) else []:
@@ -278,8 +287,8 @@ def deep_analyse(run_dir: Path, *, client=None,
             "reason over unstamped telemetry without allow_legacy=True",
             run_dir / TRIAGE_FILE)
         return None
-    if not report.get("signals"):
-        logger.info("triage_deep: clean verdict, nothing to assess")
+    if not _known_signal_types(report):
+        logger.info("triage_deep: no usable signal types to assess")
         return None
 
     if client is None:

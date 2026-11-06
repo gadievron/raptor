@@ -1,5 +1,6 @@
 """Untrusted assessment shapes cannot interrupt deep-triage parsing."""
 import json
+from types import ModuleType
 
 import pytest
 
@@ -41,12 +42,16 @@ def test_integer_confidence_overflow_becomes_zero():
 def test_decode_failures_return_empty(monkeypatch, error_type, wrapped):
     real_loads = json.loads
 
-    def fail(text):
+    def fail(text, **kwargs):
         if wrapped and text.startswith('prefix'):
-            return real_loads(text)
+            return real_loads(text, **kwargs)
         raise error_type('invalid model response')
 
-    monkeypatch.setattr(deep.json, 'loads', fail)
+    private = ModuleType('deep_decode_json')
+    vars(private).update(vars(deep.json))
+    private.loads = fail
+    monkeypatch.setattr(deep, 'json', private)
+    assert json.loads is real_loads
     text = 'prefix {} suffix' if wrapped else '{}'
     assert deep._parse_assessments(text, REPORT) == ([], '', 0)
 
