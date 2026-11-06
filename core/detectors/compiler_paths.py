@@ -102,12 +102,16 @@ def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None,
                     mapped = locate(uri) if locate is not None else uri
                     if mapped is None:
                         raise ValueError("compiler event outside target")
+                    encoded_uri = quote(mapped, safe="/")
+                    clean_message = escape_nonprintable(message)
+                    if len(encoded_uri) > 4096 or len(clean_message) > 2048:
+                        raise ValueError("over-limit normalized compiler event")
                     clean_region = {"startLine": line}
                     # File/line attribution is portable across GCC output
                     # modes; display/byte/Unicode column units are not.
                     clean_loc: dict[str, Any] = {
-                        "physicalLocation": {"artifactLocation": {"uri": quote(mapped, safe="/")}, "region": clean_region},
-                        "message": {"text": escape_nonprintable(message)},
+                        "physicalLocation": {"artifactLocation": {"uri": encoded_uri}, "region": clean_region},
+                        "message": {"text": clean_message},
                     }
                     logical = location.get("logicalLocations", [])
                     if not isinstance(logical, list):
@@ -117,14 +121,17 @@ def normalize_paths(raw: Any, locate: Callable[[str], str | None] | None = None,
                         function = logical[0].get("fullyQualifiedName") or logical[0].get("name") or ""
                         if not isinstance(function, str) or len(function) > 256:
                             raise ValueError("invalid compiler function name")
-                        clean_loc["logicalLocations"] = [{"name": escape_nonprintable(function), "kind": "function"}]
+                        function = escape_nonprintable(function)
+                        if len(function) > 256:
+                            raise ValueError("over-limit normalized compiler function name")
+                        clean_loc["logicalLocations"] = [{"name": function, "kind": "function"}]
                     clean_event: dict[str, Any] = {"location": clean_loc, "executionOrder": len(normalized) + 1}
                     depth = event.get("nestingLevel")
                     if depth is not None:
                         if not isinstance(depth, int) or isinstance(depth, bool) or not 0 <= depth <= 256:
                             raise ValueError("invalid compiler call depth")
                         clean_event["nestingLevel"] = depth
-                    size += len(mapped.encode("utf-8")) + len(clean_loc["message"]["text"].encode("utf-8")) + len(escape_nonprintable(function).encode("utf-8")) + 128
+                    size += len(mapped.encode("utf-8")) + len(clean_message.encode("utf-8")) + len(function.encode("utf-8")) + 128
                     normalized.append(clean_event)
             except (KeyError, TypeError, AttributeError, ValueError, OSError):
                 notes.append("invalid, out-of-target or over-limit compiler path omitted")
@@ -180,7 +187,10 @@ def attach_paths(destination: dict[str, Any], source: dict[str, Any],
         for path in paths:
             if path not in unique:
                 unique.append(path)
-        combined, merged_notes = normalize_paths(unique)
+        if len(unique) == len(previous):
+            combined = previous  # No new paths need a combined-budget pass.
+        else:
+            combined, merged_notes = normalize_paths(unique)
         merged_notes.extend(previous_notes)
     else:
         combined = paths  # Fresh recipients need no second normalization pass.
