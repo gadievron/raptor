@@ -229,3 +229,20 @@ def test_native_sandbox_can_run_a_benign_command(native):
             in client.stderr_path.read_text(errors='replace')):
         pytest.skip('native sandbox blocked: this execution environment denies user namespaces')
     assert result['exitCode'] == 0, result
+
+
+def test_native_thread_names_round_trip_without_a_model_call(native):
+    client, primary, *_ = native
+    params = {'cwd': str(primary), 'sandbox': 'workspace-write',
+              'approvalPolicy': 'on-request'}
+    first = client.result('thread/start', params)['thread']['id']
+    second = client.result('thread/start', params)['thread']['id']
+    before = client.result('thread/read', {'threadId': first})['thread']
+    assert before.get('name') is None
+    assert before['status']['type'] != 'notLoaded'
+    client.result('thread/name/set', {'threadId': first, 'name': 'raptor · fixture · target'})
+    assert client.result('thread/read', {'threadId': first})['thread']['name'] == 'raptor · fixture · target'
+    assert client.result('thread/read', {'threadId': second})['thread'].get('name') is None
+    client.result('thread/name/set', {'threadId': first, 'name': 'Manual investigation'})
+    assert client.result('thread/read', {'threadId': first})['thread']['name'] == 'Manual investigation'
+
