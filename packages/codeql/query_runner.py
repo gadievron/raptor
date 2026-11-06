@@ -894,11 +894,27 @@ class QueryRunner:
         candidates = (sorted(query_path.rglob("*.ql")) if query_path.is_dir()
                       else [query_path] if query_path.suffix == ".ql" else [])
 
+        # Keep one version answer and one metadata decision per selection.
+        # Unknown versions are retried by the next invocation, rather than
+        # potentially paying a probe timeout for every declared query here.
+        version_checked = False
+        installed_version: str | None = None
+        decisions: dict[Path, str | None] = {}
+
+        def installed() -> str | None:
+            nonlocal version_checked, installed_version
+            if not version_checked:
+                installed_version = self._codeql_version()
+                version_checked = True
+            return installed_version
+
         def refusal(path: Path) -> str | None:
-            text = read_capped_text(path, 1024 * 1024, errors="strict")
-            if text is None:
-                return "rule skipped: requirement metadata unreadable"
-            return rule_version_refusal(text, self._codeql_version)
+            key = path.resolve()
+            if key not in decisions:
+                text = read_capped_text(path, 1024 * 1024, errors="strict")
+                decisions[key] = ("rule skipped: requirement metadata unreadable"
+                                  if text is None else rule_version_refusal(text, installed))
+            return decisions[key]
 
         refused = {str(path.resolve()): reason for path in candidates
                    if (reason := refusal(path)) is not None}
