@@ -444,32 +444,11 @@ def _raptor_logger_propagates():
 
 @pytest.fixture(autouse=True)
 def _llm_egress_env_hermetic():
-    """Restore the process proxy env after any test that enabled the
-    in-process LLM egress chokepoint.
+    """Restore proxy routes and egress flags after every test-side mutation."""
+    from core.testing.llm_env import isolated_egress_state
 
-    ``LLMClient.__init__`` → ``enable_llm_egress`` points
-    HTTP(S)_PROXY at the loopback chokepoint PROCESS-WIDE by design.
-    In a test process that mutation outlives the test: every later
-    subprocess that honours proxy env and phones a host outside the
-    LLM allowlist (observed: ``semgrep --validate``'s version check →
-    ``semgrep.dev`` → proxy DENY → ~90s of retries → non-zero exit)
-    inherits a chokepoint meant only for the SDKs. Snapshot the proxy
-    vars up front; after each test that flipped the enable flag,
-    restore them and reset the flag. The proxy thread itself is
-    harmless once nothing routes through it.
-    """
-    import os as _os
-    from core.llm import egress as _egress
-    before = {k: _os.environ.get(k) for k in _egress._PROXY_VAR_NAMES}
-    enabled_before = _egress._enabled
-    yield
-    if _egress._enabled and not enabled_before:
-        for k, v in before.items():
-            if v is None:
-                _os.environ.pop(k, None)
-            else:
-                _os.environ[k] = v
-        _egress._reset_for_tests()
+    with isolated_egress_state():
+        yield
 
 
 @pytest.fixture
@@ -489,7 +468,7 @@ _SESSIONS_DIR_SEQ = _itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def _registry_paths():
+def _registry_paths(_llm_egress_env_hermetic):
     """Keep registry isolation outside the test body's undo stack.
 
     A unique, never-created base avoids pytest's numbered-directory scan per
@@ -1018,7 +997,9 @@ def _git_config_drift_summary(terminalreporter):
 # environment (same handoff pattern as the ambient-git-env snapshot).
 # The controller reads the markers at ITS sessionfinish — which runs
 # after every worker has completed — merges them into its own
-# findings, and fails the run. Every non-worker pytest process creates
+# findings, and fails the run. Caller routes and enable state are captured
+# at session start so preserved inherited state is not reported as a leak.
+# Every non-worker pytest process creates
 # a FRESH dir and re-publishes it, so nested pytest sessions (tests
 # that spawn pytest) never write into an outer session's dir. Cost:
 # one env scan per session + one empty-dir listing on the controller;
@@ -1099,15 +1080,29 @@ def _scratch_sweep_roots() -> "set[Path]":
     return {Path(tempfile.gettempdir()), Path("/tmp")}
 
 
+def _capture_egress_baseline(session):
+    """Remember caller routes without importing LLM code for a bare session."""
+    import sys as _sys
+
+    egress_mod = _sys.modules.get("core.llm.egress")
+    session._raptor_egress_before = {
+        "proxy": {key: value for key, value in os.environ.items()
+                  if key.upper() in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")},
+        "enabled": bool(getattr(egress_mod, "_enabled", False)),
+    }
+
+
 def _check_egress_leak(session):
     import sys as _sys
 
+    before = getattr(session, "_raptor_egress_before", {"proxy": {}, "enabled": False})
     for key, value in os.environ.items():
         if key.upper() in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY") \
-                and "127.0.0.1" in value:
+                and "127.0.0.1" in value and value != before["proxy"].get(key):
             _egress_leaks.append(f"{key}={value}")
     egress_mod = _sys.modules.get("core.llm.egress")
-    if egress_mod is not None and getattr(egress_mod, "_enabled", False):
+    if (egress_mod is not None and getattr(egress_mod, "_enabled", False)
+            and not before["enabled"]):
         _egress_leaks.append("core.llm.egress._enabled is still True")
 
     is_worker = getattr(session.config, "workerinput", None) is not None
@@ -1252,6 +1247,7 @@ def _tree_fingerprint():
 
 def pytest_sessionstart(session):
     global _tree_state_at_start, _git_config_at_start, _session_started_at
+    _capture_egress_baseline(session)
     import time as _time
     _session_started_at = _time.monotonic()
     _tree_state_at_start = _tree_fingerprint()

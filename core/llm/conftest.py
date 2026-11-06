@@ -16,5 +16,12 @@ from core.testing import reset_llm_egress_state
 
 
 @pytest.fixture(autouse=True)
-def _reset_llm_egress_state_pkg(monkeypatch):
-    yield from reset_llm_egress_state(monkeypatch)
+def _reset_llm_egress_state_pkg():
+    with pytest.MonkeyPatch.context() as patch:
+        yield from reset_llm_egress_state(patch)
+
+
+@pytest.fixture
+def monkeypatch(_reset_llm_egress_state_pkg, monkeypatch):
+    """Keep inherited process guards inside the egress owner's lifetime."""
+    yield monkeypatch

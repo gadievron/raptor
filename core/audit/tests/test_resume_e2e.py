@@ -169,9 +169,9 @@ def _review_loop_only():
     from core.audit import capabilities, orchestrator
     from core.testing import reset_llm_egress_state
 
-    with pytest.MonkeyPatch.context() as mp:
-        reset = contextlib.contextmanager(reset_llm_egress_state)
-        with reset(mp, pin_ollama_host=False):
+    reset = contextlib.contextmanager(reset_llm_egress_state)
+    with pytest.MonkeyPatch.context() as owner:
+        with reset(owner, pin_ollama_host=False), pytest.MonkeyPatch.context() as mp:
             if _HERMETIC_OLLAMA_HOST:
                 mp.setenv("OLLAMA_HOST", _HERMETIC_OLLAMA_HOST)
             mp.setattr(orchestrator, "_run_mechanical_detectors",
