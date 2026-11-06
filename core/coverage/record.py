@@ -491,102 +491,124 @@ def build_from_cocci(spatch_results: list[Any],
     return record
 
 
-def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
-    """Build a coverage record from CodeQL SARIF output.
+class CodeQLCoverageAccumulator:
+    """Run-local coverage facts; never retain decoded SARIF or result arrays."""
 
-    Extracts: files from artifacts, packs from tool.extensions,
-    rules from tool.driver.rules, failures from invocations.
+    def __init__(self, repo_root: Path | None = None) -> None:
+        self._root = Path(repo_root).resolve() if repo_root is not None else None
+        self._files: set[str] = set()
+        self._packs: set[str] = set()
+        self._rules: set[str] = set()
+        self._failures: dict[tuple[str, str], dict[str, str]] = {}
+        self._versions: set[str] = set()
+
+    def add_report(self, data: Any) -> None:
+        """Consume one already bounded/decoded report, without mutating it."""
+        from urllib.parse import unquote
+        from core.paths import to_repo_relative
+        from core.sarif.parser import ArtifactUriResolver, sarif_uri_path
+
+        files, packs, rules, failures = self._files, self._packs, self._rules, self._failures
+        root = self._root
+        def _rows(container: Any, key: str):
+            value = container.get(key) if isinstance(container, dict) else None
+            if isinstance(value, list):
+                for row in value:
+                    if isinstance(row, dict):
+                        yield row
+
+        def _dict(container: Any, key: str) -> dict[str, Any]:
+            value = container.get(key) if isinstance(container, dict) else None
+            return value if isinstance(value, dict) else {}
+
+        def _str(container: Any, key: str, default: str = "") -> str:
+            value = container.get(key) if isinstance(container, dict) else None
+            return value if isinstance(value, str) else default
+
+        for run in _rows(data, "runs"):
+            resolver = ArtifactUriResolver(run)
+
+            def local_path(artifact: dict[str, Any]) -> str | None:
+                path = sarif_uri_path(resolver.resolve(artifact))
+                if path is None:
+                    return None
+                # Decode exactly once, after checking the original authority.
+                path = unquote(path)
+                if not path or path.startswith(("//", "\\\\")) or any(ord(c) < 32 or ord(c) == 127 for c in path):
+                    return None
+                # An encoded literal file:// prefix is a filename, not a second
+                # URI layer for the filesystem helper to strip.
+                if path.startswith("file://"):
+                    path = "./" + path
+                if root is not None:
+                    relative = to_repo_relative(path, root, outside_root="relative")
+                    # The strict check is now relative and does no repeated
+                    # root resolution or source-file filesystem reads.
+                    return to_repo_relative(relative, root) if relative is not None else None
+                return path
+
+            artifacts = run.get("artifacts")
+            for index in range(len(artifacts) if isinstance(artifacts, list) else 0):
+                file = local_path({"index": index})
+                if file:
+                    files.add(file)
+            tool = _dict(run, "tool")
+            driver = _dict(tool, "driver")
+            version = _str(driver, "version") or _str(driver, "semanticVersion")
+            if version:
+                self._versions.add(version)
+            rules.update(_str(rule, "id") for rule in _rows(driver, "rules"))
+            for extension in _rows(tool, "extensions"):
+                name, ver = _str(extension, "name"), _str(extension, "version")
+                if name:
+                    packs.add(f"{name}@{ver}" if ver else name)
+                rules.update(_str(rule, "id") for rule in _rows(extension, "rules"))
+            for invocation in _rows(run, "invocations"):
+                for note in _rows(invocation, "toolExecutionNotifications"):
+                    if note.get("level") not in ("error", "warning"):
+                        continue
+                    reason = _str(_dict(note, "message"), "text", "unknown")
+                    for location in _rows(note, "locations"):
+                        artifact = _dict(_dict(location, "physicalLocation"), "artifactLocation")
+                        file = local_path(artifact)
+                        if file:
+                            failures.setdefault((file, reason), {"path": file, "reason": reason})
+
+
+    def build_record(self) -> dict[str, Any] | None:
+        files, packs, rules, failures = self._files, self._packs, self._rules, self._failures
+        if not files:
+            return None
+        record: dict[str, Any] = {
+            "tool": "codeql", "timestamp": datetime.now(timezone.utc).isoformat(),
+            "files_examined": sorted(files),
+        }
+        if len(self._versions) == 1:
+            record["version"] = next(iter(self._versions))
+        elif self._versions:
+            record["versions"] = sorted(self._versions)
+        if packs:
+            record["packs"] = sorted(packs)
+        rules.discard("")
+        if rules:
+            record["rules_applied"] = sorted(rules)
+        if failures:
+            record["files_failed"] = list(failures.values())
+        return record
+
+
+
+def build_from_codeql(sarif_path: Path, *, extra_sarif_paths: list[Path] | None = None,
+                      repo_root: Path | None = None) -> dict[str, Any] | None:
+    """Union metadata from supplied language reports; decode each input once.
+
+    The optional target root confines declared artifact coverage to that tree.
+    Existing single-report callers retain the same record shape and read budget.
     """
-    data = load_json(sarif_path, max_bytes=RUN_ARTIFACT_MAX_BYTES)
-    if not data or not isinstance(data, dict):
-        return None
-
-    files = []
-    packs = []
-    rules: list[str] = []
-    failures = []
-    version = ""
-
-    def _rows(container: Any, key: str) -> list[dict[str, Any]]:
-        # SARIF containers are run-dir JSON — every nesting level's
-        # shape is attacker-writable, and a string row crashed the
-        # ``.get`` walks below (silently costing the whole codeql
-        # coverage record through the callers' broad try blocks).
-        if not isinstance(container, dict):
-            return []
-        value = container.get(key)
-        if not isinstance(value, list):
-            return []
-        return [row for row in value if isinstance(row, dict)]
-
-    def _dict(container: Any, key: str) -> dict[str, Any]:
-        if not isinstance(container, dict):
-            return {}
-        value = container.get(key)
-        return value if isinstance(value, dict) else {}
-
-    def _str(container: Any, key: str, default: str = "") -> str:
-        if not isinstance(container, dict):
-            return default
-        value = container.get(key)
-        return value if isinstance(value, str) else default
-
-    for run in _rows(data, "runs"):
-        # Files extracted
-        for artifact in _rows(run, "artifacts"):
-            uri = _str(_dict(artifact, "location"), "uri")
-            if uri:
-                files.append(uri)
-
-        # Tool info
-        tool = _dict(run, "tool")
-        driver = _dict(tool, "driver")
-        version = (version or _str(driver, "version")
-                   or _str(driver, "semanticVersion"))
-        rules.extend(_str(r, "id") for r in _rows(driver, "rules"))
-
-        # Packs
-        for ext in _rows(tool, "extensions"):
-            name = _str(ext, "name")
-            ver = _str(ext, "version")
-            packs.append(f"{name}@{ver}" if ver else name)
-
-        # Extraction failures
-        for inv in _rows(run, "invocations"):
-            for notif in _rows(inv, "toolExecutionNotifications"):
-                if notif.get("level") not in ("error", "warning"):
-                    continue
-                locations = notif.get("locations")
-                loc = (locations[0] if isinstance(locations, list)
-                       and locations else {})
-                path = _str(
-                    _dict(_dict(loc, "physicalLocation"),
-                          "artifactLocation"), "uri")
-                failures.append({
-                    "path": path,
-                    "reason": _str(_dict(notif, "message"), "text",
-                                   "unknown"),
-                })
-
-    if not files:
-        return None
-
-    record: dict[str, Any] = {
-        "tool": "codeql",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "files_examined": sorted(set(files)),
-    }
-    if version:
-        record["version"] = version
-    if packs:
-        record["packs"] = packs
-    if rules:
-        record["rules_applied"] = sorted(set(rules))
-    failures = [f for f in failures if f["path"]]
-    if failures:
-        record["files_failed"] = failures
-
-    return record
+    accumulator = CodeQLCoverageAccumulator(repo_root)
+    for path in dict.fromkeys([Path(sarif_path), *(Path(path) for path in extra_sarif_paths or [])]):
+        accumulator.add_report(load_json(path, max_bytes=RUN_ARTIFACT_MAX_BYTES))
+    return accumulator.build_record()
 
 
 def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = None,
