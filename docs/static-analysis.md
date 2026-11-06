@@ -762,8 +762,8 @@ of C aliasing candidates against Clang's parsed types. Direct loads, stores,
 and local pointer aliases can become findings when they access a known local
 scalar through an incompatible builtin scalar type on a straight-line path.
 It follows local pointer reassignments when both object origins are known.
-Supported numeric conversions and assignments to initialized scalar locals
-preserve this tracking.
+Supported scalar literals, numeric conversions, unary `+`, `-`, `~`, `!`, and
+assignments to initialized scalar locals preserve this tracking.
 Scalar locals declared without an initializer are supported after a direct
 assignment or a compatible store through a known local pointer. Reads before
 initialization remain outside this check; incompatible stores can qualify

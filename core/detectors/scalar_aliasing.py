@@ -118,7 +118,7 @@ class _Function:
         if depth > 64:
             raise _Unsupported("expression depth cap")
         kind, children = node.get("kind"), node.get("inner", [])
-        if kind in ("IntegerLiteral", "FloatingLiteral"):
+        if kind in ("IntegerLiteral", "FloatingLiteral", "CharacterLiteral"):
             return _Scalar(_scalar_type(node))
         if kind == "DeclRefExpr":
             key = node.get("referencedDecl", {}).get("id")
@@ -156,7 +156,9 @@ class _Function:
                 # Forming an lvalue does not load it: only LValueToRValue or a
                 # supported assignment calls access(). This excludes &* / sizeof.
                 return _Place(value.pointee, value.obj, value)
-            if opcode in ("+", "-") and isinstance(value, _Scalar):
+            if opcode in ("+", "-", "~", "!") and isinstance(value, _Scalar):
+                if opcode == "~" and value.ctype not in _INTEGER_TYPES:
+                    raise _Unsupported("non-integer bitwise complement")
                 return _Scalar(_scalar_type(node))
         raise _Unsupported("unsupported expression")
 

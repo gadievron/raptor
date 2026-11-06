@@ -1444,11 +1444,16 @@ def test_native_aliasing_pipeline_separates_proof_from_candidates(tmp_path, sand
         "int incompatible_initial_store(void) { int value; *(float*)&value=1; return 0; }\n"
         "int unused_indirect_initializer(void) { float value; int *q=(int*)&value; float *p=&value; *p=1; return 0; }\n"
         "int read_during_indirect_initializer(void) { float value; float *p=&value; *p=*p; return *(int*)&value; }\n"
-        "int other_indirect_initializer(void) { float value; float other; float *p=&other; *p=1; return *(int*)&value; }\n")
+        "int other_indirect_initializer(void) { float value; float other; float *p=&other; *p=1; return *(int*)&value; }\n"
+        "int character_initializer(void) { int value='x'; return *(float*)&value; }\n"
+        "int complemented_access(float value) { return ~*(int*)&value; }\n"
+        "int negated_access(float value) { return !*(int*)&value; }\n"
+        "int complement_only(int value) { return ~value; }\n"
+        "int unused_character_initializer(void) { int value='x'; float *p=(float*)&value; return 0; }\n")
     result = _cs.scan_target(tmp_path)
     proofs = [f for f in result.findings if f["rule_id"] == "raptor.compiler.incompatible-scalar-access"]
-    assert {f["line"] for f in proofs} == {1, 2, 5, 6, 7, 9, 10, 12, 13, 14, 17, 18, 21, 22}
-    assert {c["line"] for c in result.review_candidates} == {3, 4, 8, 11, 15, 19, 20, 23, 24, 25}
+    assert {f["line"] for f in proofs} == {1, 2, 5, 6, 7, 9, 10, 12, 13, 14, 17, 18, 21, 22, 26, 27, 28}
+    assert {c["line"] for c in result.review_candidates} == {3, 4, 8, 11, 15, 19, 20, 23, 24, 25, 30}
     sarif = _cs.to_sarif(result)
     assert all(r["ruleId"] != "-Wstrict-aliasing" for r in sarif["runs"][0]["results"])
     assert all(f["aliasing_proof"]["object"] == "value" for f in proofs)
