@@ -64,6 +64,7 @@ from core.sandbox.summary import (
     MAX_DENIALS_PER_RUN,
     SUMMARY_FILE,
     _unique_evidence_object,
+    get_audit_degraded,
     get_evidence_inode_mismatch,
     get_evidence_write_failure,
     get_proxy_persist_state,
@@ -493,7 +494,8 @@ def triage_run(run_dir: Path, *,
     so file-presence keeps meaning "something happened" across every
     sibling run-dir artifact. A marker-only run (audit degraded, no other
     telemetry — exactly what an unaudited fallback produces) yields a
-    report carrying the degradation caveat, never silence.
+    report carrying the degradation caveat, never silence. Parent-recorded
+    degradation also yields a report when marker storage is unavailable.
 
     ``allow_legacy`` keeps the manual ``raptor-sandbox-triage`` surface
     able to re-triage old pre-provenance runs. Lifecycle callers MUST pass
@@ -527,6 +529,7 @@ def triage_run(run_dir: Path, *,
     # target's reach; a True return means the on-disk marker had to be
     # restored at some point this run — tamper evidence in itself.
     marker_restored = reassert_audit_degraded(run_dir)
+    parent_audit_degraded = get_audit_degraded(run_dir)
     raw_summary = _load_json(run_dir / SUMMARY_FILE)
     # The events JSONL streams (per-line MACs make incremental
     # verification safe) so honest chatty runs above the whole-file
@@ -570,7 +573,8 @@ def triage_run(run_dir: Path, *,
     _pm_inode_mismatch = get_evidence_inode_mismatch(run_dir)
     _pm_write_failure = get_evidence_write_failure(run_dir)
     if (raw_summary is None and not raw_proxy_events
-            and raw_audit_degraded is None and not marker_restored
+            and raw_audit_degraded is None and parent_audit_degraded is None
+            and not marker_restored
             and not events_read_issues):
         if not allow_legacy and (summary_destroyed or events_destroyed
                                  or degraded_destroyed or count_present
@@ -663,6 +667,10 @@ def triage_run(run_dir: Path, *,
     audit_degraded, degraded_integrity = (
         _verify_audit_degraded(
             raw_audit_degraded, _run_binding, allow_legacy=_verify_legacy))
+    # Parent knowledge survives failed publication or restoration. Keep the
+    # disk verification result independent so this cannot excuse tampering.
+    if parent_audit_degraded is not None:
+        audit_degraded = parent_audit_degraded
 
     # Key-exposure posture gate: a verifying token only narrows to
     # "written by the parent" when the run's sandbox posture could
