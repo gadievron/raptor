@@ -2375,23 +2375,9 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/codeql/database_manager.py\u001fm": {
-   "digests": [
-    "c058314750de"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "packages/codeql/query_runner.py\u001f_PACK_NOT_FOUND_RE": {
    "digests": [
     "d69bf3bafac3"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/codeql/query_runner.py\u001fm": {
-   "digests": [
-    "c058314750de"
    ],
    "exp": 1.0,
    "verdict": "linear"
