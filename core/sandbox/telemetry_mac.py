@@ -491,18 +491,35 @@ def _load_or_create_key() -> bytes | None:
                     raise
                 logger.warning("telemetry_mac: key descriptor cleanup failed",
                                exc_info=True)
+        # Creation is not publication: the pathname, bytes or permissions
+        # may have changed during write/close. Reuse the same bounded,
+        # no-follow validation as an existing key before returning material
+        # that callers expect to verify against this path. Refuse a changed
+        # snapshot; a later call retains the normal recovery policy.
+        if _read_existing_key(path) != key:
+            logger.warning(
+                "telemetry_mac: newly created key failed publication "
+                "verification under %s", path,
+            )
+            return None
         return key
     return None
 
 
 def _canonical(fields: Mapping[str, object]) -> bytes:
     """Injective canonical encoding — key-sorted, length-prefixed —
-    identical construction to rowmac's."""
+    identical construction to rowmac's for valid UTF-8 metadata.
+
+    Surrogatepass also represents POSIX surrogateescaped filenames and
+    literal JSON surrogates injectively. Existing UTF-8 field bytes stay
+    unchanged; surrogate pairs remain distinct from Unicode scalars.
+    """
     items = sorted((str(k), str(v)) for k, v in fields.items())
     out = bytearray()
     out += len(items).to_bytes(4, "big")
     for key, value in items:
-        for part in (key.encode("utf-8"), value.encode("utf-8")):
+        for part in (key.encode("utf-8", errors="surrogatepass"),
+                     value.encode("utf-8", errors="surrogatepass")):
             out += len(part).to_bytes(4, "big")
             out += part
     return bytes(out)
