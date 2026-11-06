@@ -84,3 +84,9 @@ def test_semgrep_summary_print_is_gated_on_semgrep_metrics() -> None:
             f"summary tick fires even when Semgrep timed out / errored "
             f"/ produced no metrics."
         )
+
+        assert any(
+            isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            and child.func.id == "scan_execution_status"
+            for child in ast.walk(node.test)
+        ), "green scan summary must consult recorded execution failures"

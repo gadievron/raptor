@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.reporting.scan_coverage import render_scan_coverage
 
 
@@ -215,3 +217,31 @@ class TestRobustness:
         out = render_scan_coverage(tmp_path)
         assert "1 finding " in out + " "  # singular ''finding''
         assert "1 rule group" in out      # singular ''rule group''
+
+
+@pytest.mark.parametrize('metrics,status', [
+    ({}, 'ok'),
+    ({'execution_status': 'ok'}, 'ok'),
+    ({'execution_status': 'error'}, 'error'),
+    ({'execution_status': 'partial'}, 'partial'),
+    ({'execution_status': 'unknown'}, 'partial'),
+    ({'execution_status': None}, 'partial'),
+    ({'execution_status': []}, 'partial'),
+    ({'semgrep_failed_packs': ['a']}, 'partial'),
+    ({'dropped_registry_packs': ['a']}, 'partial'),
+    ({'sarif_merge_failed': True}, 'partial'),
+    ({'analysis_gaps': {'timeout': 1}}, 'partial'),
+    ({'semgrep_dropped_files': 1}, 'partial'),
+    ({'codeql_no_output': True}, 'partial'),
+    ({'execution_status': 'ok', 'semgrep_failed_packs': ['a']}, 'partial'),
+    ({'execution_status': 'error', 'sarif_merge_failed': True}, 'error'),
+])
+def test_known_execution_failures_prevent_success_summary(tmp_path, metrics, status):
+    from core.reporting.scan_coverage import scan_execution_status
+    assert scan_execution_status(metrics) == status
+    _write(tmp_path, 'scan_metrics.json', metrics)
+    rendered = render_scan_coverage(tmp_path)
+    if metrics:
+        assert rendered == f'Scan execution: {status}'
+    else:
+        assert rendered is None

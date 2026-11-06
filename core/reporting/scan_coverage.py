@@ -83,11 +83,38 @@ def _findings_for_tool(metrics: dict, tool: str) -> int:
     return total
 
 
+def scan_execution_status(metrics: dict) -> str:
+    """Summarise known execution failures, without claiming complete coverage.
+
+    Legacy metrics lack an explicit status; their recorded failures still
+    prevent a success indicator. Unknown coverage is not a safety verdict.
+    """
+    recorded = metrics.get("execution_status")
+    if recorded == "error":
+        return "error"
+    if "execution_status" in metrics and recorded not in ("ok", "partial"):
+        return "partial"
+    if recorded == "partial" or any(metrics.get(key) for key in (
+        "semgrep_failed_packs", "dropped_registry_packs", "sarif_merge_failed",
+        "analysis_gaps", "semgrep_dropped_files", "codeql_no_output",
+    )):
+        return "partial"
+    return "ok"
+
+
+def render_scan_execution(metrics: dict) -> str | None:
+    """Render saved execution status, including failures without coverage files."""
+    status = scan_execution_status(metrics)
+    if status == "ok" and "execution_status" not in metrics:
+        return None
+    return f"Scan execution: {status}"
+
+
 def render_scan_coverage(out_dir: Path) -> str | None:
     """Render the operator-facing tool-execution coverage block for
-    a /scan run. Returns ``None`` when no per-tool coverage files
-    exist — caller suppresses the section entirely rather than
-    printing an empty header.
+    a /scan run. Saved execution failures remain visible even when no
+    per-tool coverage files exist. Returns ``None`` when neither tool
+    coverage nor an execution summary is available.
 
     Output shape (aligned, one line per tool that ran)::
 
@@ -150,8 +177,9 @@ def render_scan_coverage(out_dir: Path) -> str | None:
         finds_part = f"{finds:>3} finding{'s' if finds != 1 else ''}"
         rendered_lines.append(f"{label} {finds_part}{detail}")
 
+    execution = render_scan_execution(metrics)
     if not rendered_lines:
-        return None
+        return execution
 
     # First line gets the ``Coverage:`` label; remaining lines
     # indent to align the tool-name column.
@@ -159,9 +187,13 @@ def render_scan_coverage(out_dir: Path) -> str | None:
     indent = " " * len("Coverage: ")
     out_lines = [f"Coverage: {first}"]
     out_lines.extend(f"{indent}{line}" for line in rest)
+    if execution:
+        out_lines.append(execution)
     return "\n".join(out_lines)
 
 
 __all__ = [
     "render_scan_coverage",
+    "render_scan_execution",
+    "scan_execution_status",
 ]

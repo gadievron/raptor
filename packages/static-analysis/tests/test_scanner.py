@@ -615,12 +615,24 @@ class TestJoinCodeQLStage:
         )
 
 
-@pytest.mark.parametrize('merge_fails', [False, True])
-@pytest.mark.parametrize('removed_lines', [[], [1], [1, 2]])
-def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypatch, merge_fails, removed_lines):
+@pytest.mark.parametrize('merge_fails,removed_lines,failed_count,dropped,gaps,offline,codeql_empty', [
+    (merge_fails, removed_lines, 0, False, {}, False, False)
+    for merge_fails in (False, True) for removed_lines in ([], [1], [1, 2])
+] + [
+    (False, [], 1, False, {}, False, False),
+    (False, [], 2, False, {}, False, False),
+    (False, [], 1, False, {}, True, False),
+    (False, [], 0, True, {}, False, False),
+    (False, [], 0, False, {'timeout': 1}, False, False),
+    (False, [], 0, False, {}, False, True),
+])
+def test_scan_metrics_follow_committed_report_or_raw_fallback(
+    tmp_path, monkeypatch, capsys, merge_fails, removed_lines, failed_count, dropped, gaps, offline, codeql_empty,
+):
     import json
     import core.project.trust
     import core.run.pin
+    import core.run.gaps
     import core.sandbox
     import core.sandbox.summary
     from core.sarif.parser import parse_sarif_findings
@@ -651,7 +663,12 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypa
     monkeypatch.setattr(core.sandbox.summary, 'summarize_and_write', lambda *a: None)
     monkeypatch.setattr(_scanner_mod, 'maybe_start_orphan_watchdog', lambda *a: None)
     monkeypatch.setattr(_scanner_mod, '_resolve_baseline_packs', lambda *a: [])
-    monkeypatch.setattr(_scanner_mod, 'semgrep_scan_sequential', lambda *a, **kw: (inputs, []))
+    monkeypatch.setattr(_scanner_mod, 'semgrep_scan_sequential',
+                        lambda *a, **kw: (inputs, ['failed'] * failed_count))
+    monkeypatch.setattr(_scanner_mod, '_dropped_registry_packs', ['uncached'] if dropped else [])
+    monkeypatch.setattr(_scanner_mod.RaptorConfig, 'SEMGREP_OFFLINE', offline)
+    monkeypatch.setattr(core.run.gaps, 'gap_summary', lambda *a: gaps)
+    monkeypatch.setattr(_scanner_mod, 'run_codeql', lambda *a, **kw: [])
     monkeypatch.setattr(_scanner_mod, '_finalize_scan_artifacts', lambda *a, **kw: None)
     if merge_fails:
         def fail_merge(*a):
@@ -665,13 +682,22 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(tmp_path, monkeypa
                               for line in removed_lines],
     })
     monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
-                                     '--sequential', '--no-codeql', '--no-cocci',
+                                     '--sequential', '--codeql' if codeql_empty else '--no-codeql', '--no-cocci',
                                      '--no-source-wrappers', '--no-config-resolved',
                                      '--no-graduated-rules'])
     with pytest.raises(SystemExit) as exit_info:
         _scanner_mod.main()
-    assert exit_info.value.code == 0
+    expected_exit = 4 if failed_count == 2 or (offline and failed_count) else 0
+    assert exit_info.value.code == expected_exit
     metrics = json.loads((out / 'scan_metrics.json').read_text())
+    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or codeql_empty else 'ok'
+    assert metrics['execution_status'] == status
+    stdout = capsys.readouterr().out
+    result = json.loads(stdout[stdout.rfind('\n{') + 1:])
+    assert result['status'] == result['metrics']['execution_status'] == status
+    assert metrics['sarif_merge_failed'] is merge_fails
+    assert metrics['analysis_gaps'] == gaps
+    assert metrics['codeql_no_output'] is codeql_empty
     expected_count = 4 if merge_fails else 2 - len(removed_lines)
     expected_suppressed = 0 if merge_fails else expected_count
     assert metrics['nosemgrep_suppressed_count'] == expected_suppressed

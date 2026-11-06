@@ -3784,7 +3784,11 @@ def main() -> int:
                 if not isinstance(semgrep_metrics, dict):
                     semgrep_metrics = {}
 
-                print("\n✓ Semgrep scan complete:")
+                from core.reporting.scan_coverage import render_scan_execution
+                print("\nSemgrep scan results:")
+                execution_summary = render_scan_execution(semgrep_metrics)
+                if execution_summary:
+                    print(f"  - {execution_summary}")
                 print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
                 print(f"  - Findings: {semgrep_metrics.get('total_findings', 0)}")
                 print(f"  - Critical: {semgrep_metrics.get('findings_by_severity', {}).get('error', 0)}")
@@ -5436,16 +5440,14 @@ def main() -> int:
             # hardcoded_secrets summary print above.
             f"{threat_model_phase.get('hardcoded_literal_count', 0)} hardcoded secrets)"  # lgtm[py/clear-text-logging-sensitive-data]
         )
-    # Gate the green-tick "Scanned with Semgrep" line on actual scan
-    # success — `semgrep_metrics` is a truthy dict only when the
-    # subprocess ran, didn't time out, returned rc in {0, 1}, and
-    # produced a scan_metrics.json the loader could parse. Pre-fix the
-    # tick fired solely on `not args.codeql_only`, so timed-out and
-    # errored scans showed a misleading "✓" alongside the CodeQL line
-    # below — which already gates on `codeql_metrics` for exactly this
-    # reason. Mirror that asymmetry away.
-    if not args.codeql_only and semgrep_metrics:
+    # A completed subprocess can still have failed packs or partial output.
+    # Consult saved execution failures before displaying a success indicator.
+    from core.reporting.scan_coverage import scan_execution_status
+    if (not args.codeql_only and semgrep_metrics
+            and scan_execution_status(semgrep_metrics) == "ok"):
         print("   ✓ Scanned with Semgrep")
+    elif not args.codeql_only and semgrep_metrics:
+        print("   ⚠ Semgrep scan incomplete; inspect scan errors and coverage")
     if codeql_metrics:
         print("   ✓ Scanned with CodeQL")
         if codeql_metrics.get('total_findings', 0) > 0:
