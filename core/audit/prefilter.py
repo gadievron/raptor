@@ -3779,7 +3779,9 @@ def _check_c_patterns(
 
     result.has_array_access = bool(_STATIC_SEARCHES.array_access(source))
 
-    for k, line in enumerate(source.splitlines()):
+    # These read-only checks share one native splitlines result per attempt.
+    source_lines = source.splitlines()
+    for k, line in enumerate(source_lines):
         i = line_start + k
         stripped = line.strip()
 
@@ -3860,11 +3862,11 @@ def _check_c_patterns(
                 severity="warning",
             ))
 
-    _check_c_assign_in_cond(result, source, line_start)
-    _check_c_missing_bounds(result, source, line_start, views)
-    _check_c_use_after_free(result, source, line_start, views)
-    _check_c_toctou(result, source, line_start)
-    _check_c_post_loop_oob(result, source, line_start, views)
+    _check_c_assign_in_cond(result, source, line_start, _source_lines=source_lines)
+    _check_c_missing_bounds(result, source, line_start, views, _source_lines=source_lines)
+    _check_c_use_after_free(result, source, line_start, views, _source_lines=source_lines)
+    _check_c_toctou(result, source, line_start, _source_lines=source_lines)
+    _check_c_post_loop_oob(result, source, line_start, views, _source_lines=source_lines)
 
 
 _ASSIGN_IN_COND_RE = re.compile(
@@ -3885,9 +3887,12 @@ def _check_c_assign_in_cond(
     result: PrefilterResult,
     source: str,
     line_start: int,
+    *,
+    _source_lines: list[str] | None = None,
 ) -> None:
     """Detect assignment-in-conditional with a constant (CWE-480/481)."""
-    for i, line in enumerate(source.splitlines(), start=line_start):
+    lines = source.splitlines() if _source_lines is None else _source_lines
+    for i, line in enumerate(lines, start=line_start):
         stripped = line.strip()
         if stripped.startswith(("//", "*")):
             continue
@@ -3911,13 +3916,15 @@ def _check_c_missing_bounds(
     source: str,
     line_start: int,
     views: _GuardViews | _NoVouchViews,
+    *,
+    _source_lines: list[str] | None = None,
 ) -> None:
     """Check for array access on function parameters without bounds checks.
 
     The bounds-check search (the suppressor) reads the comment/string-
     blanked view: ``/* caller ensures i < len */`` is not a check.
     """
-    lines = source.splitlines()
+    lines = source.splitlines() if _source_lines is None else _source_lines
 
     params_with_index_access = set()
     for i, line in enumerate(lines, start=line_start):
@@ -3960,6 +3967,8 @@ def _check_c_use_after_free(
     source: str,
     line_start: int,
     views: _GuardViews | _NoVouchViews,
+    *,
+    _source_lines: list[str] | None = None,
 ) -> None:
     """Detect potential use-after-free and double-free within a function.
 
@@ -3968,7 +3977,7 @@ def _check_c_use_after_free(
     reassignment that clears a freed pointer (a suppressor) is judged
     on the blanked view's line: ``// p = NULL`` clears nothing.
     """
-    lines = source.splitlines()
+    lines = source.splitlines() if _source_lines is None else _source_lines
     freed_vars: dict[str, int] = {}
 
     for i, line in enumerate(lines, start=line_start):
@@ -4022,13 +4031,15 @@ def _check_c_toctou(
     result: PrefilterResult,
     source: str,
     line_start: int,
+    *,
+    _source_lines: list[str] | None = None,
 ) -> None:
     """Detect time-of-check-to-time-of-use patterns.
 
     Looks for access()/stat() followed by open()/fopen() on similar
     paths — classic filesystem TOCTOU race.
     """
-    lines = source.splitlines()
+    lines = source.splitlines() if _source_lines is None else _source_lines
     check_line = None
     check_path_var = None
 
@@ -4069,6 +4080,8 @@ def _check_c_post_loop_oob(
     source: str,
     line_start: int,
     views: _GuardViews | _NoVouchViews,
+    *,
+    _source_lines: list[str] | None = None,
 ) -> None:
     """Detect post-loop out-of-bounds writes.
 
@@ -4078,7 +4091,7 @@ def _check_c_post_loop_oob(
     The post-loop bounds check that clears the index (a suppressor) is
     judged on the blanked view's line.
     """
-    lines = source.splitlines()
+    lines = source.splitlines() if _source_lines is None else _source_lines
     loop_re = re.compile(
         r'\b(?:while|for)\b.{0,200}\b(\w+)\s*<\s*(\w+)\b'
         r'(?!\s*[-+*/])',
