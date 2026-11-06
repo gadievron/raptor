@@ -29,12 +29,21 @@ from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
 import pytest
 
 @pytest.fixture(autouse=True)
-def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
     layer doing this is stripped from release extracts (conftest.py
     is export-ignore), so the pin must travel in-file."""
     from core.testing.state_isolation import pin_user_state_dirs
-    pin_user_state_dirs(monkeypatch, tmp_path)
+    with pytest.MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, tmp_path)
+        yield
+
+
+@pytest.fixture
+def monkeypatch(_user_state_in_tmp):
+    """Undo body patches before restoring the file-owned registry pins."""
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 def _journal(out_dir: Path, file: str, function: str, *,
