@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
-from functools import partial
+from functools import lru_cache, partial
 from heapq import nsmallest
 from itertools import chain, islice
 from pathlib import Path
@@ -5126,6 +5126,8 @@ _PATTERNS_DIR = Path(__file__).resolve().parent / "patterns"
 # review workers raced the bare dicts' check-then-set.
 _patterns_cache: "BoundedMemo[dict[str, Any] | None]" = BoundedMemo(32)
 _pattern_file_cache: "BoundedMemo[list[tuple]]" = BoundedMemo(32)
+_pattern_render_cache: "BoundedMemo[tuple[str, str]]" = BoundedMemo(32)
+_PATTERN_RENDER_MAX_CHARS = 64 * 1024
 
 _PATTERN_HEADING_RE = re.compile(r"^## \d+\.\s+(.+)$", re.MULTILINE)
 _PATTERN_SUMMARY_START_RE = re.compile(r"\S")
@@ -5166,12 +5168,44 @@ def _is_tier1(title: str, tier1_set: set) -> bool:
     return any(keyword.lower() in title_lower for keyword in tier1_set)
 
 
+@lru_cache(maxsize=128)
+def _matching_trigger_title(title_lower: str, titles: tuple[str, ...]) -> str | None:
+    """Resolve catalogue titles by content and insertion priority."""
+    for title in titles:
+        if title.lower() in title_lower:
+            return title
+    return None
+
+
 def _match_trigger_keywords(title: str) -> list[str] | None:
     title_lower = title.lower()
-    for trigger_title, keywords in _TRIGGER_KEYWORDS.items():
-        if trigger_title.lower() in title_lower:
-            return keywords
-    return None
+    titles = tuple(_TRIGGER_KEYWORDS)
+    # Bound retained catalogue text; oversized inputs keep the direct scan.
+    matcher = _matching_trigger_title
+    if len(title_lower) > 256 or len(titles) > 64 or sum(map(len, titles)) > 4096:
+        matcher = matcher.__wrapped__
+    matched = matcher(title_lower, titles)
+    return _TRIGGER_KEYWORDS.get(matched) if matched is not None else None
+
+
+def _render_pattern_tiers(
+    tier1_parts: list[str], tier2_parts: list[str],
+) -> tuple[str, str]:
+    """Reuse bounded catalogue-only renders without retaining function source."""
+    key = (tuple(tier1_parts), tuple(tier2_parts))
+    cached, found = _pattern_render_cache.peek(key)
+    if found and cached is not None:
+        return cached
+    chars = (sum(map(len, chain.from_iterable(key)))
+             + 2 * max(0, len(key[0]) - 1) + max(0, len(key[1]) - 1))
+
+    def render() -> tuple[str, str]:
+        return "\n\n".join(key[0]), "\n".join(key[1])
+
+    result, _cached = _pattern_render_cache.get_or_compute(
+        key if chars <= _PATTERN_RENDER_MAX_CHARS else None, render,
+    )
+    return result
 
 
 def _load_language_patterns(
@@ -5222,13 +5256,12 @@ def _load_language_patterns(
 
         if not tier1_parts and not tier2_parts:
             return None
-        return {
-            "tier1": "\n\n".join(tier1_parts),
-            "tier2": "\n".join(tier2_parts),
-        }
+        tier1, tier2 = _render_pattern_tiers(tier1_parts, tier2_parts)
+        return {"tier1": tier1, "tier2": tier2}
 
     result, _cached = _patterns_cache.get_or_compute(cache_key, _compute)
-    return result
+    # Keep the cached dictionary private; its string values are immutable.
+    return dict(result) if cache_key is not None and result is not None else result
 
 
 def _load_pattern_file(name: str) -> list[tuple]:
