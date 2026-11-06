@@ -18,6 +18,8 @@ from packages.web.client import WebClient
 
 from packages.web.tests.http_server import start_http_server
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     response_status = 200
@@ -457,15 +459,11 @@ def test_rate_limiter_ignores_wall_clock_steps(monkeypatch):
     monotonic clock is immune."""
     client = WebClient("http://t.example", rate_limit=0.05)
     sleeps: list[float] = []
-    monkeypatch.setattr(
-        client_module.time, "sleep", lambda s: sleeps.append(s),
-    )
+    patch_module_attribute(monkeypatch, client_module, "time", "sleep", lambda s: sleeps.append(s))
     real_time = time.time
     client._rate_limit_wait()
     # Simulate a backward NTP step of an hour between requests.
-    monkeypatch.setattr(
-        client_module.time, "time", lambda: real_time() - 3600,
-    )
+    patch_module_attribute(monkeypatch, client_module, "time", "time", lambda: real_time() - 3600)
     client._rate_limit_wait()
     client.close()
     assert all(requested < 1.0 for requested in sleeps), sleeps

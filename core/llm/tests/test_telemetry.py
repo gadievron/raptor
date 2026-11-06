@@ -20,6 +20,8 @@ from core.llm.client import LLMClient
 from core.llm.config import LLMConfig, ModelConfig
 from core.llm.telemetry import TelemetrySink, emit, set_sink
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _clean_sink():
@@ -227,7 +229,7 @@ class TestClientEmission:
         self, tmp_path, monkeypatch,
     ):
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         sink = TelemetrySink(tmp_path / "t.jsonl")
         set_sink(sink)
         client = _client(max_retries=3)
@@ -256,7 +258,7 @@ class TestClientEmission:
         transport failures — and must not be retried: an identical
         retry cannot change a refusal."""
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         sink = TelemetrySink(tmp_path / "t.jsonl")
         set_sink(sink)
         client = _client(max_retries=3)
@@ -426,7 +428,7 @@ class TestFailedAttemptSpend:
             _attach_billed_usage,
             _llm_truncation_error,
         )
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         sink = TelemetrySink(tmp_path / "t.jsonl")
         set_sink(sink)
         err = _llm_truncation_error(
@@ -458,7 +460,7 @@ class TestFailedAttemptSpend:
         """Transport failures that never reached generation cost
         nothing — their rows must not grow zero-value fields."""
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         sink = TelemetrySink(tmp_path / "t.jsonl")
         set_sink(sink)
         client = _client(max_retries=3)

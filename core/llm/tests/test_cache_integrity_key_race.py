@@ -17,6 +17,8 @@ import pytest
 from core.llm import cache_integrity
 from core.security import mac_key
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
@@ -44,7 +46,7 @@ def _lose_creation_race(monkeypatch):
         return real_open(path, flags, mode)
 
     monkeypatch.setattr(cache_integrity.os, "open", fake_open)
-    monkeypatch.setattr(mac_key.time, "sleep", lambda s: None)
+    patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
 
 def test_race_loser_retries_through_empty_read(

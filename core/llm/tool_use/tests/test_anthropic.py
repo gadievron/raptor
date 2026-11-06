@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 # AnthropicProvider's constructor requires the anthropic SDK;
 # CI matrix runs without it skip this whole file cleanly. Import
 # checks happen here (module level) so collection doesn't fail.
@@ -114,7 +116,7 @@ def _no_retry_backoff(monkeypatch):
     seconds."""
     import core.llm.providers as providers_mod
 
-    monkeypatch.setattr(providers_mod.time, "sleep", lambda s: None)
+    patch_module_attribute(monkeypatch, providers_mod, "time", "sleep", lambda s: None)
 
 
 def _provider_with_stub() -> tuple[AnthropicProvider, _StubClient]:

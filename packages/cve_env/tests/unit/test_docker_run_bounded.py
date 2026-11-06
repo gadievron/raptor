@@ -26,6 +26,8 @@ from core.container.proc import RunOutcome
 
 from cve_env.tools import docker_run as dr
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def test_logs_tail_is_bounded(monkeypatch: Any) -> None:
     seen: dict[str, float] = {}
@@ -51,9 +53,7 @@ def test_read_allocated_host_port_poll_is_bounded(monkeypatch: Any) -> None:
         return RunOutcome(returncode=None, stdout="", stderr="", timed_out=True)
 
     monkeypatch.setattr(cc, "run_cli", fake_rwt)
-    monkeypatch.setattr(
-        cc.time, "sleep", lambda *_a, **_k: None
-    )  # don't really sleep the poll gap
+    patch_module_attribute(monkeypatch, cc, "time", "sleep", lambda *_a, **_k: None)  # don't really sleep the poll gap
 
     start = time.monotonic()
     with pytest.raises(

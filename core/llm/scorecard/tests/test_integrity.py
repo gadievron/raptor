@@ -34,6 +34,8 @@ from core.llm.scorecard.scorecard import (
     Policy,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 _NOW_ISO = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 _NOW_MONTH = _NOW_ISO[:7]
 
@@ -404,7 +406,7 @@ def _lose_creation_race(monkeypatch, tmp_path):
         return real_open(path, flags, mode)
 
     monkeypatch.setattr(os, "open", fake_open)
-    monkeypatch.setattr(mac_key.time, "sleep", lambda s: None)
+    patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
 
 def test_race_loser_retries_through_empty_read(
@@ -453,7 +455,7 @@ def test_repeated_quarantines_preserve_each_other(tmp_path, monkeypatch):
     ticks = itertools.count(1_000_000_001)
 
     import core.llm.scorecard.scorecard as sc_mod
-    monkeypatch.setattr(sc_mod.time, "time", lambda: float(next(ticks)))
+    patch_module_attribute(monkeypatch, sc_mod, "time", "time", lambda: float(next(ticks)))
 
     # First tamper + honest write → first quarantine.
     path.write_text(json.dumps(_forged_cells()), encoding="utf-8")

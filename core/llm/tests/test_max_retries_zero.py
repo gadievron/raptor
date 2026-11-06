@@ -18,6 +18,8 @@ from core.llm.client import LLMClient
 from core.llm.config import LLMConfig, ModelConfig
 from core.llm.providers import LLMResponse, StructuredResponse
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _client(max_retries: int) -> LLMClient:
     return LLMClient(LLMConfig(
@@ -101,7 +103,7 @@ class TestMaxRetriesPositiveUnchanged:
         """Other direction of the clamp: positive values keep their
         total-attempts meaning — the clamp must not add an attempt."""
         import core.llm.client as client_mod
-        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
         client = _client(max_retries=3)
         with patch.object(client, "_get_provider") as mock_get:
             prov = MagicMock()

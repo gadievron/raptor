@@ -33,6 +33,8 @@ from core.llm.dispatcher.client import (
     take_upstream_response_started,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class FakeAPIConnectionError(Exception):
     """Name-shaped like the SDK wrappers the gate must recognise."""
@@ -66,7 +68,7 @@ def _clean_attempt_state(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
     import core.llm.client as client_mod
-    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
 
 
 class TestAttemptStateHooks:

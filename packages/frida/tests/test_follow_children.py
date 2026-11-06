@@ -14,6 +14,8 @@ import pytest
 from packages.frida import runner
 from packages.frida.runner import RunConfig, TargetSpec, run
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def _wait_for(cond, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
@@ -168,7 +170,7 @@ class TestFollowChildren:
 
             original_sleep(seconds)
 
-        monkeypatch.setattr(runner.time, "sleep", sleep_with_child)
+        patch_module_attribute(monkeypatch, runner, "time", "sleep", sleep_with_child)
 
         cfg = _cfg(tmp_path, follow_children=True)
         cfg.script_source = "recv('raptor:flush', function () {});"
@@ -197,6 +199,8 @@ class TestFollowChildren:
         device = _FakeDevice()
         original_sleep = runner.time.sleep
         child_event_sent = False
+        clock = {"now": 0.0}
+        original_bounded_call = runner._bounded_frida_call
 
         class SlowExports:
             def __init__(self, script):
@@ -204,8 +208,17 @@ class TestFollowChildren:
 
             def flush(self):
                 self.script.flush_calls += 1
-                original_sleep(0.1)
 
+        def bounded_call(fn, timeout_s, what):
+            # This case checks per-script wedge accounting. Report a definite
+            # timeout instead of racing a sleeping fake against its waiter.
+            if what == "script-flush":
+                assert timeout_s == 0.02
+                fn()
+                return False
+            return original_bounded_call(fn, timeout_s, what)
+
+        monkeypatch.setattr(runner, "_bounded_frida_call", bounded_call)
         monkeypatch.setattr(runner, "_FLUSH_RPC_TIMEOUT_S", 0.02)
         monkeypatch.setattr(
             _FakeScript, "list_exports_sync", lambda self: ["flush"],
@@ -244,9 +257,10 @@ class TestFollowChildren:
                 else:
                     raise AssertionError("Child script was not ready")
 
-            original_sleep(seconds)
+            clock["now"] += seconds
 
-        monkeypatch.setattr(runner.time, "sleep", sleep_with_child)
+        patch_module_attribute(monkeypatch, runner, "time", "sleep", sleep_with_child)
+        patch_module_attribute(monkeypatch, runner, "time", "monotonic", lambda: clock["now"])
 
         cfg = _cfg(tmp_path, follow_children=True)
         cfg.duration_sec = 2.7

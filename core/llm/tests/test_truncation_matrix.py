@@ -27,6 +27,8 @@ import pytest
 
 from core.llm.telemetry import TelemetrySink, set_sink
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _clean_sink():
@@ -108,7 +110,7 @@ def test_matrix_single_attempt_with_paid_telemetry(
     """Every shape × class: exactly ONE paid attempt (no identical
     retry), disposition fatal, and the row carries the stamped cost."""
     import core.llm.client as client_mod
-    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, client_mod, "time", "sleep", lambda _s: None)
     sink = TelemetrySink(tmp_path / "t.jsonl")
     set_sink(sink)
 
