@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -96,7 +96,7 @@ def test_promoter_blocks_while_lock_held(tmp_path: Path) -> None:
 
     worker = tmp_path / "worker.py"
     worker.write_text(
-        "import sys\n"
+        "import logging, sys\n"
         f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
         "from pathlib import Path\n"
         "from core.concepts.model import Concept, DomainModel\n"
@@ -106,8 +106,16 @@ def test_promoter_blocks_while_lock_held(tmp_path: Path) -> None:
         "DomainModel(target='t', source_root='s',\n"
         "            concepts=[Concept(id='c1', description='d')]"
         ").save(run)\n"
-        "(base / 'ready').touch()\n"
-        "merge_promote_domain_model(run, base / 'domain-model.json')\n",
+        "class ContentionSignal(logging.Handler):\n"
+        "    def emit(self, record):\n"
+        "        if 'held by another process' in record.getMessage():\n"
+        "            print('CONTENDED', flush=True)\n"
+        "handler = ContentionSignal()\n"
+        "logger = logging.getLogger('core.atomic_fs.fs_lock')\n"
+        "logger.addHandler(handler)\n"
+        "logger.setLevel(logging.WARNING)\n"
+        "merge_promote_domain_model(run, base / 'domain-model.json')\n"
+        "print('DONE', flush=True)\n",
     )
 
     fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
@@ -125,16 +133,18 @@ def test_promoter_blocks_while_lock_held(tmp_path: Path) -> None:
         )
         with reap_on_exit(subprocess.Popen(
             [sys.executable, str(worker)], env=env, cwd=str(tmp_path),
+            stdout=subprocess.PIPE,
         )) as proc:
             try:
-                deadline = time.monotonic() + 30
-                while not (tmp_path / "ready").exists():
-                    assert proc.poll() is None, f"worker exited early: {proc.returncode}"
-                    assert time.monotonic() < deadline, "worker never started"
-                    time.sleep(0.01)
-                # Worker is past imports and inside the promote call; give
-                # it a full second to (wrongly) write through the held lock.
-                time.sleep(1.0)
+                # The real lock emits this only after a failed flock attempt.
+                # An unlocked promoter reports DONE instead and fails promptly.
+                with selectors.DefaultSelector() as ready:
+                    ready.register(proc.stdout, selectors.EVENT_READ)
+                    assert ready.select(timeout=30), "worker never reported contention"
+                    message = os.read(proc.stdout.fileno(), 64)
+                assert message == b"CONTENDED\n", (
+                    f"promoter did not contend on the held lock: {message!r}"
+                )
                 assert not canonical.exists(), (
                     "promoter wrote the canonical model while another "
                     "process held the promotion lock"
