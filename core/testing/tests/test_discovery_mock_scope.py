@@ -31,7 +31,7 @@ _SPECS = [('core/analysis/tests/test_binary_oracle.py', {'bo_mod': 'core.analysi
  ('core/audit/tests/test_witness_oracle_dispatch.py',
   {'dispatch': 'core.audit.dark_verify._dispatch'}),
  ('core/audit/corpus/tests/test_rule_eval.py', {'rule_eval': 'core.audit.corpus.rule_eval'}),
- ('core/startup/tests/test_check_tools.py', {'startup_init': 'core.startup.init'}),
+ ('core/startup/tests/test_check_tools.py', {'startup_init': 'core.startup.init', 'consumer_0': 'core.startup.init'}),
  ('core/startup/tests/test_install_guard.py', {'guard': 'core.startup.install_guard'}),
  ('packages/joern/tests/test_prereqs.py', {'prereqs': 'packages.joern.prereqs'}),
  ('packages/zkpox/tests/test_proving_deps.py', {'pd': 'packages.zkpox.proving_deps'}),
