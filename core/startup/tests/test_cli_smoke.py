@@ -118,16 +118,8 @@ def _no_tracked_tree_side_effects():
     )
 
 
-def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Invoke ``python raptor.py <args>`` with stdout+stderr captured.
-
-    Timeout kills the child's whole PROCESS GROUP, not just the direct
-    child. ``subprocess.run(timeout=...)`` only kills the immediate
-    process — a raptor.py invocation that got past argparse has already
-    forked real work (scanner subprocesses, agentic children), and
-    those grandchildren survived the kill and kept running full scans
-    against the operator's active project after every suite run.
-    """
+def _child_env() -> dict[str, str]:
+    """Give every smoke child the same disposable startup state."""
     env = dict(os.environ)
     if _CHILD_TMPDIR:
         env["TMPDIR"] = _CHILD_TMPDIR
@@ -140,6 +132,20 @@ def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProces
     # a REAL target and starts real analysis work (see the isolation
     # comment at _CHILD_TMPDIR).
     env.pop("RAPTOR_CALLER_DIR", None)
+    return env
+
+
+def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Invoke ``python raptor.py <args>`` with stdout+stderr captured.
+
+    Timeout kills the child's whole PROCESS GROUP, not just the direct
+    child. ``subprocess.run(timeout=...)`` only kills the immediate
+    process — a raptor.py invocation that got past argparse has already
+    forked real work (scanner subprocesses, agentic children), and
+    those grandchildren survived the kill and kept running full scans
+    against the operator's active project after every suite run.
+    """
+    env = _child_env()
     cmd = [sys.executable, str(RAPTOR_PY), *args]
     proc = subprocess.Popen(
         cmd,
@@ -178,6 +184,24 @@ def _argparse_accepted(*args: str, timeout: float = 3.0) -> bool:
     except subprocess.TimeoutExpired:
         return True
     return "unrecognized argument" not in (r.stdout + r.stderr)
+
+
+def test_import_child_environment_is_isolated(monkeypatch):
+    """Import probes keep the LLM tripwire but cannot discover session targets."""
+    monkeypatch.setenv("HOME", "/operator-home")
+    monkeypatch.setenv("TMPDIR", "/operator-tmp")
+    monkeypatch.setenv("RAPTOR_OUT_DIR", "/operator-output")
+    monkeypatch.setenv("RAPTOR_CALLER_DIR", "/operator-target")
+    # Preserve arbitrary inherited settings, including tripwire configuration.
+    monkeypatch.setenv("RAPTOR_SMOKE_SENTINEL", "retained")
+    before = dict(os.environ)
+    env = _child_env()
+    assert env["HOME"] == _CHILD_HOME
+    assert env["TMPDIR"] == _CHILD_TMPDIR
+    assert env["RAPTOR_OUT_DIR"] == _CHILD_OUT_DIR
+    assert "RAPTOR_CALLER_DIR" not in env
+    assert env["RAPTOR_SMOKE_SENTINEL"] == "retained"
+    assert dict(os.environ) == before
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +457,7 @@ def test_top_level_module_imports(module: str):
             (f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r}); "
              f"import {module}"),
         ],
+        env=_child_env(),
         capture_output=True,
         text=True,
         timeout=15,
@@ -450,6 +475,7 @@ def test_core_config_imports():
             (f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r}); "
              "from core import config"),
         ],
+        env=_child_env(),
         capture_output=True,
         text=True,
         timeout=15,
