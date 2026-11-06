@@ -1252,6 +1252,15 @@ def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> i
 
 def mode_scan(args: list) -> int:
     """Run static code analysis (Semgrep)."""
+    from core.sandbox.preflight import preflight_scan_cli
+    from core.sandbox.errors import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+    try:
+        preflight_scan_cli(args)
+    except SandboxSetupError as exc:
+        print(f"RAPTOR: scan refused — sandbox isolation could not engage.\n{exc}",
+              file=sys.stderr)
+        return SANDBOX_ENGAGE_EXIT_CODE
+
     script_root = Path(__file__).parent
     scanner_script = script_root / "packages/static-analysis/scanner.py"
 

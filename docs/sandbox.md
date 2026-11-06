@@ -1587,3 +1587,16 @@ test fixture. This validates the available outer-only mode, not two-layer macOS
 compatibility. The required-mode test reports that distinction in its JUnit
 suite properties (compatible with xUnit2). The native boundary probe remains
 required in either case.
+
+### Early strict scan checks
+
+`python3 raptor.py scan --repo /path/to/repo --sandbox strict` checks strict
+backend availability before creating a scan run or starting a scanner worker.
+Direct static-analysis workers perform the same preflight before cloning or
+creating scan scratch space. Unsupported isolation returns exit code **3**.
+The preflight shares requirements and diagnostics with the sandbox context;
+it does not replace enforcement checks when an actual child starts.
+
+This behavior applies to every frontend. The default `full` profile keeps its
+existing degraded-isolation behavior. An outer tool sandbox or read-only
+installation does not establish the scanner's own isolation requirements.
