@@ -47,7 +47,8 @@ def _load_coverage_record(out_dir: Path, tool: str) -> dict | None:
     or its coverage emit failed; both fold to ''no record to render''
     in the caller's loop)."""
     p = out_dir / f"coverage-{tool}.json"
-    return load_json(p, max_bytes=_MAX_RECORD_BYTES)
+    data = load_json(p, max_bytes=_MAX_RECORD_BYTES)
+    return data if isinstance(data, dict) else None
 
 
 def _findings_for_tool(metrics: dict, tool: str) -> int:
@@ -59,14 +60,16 @@ def _findings_for_tool(metrics: dict, tool: str) -> int:
     that lack ``findings_by_tool``.
     """
     by_tool = metrics.get("findings_by_tool")
-    if by_tool and tool in by_tool:
-        v = by_tool[tool]
-        return v if isinstance(v, int) else 0
+    if isinstance(by_tool, dict):
+        v = by_tool.get(tool)
+        return v if type(v) is int and v >= 0 else 0
 
     findings_by_rule = metrics.get("findings_by_rule") or {}
     total = 0
+    if not isinstance(findings_by_rule, dict):
+        return 0
     for rule_id, count in findings_by_rule.items():
-        if not isinstance(count, int):
+        if not isinstance(rule_id, str) or type(count) is not int or count < 0:
             continue
         rule_lower = rule_id.lower()
         if tool == "semgrep":
@@ -162,22 +165,26 @@ def render_scan_coverage(out_dir: Path) -> str | None:
         # rules_applied is either an int (legacy: count) or a list
         # (newer shape). Render the count regardless.
         if isinstance(rules, list):
-            rule_count = len(rules)
-        elif isinstance(rules, int):
+            rule_count = len({rule for rule in rules if isinstance(rule, str) and rule})
+        elif type(rules) is int and rules >= 0:
             rule_count = rules
         else:
             rule_count = None
 
-        # Failed-pack info — pulled from scan_metrics for semgrep
-        # specifically (semgrep_failed_packs is the only per-tool
-        # failure field surfaced today; codeql / cocci failures
-        # surface through their own pipeline — extend as those
-        # detectors grow).
+        # Pack-level failures supplement the per-path diagnostics below.
         failed_packs: list = []
         if tool == "semgrep":
-            failed_packs = metrics.get("semgrep_failed_packs") or []
+            value = metrics.get("semgrep_failed_packs")
+            if isinstance(value, list):
+                failed_packs = list(dict.fromkeys(pack for pack in value if isinstance(pack, str) and pack))
 
         detail_parts: list[str] = []
+        file_issues = rec.get("files_failed")
+        if isinstance(file_issues, list):
+            affected = {row["path"] for row in file_issues
+                        if isinstance(row, dict) and isinstance(row.get("path"), str) and row["path"]}
+            if affected:
+                detail_parts.append(f"{len(affected)} path(s) with tool warnings or errors")
         if rule_count is not None:
             detail_parts.append(
                 f"{rule_count} rule group{'s' if rule_count != 1 else ''}"

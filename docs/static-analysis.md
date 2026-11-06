@@ -525,6 +525,11 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+The scan coverage summary shows how many distinct paths have tool warnings or
+errors, alongside rule counts and findings. Multiple diagnostics for one path
+count once. Consult the tool's coverage record for the affected paths and
+reasons; a zero-finding count does not mean those paths were analyzed fully.
+
 For multi-language CodeQL scans, coverage combines the files, query packs and
 rule inventories from every report produced by the current scan. Extraction
 warnings retain every affected file. Artifact references honor URI bases and
