@@ -715,7 +715,7 @@
     "count": 19,
     "kind": "literal"
   },
-  "core/audit/forecast.py::forecast_audit_cost": {
+  "core/audit/forecast.py::result": {
     "count": 12,
     "kind": "literal",
     "note": "forecast result-document field names (an artifact schema forecast.json persists and the report embeds), not a learned name vocabulary"

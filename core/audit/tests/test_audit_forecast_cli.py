@@ -37,6 +37,10 @@ def _load_cli():
 def cli_env(tmp_path, monkeypatch):
     """Target + out dir with a pre-built two-function checklist, the
     lifecycle stub faked, and the pipeline tripwired."""
+    from core.llm import billing
+    from core.llm.config import ModelConfig
+    monkeypatch.setattr(billing, "_get_default_primary_model", lambda **kwargs:
+                        ModelConfig("anthropic", "owned-api", api_key="test-key"))
     mod = _load_cli()
     target = tmp_path / "target"
     target.mkdir()
@@ -447,3 +451,44 @@ def test_uncapped_save_failure_warns_and_proceeds(cli_env, capsys,
     assert "Cost forecast: $" in captured.out
     assert "could not persist" in captured.err
     assert "calibration will be skipped" in captured.err
+
+
+@pytest.mark.parametrize("forecast_only", [False, True])
+@pytest.mark.parametrize("route", ["subscription", "local", "unknown"])
+def test_non_api_runs_keep_workload_without_dollar_projection(cli_env, monkeypatch, capsys, forecast_only, route):
+    from core.llm import billing
+    from core.llm.config import ModelConfig
+    model = {"subscription": ModelConfig("claudecode", "owned-cli"),
+             "local": ModelConfig("ollama", "owned-local"), "unknown": None}[route]
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for key in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(billing, "_get_default_primary_model", lambda **kwargs: model)
+    argv = ["run", str(cli_env.target), "--out", str(cli_env.out_dir)]
+    if forecast_only:
+        argv.append("--forecast")
+    rc = cli_env.run_cli(argv)
+    output = capsys.readouterr()
+    assert rc == (0 if forecast_only else 1)  # paying pipeline remains tripwired
+    assert "Audit workload forecast: 2 queue item(s)" in output.out
+    assert "USD estimate omitted" in output.out
+    assert "Cost forecast: $" not in output.out and "central ~$" not in output.out
+    doc = json.loads((cli_env.out_dir / "forecast.json").read_text())
+    assert doc["usd_estimate_available"] is False
+    assert doc["usd_low"] is None and doc["usd_central"] is None and doc["usd_high"] is None
+    assert doc["queue_n"] == 2
+
+
+def test_explicit_cli_pin_suppresses_dollars_despite_api_default(cli_env, monkeypatch, capsys):
+    from core.llm import billing
+    from core.llm.config import LLMConfig, ModelConfig
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for key in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(billing, "_pinned_llm_config", lambda *args, **kwargs:
+                        LLMConfig(primary_model=ModelConfig("claudecode", "owned-cli"), fallback_models=[]))
+    assert cli_env.run_cli(["run", str(cli_env.target), "--out", str(cli_env.out_dir),
+                            "--forecast", "--model", "claudecode"]) == 0
+    assert "Cost forecast: $" not in capsys.readouterr().out
+    doc = json.loads((cli_env.out_dir / "forecast.json").read_text())
+    assert doc["usd_estimate_available"] is False

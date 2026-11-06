@@ -608,3 +608,26 @@ class TestFormatting:
             line = format_calibration_line(entry)
             assert "Forecast vs actual" in line
             assert "$?" in line
+
+
+
+def test_non_metered_forecast_omits_usd_but_retains_workload():
+    gaps = _gaps([("a.c", "f"), ("a.c", "g")])
+    forecast = _forecast(gaps, usd_estimate_available=False)
+    assert forecast["usd_estimate_available"] is False
+    assert forecast["queue_n"] == 2
+    assert all(forecast[key] is None for key in ("usd_low", "usd_central", "usd_high"))
+    assert all(value is None for phase in forecast["phases"].values()
+               for key, value in phase.items() if key.startswith("usd_"))
+    assert forecast["phases"]["review"]["calls_central"] == 2
+    lines = format_forecast_lines(forecast)
+    assert all("$" not in line for line in lines)
+    assert "USD estimate omitted" in "\n".join(lines)
+
+
+def test_non_metered_run_does_not_write_dollar_calibration(tmp_path):
+    forecast = _forecast(_gaps([("a.c", "f")]), usd_estimate_available=False)
+    save_forecast(tmp_path, forecast)
+    (tmp_path / "cost-breakdown.json").write_text(json.dumps(_breakdown()))
+    assert record_run_calibration(tmp_path) is None
+    assert not (tmp_path / CALIBRATION_FILENAME).exists()

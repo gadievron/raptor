@@ -41,7 +41,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--out <dir>` — output directory (default: resolved by lifecycle)
 - `--codeql-db <path>` — CodeQL database for query dispatch and pre-sweep (repeatable — one per language for multi-language targets; per-function dispatch routes by the file's language)
 - `--max-cost <USD>` — stop after spending this many dollars on LLM calls. Also accepted by `resume` for a single segment (overrides the original cap; booked spend from prior segments still counts against it; `0` removes the cap)
-- `--forecast` — print the deepen-aware pre-spend cost forecast band (low/central/high USD with its band drivers, from the gap-queue census plus journal priors) and exit at $0 LLM spend without reviewing anything. Uncapped runs (no `--max-cost`) print the same band informationally at run start — never a gate
+- `--forecast` — print the deepen-aware pre-spend cost forecast band (low/central/high USD with its band drivers, from the gap-queue census plus journal priors) and exit at $0 LLM spend without reviewing anything. Uncapped runs (no `--max-cost`) print the same forecast informationally at run start — never a gate. USD projections are shown only for configured metered API routes; subscription, local, or unknown billing routes show the workload forecast without dollar amounts
 - `--deepen-reserve <fraction>` — slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables)
 - `--max-time <seconds>` — stop after this many wall-clock seconds
 - `--review-passes <N>` — independent review passes per function for self-consistency (default: 1)
