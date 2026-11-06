@@ -28,19 +28,17 @@ from unittest.mock import patch
 
 import pytest
 
-from core.concepts.tests._study_cli import run_prep_main
+from core.concepts.tests._study_cli import run_loop_with_prep, run_study_main
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
 _LOOP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-loop"
 
 
-def _load_prep() -> ModuleType:
-    loader = importlib.machinery.SourceFileLoader(
-        "raptor_study_prep_focus_vet", str(_PREP_PATH))
-    spec = importlib.util.spec_from_file_location(
-        "raptor_study_prep_focus_vet", str(_PREP_PATH), loader=loader,
-    )
+def _load_study(script: Path = _PREP_PATH) -> ModuleType:
+    name = script.name.replace("-", "_") + "_focus_vet"
+    loader = importlib.machinery.SourceFileLoader(name, str(script))
+    spec = importlib.util.spec_from_file_location(name, script, loader=loader)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     with patch.object(sys, "path", sys.path.copy()):
@@ -50,15 +48,18 @@ def _load_prep() -> ModuleType:
     return mod
 
 
-prep = _load_prep()
+prep = _load_study()
 
 _DROP_LINE = ("reading-list identifiers resolve to no file in this "
               "tree — dropped from focus (different binary?)")
 
 
 def _run(script: Path, args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
-    if script == _PREP_PATH and in_process:
-        return run_prep_main(_load_prep, script, args)
+    if in_process:
+        if script == _PREP_PATH:
+            return run_study_main(_load_study, script, args)
+        if script == _LOOP_PATH:
+            return run_loop_with_prep(lambda: _load_study(script), script, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -182,7 +183,10 @@ class TestVetHelper:
 
 
 class TestForeignReadingList:
-    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
+    @pytest.mark.parametrize("in_process", [
+        pytest.param(True, id="main"),
+        pytest.param(False, marks=pytest.mark.integration, id="interpreter"),
+    ])
     def test_foreign_identifiers_dropped_unfocused_fallback(
         self, tmp_path: Path, in_process,
     ) -> None:
@@ -465,8 +469,12 @@ class TestRedbMergeFallback:
 
 
 class TestStudyLoopZeroItemWarning:
+    @pytest.mark.parametrize("in_process", [
+        pytest.param(True, id="main"),
+        pytest.param(False, marks=pytest.mark.integration, id="interpreter"),
+    ])
     def test_zero_items_after_drops_is_a_warning(
-        self, tmp_path: Path,
+        self, tmp_path: Path, in_process,
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -480,7 +488,7 @@ class TestStudyLoopZeroItemWarning:
                             ["orphan_note", "FUN_00401a2c"])
         result = _run(_LOOP_PATH, [
             str(repo), str(out), "--root", str(repo), "--skip-compile",
-        ])
+        ], in_process=in_process)
         assert result.returncode == 0, result.stderr
         assert "study-loop: WARNING: 0 study items" in result.stderr
         assert "different binary?" in result.stderr

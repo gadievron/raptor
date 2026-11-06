@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.concepts.tests._study_cli import run_prep_main
+from core.concepts.tests._study_cli import run_study_main
 
 _PREP_PATH = (Path(__file__).resolve().parents[3]
               / "libexec" / "raptor-study-prep")
@@ -40,7 +40,7 @@ prep = _load_prep()
 
 def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
     if in_process:
-        return run_prep_main(_load_prep, _PREP_PATH, args)
+        return run_study_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -127,7 +127,10 @@ class TestLoadBridgeSeeds:
 
 
 class TestBridgeSeedTier:
-    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
+    @pytest.mark.parametrize("in_process", [
+        pytest.param(True, id="main"),
+        pytest.param(False, marks=pytest.mark.integration, id="interpreter"),
+    ])
     def test_bridge_seeds_prioritize_without_filtering(
             self, tmp_path: Path, in_process) -> None:
         repo = _make_tree(tmp_path)

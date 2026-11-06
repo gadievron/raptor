@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.concepts.tests._study_cli import run_loop_with_prep
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 STUDY_LOOP = str(RAPTOR_DIR / "libexec" / "raptor-study-loop")
 
@@ -31,8 +33,10 @@ def _load_loop_module() -> ModuleType:
 _loop = _load_loop_module()
 
 
-def _run_loop(args: list[str], env_extra: dict | None = None) -> subprocess.CompletedProcess:
-    """Run study-loop with trust marker set."""
+def _run_loop(args: list[str], env_extra: dict | None = None, *, in_process=False) -> subprocess.CompletedProcess:
+    """Keep interpreter checks explicit; empty-study feature cases reuse imports."""
+    if in_process and env_extra is None:
+        return run_loop_with_prep(_load_loop_module, STUDY_LOOP, args)
     import os
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
@@ -77,15 +81,22 @@ class TestStudyLoopCLI:
 
     def test_missing_target_produces_no_items(self, tmp_path):
         result = _run_loop([
-            "/nonexistent/target", str(tmp_path),
-            "--identifier", "some_func",
-        ])
-        assert "no study items" in result.stderr.lower() or result.returncode == 0
+            str(tmp_path / "missing"), str(tmp_path),
+            "--identifier", "some_func", "--root", str(tmp_path),
+        ], in_process=True)
+        assert result.returncode == 0, result.stderr
+        assert "no study items" in result.stderr.lower()
+        data = json.loads((tmp_path / "study-list.json").read_text())
+        assert data["items"] == []
+        assert data["source_root"] == str(tmp_path.resolve())
 
-    def test_path_only_runs_overview(self, tmp_path):
+    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
+    def test_path_only_runs_overview(self, tmp_path, in_process):
         """Path-only invocation triggers overview mode."""
-        result = _run_loop(["/nonexistent/target", str(tmp_path)])
+        result = _run_loop([str(tmp_path / "missing"), str(tmp_path)], in_process=in_process)
         assert "running overview" in result.stderr.lower()
+        assert result.returncode == 1, result.stderr
+        assert "overview produced nothing" in result.stderr.lower()
 
     def test_creates_output_dir(self, tmp_path, monkeypatch):
         out = tmp_path / "loop-out"
@@ -665,3 +676,41 @@ class TestPendingItemsShapeTolerance:
         ]}))
         pending = _loop._pending_items(p)
         assert [i["id"] for i in pending] == ["rl-1"]
+
+
+
+def test_real_empty_prep_preserves_required_model_failure(tmp_path):
+    target = tmp_path / "src"
+    target.mkdir()
+    (target / "notes.c").write_text("/* no extractable declarations */\n")
+    out = tmp_path / "out"
+    result = _run_loop([
+        str(target), str(out), "--root", str(target),
+        "--identifier", "absent_fn", "--require-domain-model", "--skip-compile",
+    ], in_process=True)
+    assert result.returncode == 1, result.stderr
+    data = json.loads((out / "study-list.json").read_text())
+    assert data["items"] == []
+    assert data["source_root"] == str(target.resolve())
+    failure = json.loads((out / "study-failure.json").read_text())
+    assert failure["reason"] == "no_domain_model"
+    assert "ERROR" in result.stderr
+
+
+def test_empty_loop_runner_rejects_unexpected_study_stage(tmp_path):
+    target = tmp_path / "src"
+    target.mkdir()
+    (target / "alpha.c").write_text("int alpha_fn(void) { return 0; }\n")
+    out = tmp_path / "out"
+    argv, path = sys.argv, sys.path
+    argv_values, path_values = argv.copy(), path.copy()
+    streams = sys.stdout, sys.stderr
+    with pytest.raises(AssertionError, match="unexpected helper"):
+        _run_loop([
+            str(target), str(out), "--root", str(target),
+            "--identifier", "alpha_fn", "--skip-compile",
+        ], in_process=True)
+    assert json.loads((out / "study-list.json").read_text())["items"]
+    assert sys.argv is argv and argv == argv_values
+    assert sys.path is path and path == path_values
+    assert (sys.stdout, sys.stderr) == streams

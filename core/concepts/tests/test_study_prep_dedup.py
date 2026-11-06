@@ -25,6 +25,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.concepts.tests._study_cli import run_study_main
+
 _PREP_PATH = (Path(__file__).resolve().parents[3]
               / "libexec" / "raptor-study-prep")
 
@@ -46,7 +48,9 @@ def _load_prep() -> ModuleType:
 prep = _load_prep()
 
 
-def _run_prep(args: list[str]) -> subprocess.CompletedProcess:
+def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
+    if in_process:
+        return run_study_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -116,7 +120,11 @@ class TestNameLevelDedup:
 
 
 class TestCliDedupAndBridgeRatio:
-    def test_thunk_duplicates_and_matched_ratio(self, tmp_path: Path):
+    @pytest.mark.parametrize("in_process", [
+        pytest.param(True, id="main"),
+        pytest.param(False, marks=pytest.mark.integration, id="interpreter"),
+    ])
+    def test_thunk_duplicates_and_matched_ratio(self, tmp_path: Path, in_process):
         repo = tmp_path / "repo"
         repo.mkdir()
         # Three identical thunks + a struct whose refcount field mints
@@ -145,7 +153,7 @@ class TestCliDedupAndBridgeRatio:
         result = _run_prep([
             str(repo), str(out), "--root", str(repo),
             "--bridge-seed-file", str(bridge),
-        ])
+        ], in_process=in_process)
         assert result.returncode == 0, result.stderr
         data = json.loads(
             (out / "study-list.json").read_text(encoding="utf-8"))
