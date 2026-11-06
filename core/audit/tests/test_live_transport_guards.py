@@ -1655,6 +1655,8 @@ class TestCompilerSurfaceFences:
             "test_named_gcc_object_wins_over_unrelated_same_line_identifier",
             "test_explicit_common_identifier_does_not_confirm_another_objects_bug",
             "test_cpp_leak_checker_and_cleanup_controls",
+            "test_aliasing_local_assignment_requires_definite_initialization",
+            "test_aliasing_unary_values_require_actual_incompatible_access",
             "test_aliasing_memo_is_tu_wide_and_returns_isolated_proofs",
             "test_aliasing_no_clang_retains_candidate",
             "test_aliasing_proof_cannot_confirm_another_identifier",
