@@ -49,6 +49,7 @@ def hook_env(tmp_path):
 
     env = dict(os.environ)
     env["HOME"] = str(home)
+    env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
     return {"env": env, "target": target, "run_dir": run_dir}
 
 
