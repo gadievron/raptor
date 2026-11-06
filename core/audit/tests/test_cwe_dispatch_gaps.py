@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.audit.compiler_sweep import compiler_applicable
 from core.audit.cwe_dispatch import (
     CWE_TO_TOOL_DISPATCH,
@@ -131,7 +133,7 @@ def _suspicious_outcome(cwe: str, counter: str) -> ReviewOutcome:
             "cwe": cwe,
             "hypothesis": "the length header is attacker controlled",
             "hypotheses": [{
-                "mechanism": "attacker controls the length",
+                "mechanism": "the length header is attacker controlled",
                 "confidence": "medium",
                 "counter": counter,
             }],
@@ -153,6 +155,11 @@ class TestUnmappedFamiliesSeedSynthesis:
             _orch, "_synthesize_unmapped_suspicious",
             lambda *a, **kw: synth_calls.append(a[3]),
         )
+        def unexpected_sweep(*args, **kwargs):
+            pytest.fail("counter-routing test must not execute a mechanical sweep")
+
+        monkeypatch.setattr(_orch, "run_prefilter", unexpected_sweep)
+        monkeypatch.setattr(_orch, "_run_tool_chain", unexpected_sweep)
         # Keep the sweep fully mechanical-free for the test.
         monkeypatch.setattr(
             _orch, "_read_raw_source", lambda *a, **kw: "int f(void){}",
@@ -160,6 +167,7 @@ class TestUnmappedFamiliesSeedSynthesis:
 
         result = OrchestratorResult()
         outcome = _suspicious_outcome(cwe, self._COUNTER)
+        assert _orch._has_refuting_counter(outcome, hypothesis=outcome.hypothesis)
         result.outcomes.append(outcome)
         result.suspicious = 1
         config = OrchestratorConfig(
