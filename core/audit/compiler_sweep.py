@@ -57,6 +57,7 @@ from core.detectors.compiler import (
     CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
+from core.sarif.parser import ResultRuleResolver, _result_rule_id, rule_default_level
 from core.run.scratch import scratch_dir
 
 from ._util import safe_join
@@ -1757,6 +1758,7 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
     for run in data["runs"]:
         if not isinstance(run, dict) or not isinstance(run.get("results"), list):
             raise CompilerDiagnosticError("GCC SARIF run requires a result array")
+        rule_resolver: ResultRuleResolver | None = None
         for result in run["results"]:
             if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
@@ -1768,9 +1770,18 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
                 filename = local_uri_path(uri) if uri else ""
             except ValueError as exc:
                 raise CompilerDiagnosticError("invalid GCC SARIF diagnostic URI") from exc
+            diagnostic_id = result.get("ruleId")
+            diagnostic_id = diagnostic_id if isinstance(diagnostic_id, str) else ""
+            level = result.get("level") or ""
+            if not diagnostic_id or not level:
+                if rule_resolver is None:
+                    rule_resolver = ResultRuleResolver(run)
+                rule = rule_resolver.resolve(result)
+                diagnostic_id = _result_rule_id(result, rule) or ""
+                level = level or rule_default_level(rule) or ""
             diags.append({
-                "id": result.get("ruleId", "") or "",
-                "kind": result.get("level", "") or "",
+                "id": diagnostic_id,
+                "kind": level,
                 "line": region.get("startLine", 0) or 0,
                 "file": filename,
                 "message": (result.get("message", {}) or {}).get("text", "") or "",
