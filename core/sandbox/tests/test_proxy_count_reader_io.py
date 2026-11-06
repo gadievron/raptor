@@ -65,7 +65,7 @@ def test_malformed_fields_rejected_before_mac(sidecar, monkeypatch, payload):
 
 
 def test_recursion_error_is_invalid_sidecar(sidecar, monkeypatch):
-    def too_deep(*args):
+    def too_deep(*args, **kwargs):
         raise RecursionError('decoder nesting limit')
 
     monkeypatch.setattr(json, 'loads', too_deep)

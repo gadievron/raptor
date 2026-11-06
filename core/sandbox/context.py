@@ -470,6 +470,7 @@ def _read_proxy_count_sidecar(output, run_binding):
     not verify (tamper evidence in itself)."""
     from . import proxy as _proxy_mod
     from . import telemetry_mac as _tmac
+    from .evidence import _unique_evidence_object
     path = os.path.join(output, _proxy_mod.PROXY_EVENTS_COUNT_FILENAME)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -501,7 +502,8 @@ def _read_proxy_count_sidecar(output, run_binding):
         return None, set(), True
     import json as _json
     try:
-        data = _json.loads(raw.decode("utf-8"))
+        data = _json.loads(raw.decode("utf-8"),
+                           object_pairs_hook=_unique_evidence_object)
     except (ValueError, UnicodeDecodeError, RecursionError):
         return None, set(), True
     if not isinstance(data, dict):
