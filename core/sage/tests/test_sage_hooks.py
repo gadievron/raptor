@@ -9,6 +9,20 @@ from unittest.mock import MagicMock, patch
 
 from core.sage import rowmac
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import core.sage.hooks as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
+
+
 # All hooks now mint/verify row MACs. Point the key at a module-scoped
 # temp directory so tests never touch the checkout's .sage/ state.
 _key_tmp = None

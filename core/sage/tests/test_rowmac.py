@@ -13,6 +13,18 @@ from unittest.mock import patch
 from core.sage import rowmac
 from core.testing.module_state import isolated_module_state
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import core.security.mac_key as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
 
 
 class TestKeyPathResolution(unittest.TestCase):

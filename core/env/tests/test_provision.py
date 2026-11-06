@@ -10,6 +10,20 @@ from core.env import provision as pv
 from core.env.spec import EnvironmentSpec, RunSpec, SourceSpec
 from core.env.store import load_run_spec
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import core.container.containers as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
+
+
 _CID = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 _PORTS = '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"49001"}]}'
 _STATE = '{"Running": true, "Status": "running"}'

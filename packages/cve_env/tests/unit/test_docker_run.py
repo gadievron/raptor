@@ -14,6 +14,18 @@ import pytest
 
 from cve_env.tools.docker_run import RunError, _normalize_ports
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import core.container.containers as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
+
 
 def test_normalize_ports_accepts_bind_dict() -> None:
     assert _normalize_ports({8080: {"bind": "127.0.0.1"}}) == (8080, "127.0.0.1")

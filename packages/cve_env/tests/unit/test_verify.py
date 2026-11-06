@@ -25,6 +25,18 @@ from cve_env.tools.verify import (
     verify,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_clock_patch_targets(monkeypatch):
+    """Keep clock patch decorators and contexts on this consumer's view."""
+    import cve_env.tools.verify as clock_consumer
+
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
+    )
+
 
 def _mk_resp(*, status: int, body: bytes) -> MagicMock:
     # The engine's transport seam returns (status_code, content_bytes).
