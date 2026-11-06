@@ -78,6 +78,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .evidence import _unique_evidence_object
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -267,7 +269,8 @@ def _read_marker_record(path: Path) -> "tuple[dict | None, str | None]":
     finally:
         os.close(fd)
     try:
-        record = json.loads(raw.decode("utf-8"))
+        record = json.loads(raw.decode("utf-8"),
+                            object_pairs_hook=_unique_evidence_object)
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None, "invalid-json"
     if not isinstance(record, dict):
@@ -282,7 +285,7 @@ def _validate_record(record: dict) -> "tuple[HostConsent | None, str | None]":
     what the record itself must satisfy. Extra keys are tolerated
     (forward compatibility); wrong types and wrong values are not.
     """
-    if record.get("schema") != _SCHEMA_VERSION:
+    if type(record.get("schema")) is not int or record["schema"] != _SCHEMA_VERSION:
         return None, "wrong-schema"
     floor = record.get("floor")
     if floor != CONSENTED_FLOOR_LABEL:

@@ -29,6 +29,7 @@ from core.security.capped_read import read_capped_text
 from . import state
 from ._fork_safe_warn import warn_post_fork
 from .exit_codes import SANDBOX_EXIT_RLIMIT_CORE_FAIL
+from .evidence import _unique_evidence_object
 from .landlock import (
     _get_landlock_abi,
     _make_landlock_preexec,
@@ -150,7 +151,7 @@ def _load_user_limits() -> dict:
                 _CONFIG_PATH, 64 * 1024, errors="strict",
                 follow_symlinks=True, raise_on_refusal=True,
             )
-            data = json.loads(raw)
+            data = json.loads(raw, object_pairs_hook=_unique_evidence_object)
             if isinstance(data, dict):
                 # Accept non-negative ints; 0 is a valid "skip this rlimit"
                 # sentinel (see _set_limits guards: `if mem > 0:` etc.).
