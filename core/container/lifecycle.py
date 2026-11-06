@@ -28,7 +28,9 @@ def _count_removed(requested: list[str], outcome: RunOutcome) -> int:
 
 def remove_labeled_containers(label: str, value: str,
                               timeout: float = 30.0) -> int:
-    """``docker rm -f`` every container labeled ``label=value``.
+    """``docker rm -fv`` every container labeled ``label=value``.
+
+    Anonymous volumes are removed with their containers; named volumes stay.
     Returns the count removed (0 when none matched or on any failure)."""
     if not value:
         return 0
@@ -42,7 +44,7 @@ def remove_labeled_containers(label: str, value: str,
            if i.strip()]
     if not ids:
         return 0
-    outcome = run_cli(["docker", "rm", "-f", *ids], timeout=timeout)
+    outcome = run_cli(["docker", "rm", "-f", "-v", *ids], timeout=timeout)
     return _count_removed(ids, outcome)
 
 

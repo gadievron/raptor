@@ -477,7 +477,9 @@ def stop_container(
     *,
     required_label: tuple[str, str] | None = None,
 ) -> bool:
-    """Stop + remove ``container_id``. Errors swallowed (best effort).
+    """Stop + remove ``container_id`` and its anonymous volumes.
+
+    Errors swallowed (best effort); named volumes are preserved.
 
     When ``required_label=(key, value)`` is given, the container must
     carry exactly that label or the call refuses (returns False) — the
@@ -497,5 +499,5 @@ def stop_container(
             )
             return False
     run_cli(["docker", "stop", container_id], timeout=30)
-    run_cli(["docker", "rm", "-f", container_id], timeout=30)
+    run_cli(["docker", "rm", "-f", "-v", container_id], timeout=30)
     return True

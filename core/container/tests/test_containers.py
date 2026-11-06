@@ -194,7 +194,7 @@ def test_stop_removes_owned_container() -> None:
         ok = cc.stop_container("cid", required_label=("o", "mine"))
     assert ok is True
     assert ["docker", "stop", "cid"] in captured
-    assert ["docker", "rm", "-f", "cid"] in captured
+    assert ["docker", "rm", "-f", "-v", "cid"] in captured
 
 
 # ── inspect_state error folding ───────────────────────────────────────

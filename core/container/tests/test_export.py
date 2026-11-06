@@ -107,7 +107,7 @@ def test_export_rootfs_happy_path_and_cleanup(tmp_path: Path) -> None:
     assert outcome.ok, outcome.reason
     assert (dest / "bin" / "init").is_file()
     assert outcome.config is not None and outcome.config.workdir == "/app"
-    assert ["docker", "rm", "-f", "cid123"] in captured  # throwaway removed
+    assert ["docker", "rm", "-f", "-v", "cid123"] in captured  # throwaway removed
 
 
 def test_export_rootfs_create_failure_classified(tmp_path: Path) -> None:
@@ -158,7 +158,8 @@ def test_export_tar_staged_next_to_dest_not_default_tmp(
         outcome = ex.export_rootfs("nginx@sha256:" + "a" * 64, dest)
     assert outcome.ok, outcome.reason
     assert len(tar_dests) == 1
-    assert tar_dests[0].parent == dest.parent
+    assert tar_dests[0].parent.parent == dest.parent
+    assert not tar_dests[0].parent.exists()
     assert not tar_dests[0].exists()  # staged tar removed after extract
 
 
@@ -232,7 +233,7 @@ def test_export_rootfs_gates_image_size_before_export(tmp_path: Path) -> None:
     assert not outcome.ok and outcome.reason == "quota_exceeded"
     assert outcome.extras["image_size"] == 10 << 30
     assert not any(c[:2] == ["docker", "export"] for c in seen)
-    assert ["docker", "rm", "-f", "cid123"] in seen  # throwaway removed
+    assert ["docker", "rm", "-f", "-v", "cid123"] in seen  # throwaway removed
 
 
 def test_export_rootfs_reports_counts_and_flags_degraded(tmp_path: Path) -> None:

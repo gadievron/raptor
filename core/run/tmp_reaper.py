@@ -303,6 +303,8 @@ _DIR_PREFIXES = (
     "raptor-joern-uds-",
     "raptor-ls-remote-",
     "raptor-resolver-home-",
+    "raptor-rootfs-export-",
+    "raptor-rootfs-extract-",
     "raptor-sca-",
     "raptor-symex-",
     "raptor_cc_probe_",

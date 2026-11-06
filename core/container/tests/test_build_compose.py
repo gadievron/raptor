@@ -144,9 +144,8 @@ def test_rewrite_hardens_and_labels(tmp_path: Path) -> None:
         assert svc["mem_limit"] == "4g"
         assert svc["pids_limit"] == 512
     finally:
-        import shutil
 
-        shutil.rmtree(staging, ignore_errors=True)
+        cco.cleanup_staging(staging)
 
 
 def test_run_compose_folds_failures_to_compose_error(tmp_path: Path) -> None:

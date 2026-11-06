@@ -58,7 +58,8 @@ def test_resolver_home_mkdir_failure_cleans_tree(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
     with pytest.raises(OSError, match="disk full"):
-        compose._resolver_scratch_home()
+        with compose._resolver_scratch_home():
+            pytest.fail("failed setup must not enter the resolver scope")
     assert not scratch.exists()
 
 
