@@ -1,7 +1,8 @@
-"""Tests for .github/scripts/test_impact.py — graph cache placement."""
+"""Tests for .github/scripts/test_impact.py — cached graphs and timing inputs."""
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
@@ -108,3 +109,113 @@ def test_diff_failure_remains_fatal(tmp_path, monkeypatch, capsys):
     assert "git diff failed:" in error
     assert "missing-revision" in error
     assert "b'" not in error
+
+
+@pytest.mark.parametrize('mode', [0o755, 0o770, 0o777], ids=['world-readable', 'group-writable', 'world-writable'])
+def test_existing_nonprivate_cache_directory_disables_cache(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(test_impact, 'tempfile', SimpleNamespace(gettempdir=lambda: str(tmp_path)))
+    directory = tmp_path / f'raptor-test-impact-{os.getuid()}'
+    directory.mkdir()
+    directory.chmod(mode)
+    assert test_impact._cache_path(Path('/owned/repo')) is None
+
+
+def _graph_payload():
+    return dict(version=1, fingerprint='current', parse_failures=0,
+                reverse_graph={'core/helper.py': ['core/tests/test_helper.py']})
+
+
+@pytest.mark.parametrize('payload', [None, [], 'cache', 1], ids=['null', 'array', 'string', 'number'])
+def test_nonobject_graph_cache_is_a_miss(tmp_path, payload):
+    cache = tmp_path / 'graph.json'
+    cache.write_text(json.dumps(payload))
+    assert test_impact._load_cached_graph(cache, 'current') is None
+
+
+@pytest.mark.parametrize('field,value', [
+    ('reverse_graph', None),
+    ('reverse_graph', {'core/helper.py': 'core/tests/test_helper.py'}),
+    ('reverse_graph', {'core/helper.py': [1]}),
+    ('reverse_graph', {'../helper.py': []}),
+    ('reverse_graph', {'core/helper.py': ['/outside.py']}),
+    ('reverse_graph', {'core/helper.py': ['core/../outside.py']}),
+    ('reverse_graph', {'core/helper.py': ['core/bad\0.py']}),
+    ('reverse_graph', {'core/helper.py': ['core//test.py']}),
+    ('version', True), ('version', 1.0), ('version', 2),
+    ('parse_failures', None), ('parse_failures', -1), ('parse_failures', True),
+    ('fingerprint', 'stale'),
+], ids=['missing-graph', 'string-edges', 'nonpath-edge', 'parent-source',
+        'absolute-edge', 'parent-edge', 'nul-edge', 'noncanonical-edge',
+        'boolean-version', 'float-version', 'old-version', 'missing-failures',
+        'negative-failures', 'boolean-failures', 'stale-fingerprint'])
+def test_malformed_graph_cache_is_a_miss(tmp_path, field, value):
+    payload = _graph_payload()
+    payload[field] = value
+    cache = tmp_path / 'graph.json'
+    cache.write_text(json.dumps(payload))
+    assert test_impact._load_cached_graph(cache, 'current') is None
+
+
+@pytest.mark.parametrize('field', ['reverse_graph', 'parse_failures'])
+def test_incomplete_graph_cache_is_a_miss(tmp_path, field):
+    payload = _graph_payload()
+    del payload[field]
+    cache = tmp_path / 'graph.json'
+    cache.write_text(json.dumps(payload))
+    assert test_impact._load_cached_graph(cache, 'current') is None
+
+
+@pytest.mark.parametrize('raw', [b'\xff', b'{"version":'], ids=['invalid-utf8', 'truncated-json'])
+def test_unreadable_graph_cache_is_a_miss(tmp_path, raw):
+    cache = tmp_path / 'graph.json'
+    cache.write_bytes(raw)
+    assert test_impact._load_cached_graph(cache, 'current') is None
+
+
+def test_valid_graph_cache_roundtrips_empty_and_unusual_paths(tmp_path):
+    cache = tmp_path / 'graph.json'
+    for graph in ({}, {Path('core/café.py'): {Path('core/line\nname.py')}}):
+        test_impact._save_graph_cache(cache, 'current', graph, 2)
+        assert test_impact._load_cached_graph(cache, 'current') == (graph, 2)
+
+
+def test_malformed_cache_rebuilds_and_preserves_affected_tests(tmp_path, monkeypatch, capsys):
+    helper = tmp_path / 'core/pkg/helper.py'
+    helper.parent.mkdir(parents=True)
+    helper.write_text('VALUE = 1\n')
+    test = tmp_path / 'core/pkg/tests/test_helper.py'
+    test.parent.mkdir()
+    test.write_text('from core.pkg import helper\ndef test_value():\n    assert helper.VALUE == 1\n')
+    files = test_impact.discover_py_files(tmp_path, extra_roots=test_impact._EXTRA_ROOTS)
+    payload = _graph_payload()
+    payload.update(fingerprint=test_impact._files_fingerprint(files, tmp_path), reverse_graph=[])
+    cache = tmp_path / 'graph.json'
+    cache.write_text(json.dumps(payload))
+    monkeypatch.setattr(test_impact, '_cache_path', lambda repo: cache)
+    monkeypatch.setattr(sys, 'argv', ['test_impact.py', '--repo', str(tmp_path), '--json', 'core/pkg/helper.py'])
+    for status in ['miss', 'hit']:
+        assert test_impact.main() == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result['graph_cache'] == status
+        assert result['affected_tests'] == ['core/pkg/tests/test_helper.py']
+
+
+def test_duration_estimates_ignore_invalid_values(tmp_path):
+    payload = {'core/test_a.py::one': 1.25, 'core/test_a.py::two': 2,
+               'core/test_b.py::zero': 0, '::missing-file': 1,
+               'bad.py::nan': float('nan'), 'bad.py::infinity': float('inf'),
+               'bad.py::negative': -2, 'bad.py::bool': True,
+               'bad.py::huge-int': 10 ** 400, 'bad.py::string': '2'}
+    (tmp_path / '.test_durations').write_text(json.dumps(payload))
+    assert test_impact._load_test_durations(tmp_path) == {'core/test_a.py': 3.25, 'core/test_b.py': 0.0}
+
+
+@pytest.mark.parametrize('second', ['a.py::two', 'b.py::one'], ids=['within-file', 'across-files'])
+def test_overflowing_duration_total_disables_estimates(tmp_path, second):
+    (tmp_path / '.test_durations').write_text(json.dumps({'a.py::one': 1e308, second: 1e308}))
+    assert test_impact._load_test_durations(tmp_path) is None
+
+
+def test_invalid_utf8_duration_data_disables_estimates(tmp_path):
+    (tmp_path / '.test_durations').write_bytes(b'\xff')
+    assert test_impact._load_test_durations(tmp_path) is None

@@ -34,6 +34,7 @@ import argparse
 import ast
 import hashlib
 import json as json_mod
+import math
 import os
 import subprocess
 import sys
@@ -181,7 +182,7 @@ def _cache_path(repo: Path) -> Path | None:
     try:
         base.mkdir(mode=0o700, exist_ok=True)
         st = base.stat()
-        if st.st_uid != os.getuid() or base.is_symlink():
+        if st.st_uid != os.getuid() or base.is_symlink() or st.st_mode & 0o077:
             return None
     except OSError:
         return None
@@ -212,14 +213,29 @@ def _load_cached_graph(
 ) -> tuple[dict[Path, set[Path]], int] | None:
     try:
         data = json_mod.loads(cache_file.read_text(encoding="utf-8"))
-    except (OSError, json_mod.JSONDecodeError):
+    except (OSError, UnicodeError, json_mod.JSONDecodeError):
         return None
-    if data.get("version") != 1 or data.get("fingerprint") != fingerprint:
+    if (not isinstance(data, dict) or type(data.get("version")) is not int
+            or data["version"] != 1 or data.get("fingerprint") != fingerprint):
         return None
+    graph = data.get("reverse_graph")
+    failures = data.get("parse_failures")
+    if not isinstance(graph, dict) or type(failures) is not int or failures < 0:
+        return None
+
+    def valid_path(value):
+        if not isinstance(value, str) or value in ("", ".") or "\0" in value:
+            return False
+        path = Path(value)
+        return not path.is_absolute() and ".." not in path.parts and str(path) == value
+
     reverse: dict[Path, set[Path]] = {}
-    for k, vs in data.get("reverse_graph", {}).items():
-        reverse[Path(k)] = {Path(v) for v in vs}
-    return reverse, data.get("parse_failures", 0)
+    for key, values in graph.items():
+        if (not valid_path(key) or not isinstance(values, list)
+                or not all(valid_path(value) for value in values)):
+            return None
+        reverse[Path(key)] = {Path(value) for value in values}
+    return reverse, failures
 
 
 def _save_graph_cache(
@@ -258,16 +274,28 @@ def _load_test_durations(repo: Path) -> dict[str, float] | None:
         return None
     try:
         raw = json_mod.loads(dur_path.read_text(encoding="utf-8"))
-    except (OSError, json_mod.JSONDecodeError):
+    except (OSError, UnicodeError, json_mod.JSONDecodeError):
         return None
     if not isinstance(raw, dict):
         return None
     per_file: dict[str, float] = defaultdict(float)
+    total = 0.0
     for node_id, duration in raw.items():
-        if not isinstance(duration, (int, float)):
+        if type(duration) not in (int, float):
+            continue
+        try:
+            duration = float(duration)
+        except OverflowError:
+            continue
+        if not math.isfinite(duration) or duration < 0:
             continue
         file_part = node_id.split("::")[0]
+        if not file_part:
+            continue
         per_file[file_part] += duration
+        total += duration
+        if not math.isfinite(total) or not math.isfinite(per_file[file_part]):
+            return None  # Timing data cannot supply a usable estimate.
     return dict(per_file) if per_file else None
 
 
