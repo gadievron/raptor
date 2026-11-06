@@ -36,3 +36,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/retry_macos_allocation.py --apply
+
+  retry-limit:
+    name: Explain automatic recovery limit
+    if: >-
+      github.event.workflow_run.run_attempt == 2 &&
+      (github.event.workflow_run.conclusion == 'failure' ||
+       github.event.workflow_run.conclusion == 'timed_out')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Explain why another allocation retry was not requested
+        shell: bash
+        run: |
+          {
+            echo '### Automatic macOS recovery limit reached'
+            echo
+            echo 'The source workflow is already on attempt 2. Automatic allocation recovery is limited to one retry; no further retry was requested.'
+            echo
+            echo 'Inspect the source macOS job: an empty step list and no assigned runner indicate allocation failure. Executed setup or test failures need their own investigation.'
+            echo
+            echo 'A manual rerun remains available. Increasing a test timeout does not address runner allocation failures.'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
