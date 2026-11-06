@@ -4,8 +4,11 @@ operator shell."""
 
 from __future__ import annotations
 
+
 import subprocess
 from types import SimpleNamespace
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 def test_r2ghidra_probe_uses_sanitised_env(monkeypatch):
@@ -19,7 +22,7 @@ def test_r2ghidra_probe_uses_sanitised_env(monkeypatch):
                                stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(r2u.shutil, "which", lambda _n: "/usr/bin/r2")
+    patch_module_attribute(monkeypatch, r2u, "shutil", "which", lambda _n: "/usr/bin/r2")
     monkeypatch.setenv("LD_PRELOAD", "/evil/lib.so")
 
     caps = r2u.probe_capability()

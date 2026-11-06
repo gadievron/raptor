@@ -9,9 +9,12 @@ future prove/verify entry points + their slow tests one canonical
 
 from __future__ import annotations
 
+
 from pathlib import Path
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 # packages/zkpox/tests/test_proving_deps.py → parents[3] = repo root
@@ -33,14 +36,14 @@ def test_available_returns_bool():
 
 def test_available_false_when_binary_missing(monkeypatch):
     pd.proving_stack_available.cache_clear()
-    monkeypatch.setattr(pd.shutil, "which", lambda _b: None)
+    patch_module_attribute(monkeypatch, pd, "shutil", "which", lambda _b: None)
     assert proving_stack_available() is False
     pd.proving_stack_available.cache_clear()
 
 
 def test_available_true_when_all_binaries_present(monkeypatch):
     pd.proving_stack_available.cache_clear()
-    monkeypatch.setattr(pd.shutil, "which", lambda b: f"/usr/bin/{b}")
+    patch_module_attribute(monkeypatch, pd, "shutil", "which", lambda b: f"/usr/bin/{b}")
     assert proving_stack_available() is True
     pd.proving_stack_available.cache_clear()
 
@@ -56,7 +59,7 @@ def test_available_is_cached(monkeypatch):
         calls["n"] += 1
         return None
 
-    monkeypatch.setattr(pd.shutil, "which", counting_which)
+    patch_module_attribute(monkeypatch, pd, "shutil", "which", counting_which)
     proving_stack_available()
     proving_stack_available()
     assert calls["n"] == len(pd._PROVING_BINARIES)  # one sweep, not two

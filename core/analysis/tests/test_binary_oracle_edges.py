@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import shutil
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from core.analysis.reach_witness import (
     Reachability,
     WitnessKind,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +67,7 @@ def test_extract_handles_offset_keyed_aflj_without_crashing(
     # r2 may be absent on the fast tier — the extractor early-returns on
     # ``which('r2') is None``. Pretend it is present; the sandbox run is
     # mocked below so no real r2 is invoked.
-    monkeypatch.setattr(_edges.shutil, "which", lambda _name: "/usr/bin/r2")
+    patch_module_attribute(monkeypatch, _edges, "shutil", "which", lambda _name: "/usr/bin/r2")
 
     binary = tmp_path / "x"
     binary.write_bytes(b"\x7fELF placeholder")
@@ -113,7 +116,7 @@ def test_extract_survives_non_utf8_r2_output(monkeypatch, tmp_path) -> None:
     import core.analysis.binary_oracle_edges as _edges
     import core.sandbox as _sb
 
-    monkeypatch.setattr(_edges.shutil, "which", lambda _name: "/usr/bin/r2")
+    patch_module_attribute(monkeypatch, _edges, "shutil", "which", lambda _name: "/usr/bin/r2")
 
     binary = tmp_path / "x"
     binary.write_bytes(b"\x7fELF placeholder")
@@ -528,7 +531,7 @@ def test_load_cached_edge_index_is_cache_only(tmp_path, monkeypatch) -> None:
     from core.config import RaptorConfig
 
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
-    monkeypatch.setattr(_edges.shutil, "which", lambda _n: "/usr/bin/r2")
+    patch_module_attribute(monkeypatch, _edges, "shutil", "which", lambda _n: "/usr/bin/r2")
 
     class _NullProc:
         stdout = ""
@@ -642,8 +645,7 @@ def test_extract_script_appends_av_to_single_session(monkeypatch, tmp_path):
 
     binary = tmp_path / "demo"
     binary.write_bytes(b"\x7fELF-stub")
-    monkeypatch.setattr(edges_mod.shutil, "which",
-                        lambda t: f"/usr/bin/{t}")
+    patch_module_attribute(monkeypatch, edges_mod, "shutil", "which", lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
     monkeypatch.setattr(edges_mod, "_identity_cache_key", lambda p: None)
 
@@ -702,8 +704,7 @@ def _rc_extract_setup(monkeypatch, tmp_path, rc):
     from core.config import RaptorConfig
 
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
-    monkeypatch.setattr(edges_mod.shutil, "which",
-                        lambda t: f"/usr/bin/{t}")
+    patch_module_attribute(monkeypatch, edges_mod, "shutil", "which", lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
     monkeypatch.setattr(edges_mod, "_identity_cache_key",
                         lambda p: "feedface" * 5)

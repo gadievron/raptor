@@ -8,6 +8,7 @@ lives outside afl-fuzz's own directory.
 
 from __future__ import annotations
 
+
 import logging
 from pathlib import Path
 
@@ -15,6 +16,8 @@ import pytest
 
 from packages.fuzzing import capability
 from packages.fuzzing.afl_runner import AFLRunner
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -156,8 +159,7 @@ class TestCtorValidation:
         binary.write_bytes(b"\x7fELF")
         binary.chmod(0o755)
         import packages.fuzzing.afl_runner as afl_runner_mod
-        monkeypatch.setattr(
-            afl_runner_mod.shutil, "which", lambda _n: "/usr/bin/afl-fuzz")
+        patch_module_attribute(monkeypatch, afl_runner_mod, "shutil", "which", lambda _n: "/usr/bin/afl-fuzz")
         monkeypatch.setattr(
             AFLRunner, "_validate_afl_command", lambda _self: None)
         with pytest.raises(ValueError, match="binary-only mode"):
@@ -172,9 +174,7 @@ class TestCtorValidation:
 class TestFindAflSupportFile:
     def test_which_hit_used_without_afl_fuzz_context(self, monkeypatch):
         monkeypatch.delenv("AFL_PATH", raising=False)
-        monkeypatch.setattr(
-            capability.shutil, "which",
-            lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda name: f"/usr/bin/{name}")
         assert (capability.find_afl_support_file("afl-qemu-trace")
                 == "/usr/bin/afl-qemu-trace")
 
@@ -183,22 +183,20 @@ class TestFindAflSupportFile:
         # shmem-protocol incompatible with the afl-fuzz that runs it.
         monkeypatch.delenv("AFL_PATH", raising=False)
         (tmp_path / "afl-qemu-trace").write_bytes(b"")
-        monkeypatch.setattr(
-            capability.shutil, "which",
-            lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda name: f"/usr/bin/{name}")
         assert (capability.find_afl_support_file(
             "afl-qemu-trace", afl_fuzz=str(tmp_path / "afl-fuzz"))
             == str(tmp_path / "afl-qemu-trace"))
 
     def test_afl_path_env_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(capability.shutil, "which", lambda _n: None)
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda _n: None)
         (tmp_path / "afl-frida-trace.so").write_bytes(b"")
         monkeypatch.setenv("AFL_PATH", str(tmp_path))
         assert (capability.find_afl_support_file("afl-frida-trace.so")
                 == str(tmp_path / "afl-frida-trace.so"))
 
     def test_afl_fuzz_sibling_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(capability.shutil, "which", lambda _n: None)
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda _n: None)
         monkeypatch.delenv("AFL_PATH", raising=False)
         (tmp_path / "afl-frida-trace.so").write_bytes(b"")
         assert (capability.find_afl_support_file(
@@ -206,7 +204,7 @@ class TestFindAflSupportFile:
             == str(tmp_path / "afl-frida-trace.so"))
 
     def test_missing_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(capability.shutil, "which", lambda _n: None)
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda _n: None)
         monkeypatch.delenv("AFL_PATH", raising=False)
         # Neutralise the conventional install dirs — the runner host
         # may legitimately ship the tracer there.
@@ -235,8 +233,7 @@ class TestProbeHardening:
         tracer = sub / "afl-qemu-trace"
         tracer.write_bytes(b"")
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            capability.shutil, "which", lambda _n: "sub/afl-qemu-trace")
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda _n: "sub/afl-qemu-trace")
         found = capability.find_afl_support_file("afl-qemu-trace")
         assert Path(found).is_absolute()
         assert found == str(tracer)
@@ -253,7 +250,7 @@ class TestProbeHardening:
         shim_dir.mkdir()
         shim = shim_dir / "afl-fuzz"
         shim.symlink_to(real / "afl-fuzz")
-        monkeypatch.setattr(capability.shutil, "which", lambda _n: None)
+        patch_module_attribute(monkeypatch, capability, "shutil", "which", lambda _n: None)
         monkeypatch.delenv("AFL_PATH", raising=False)
         monkeypatch.setattr(capability, "_AFL_SUPPORT_DIRS", ())
         assert (capability.find_afl_support_file(
@@ -304,8 +301,7 @@ class TestRunnerPathResolution:
         corpus.mkdir()
         (corpus / "seed").write_bytes(b"a")
         import packages.fuzzing.afl_runner as afl_runner_mod
-        monkeypatch.setattr(
-            afl_runner_mod.shutil, "which", lambda _n: "/usr/bin/afl-fuzz")
+        patch_module_attribute(monkeypatch, afl_runner_mod, "shutil", "which", lambda _n: "/usr/bin/afl-fuzz")
         monkeypatch.setattr(
             AFLRunner, "_validate_afl_command", lambda _self: None)
         monkeypatch.chdir(tmp_path)
@@ -336,8 +332,7 @@ class TestPlanTimeTracerHint:
         # The availability gate consults the host PATH before the
         # (mocked) probe runs — pin it so the test is independent of
         # whether the runner ships binutils.
-        monkeypatch.setattr(orch_mod.shutil, "which",
-                            lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, orch_mod, "shutil", "which", lambda name: f"/usr/bin/{name}")
         plan = SimpleNamespace(hints=[])
         FuzzingOrchestrator._hint_binary_only_gap(plan, caps, binary)
         assert any("binary-only tracer" in h for h in plan.hints)

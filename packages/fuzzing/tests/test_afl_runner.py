@@ -1,5 +1,6 @@
 """Tests for packages/fuzzing/afl_runner.py."""
 
+
 import logging
 import os
 import tempfile
@@ -7,6 +8,8 @@ import unittest
 from pathlib import Path
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -151,8 +154,7 @@ class TestCreateDefaultCorpus:
         # availability probe and command validation (the
         # test_host_mode_never_stages pattern) so the test runs on
         # hosts without afl-fuzz installed.
-        monkeypatch.setattr(mod.shutil, "which",
-                            lambda *_a, **_k: "/usr/bin/afl-fuzz")
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: "/usr/bin/afl-fuzz")
         monkeypatch.setattr(AFLRunner, "_validate_afl_command",
                             lambda self: None)
         AFLRunner(
@@ -638,8 +640,7 @@ class TestRootfsMode:
         from packages.fuzzing import afl_runner as mod
         rootfs = self._rootfs(tmp_path)
         # Prove the host toolchain is NOT consulted in rootfs mode.
-        monkeypatch.setattr(mod.shutil, "which",
-                            lambda *_a, **_k: None)
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: None)
         return AFLRunner(
             binary_path=rootfs / "src/app",
             corpus_dir=tmp_path / "corpus",
@@ -724,7 +725,7 @@ class TestRootfsCorpusStaging:
     def _runner(self, tmp_path, monkeypatch, **kw):
         from packages.fuzzing import afl_runner as mod
         rootfs = TestRootfsMode._rootfs(tmp_path)
-        monkeypatch.setattr(mod.shutil, "which", lambda *_a, **_k: None)
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: None)
         return AFLRunner(
             binary_path=rootfs / "src/app",
             output_dir=tmp_path / "out",
@@ -768,8 +769,7 @@ class TestRootfsCorpusStaging:
         binary.chmod(0o755)
         ext = tmp_path / "elsewhere" / "corpus"
         ext.mkdir(parents=True)
-        monkeypatch.setattr(mod.shutil, "which",
-                            lambda *_a, **_k: "/usr/bin/afl-fuzz")
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: "/usr/bin/afl-fuzz")
         monkeypatch.setattr(AFLRunner, "_validate_afl_command",
                             lambda self: None)
         runner = AFLRunner(binary_path=binary, corpus_dir=ext,
@@ -831,7 +831,7 @@ class TestRootfsStagingHardening:
         rootfs = TestRootfsMode._rootfs(tmp_path)
         cmplog = tmp_path / "cmplog-bin"
         cmplog.write_bytes(b"\x7fELF")
-        monkeypatch.setattr(mod.shutil, "which", lambda *_a, **_k: None)
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: None)
         import pytest as _pytest
         with _pytest.raises(ValueError, match="cmplog"):
             AFLRunner(
@@ -1013,7 +1013,7 @@ class TestCmplogInRootfs:
                                                  monkeypatch):
         from packages.fuzzing import afl_runner as mod
         rootfs = TestRootfsMode._rootfs(tmp_path)
-        monkeypatch.setattr(mod.shutil, "which", lambda *_a, **_k: None)
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: None)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         (corpus / "seed0").write_bytes(b"A")
@@ -1039,8 +1039,7 @@ class TestCmplogInRootfs:
         binary.write_bytes(b"\x7fELF")
         binary.chmod(0o755)
         (tmp_path / "corpus").mkdir()
-        monkeypatch.setattr(mod.shutil, "which",
-                            lambda *_a, **_k: "/usr/bin/afl-fuzz")
+        patch_module_attribute(monkeypatch, mod, "shutil", "which", lambda *_a, **_k: "/usr/bin/afl-fuzz")
         monkeypatch.setattr(AFLRunner, "_validate_afl_command",
                             lambda self: None)
         runner = AFLRunner(binary_path=binary,

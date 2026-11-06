@@ -6,21 +6,22 @@ images without a compiler.
 
 from __future__ import annotations
 
+
 import subprocess
 from types import SimpleNamespace
 
 import core.build.toolchain as toolchain
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def test_no_gcc_means_false(monkeypatch):
-    monkeypatch.setattr(toolchain.shutil, "which", lambda cmd: None)
+    patch_module_attribute(monkeypatch, toolchain, "shutil", "which", lambda cmd: None)
     assert toolchain.has_libasan() is False
 
 
 def test_probe_success_means_true(monkeypatch):
-    monkeypatch.setattr(
-        toolchain.shutil, "which", lambda cmd: "/usr/bin/gcc",
-    )
+    patch_module_attribute(monkeypatch, toolchain, "shutil", "which", lambda cmd: "/usr/bin/gcc")
     seen = {}
 
     def fake_run(argv, **kwargs):
@@ -39,9 +40,7 @@ def test_probe_success_means_true(monkeypatch):
 
 
 def test_probe_failure_means_false(monkeypatch):
-    monkeypatch.setattr(
-        toolchain.shutil, "which", lambda cmd: "/usr/bin/gcc",
-    )
+    patch_module_attribute(monkeypatch, toolchain, "shutil", "which", lambda cmd: "/usr/bin/gcc")
     import core.sandbox
     monkeypatch.setattr(
         core.sandbox, "run_trusted",
@@ -51,9 +50,7 @@ def test_probe_failure_means_false(monkeypatch):
 
 
 def test_probe_timeout_fails_closed(monkeypatch):
-    monkeypatch.setattr(
-        toolchain.shutil, "which", lambda cmd: "/usr/bin/gcc",
-    )
+    patch_module_attribute(monkeypatch, toolchain, "shutil", "which", lambda cmd: "/usr/bin/gcc")
 
     def fake_run(*a, **k):
         raise subprocess.TimeoutExpired(cmd="gcc", timeout=10)

@@ -9,6 +9,7 @@ without ever running target code.
 
 from __future__ import annotations
 
+
 import os
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from core.inventory.perlasm import (
     generate_asm,
     run_perlasm_pass,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 # The structural preamble shape shared by openssl perlasm generators:
 # xlate driver lookup + $flavour/$output argv handling.
@@ -336,7 +339,7 @@ class TestGenerationAndCache:
 class TestPassAndGaps:
     def test_no_perl_is_a_loud_gap(self, target, tmp_path, monkeypatch):
         _write_generator(target, "crypto/aes/asm/g.pl")
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: None)
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: None)
         res = run_perlasm_pass(target, cache_dir=tmp_path / "c")
         assert res.file_records == []
         assert len(res.gaps) == 1
@@ -345,7 +348,7 @@ class TestPassAndGaps:
 
     def test_generator_cap_is_a_gap(self, target, tmp_path, fake_sandbox,
                                     monkeypatch):
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: "/usr/bin/perl")
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: "/usr/bin/perl")
         _write_generator(target, "crypto/a/asm/a.pl")
         _write_generator(target, "crypto/b/asm/b.pl")
         res = run_perlasm_pass(target, cache_dir=tmp_path / "c",
@@ -355,7 +358,7 @@ class TestPassAndGaps:
 
     def test_unknown_flavour_family_is_a_gap(self, target, tmp_path,
                                              fake_sandbox, monkeypatch):
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: "/usr/bin/perl")
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: "/usr/bin/perl")
         _write_generator(target, "crypto/bn/asm/ppc.pl", driver="ppc-xlate")
         res = run_perlasm_pass(target, cache_dir=tmp_path / "c")
         assert res.file_records == []
@@ -422,7 +425,7 @@ class TestEnrichment:
 
     def test_records_language_and_provenance(self, target, tmp_path,
                                              fake_sandbox, monkeypatch):
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: "/usr/bin/perl")
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: "/usr/bin/perl")
         _write_generator(target, "crypto/aes/asm/aes-demo-armv8.pl")
         inv = self._inventory()
         enrich_inventory_with_perlasm(inv, target, cache_dir=tmp_path / "c")
@@ -462,7 +465,7 @@ class TestEnrichment:
         """Enriching the same inventory dict twice must not drift
         total_files: the second pass skips every already-present record
         as a duplicate, and only APPENDED records may count."""
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: "/usr/bin/perl")
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: "/usr/bin/perl")
         _write_generator(target, "crypto/aes/asm/aes-demo-armv8.pl")
         inv = self._inventory()
         enrich_inventory_with_perlasm(inv, target, cache_dir=tmp_path / "c")
@@ -473,7 +476,7 @@ class TestEnrichment:
         assert inv["total_files"] == 2
 
     def test_gaps_land_in_limitations(self, target, tmp_path, monkeypatch):
-        monkeypatch.setattr(perlasm.shutil, "which", lambda _: None)
+        patch_module_attribute(monkeypatch, perlasm, "shutil", "which", lambda _: None)
         _write_generator(target, "crypto/aes/asm/g.pl")
         inv = self._inventory()
         enrich_inventory_with_perlasm(inv, target, cache_dir=tmp_path / "c")

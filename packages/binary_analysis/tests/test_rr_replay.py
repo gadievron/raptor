@@ -1,4 +1,5 @@
 """rr replay's mechanical entry point must never fall back to host execution."""
+
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,8 @@ import pytest
 
 from core.sandbox import SandboxSetupError
 from packages.binary_analysis import rr_replay as module
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture
@@ -22,7 +25,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(module, 'sys', SimpleNamespace(platform='linux',
         stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr))
-    monkeypatch.setattr(module.shutil, 'which', lambda name, **kwargs: '/usr/bin/'+name)
+    patch_module_attribute(monkeypatch, module, "shutil", "which", lambda name, **kwargs: '/usr/bin/'+name)
     monkeypatch.setattr(module.RaptorConfig, 'get_safe_env', lambda: {
         'PATH': '/usr/bin:/bin', 'TMPDIR': str(scratch), 'RR_TMPDIR': '/host-only'})
     return home, trace, scratch
@@ -112,7 +115,7 @@ def test_nonstandard_gdb_is_pinned_and_its_runtime_is_visible(setup, monkeypatch
     executable.write_text('fixture')
     resource = prefix/'share'/'gdb'
     resource.mkdir(parents=True)
-    monkeypatch.setattr(module.shutil, 'which', lambda name, **kwargs:
+    patch_module_attribute(monkeypatch, module, "shutil", "which", lambda name, **kwargs:
                         str(executable) if name == 'gdb' else '/usr/bin/rr')
     def dispatch(command, **kwargs):
         assert '--debugger='+str(executable) in command
@@ -125,7 +128,7 @@ def test_nonstandard_gdb_is_pinned_and_its_runtime_is_visible(setup, monkeypatch
 
 def test_missing_gdb_is_actionable(setup, monkeypatch):
     _, trace, scratch = setup
-    monkeypatch.setattr(module.shutil, 'which', lambda name, **kwargs:
+    patch_module_attribute(monkeypatch, module, "shutil", "which", lambda name, **kwargs:
                         None if name == 'gdb' else '/usr/bin/rr')
     with pytest.raises(FileNotFoundError, match='GDB not installed'):
         module.replay(trace, commands=b'quit\n')
@@ -136,7 +139,7 @@ def test_gdb_runtime_must_not_grant_home(setup, monkeypatch):
     home, trace, _ = setup
     executable = home/'gdb'
     executable.write_text('fixture')
-    monkeypatch.setattr(module.shutil, 'which', lambda name, **kwargs:
+    patch_module_attribute(monkeypatch, module, "shutil", "which", lambda name, **kwargs:
                         str(executable) if name == 'gdb' else '/usr/bin/rr')
     with pytest.raises(SandboxSetupError, match='dedicated tool directory'):
         module.replay(trace, commands=b'quit\n')

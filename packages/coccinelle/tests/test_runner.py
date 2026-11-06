@@ -1,5 +1,6 @@
 """Tests for Coccinelle runner."""
 
+
 import json
 import os
 import re
@@ -34,6 +35,8 @@ from packages.coccinelle.runner import (
     version,
     version_tuple,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -1917,8 +1920,7 @@ class TestSpatchPathRealpath:
         link = tmp_path / "shim" / "spatch"
         link.parent.mkdir()
         link.symlink_to(real)
-        monkeypatch.setattr(runner_mod.shutil, "which",
-                            lambda _name: str(link))
+        patch_module_attribute(monkeypatch, runner_mod, "shutil", "which", lambda _name: str(link))
         monkeypatch.setattr(runner_mod, "_spatch_resolved", False)
         monkeypatch.setattr(runner_mod, "_resolved_spatch", None)
         assert runner_mod._spatch_path() == str(real.resolve())

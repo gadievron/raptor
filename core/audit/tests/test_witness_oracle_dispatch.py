@@ -1,5 +1,6 @@
 """Automatic witness spending requires a possible independent defect oracle."""
 
+
 import ast
 import copy
 from pathlib import Path
@@ -10,11 +11,13 @@ from core.audit import dark_verify as dv
 from core.audit import orchestrator as orch
 from core.audit.dark_verify import _dispatch as dispatch
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture
 def probes(tmp_path, monkeypatch):
     counts = {"model": 0, "execute": 0}
-    monkeypatch.setattr(dispatch.shutil, "which", lambda name: "/tools/" + name)
+    patch_module_attribute(monkeypatch, dispatch, "shutil", "which", lambda name: "/tools/" + name)
     def parse(*args, **kwargs):
         return dv.DarkWitnessSpec(
             finding_key=kwargs["finding_key"], file=kwargs["file"], function=kwargs["function"],
@@ -82,7 +85,7 @@ def test_missing_compiler_spends_nothing(tmp_path, probes, monkeypatch, file, co
     def missing(name):
         checked.append(name)
         return None
-    monkeypatch.setattr(dispatch.shutil, "which", missing)
+    patch_module_attribute(monkeypatch, dispatch, "shutil", "which", missing)
     run(tmp_path, probes, lane, file=file)
     assert checked and set(checked) == {compiler}
     assert probes[0] == {"model": 0, "execute": 0}

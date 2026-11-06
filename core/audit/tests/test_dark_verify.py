@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import ast
 import inspect
 import json
@@ -48,6 +49,8 @@ from core.audit.dark_verify import (
     validate_import_path,
     validate_spec,
 )
+
+from core.testing.module_bindings import patch_module_attribute
 
 # -- language_for_file --------------------------------------------------------
 
@@ -2566,10 +2569,7 @@ class TestTargetCopyReadRefusal:
         # No toolchain needed: the refusal fires before any compile.
         import core.source
 
-        monkeypatch.setattr(
-            ex.shutil, "which",
-            lambda name: "/nonexistent/go" if name == "go" else None,
-        )
+        patch_module_attribute(monkeypatch, ex, "shutil", "which", lambda name: "/nonexistent/go" if name == "go" else None)
         monkeypatch.setattr(
             core.source, "read_text_capped",
             lambda *a, **kw: ("package main\n", True),

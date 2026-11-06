@@ -18,10 +18,13 @@ Deliberately NOT swept:
 
 from __future__ import annotations
 
+
 import re
 from pathlib import Path
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -83,8 +86,7 @@ def test_probe_retention_is_capped(monkeypatch):
             argv, 0, stdout="v1.0\n" + "A" * (2 * 1024 * 1024),
             stderr="B" * (2 * 1024 * 1024))
 
-    monkeypatch.setattr(toolprobe.shutil, "which",
-                        lambda name: "/usr/bin/faketool")
+    patch_module_attribute(monkeypatch, toolprobe, "shutil", "which", lambda name: "/usr/bin/faketool")
     monkeypatch.setattr(toolprobe.subprocess, "run", fake_run)
     info = toolprobe.probe("faketool")
     assert info is not None
