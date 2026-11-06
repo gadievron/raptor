@@ -101,9 +101,9 @@ def enrich_with_ast_view(
     if inventory is None:
         try:
             from core.inventory.builder import build_inventory
-            import tempfile
-            with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target_path), td)
+            from core.run.scratch import scratch_dir
+            with scratch_dir("raptor-orchestration-inventory-") as td:
+                inventory = build_inventory(str(target_path), str(td))
         except Exception as e:                              # noqa: BLE001
             logger.debug(
                 "context_map_ast_view: inventory build failed (%s); "

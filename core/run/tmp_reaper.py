@@ -87,6 +87,8 @@ _DIR_PREFIXES = (
     # Disposable observe CLI output; scratch_dir holds a keepalive until
     # its ExitStack exits. --keep uses a separate, unreaped namespace.
     "raptor-observe-tmp-",
+    # Disposable orchestration inventories, protected by scratch keepalive.
+    "raptor-orchestration-inventory-",
     # Corpus receipt-replay temporary target/output trees.
     "receipt-replay-",
     "raptor-web-browser-",
