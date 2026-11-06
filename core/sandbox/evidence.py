@@ -56,6 +56,7 @@ import contextlib
 import errno
 from core.json import dumps_artifact
 from core.security.capped_read import path_may_exist
+from core.security.log_sanitisation import sanitise_for_terminal
 import logging
 import os
 import stat as _stat
@@ -321,13 +322,17 @@ class EvidenceFile:
                 # written a record after this partial write.
                 logger.warning(
                     "evidence append incomplete for %s: wrote %s of %s bytes",
-                    self.path, written, len(data),
+                    sanitise_for_terminal(str(self.path)), written, len(data),
                 )
                 return False
             return True
-        except (OSError, UnicodeError):
-            logger.warning("evidence append failed for %s", self.path,
-                           exc_info=True)
+        except (OSError, UnicodeError) as exc:
+            logger.warning(
+                "evidence append failed for %s: %s: %s",
+                sanitise_for_terminal(str(self.path)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64),
+                sanitise_for_terminal(str(exc)),
+            )
             return False
 
     def write_record(self, record: dict) -> bool:
@@ -364,7 +369,7 @@ class EvidenceFile:
                 "vanished during the run (created dev=%s ino=%s). "
                 "Records appended via the held fd are intact in the "
                 "original inode but the on-disk path was removed.",
-                self.path, self._created_dev, self._created_ino,
+                sanitise_for_terminal(str(self.path)), self._created_dev, self._created_ino,
             )
             return False
         if (st.st_dev, st.st_ino) != (self._created_dev, self._created_ino):
@@ -373,7 +378,7 @@ class EvidenceFile:
                 "was swapped during the run (created dev=%s ino=%s, "
                 "now dev=%s ino=%s). Do not trust the file at this "
                 "path; treat this run's evidence as compromised.",
-                self.path, self._created_dev, self._created_ino,
+                sanitise_for_terminal(str(self.path)), self._created_dev, self._created_ino,
                 st.st_dev, st.st_ino,
             )
             return False
@@ -383,10 +388,13 @@ class EvidenceFile:
             written_end = os.lseek(self.fd, 0, os.SEEK_CUR)
             held = os.fstat(self.fd)
             size = held.st_size
-        except OSError:
+        except OSError as exc:
             logger.warning(
                 "SANDBOX EVIDENCE TAMPER SUSPECTED: cannot verify the "
-                "held evidence descriptor for %s", self.path, exc_info=True,
+                "held evidence descriptor for %s: %s: %s",
+                sanitise_for_terminal(str(self.path)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64),
+                sanitise_for_terminal(str(exc)),
             )
             return False
         # Validate both snapshots: a safe pathname stat cannot overrule
@@ -396,7 +404,7 @@ class EvidenceFile:
                 logger.warning(
                     "SANDBOX EVIDENCE TAMPER SUSPECTED: unsafe evidence "
                     "metadata for %s (%s: mode=%o uid=%s nlink=%s)",
-                    self.path, location, snapshot.st_mode,
+                    sanitise_for_terminal(str(self.path)), location, snapshot.st_mode,
                     snapshot.st_uid, snapshot.st_nlink,
                 )
                 return False
@@ -406,7 +414,7 @@ class EvidenceFile:
                 "SANDBOX EVIDENCE TAMPER SUSPECTED: evidence file %s "
                 "was truncated below known append progress (%s bytes < %s). "
                 "Treat this run's evidence as compromised.",
-                self.path, size, minimum_size,
+                sanitise_for_terminal(str(self.path)), size, minimum_size,
             )
             return False
         return True
@@ -432,9 +440,15 @@ class EvidenceFile:
                 self._fd_released = True
                 try:
                     os.close(self.fd)
-                except OSError:
-                    logger.warning("evidence close failed for %s", self.path,
-                                   exc_info=True)
+                except OSError as exc:
+                    # Raw tracebacks can put path/error controls back into
+                    # logs after message escaping. Retain bounded context.
+                    logger.warning(
+                        "evidence close failed for %s: %s: %s",
+                        sanitise_for_terminal(str(self.path)),
+                        sanitise_for_terminal(type(exc).__name__, max_len=64),
+                        sanitise_for_terminal(str(exc)),
+                    )
                 else:
                     self._close_result = verification_result
             return self._close_result
