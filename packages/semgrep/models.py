@@ -244,6 +244,7 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
     from core.sarif.parser import (
         ArtifactUriResolver,
         ResultRuleResolver,
+        get_result_rule,
         get_run_execution_diagnostics,
     )
 
@@ -270,11 +271,17 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
                 malformed += 1
                 continue
             try:
-                if rule_resolver is None:
-                    rule_resolver = ResultRuleResolver(run)
+                if uri_resolver is None:
                     uri_resolver = ArtifactUriResolver(run)
-                assert uri_resolver is not None
-                rule = rule_resolver.resolve(result)
+                index = result.get("ruleIndex")
+                if "rule" not in result and type(index) is int and index >= 0:
+                    # Indexed driver references validate directly; indexing the
+                    # entire rule table cannot speed up these constant-time reads.
+                    rule = get_result_rule(run, result)
+                else:
+                    if rule_resolver is None:
+                        rule_resolver = ResultRuleResolver(run)
+                    rule = rule_resolver.resolve(result)
                 finding = SemgrepFinding.from_sarif_result(
                     result, resolved_rule=rule, resolve_uri=uri_resolver.resolve,
                 )
