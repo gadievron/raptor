@@ -54,7 +54,7 @@ from typing import Any, BinaryIO, cast
 from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths, local_uri_path, valid_diagnostic_location
 
 from core.detectors.compiler import (
-    CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
+    CompilerDiagnosticError, CompilerExecutionError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
 from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, _thread_flow_location, get_run_execution_diagnostics, rule_default_level
@@ -1764,7 +1764,11 @@ def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
     for run in data["runs"]:
         if not isinstance(run, dict) or not isinstance(run.get("results"), list):
             raise CompilerDiagnosticError("GCC SARIF run requires a result array")
-        if any(get_run_execution_diagnostics(run).values()):
+        execution = get_run_execution_diagnostics(run)
+        if any(execution.values()):
+            if (execution["tool_execution_failures"] and not execution["sarif_input_errors"]
+                    and not execution["tool_coverage_limitations"]):
+                raise CompilerExecutionError("GCC SARIF reports unsuccessful execution")
             raise CompilerDiagnosticError("GCC SARIF reports incomplete or invalid execution")
         rule_resolver: ResultRuleResolver | None = None
         uri_resolver: ArtifactUriResolver | None = None
