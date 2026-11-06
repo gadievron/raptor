@@ -187,7 +187,10 @@ def test_callback_and_shared_lifecycle_marker_path(tmp_path, context, monkeypatc
     main()
     assert (out / ".raptor-tool-failure").exists() == bool(code)
     from core.startup import codex_environment
-    monkeypatch.setattr(codex_environment, "restore", lambda sid: None)
+    def restore(sid, *, lifecycle=False):
+        assert sid == "test-session"
+        assert lifecycle is True
+    monkeypatch.setattr(codex_environment, "restore", restore)
     stop_payload = json.dumps({"session_id": "test-session",
                                "hook_event_name": "Stop"})
     monkeypatch.setattr(sys, "stdin", io.StringIO(stop_payload))
@@ -214,7 +217,10 @@ def test_codex_stop_leaves_unknown_running(tmp_path, context, monkeypatch):
     from core.run import metadata
     monkeypatch.setattr(metadata, "_get_session_pid", lambda: 99999)
     from core.startup import codex_environment
-    monkeypatch.setattr(codex_environment, "restore", lambda sid: None)
+    def restore(sid, *, lifecycle=False):
+        assert sid == "test-session"
+        assert lifecycle is True
+    monkeypatch.setattr(codex_environment, "restore", restore)
     module = runpy.run_path(str(SCRIPT))
     main = module["main"]
     main.__globals__["REPO_ROOT"] = tmp_path
