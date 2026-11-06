@@ -13,6 +13,7 @@ from ..sbom_import import _check_document, _components, _license_declarations, _
 from ..sbom_spdx_import import _read_spdx
 from .coverage import collect
 from .source import MAX_NOTICE_BYTES
+from .projection import CycloneProjection, spdx_file, native_file, native_package, discard
 from .model import FORMAT, Inventory, Notice, Record, from_snapshot, validate
 
 
@@ -32,7 +33,7 @@ def _embedded(content, embedded, *, path, encoding=""):
     return Notice(sha, path, "embedded_sbom_text")
 
 
-def _document_inventory(data, sha, name):
+def _document_inventory(data, sha, name, *, known_refs=None):
     _check_document(data)
     embedded = {}
     extra_notices = []
@@ -67,7 +68,7 @@ def _document_inventory(data, sha, name):
                 continue
             edges.setdefault(a, set()).add(b)
     else:
-        imported = _read_cyclonedx(data, Path(name))
+        imported = _read_cyclonedx(data, Path(name), _known_refs=known_refs)
         inventory = Inventory("CycloneDX-1.5", sha, str(data.get("serialNumber", "")), diagnostics=list(imported.warnings))
         for component, ref in zip(_components(data), imported.component_refs):
             if component.get("type") == "file":
@@ -116,11 +117,15 @@ def _notice(record):
 
 def _bundle(source):
     digest = source.read("image-digest.txt", 128).decode("ascii").strip()
-    coverage = collect(PurePosixPath("."), digest, read=source.read)
+    catalogue = source.read_json("syft.json", projectors={"files": native_file, "artifacts": native_package,
+                                                        "artifactRelationships": discard})
+    coverage = collect(PurePosixPath("."), digest, read=source.read, catalogue=catalogue)
+    del catalogue
     if coverage.metrics is None:
         raise ValueError("evidence audit unavailable: " + "; ".join(coverage.errors))
-    data, sha = source.read_json("prepared/sbom.cdx.json")
-    inventory, embedded = _document_inventory(data, sha, "prepared/sbom.cdx.json")
+    projection = CycloneProjection()
+    data, sha = source.read_json("prepared/sbom.cdx.json", projectors={"components": projection.component}, observe=projection.observe)
+    inventory, embedded = _document_inventory(data, sha, "prepared/sbom.cdx.json", known_refs=projection.refs)
     del data
     inventory.subject = digest
     inventory.coverage = asdict(coverage)
@@ -192,12 +197,13 @@ def read_inventory(source, *, verify_notices=True):
     elif source.bundle:
         inventory, embedded = _bundle(source)
     else:
-        document, sha = source.read_json()
+        projection = CycloneProjection()
+        document, sha = source.read_json(projectors={"components": projection.component, "files": spdx_file}, observe=projection.observe)
         if document.get("format") == FORMAT:
             inventory = from_snapshot(document)
             inventory.diagnostics.append("Inventory snapshot contains recorded evidence metadata; original notice bytes were not re-verified.")
             return inventory, {}
-        inventory, embedded = _document_inventory(document, sha, str(source.path))
+        inventory, embedded = _document_inventory(document, sha, str(source.path), known_refs=projection.refs)
     validate(inventory)
     if verify_notices:
         failures = {}

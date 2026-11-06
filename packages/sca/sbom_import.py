@@ -169,7 +169,7 @@ def read_sbom(path: Path) -> ImportedBom:
     return _read_cyclonedx(data, path)
 
 
-def _read_cyclonedx(data: dict, path: Path) -> ImportedBom:
+def _read_cyclonedx(data: dict, path: Path, *, _known_refs: set[str] | None = None) -> ImportedBom:
     # Sanity: bomFormat must be "CycloneDX". Operators who pass
     # an SPDX SBOM see a clear error rather than a silent miss.
     bom_format = data.get("bomFormat")
@@ -193,7 +193,7 @@ def _read_cyclonedx(data: dict, path: Path) -> ImportedBom:
     if not isinstance(data.get("vulnerabilities", []), list):
         raise ValueError("CycloneDX vulnerabilities must be an array")
     components = _components(data)
-    known_refs = _references(data)
+    known_refs = _references(data) | (_known_refs or set())
     external_refs: set[str] = set()
     depths = _graph_depths(data, known_refs, external_refs)
     component_refs: list[str] = []

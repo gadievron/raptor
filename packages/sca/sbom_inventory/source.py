@@ -1,15 +1,14 @@
 """Bounded, read-only SBOM and evidence inputs; no extraction or external lookups."""
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
 import zipfile
 
-from core.oci.evidence import read_catalogue
-from core.security.capped_read import read_capped
+from core.json.projection import project_object
 from core.source.beneath import open_regular_beneath
 from core.source.gated import open_regular_gated
 from core.zip import bomb_shaped_reason, is_safe_member, peek_eocd
@@ -61,8 +60,8 @@ class Source:
             return path_may_exist(self.path / name)
         return False
 
-    def read(self, name, max_bytes=MAX_DOCUMENT_BYTES, *, raise_on_refusal=True):
-        """Read one selected member; never materialise or extract the archive."""
+    @contextmanager
+    def open(self, name="", max_bytes=MAX_DOCUMENT_BYTES):
         name = str(name)
         relative = PurePosixPath(name)
         if relative.is_absolute() or ".." in relative.parts or "\\" in name:
@@ -70,40 +69,45 @@ class Source:
         if not self.bundle:
             if name not in {"", "."}:
                 raise ValueError("a standalone snapshot has no retained notice store; use its original SBOM/evidence input")
-            return read_capped(self.path, max_bytes, follow_symlinks=True, raise_on_refusal=True)
-        if self.archive is not None:
+            stream = open_regular_gated(self.path)
+        elif self.archive is not None:
             try:
                 info = self.archive.getinfo(name)
             except KeyError:
                 raise FileNotFoundError("missing evidence member: " + name) from None
             if info.file_size > max_bytes:
                 raise ValueError("evidence member exceeds read budget")
-            try:
-                with self.archive.open(info) as stream:
-                    raw = stream.read(max_bytes + 1)
-            except Exception as error:
-                # ZIP codecs use several unrelated exception classes for
-                # malformed/encrypted/unsupported members. Keep the domain
-                # error contract at this one stdlib I/O boundary.
-                raise ValueError("unreadable evidence ZIP member: " + name) from error
+            stream = self.archive.open(info)
         else:
             stream = open_regular_beneath(self.path.resolve(), name, "rb")
             if stream is None:
                 raise ValueError("missing, nonregular or symlinked evidence member: " + name)
-            with stream:
-                if os.fstat(stream.fileno()).st_size > max_bytes:
-                    raise ValueError("evidence member exceeds read budget")
+        with stream:
+            if self.archive is None and os.fstat(stream.fileno()).st_size > max_bytes:
+                raise ValueError("evidence member exceeds read budget")
+            yield stream
+
+    def read(self, name, max_bytes=MAX_DOCUMENT_BYTES, *, raise_on_refusal=True):
+        try:
+            with self.open(name, max_bytes) as stream:
                 raw = stream.read(max_bytes + 1)
+        except (OSError, ValueError):
+            raise
+        except Exception as error:
+            raise ValueError("unreadable evidence member: " + str(name)) from error
         if len(raw) > max_bytes:
             raise ValueError("evidence member exceeds read budget")
         return raw
 
-    def read_json(self, name=""):
-        raw = self.read(name)
-        # The shared catalogue decoder rejects duplicate keys and non-finite
-        # values. UTF-8 decoding rejects foreign encodings and malformed bytes.
-        value = read_catalogue(raw.decode("utf-8-sig"))
-        return value, hashlib.sha256(raw).hexdigest()
+    def read_json(self, name="", *, projectors=None, observe=None):
+        try:
+            with self.open(name) as stream:
+                return project_object(stream, max_bytes=MAX_DOCUMENT_BYTES,
+                                      projectors=projectors, observe=observe, max_depth=64)
+        except (OSError, ValueError):
+            raise
+        except Exception as error:
+            raise ValueError("unreadable evidence JSON member: " + str(name)) from error
 
     def blob(self, sha256):
         if not isinstance(sha256, str) or not SHA256.fullmatch(sha256):

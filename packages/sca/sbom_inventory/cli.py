@@ -1,4 +1,4 @@
-"""Inspect, compare and export SBOM evidence offline, without generating HTML."""
+"""Inspect, compare, explain and collect SBOM evidence without generating HTML."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import zipfile
 
+from core.tar import TarOpenError
 from core.json import dumps_artifact, save_json
 from core.logging import configure_cli_logging
 from core.security.log_sanitisation import sanitise_for_terminal, escape_nonprintable
@@ -15,15 +16,16 @@ from .inventory import read_inventory
 from .model import selected
 from .output import inventory_document, csv_inventory, export_notices, markdown, write_inventory
 from .source import Source
+from .relationships import explain
 
 
 def parser():
     result = argparse.ArgumentParser(prog="raptor-sca sbom", description=__doc__,
-        epilog="Examples:\n  raptor-sca sbom inspect sbom.cdx.json --out audit\n  raptor-sca sbom diff baseline/inventory.json current/inventory.json",
+        epilog="Examples:\n  raptor-sca sbom inspect sbom.cdx.json --out inventory\n  raptor-sca sbom diff baseline/inventory.json current/inventory.json",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = result.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="inspect an SBOM or collected evidence", description="Inspect declarations, supplied dependency links and retained notice/ownership evidence. No network or image code is executed.",
-        epilog="Examples:\n  raptor-sca sbom inspect container-sbom.zip --out audit\n  raptor-sca sbom inspect sbom.spdx.json --license MIT --format csv",
+        epilog="Examples:\n  raptor-sca sbom inspect container-sbom.zip --out inventory\n  raptor-sca sbom inspect sbom.spdx.json --license MIT --format csv",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     notices = commands.add_parser("notices", help="export original licence and notice bytes", description="Export retained original bytes and a portable index to a new directory. External licence URLs are never fetched.",
         epilog="Examples:\n  raptor-sca sbom notices container-sbom.zip --out notices\n  raptor-sca sbom notices sbom.cdx.json --license MIT --out mit-notices",
@@ -36,12 +38,30 @@ def parser():
     inspect.add_argument("--format", choices=("text", "json", "csv"), default="text", help="stdout format (default: text)")
     inspect.add_argument("--out", type=Path, help="also write inventory.json, inventory.csv and summary.md (default: stdout only)")
     notices.add_argument("--out", type=Path, required=True, help="new export directory; existing paths are refused")
-    diff = commands.add_parser("diff", help="compare two inventories or audit snapshots", description="Compare occurrences, versions, declarations and notice fingerprints. Ambiguous matches remain explicit; notice text updates are informational.",
+    diff = commands.add_parser("diff", help="compare two inventories or audit snapshots", description="Compare packages, declarations, notice fingerprints, supplied dependencies and recorded executable ownership. Ambiguous matches remain explicit; notice text updates are informational.",
         epilog="Examples:\n  raptor-sca sbom diff old.cdx.json new.cdx.json\n  raptor-sca sbom diff old/inventory.json new/inventory.json --out changes.json",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     diff.add_argument("baseline", type=Path)
     diff.add_argument("current", type=Path)
     diff.add_argument("--out", type=Path, help="also save comparison JSON (default: stdout only)")
+    why = commands.add_parser("why", help="explain supplied dependency paths", description="Trace retained parent relationships for a package. Missing graph data remains explicit; no source code or image is executed.",
+        epilog="Examples:\n  raptor-sca sbom why inventory.json example\n  raptor-sca sbom why sbom.cdx.json example --root application",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    why.add_argument("input", type=Path)
+    why.add_argument("package", help="exact name, occurrence ID or Package URL")
+    why.add_argument("--root", help="optional explicit root name/ID/PURL (default: show supplied ancestor boundaries)")
+    why.add_argument("--max-paths", type=int, default=20, help="paths per occurrence (default: 20, maximum: 1000)")
+    why.add_argument("--max-depth", type=int, default=32, help="path depth budget (default: 32, maximum: 128)")
+    why.add_argument("--out", type=Path, help="also save path JSON (default: stdout only)")
+    collect = commands.add_parser("collect", help="collect original container notice evidence", description="Collect from a native Syft 16.x image catalogue and an OCI layout or explicit digest-pinned registry. The image is never executed.",
+        epilog="Examples:\n  raptor-sca sbom collect --syft syft.json --oci-layout image-layout --out evidence\n  raptor-sca sbom collect --syft syft.json --registry-ref example/image@sha256:DIGEST --out evidence",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    collect.add_argument("--syft", type=Path, required=True, help="native Syft 16.x image JSON, including file hashes and image metadata")
+    origin = collect.add_mutually_exclusive_group(required=True)
+    origin.add_argument("--oci-layout", type=Path, help="offline OCI blob store")
+    origin.add_argument("--registry-ref", help="explicit IMAGE@sha256:PLATFORM_MANIFEST_DIGEST; enables registry network access")
+    collect.add_argument("--identify", action="append", default=[], help="catalogued image path to hash without retaining executable bytes (repeatable)")
+    collect.add_argument("--out", type=Path, required=True, help="new evidence directory; existing paths are refused")
     return result
 
 
@@ -54,6 +74,19 @@ def main(argv=None):
     args = parser().parse_args(argv)
     configure_cli_logging(logging.WARNING)
     try:
+        if args.command == "collect":
+            from .collection import collect_image
+            _emit(collect_image(args.syft, args.out, oci_layout=args.oci_layout,
+                                registry_ref=args.registry_ref, identify=args.identify))
+            return 0
+        if args.command == "why":
+            with Source(args.input) as source:
+                inventory, _ = read_inventory(source)
+            result = explain(inventory, args.package, root=args.root, max_paths=args.max_paths, max_depth=args.max_depth)
+            if args.out:
+                save_json(args.out, result, stream=True)
+            _emit(result)
+            return 0
         if args.command == "diff":
             with Source(args.baseline) as source:
                 before, _ = read_inventory(source)
@@ -81,6 +114,6 @@ def main(argv=None):
                 else:
                     print(escape_nonprintable(markdown(inventory, records), preserve_newlines=True))
         return 0
-    except (OSError, ValueError, TypeError, KeyError, RecursionError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, zipfile.BadZipFile, TarOpenError) as error:
         print("raptor-sca sbom: " + sanitise_for_terminal(str(error)), file=sys.stderr)
         return 2

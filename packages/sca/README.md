@@ -37,6 +37,8 @@ raptor-sca sbom inspect sbom.cdx.json --out inventory
 # Compare inventories and export retained original notices
 raptor-sca sbom diff old/inventory.json new/inventory.json
 raptor-sca sbom notices container-sbom.zip --out collected-notices
+raptor-sca sbom why sbom.cdx.json example
+raptor-sca sbom collect --syft syft.json --oci-layout image-layout --out evidence
 
 # Compare two findings.json files (CI baseline vs current)
 raptor-sca diff baseline.json current.json

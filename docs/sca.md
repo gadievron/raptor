@@ -330,6 +330,39 @@ required `CC0-1.0` metadata licence; this does not change component licences.
 
 ---
 
+## Creating and scanning your own SBOM
+
+A normal project scan writes `sbom.cdx.json`; add `--spdx` for SPDX 2.3 output.
+An existing CycloneDX 1.5 or SPDX 2.3 JSON document can feed the same advisory
+and licence-policy pipeline:
+
+```bash
+raptor-sca ./project --out scan --spdx
+raptor-sca ./project --sbom release.cdx.json --out scan
+raptor-sca ./project --sbom release.spdx.json --out scan
+```
+
+Use a real source checkout when you want reachability or source-based analysis.
+Supported Package URLs and resolved versions enable advisory matching; missing
+or unsupported coordinates remain in the inventory with coverage diagnostics.
+File records are retained as evidence, outside package vulnerability matching.
+Advisory checks may need network access or a populated offline advisory cache.
+
+Findings include available fixed-version recommendations. Compare explicit current/candidate package versions before changing your build:
+
+```bash
+raptor-sca upgrade npm example 1.0.0 1.0.1
+raptor-sca upgrade PyPI example 1.0.0 --candidate 1.0.1 --candidate 1.1.0
+```
+
+`upgrade` compares advisory exposure at those versions; it does not rewrite an
+SBOM or resolve an entire replacement image. A distro advisory's **source fix** is not necessarily an
+installable binary-package version. `fix` rewrites supported source manifests;
+an SBOM alone cannot supply those manifests or rebuild a container. Scan the
+checkout and review its proposed changes when applying upgrades, then rebuild
+and scan the resulting SBOM again. `sbom inspect`, `diff`, `why` and `notices`
+work offline and do not perform vulnerability queries.
+
 ## Inspecting SBOM inventories and collected notices
 
 Use `raptor-sca sbom inspect` to examine an existing CycloneDX 1.5 or SPDX 2.3
@@ -373,7 +406,54 @@ changes and notice fingerprints. It pairs stable occurrences first, then only
 unambiguous package identities; repeated instances remain visible as ambiguous
 groups. Notice-text updates, including spelling or copyright-year changes, are
 informational. The command does not classify their legal meaning. Changes to
-binary ownership and dependency graphs remain outside this comparison.
+binary ownership and supplied dependency graphs appear in separate comparison sections.
+Missing ownership or graph data is reported as unavailable, not as removals.
+Duplicate file paths across layers remain ambiguous. An ownership-check removal
+does not establish that the file disappeared from the image.
+
+Trace supplied dependency paths without scanning a source tree:
+
+```bash
+raptor-sca sbom why sbom.cdx.json example
+raptor-sca sbom why inventory/inventory.json example --root application --out paths.json
+```
+
+`why` keeps repeated package occurrences separate. It reports cycles, path/depth
+limits and whether a requested root was reached. A boundary with no recorded
+parents is not proof of a direct dependency. `--max-paths` and `--max-depth`
+control output size; traversal also has a fixed work budget.
+
+Collect your own image's original notice bytes using a native **Syft 16.x**
+image catalogue with file hashes, embedded image metadata and layer identities.
+Supply the matching offline OCI blob store or explicitly enable registry access
+with a single-platform manifest digest:
+
+```bash
+raptor-sca sbom collect --syft syft.json --oci-layout image-layout --out evidence
+raptor-sca sbom collect --syft syft.json \
+  --registry-ref example/image@sha256:PLATFORM_MANIFEST_DIGEST --out evidence
+raptor-sca sbom inspect evidence --out inventory
+raptor-sca sbom notices evidence --out collected-notices
+```
+
+The registry digest must match the catalogue's platform manifest; a mutable tag
+or a multi-platform index digest is insufficient. Collection verifies layer and
+file digests without executing the image. The output directory must be new;
+failed collections leave no partial bundle. Add repeatable `--identify /path`
+options to retain hashes for catalogued executables without saving their bytes.
+
+The bundle includes the unchanged `syft.json`, image identity, capture receipts,
+notice associations, original notice blobs and `prepared/sbom.cdx.json`. The
+CycloneDX projection contains catalogued packages and supplied package links;
+the original file inventory remains in `syft.json`. This does not translate
+arbitrary Syft metadata into CycloneDX, establish bundled-dependency completeness
+or infer build provenance. Missing declarations and notices remain explicit.
+RAPTOR-specific source assessments are not invented for other images.
+
+Inventory inspection decodes large arrays one record at a time and discards
+unused file details after validation. It keeps the original input fingerprint,
+package records and file count. Normal vulnerability scans continue to retain
+the complete imported document for faithful enriched exports.
 
 Export collected original licence and notice bytes to a **new** directory:
 

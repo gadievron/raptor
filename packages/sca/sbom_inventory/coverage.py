@@ -128,7 +128,7 @@ def _source_assessment(record):
             "status": status, "matched_files": matched, "scope": check.get("scope", ""),
             "limitations": check.get("limitations", []), "gaps": record["gaps"]}
 
-def collect(audit, image_digest, *, read=None, max_bytes=MAX_BYTES):
+def collect(audit, image_digest, *, read=None, max_bytes=MAX_BYTES, catalogue=None):
     """Accept only complete evidence bound to the exact inventory and image."""
     from core.security.capped_read import read_capped
     from core.oci.evidence import subject
@@ -138,7 +138,7 @@ def collect(audit, image_digest, *, read=None, max_bytes=MAX_BYTES):
     try:
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_digest):
             raise ValueError("invalid exported image digest")
-        native, native_sha = _document(audit / "syft.json", read, max_bytes)
+        native, native_sha = catalogue if catalogue is not None else _document(audit / "syft.json", read, max_bytes)
         provenance, _ = _document(audit / "prepared/provenance.json", read, max_bytes)
         image, _ = subject(native)
         notices = provenance["notice_evidence"]
