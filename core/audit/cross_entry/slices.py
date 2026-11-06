@@ -38,6 +38,9 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
     requested = set(report_functions) if report_functions is not None else None
     focus = set(focus_functions)
     skipped = set(skip_consumers)
+    focus_order = sorted(focus)
+    known_focus = focus & index.functions.keys()
+    limit_settings = limits.content_settings()
     per_function = defaultdict(list)
     by_type = defaultdict(set)
     by_path = defaultdict(set)
@@ -80,6 +83,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         selected = chain.from_iterable(by_function.get(f, ()) for f in set(functions))
         return (index.calls[position] for position in sorted(selected))
 
+    path_weights = {path: 10_000//max(1,len(functions)) for path,functions in by_path.items()}
     candidates = []
     unassembled = []
     started = time.monotonic()
@@ -137,7 +141,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         related_paths = {key for f in neighborhood for key in signatures[f]}
         consumer_roles = roles(fid)
         def weight(paths: set) -> int:
-            return sum(10_000//max(1,len(by_path[p])) for p in paths)
+            return sum(path_weights[p] for p in paths)
         def rank(f: str) -> tuple:
             direct = signatures[f] & core_paths
             related = signatures[f] & related_paths
@@ -168,7 +172,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
             from .dispatch import expand_dispatch_paths
             dispatch_rows,dispatch_deferred = expand_dispatch_paths(index,dispatch_rows,limits)
         ordered = list(dict.fromkeys([fid]+peer_order[:1]
-                       +sorted(focus & set(index.functions)-{fid})
+                       +sorted(known_focus-{fid})
                        +sorted(dispatch_callers)
                        +peer_order[1:3]
                        +[f for p in anchor_paths for f in p]
@@ -234,11 +238,11 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
             unresolved = unresolved[:64]
         score = 4*len(reasons) + min(8,len(peers-neighborhood))
         fingerprint = digest({"selection_version":4,"index":index.fingerprint,"consumer":fid,"functions":keep,
-                              "dispatch":dispatch_rows,"focus":sorted(focus),"limits":limits.content_settings()})
+                              "dispatch":dispatch_rows,"focus":focus_order,"limits":limit_settings})
         inventory = list(dict.fromkeys(ordered+[r["target"] for r in dispatch_rows]))
-        unit_id = digest([fid,sorted(focus)])[:20] if focus else digest(fid)[:20]
+        unit_id = digest([fid,focus_order])[:20] if focus else digest(fid)[:20]
         candidates.append(StudySlice(unit_id,fid,keep,[a.id for a in relevant],paths,reasons,
-                                     sorted(set(unresolved)),sorted(set(truncated)),score,"\n".join(chunks),fingerprint,dispatch_rows,inventory,sorted(focus)))
+                                     sorted(set(unresolved)),sorted(set(truncated)),score,"\n".join(chunks),fingerprint,dispatch_rows,inventory,focus_order.copy()))
     ranked = sorted(candidates,key=lambda s:(-s.score,s.consumer))
     # Reserve one fifth for deterministic exploration instead of always
     # dropping the weak tail. Partition the remaining ranked candidates evenly.
