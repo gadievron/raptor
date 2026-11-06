@@ -27,6 +27,20 @@ from packages.fuzzing.cargofuzz_runner import (
     parse_rust_panic,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import packages.fuzzing.cargofuzz_runner as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
+
 # Realistic streams. The campaign side is libFuzzer's own grammar
 # (cargo-fuzz targets ARE libFuzzer binaries); the panic block is
 # rustc's >=1.73 two-line format with RUST_BACKTRACE=1 frames.

@@ -12,6 +12,29 @@ from packages.fuzzing.capability import (
     select_fuzzer,
 )
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import packages.fuzzing.capability as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+    # The capability probe delegates this lookup to the radare2 adapter.
+    # Forward through the private binding rather than the host's shutil.
+    import inspect
+
+    radare2_probe = inspect.getmodule(consumer_0._probe_radare2_capability)
+
+    patch_module_attribute(
+        monkeypatch, radare2_probe, "shutil", "which",
+        lambda *args, **kwargs: consumer_0.shutil.which(*args, **kwargs),
+    )
+
 
 class TestCapabilityReport(unittest.TestCase):
     def test_report_summary_has_required_sections(self):

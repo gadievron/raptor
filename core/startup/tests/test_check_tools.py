@@ -20,6 +20,19 @@ from core.startup.init import check_tools
 
 from core.testing.module_bindings import patch_module_attribute
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import core.startup.init as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
+
 _FAKE_DEPS = {
     "afl++":      {"binary": "afl-fuzz", "severity": "required", "affects": "/fuzz"},
     "codeql":     {"binary": "codeql", "group": "scanner", "affects": "/codeql, /agentic"},

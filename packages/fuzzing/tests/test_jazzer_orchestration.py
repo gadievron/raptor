@@ -15,6 +15,19 @@ from packages.fuzzing.jazzer_runner import JavaExceptionInfo
 from packages.fuzzing.orchestrator import FuzzingOrchestrator
 from packages.fuzzing.witness_adapter import witness_from_jazzer_artifact
 
+import pytest
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shutil_patch_targets(monkeypatch):
+    """Keep shutil patch decorators and contexts on consumer-owned views."""
+    import packages.fuzzing.target_detector as consumer_0
+
+    patch_module_attribute(
+        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
+    )
+
 
 def _tmpdir(case: unittest.TestCase) -> Path:
     d = tempfile.mkdtemp()
