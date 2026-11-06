@@ -92,6 +92,7 @@ def test_stage_skips_non_c_target(tmp_path, monkeypatch):
 
 
 def test_stage_empty_corpus_returns_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
     repo = _c_repo(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
