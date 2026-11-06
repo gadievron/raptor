@@ -120,6 +120,32 @@ def validate_user_state(paths: list[Path], frontend: str | None = None) -> None:
             raise ProtectionError('protected code overlaps Claude user configuration; use independent installation content')
 
 
+def prepare_frontend_mountpoints(frontend: str | None) -> None:
+    """Prepare native sandbox mount points before the installation is sealed."""
+    if frontend != 'codex':
+        return
+    # Codex protects workspace .aws independently of the outer mount policy.
+    # Its sandbox cannot create this missing mount point after ROOT is read-only.
+    # Keep it empty on creation; never copy or redirect operator credentials.
+    root = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    node = None
+    try:
+        try:
+            node = os.open('.aws', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        except FileNotFoundError:
+            try:
+                os.mkdir('.aws', mode=0o700, dir_fd=root)
+            except FileExistsError:
+                pass  # A concurrent launch still has to pass the no-follow open.
+            node = os.open('.aws', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+    except OSError as exc:
+        raise ProtectionError('Codex sandbox mount point .aws must be a real directory') from exc
+    finally:
+        if node is not None:
+            os.close(node)
+        os.close(root)
+
+
 def _reject_stdio(message: str) -> None:
     # On a refusal, do not report through a second, not-yet-validated regular
     # file descriptor: it could also alias installed code or control state.
@@ -795,6 +821,7 @@ def main() -> int:
         protected = protected_paths()
         validate_user_state(protected, frontend)
         close_inherited_fds(protected, ROOT / "out")
+        prepare_frontend_mountpoints(frontend)
         protected = audit_protected_paths(protected)
         validate_user_state(protected, frontend)
         close_inherited_fds(protected, ROOT / "out")
