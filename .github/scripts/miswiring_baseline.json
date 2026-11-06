@@ -418,6 +418,9 @@
   "artifacts:write_only_artifact::hosts-before.txt": {
    "note": "Deliberate recovery record from the Linux CI hostname tripwire: preserve the original hosts file for diagnosis or manual recovery if the listener is killed. Normal shutdown restores the in-memory original in serve's finally block, so this backup intentionally has no automated production reader."
   },
+  "artifacts:write_only_artifact::inventory.csv": {
+   "note": "Deliberate user-facing export: sbom inspect writes the selected inventory as formula-safe CSV for spreadsheet and downstream consumers. CLI comparison reads inventory.json, not this derived presentation."
+  },
   "artifacts:write_only_artifact::io-correlation.json": {
    "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"
   },
@@ -528,6 +531,9 @@
   },
   "artifacts:write_only_artifact::study-stale.json": {
    "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
+  },
+  "artifacts:write_only_artifact::summary.md": {
+   "note": "Deliberate user-facing output: sbom inspect writes a sanitised Markdown summary for humans and CI artifact viewers; subsequent inspection/comparison derives from inventory.json rather than reparsing rendered prose."
   },
   "artifacts:write_only_artifact::summary.txt": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"

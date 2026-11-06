@@ -74,6 +74,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `verify <path> --proposed <dir>` | Round-trip check: re-scan with proposed overlay applied. |
 | `health` | Probe every registry client; report reachability. |
 | `purl <eco> <name> <ver>` | Build a canonical Package URL. |
+| `sbom <inspect\|diff\|notices>` | Offline SBOM inventories, evidence inspection, comparison and original-notice export. |
 | `render <findings.json>` | Re-render `report.md` / SARIF from an existing findings file. |
 | `clean-cache` | Reclaim stale entries and enforce a disposable disk budget. Supports `--dry-run`, `--max-age`, `--max-size-mb`, `--stress-max-age`, and `--stress-max-size-mb`. |
 | `dt-push` | Upload a CycloneDX SBOM to a Dependency-Track instance. Requires `--url` and `$DT_API_KEY` (or the deprecated `--api-key` flag — argv is world-readable via `/proc/*/cmdline`; the env var wins when both are set). |
@@ -328,6 +329,75 @@ container ships or runs the vulnerable kernel. Generated SPDX 2.3 documents reta
 required `CC0-1.0` metadata licence; this does not change component licences.
 
 ---
+
+## Inspecting SBOM inventories and collected notices
+
+Use `raptor-sca sbom inspect` to examine an existing CycloneDX 1.5 or SPDX 2.3
+JSON inventory. It shows licence declarations, supplied package relationships
+and available notice evidence. RAPTOR container-evidence ZIPs and directories
+also expose recorded executable ownership and source/build assessments.
+
+```bash
+raptor-sca sbom inspect sbom.cdx.json --out inventory
+raptor-sca sbom inspect container-sbom.zip --license MIT --format csv
+raptor-sca sbom inspect container-sbom.zip --package example --format json
+```
+
+`--out` writes `inventory.json`, `inventory.csv` and `summary.md`.
+The JSON retains the complete package/source/subject projection, with the selected occurrence IDs
+listed separately; CSV contains the selected records. Package records,
+source-only dependency candidates and OS/container subjects remain separate scopes.
+Subject records retain their supplied declarations and evidence; package-gap
+counts do not assert a blanket licence for an operating system or image. A licence filter
+matches an exact declaration operand, including compound expressions, without
+choosing an `AND`/`OR` licensing option. The JSON retains supplied dependency
+links and distinguishes missing graph data from an explicitly empty edge list.
+
+A standalone SBOM containing licence identifiers or URLs may have no retained
+notice text. That coverage is reported as **not assessed**. Embedded texts can
+be inspected and exported. For an evidence bundle, retained notice bytes are
+checked against their SHA-256 fingerprints. Recorded ownership and source/build
+assessments retain their scopes and limitations; inspection is not a fresh
+signature, build-provenance or legal review.
+
+Compare two source inventories, collected-evidence bundles or saved inventory
+snapshots:
+
+```bash
+raptor-sca sbom diff baseline/inventory.json current/inventory.json --out changes.json
+raptor-sca sbom diff previous.cdx.json current.cdx.json
+```
+
+The comparison separates additions/removals, version updates, declaration
+changes and notice fingerprints. It pairs stable occurrences first, then only
+unambiguous package identities; repeated instances remain visible as ambiguous
+groups. Notice-text updates, including spelling or copyright-year changes, are
+informational. The command does not classify their legal meaning. Changes to
+binary ownership and dependency graphs remain outside this comparison.
+
+Export collected original licence and notice bytes to a **new** directory:
+
+```bash
+raptor-sca sbom notices container-sbom.zip --out collected-notices
+raptor-sca sbom notices sbom.cdx.json --license MIT --out mit-notices
+raptor-sca sbom inspect collected-notices
+```
+
+The export stores original bytes by SHA-256 and includes `notice-index.json`
+with original paths, origins, layer/visibility evidence and package associations.
+An unfiltered bundle export includes unassociated collected notices too. Standard
+licence references and distributor notices keep their distinct origins. Existing
+output paths are refused, and a missing/corrupt requested text cannot leave a
+partially published export. Saved JSON inventory snapshots retain evidence
+metadata; exporting their original bytes requires the original input bundle.
+
+These commands operate offline. They read existing data without fetching
+external licence URLs or executing image contents. Inputs are bounded to 96 MiB
+per JSON document and 8 MiB per notice; ZIPs are limited to 10,000 entries and
+2 GiB of declared uncompressed contents. A completed inspection or comparison
+returns 0 even when gaps or changes are present; invalid inputs return 2.
+Use each command's `--help` for options and examples.
+
 
 ## Preparing RAPTOR inventory exports
 

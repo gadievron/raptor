@@ -92,6 +92,7 @@ Utilities:
   raptor-sca health                              Registry reachability check
   raptor-sca purl PyPI django 4.2.10             Print canonical Package URL
   raptor-sca render <findings.json>              Re-emit report.md / SARIF
+  raptor-sca sbom <inspect|diff|notices>          Offline SBOM inventory and notices
   raptor-sca clean-cache --max-age 30            Reclaim disk from stale cache
 
 Run 'raptor-sca <command> --help' for command-specific options.

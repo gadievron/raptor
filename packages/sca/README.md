@@ -31,11 +31,31 @@ raptor-sca fix /path/to/project --apply --allow-major
 # Pre-install safety verdict for a specific package
 raptor-sca check PyPI django 4.2.10
 
+# Inspect SBOM licence/notice evidence offline
+raptor-sca sbom inspect sbom.cdx.json --out inventory
+
+# Compare inventories and export retained original notices
+raptor-sca sbom diff old/inventory.json new/inventory.json
+raptor-sca sbom notices container-sbom.zip --out collected-notices
+
 # Compare two findings.json files (CI baseline vs current)
 raptor-sca diff baseline.json current.json
 ```
 
 ---
+
+## SBOM inventory workflows
+
+`raptor-sca sbom inspect` reads CycloneDX 1.5 / SPDX 2.3 JSON, RAPTOR evidence
+bundles and saved inventory snapshots. It provides declaration/notice coverage,
+supplied dependency relationships and available ownership/source evidence.
+JSON snapshots retain complete package/source/subject projections and identify any selection; CSV
+exports contain the selected records. `sbom diff` compares inventories without
+collapsing ambiguous occurrences. `sbom notices` exports original bytes and
+provenance to a new directory. These operations work offline; notice-text
+updates are informational and missing evidence remains explicit.
+See [SBOM inventory workflows](../../docs/sca.md#inspecting-sbom-inventories-and-collected-notices)
+and `raptor-sca sbom --help`.
 
 ## Scan stages
 
@@ -75,8 +95,9 @@ A successful scan writes the following to `--out`:
 | `findings.sarif` | SARIF 2.1.0 | GitHub code-scanning, GitLab SAST, Sonar, etc. Suppressed findings emit a `suppressions` block. |
 | `coverage-sca.json` | JSON | RAPTOR coverage layer (which files were examined). |
 
-The `findings.json` schema is canonical — every other emitter
-re-derives from it. External tools should consume that one.
+The `findings.json` schema is canonical for vulnerability and policy findings.
+Standalone SBOM inspection uses versioned inventory/comparison JSON instead;
+those records describe supplied inventory and evidence, not new vulnerability findings.
 
 ---
 

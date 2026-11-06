@@ -217,3 +217,25 @@ def test_zip64_extract_gate_fires_on_non_sentinel_eocd(tmp_path: Path):
     p.write_bytes(data)
     with pytest.raises(ZipEntryCountExceeded):
         extract_files_from_zip(str(p), selector=lambda n: n)
+
+
+def test_held_stream_preflight_preserves_position_and_bounds_reads():
+    class Counted(io.BytesIO):
+        sizes = []
+        def read(self, size=-1):
+            assert 0 <= size <= 65557
+            self.sizes.append(size)
+            return super().read(size)
+    stream = Counted(_build_zip(100))
+    stream.seek(7)
+    assert peek_eocd(stream).entries_total == 100
+    assert stream.tell() == 7
+    assert stream.sizes
+
+
+def test_held_stream_honours_zip64_override():
+    data = _append_zip64_records(_build_zip(1), entries=123_456, cd_size=456_789)
+    stream = io.BytesIO(data)
+    stream.seek(3)
+    assert peek_eocd(stream).entries_total == 123_456
+    assert stream.tell() == 3

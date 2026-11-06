@@ -17,6 +17,7 @@ Utilities:
     raptor-sca health                            Registry reachability check
     raptor-sca purl <eco> <name> <version>       Print canonical Package URL
     raptor-sca render <findings.json>            Re-emit report.md / SARIF
+    raptor-sca sbom <inspect|diff|notices>          Offline SBOM evidence workflows
 
 The default (no subcommand) is ``scan`` — the full analyse pipeline.
 
@@ -58,7 +59,7 @@ logger = logging.getLogger(__name__)
 SUBCOMMANDS = ("fix", "check", "upgrade", "diff",
                "verify", "health", "purl", "render",
                "clean-cache", "dt-push", "suppress", "bump",
-               "fingerprint", "triage", "fix-diff")
+               "fingerprint", "triage", "fix-diff", "sbom")
 _SUBCOMMANDS = SUBCOMMANDS  # backcompat alias for internal callers
 
 
@@ -129,6 +130,9 @@ def _dispatch(subcommand: str, argv: list[str]) -> int:
     if subcommand == "triage":
         from .supply_chain import typosquat_audit
         return typosquat_audit.main(argv)
+    if subcommand == "sbom":
+        from .sbom_inventory import cli as sbom_cli
+        return sbom_cli.main(argv)
     if subcommand == "fix-diff":
         from . import fix_diff
         return fix_diff.main(argv)
