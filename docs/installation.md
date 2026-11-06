@@ -213,3 +213,34 @@ Browser updates come through Debian packages when the image is rebuilt. Before
 publication, an offline check exercises the installed browser with the installed
 Playwright version. Manual installations keep Playwright's default browser unless
 you set `RAPTOR_WEB_BROWSER_EXECUTABLE` to a different trusted Chromium executable.
+
+
+## Session names in Claude Code
+
+RAPTOR names launcher-owned sessions `raptor · <project> · <target basename>`.
+Projectless sessions use `raptor · projectless · <target basename>` when a
+launcher target or a witnessed run from that session supplies it. A session
+without an authenticated RAPTOR binding is left alone. Names use the session's own project binding, never
+another terminal's active-project bookmark. Target labels come from that project's
+current target, or the projectless session's own run/launcher context, never
+shell-command text or another terminal's runs. Run targets are display metadata
+only and never authorize work or establish project membership.
+
+The title hook runs on start, resume and fork, and before user turns. Loading a
+project or changing its target refreshes the name at the next supported hook
+boundary. Claude's documented `sessionTitle` hook output applies the change;
+RAPTOR does not edit transcript files, simulate keystrokes or start a model call.
+See the [Claude hook reference](https://code.claude.com/docs/en/hooks).
+
+A manual `/rename` or explicit frontend title takes precedence. Once the hook
+observes a custom title that RAPTOR did not request or confirm, automatic naming
+stops for that conversation. Forks preserve an inherited custom title. Clients
+that omit current-title feedback are not renamed during user turns.
+
+Naming is optional. Hook errors, timeouts, unavailable storage and contended locks
+never prevent launch or a user turn. A requested title is not marked confirmed
+until Claude reports it back; retries are bounded to three per desired title.
+Concurrent conversations use distinct frontend session IDs and separate locks.
+Bookkeeping lives in `sessions.d/.titles` under the operator registry and honors
+`RAPTOR_REGISTRY_HOME`. No project settings, run identities or session credentials
+are changed by naming.

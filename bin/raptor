@@ -839,6 +839,8 @@ elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
 unset _target_clean
+# Display context for this frontend only; never project or execution authority.
+export RAPTOR_SESSION_TARGET="$CHECK_TARGET"
 
 # Clear the screen BEFORE the pre-flight checks so their stderr
 # (trust warnings, project-mismatch prompts) stays visible instead

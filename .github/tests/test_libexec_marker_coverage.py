@@ -287,6 +287,7 @@ SYSPATH_VARIANTS = {
     ),
     "raptor-run-sandboxed": ("sys.path.insert(0, raptor_dir)",),
     "raptor-sca-run": ("sys.path.insert(0, str(_REPO))",),
+    "raptor-session-title": ("sys.path.insert(0, str(REPO_ROOT))",),
     "raptor-session-init": (
         "sys.path.insert(0, str(REPO_ROOT))",
         # embedded python3 -c child snippet (mandated RAPTOR_DIR pattern)
