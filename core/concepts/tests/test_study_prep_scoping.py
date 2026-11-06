@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.concepts.tests._study_cli import run_prep_main
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
 
@@ -242,7 +244,9 @@ class TestChaseSubprocessEnv:
 # ------------------------------------------------------------------
 
 
-def _run_prep(args: list[str]) -> subprocess.CompletedProcess:
+def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProcess:
+    if in_process:
+        return run_prep_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
     return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
@@ -359,13 +363,14 @@ class TestIncludeDirWarning:
 
 
 class TestStrictArgParsing:
-    def test_unknown_flag_is_an_error(self, tmp_path) -> None:
+    @pytest.mark.parametrize("in_process", [True, False], ids=["main", "interpreter"])
+    def test_unknown_flag_is_an_error(self, tmp_path, in_process) -> None:
         repo = _make_correlate_tree(tmp_path)
         out = tmp_path / "out"
         result = _run_prep([
             str(repo), str(out),
             "--identifer", "alpha_ctx",  # deliberate misspelling
-        ])
+        ], in_process=in_process)
         assert result.returncode != 0
         assert "unrecognized arguments" in result.stderr
 
@@ -580,3 +585,51 @@ class TestStudyListCacheScope:
         assert result.returncode == 0, result.stderr
         assert "reusing cached" not in result.stderr
         assert "alpha_ctx" in _item_names(out)
+
+
+@pytest.mark.parametrize("args, status", [
+    pytest.param(["--help"], 0, id="help"),
+    pytest.param(["--invalid-option"], 2, id="parse-error"),
+])
+def test_main_runner_restores_borrowed_process_state(monkeypatch, args, status):
+    monkeypatch.delenv("_RAPTOR_TRUSTED", raising=False)
+    argv, path = sys.argv, sys.path
+    argv_values, path_values = argv.copy(), path.copy()
+    streams = sys.stdout, sys.stderr
+    result = run_prep_main(_load_prep, _PREP_PATH, args)
+    assert result.returncode == status
+    assert result.args == [sys.executable, str(_PREP_PATH), *args]
+    assert sys.argv is argv and argv == argv_values
+    assert sys.path is path and path == path_values
+    assert (sys.stdout, sys.stderr) == streams
+    assert "_RAPTOR_TRUSTED" not in os.environ
+
+
+@pytest.mark.parametrize("phase", ["load", "main"])
+def test_main_runner_propagates_failures_and_closes_owned_streams(monkeypatch, phase):
+    monkeypatch.delenv("_RAPTOR_TRUSTED", raising=False)
+    argv, path = sys.argv, sys.path
+    argv_values, path_values = argv.copy(), path.copy()
+    streams = sys.stdout, sys.stderr
+    owned = []
+
+    def fail():
+        owned.extend((sys.stdout, sys.stderr))
+        sys.argv.append("temporary argument")
+        sys.path.append("temporary import path")
+        raise RuntimeError("planted study invocation failure")
+
+    def load():
+        if phase == "load":
+            fail()
+        module = _load_prep()
+        module.main = fail
+        return module
+
+    with pytest.raises(RuntimeError, match="planted study invocation failure"):
+        run_prep_main(load, _PREP_PATH, [])
+    assert owned and all(stream.closed for stream in owned)
+    assert sys.argv is argv and argv == argv_values
+    assert sys.path is path and path == path_values
+    assert (sys.stdout, sys.stderr) == streams
+    assert "_RAPTOR_TRUSTED" not in os.environ
