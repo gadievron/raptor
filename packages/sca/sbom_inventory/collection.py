@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import tempfile
 from urllib.parse import quote
 
-from core.atomic_fs import write_bytes_atomically, write_text_atomically
+from core.atomic_fs import write_bytes_atomically, write_text_atomically, publish_new_directory
+from core.run.scratch import scratch_dir
 from core.json import save_json
 from core.json.projection import project_object
 from core.oci.evidence import capture, subject
@@ -70,7 +70,7 @@ def collect_image(syft: Path, out: Path, *, oci_layout=None, registry_ref=None, 
                 raise ValueError("registry evidence unavailable: " + str(error)) from error
         report["catalogue_sha256"] = sha
         out.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-collect-", dir=out.parent) as temporary:
+        with scratch_dir("raptor-sca-collect-", dir=out.parent, keepalive=True) as temporary:
             staging = Path(temporary) / "bundle"
             capture_dir = staging / "capture"
             blob_dir = capture_dir / "notices/sha256"
@@ -109,7 +109,7 @@ def collect_image(syft: Path, out: Path, *, oci_layout=None, registry_ref=None, 
                 inventory, _ = read_inventory(source)
             if path_may_exist(out):
                 raise ValueError("output must be a new directory")
-            staging.rename(out)
+            publish_new_directory(staging, out)
     return {"format": "raptor-sbom-collection", "schema_version": 1, "subject": image["manifest_digest"],
             "catalogue_sha256": sha, "summary": inventory.summary(),
             "limitations": ["CycloneDX contains catalogued packages and supplied package relationships; the original file inventory remains in syft.json.",

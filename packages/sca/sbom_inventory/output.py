@@ -6,9 +6,9 @@ from dataclasses import replace
 import hashlib
 import io
 from pathlib import Path
-import tempfile
 
-from core.atomic_fs import write_bytes_atomically, write_text_atomically
+from core.atomic_fs import write_bytes_atomically, write_text_atomically, publish_new_directory
+from core.run.scratch import scratch_dir
 from core.json import save_json
 from core.security.capped_read import path_may_exist
 from core.security.markdown_render import md_inline
@@ -81,8 +81,9 @@ def export_notices(out, inventory, records, source, embedded, *, include_unassoc
     selected_inventory = replace(inventory, records=records, notice_files=notices, coverage=None,
                                  diagnostics=inventory.diagnostics + ["Notice export contains the selected records and retained texts only; it is not a new scan."])
     out.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="raptor-sca-notices-", dir=out.parent) as temporary:
-        staging = Path(temporary)
+    with scratch_dir("raptor-sca-notices-", dir=out.parent, keepalive=True) as workspace:
+        staging = workspace / "bundle"
+        staging.mkdir()
         blobs = staging / "prepared/notices/sha256"
         blobs.mkdir(parents=True)
         for sha in dict.fromkeys(n.sha256 for n in notices):
@@ -99,7 +100,7 @@ def export_notices(out, inventory, records, source, embedded, *, include_unassoc
                               "Standard reference texts and distributor notices remain distinct from upstream notices.\n")
         # A private staging directory prevents partially written exports from
         # looking complete when a late blob is corrupt or missing.
-        staging.rename(out)
+        publish_new_directory(staging, out)
     return {"notice_records": len(notices), "unique_texts": len({n.sha256 for n in notices})}
 
 
@@ -142,11 +143,12 @@ def write_upgrade_plan(out, report):
     if path_may_exist(out):
         raise ValueError("plan output already exists; choose a new directory")
     out.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="raptor-sca-plan-", dir=out.parent) as temporary:
-        staging = Path(temporary)
+    with scratch_dir("raptor-sca-plan-", dir=out.parent, keepalive=True) as workspace:
+        staging = workspace / "bundle"
+        staging.mkdir()
         save_json(staging / "upgrade-plan.json", report, stream=True)
         write_text_atomically(staging / "upgrade-plan.md", upgrade_plan_markdown(report, limit=None))
-        staging.rename(out)
+        publish_new_directory(staging, out)
 
 
 def verification_markdown(report, *, limit=50):
@@ -206,8 +208,9 @@ def write_verification(out, report):
     if path_may_exist(out):
         raise ValueError("verification output already exists; choose a new directory")
     out.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="raptor-sca-verification-", dir=out.parent) as temporary:
-        staging = Path(temporary)
+    with scratch_dir("raptor-sca-verification-", dir=out.parent, keepalive=True) as workspace:
+        staging = workspace / "bundle"
+        staging.mkdir()
         save_json(staging / "upgrade-verification.json", report, stream=True)
         write_text_atomically(staging / "upgrade-verification.md", verification_markdown(report, limit=None))
-        staging.rename(out)
+        publish_new_directory(staging, out)

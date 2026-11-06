@@ -68,3 +68,11 @@ def write_json(tmp_path):
         path.write_text(json.dumps(value))
         return path
     return write
+
+
+@pytest.fixture(autouse=True)
+def _owned_tool_scratch():
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_scratch_keepalive():
+        yield
