@@ -184,20 +184,26 @@ def _cache_path(repo: Path) -> Path | None:
             return None
     except OSError:
         return None
-    repo_hash = hashlib.md5(str(repo).encode()).hexdigest()[:12]
+    repo_hash = hashlib.md5(os.fsencode(repo)).hexdigest()[:12]
     return base / f"graph-{repo_hash}.json"
 
 
 def _files_fingerprint(py_files: list[Path], repo: Path) -> str:
-    """Hash of (path, mtime_ns) for cache invalidation."""
-    entries = []
-    for f in sorted(py_files):
+    """Key source contents and graph-building rules, even when mtimes survive."""
+    digest = hashlib.sha256()
+    digest.update((sys.implementation.name + ":" + sys.version + "\0").encode())
+    inputs = set(py_files) | {Path('.github/scripts') / name for name in
+                              ('test_impact.py', 'test_scope.py', 'codeql_scope.py')}
+    for path in sorted(inputs):
+        digest.update(os.fsencode(path) + b'\0')
         try:
-            st = (repo / f).stat()
-            entries.append(f"{f}\0{st.st_mtime_ns}")
+            with (repo / path).open('rb') as source:
+                content = hashlib.file_digest(source, 'sha256').digest()
         except OSError:
-            entries.append(f"{f}\0missing")
-    return hashlib.md5("\n".join(entries).encode()).hexdigest()
+            digest.update(b'missing\0')
+        else:
+            digest.update(b'present\0' + content)
+    return digest.hexdigest()
 
 
 def _load_cached_graph(

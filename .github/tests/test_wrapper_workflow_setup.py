@@ -1,5 +1,6 @@
 """Execute the workflow's setup commands with owned package-manager stand-ins."""
 
+import ast
 import itertools
 import json
 import os
@@ -113,7 +114,7 @@ def test_python_parser_dependencies_include_elf_worker_and_preserve_failures(tmp
     assert result.returncode == (29 if failure else 0), result.stdout + result.stderr
     calls = [json.loads(line) for line in Path(env['SETUP_CALLS']).read_text().splitlines()]
     assert calls[0] == ['uv', 'pip', 'install', '--python', str(tmp_path / 'bin/python'),
-                        'pwntools==4.15.0', 'ROPgadget==7.7', 'capstone==5.0.6']
+                        '-r', '.github/scripts/requirements-sandbox-wrappers.txt']
     assert len(calls) == 1
 
 
@@ -130,3 +131,55 @@ def test_ruby_parser_dependencies_stay_gated_and_preserve_failures(tmp_path, fai
     calls = [json.loads(line) for line in Path(env['SETUP_CALLS']).read_text().splitlines()]
     assert calls == [['gem', 'install', '--no-document', '--install-dir',
                       str(tmp_path / 'wrapper-gems'), 'one_gadget', '-v', '1.10.0']]
+
+
+def _cache_expression(text, platform, families):
+    expression = text.strip().removeprefix('${{').removesuffix('}}').strip()
+    expression = re.sub(r"contains\(matrix\.families, '([^']+)'\)",
+                        lambda match: repr(match[1] in families), expression)
+    expression = expression.replace('runner.os', repr(platform)).replace('&&', ' and ').replace('||', ' or ')
+
+    def visit(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.BoolOp):
+            for value in node.values:
+                result = visit(value)
+                if isinstance(node.op, ast.And) and not result:
+                    return result
+                if isinstance(node.op, ast.Or) and result:
+                    return result
+            return result
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+            return visit(node.left) == visit(node.comparators[0])
+        raise AssertionError('Unsupported cache expression: ' + ast.dump(node))
+
+    return visit(ast.parse(expression, mode='eval').body)
+
+
+@pytest.mark.parametrize('platform', ['Linux', 'macOS'])
+@pytest.mark.parametrize('families', [[], ['radare2'], ['gadget-parsers'], ['elf-worker'],
+                                    ['gadget-parsers', 'elf-worker', 'playwright-browser']],
+                         ids=['contracts', 'unrelated-native', 'gadgets', 'elf', 'full-parser-selection'])
+def test_parser_build_cache_uses_installed_requirements_only_when_needed(platform, families):
+    workflow = (ROOT / '.github/workflows/sandbox-wrappers.yml').read_text()
+    uv_step = workflow.split('      - uses: astral-sh/setup-uv@', 1)[1].split('      - uses:', 1)[0]
+    globs = re.search(r'(?m)^          cache-dependency-glob: \|\n((?:            [^\n]*\n)+)', uv_step)
+    assert globs
+    patterns = []
+    for line in globs[1].splitlines():
+        value = _cache_expression(line, platform, families) if '${{' in line else line.strip()
+        if value:
+            patterns.append(value)
+    assert 'uv.lock' in patterns
+    needed = bool({'gadget-parsers', 'elf-worker'} & set(families))
+    installed = re.search(r' -r (\S+)', _command(_step('Install Python parser dependencies')))[1]
+    assert (installed in patterns) is needed
+    assert {'uv.lock', 'pyproject.toml', 'uv.toml'} <= set(patterns)
+    assert len(patterns) == (4 if needed else 3)
+    pruning = re.search(r'(?m)^          prune-cache: (.+)$', uv_step)[1]
+    assert _cache_expression(pruning, platform, families) is (platform == 'macOS' and needed)
+    pins = [line for line in (ROOT / installed).read_text().splitlines() if line and not line.startswith('#')]
+    assert len(pins) == 3
+    assert all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*==[0-9.]+', pin) for pin in pins)
+    assert {pin.split('==')[0].lower() for pin in pins} == {'pwntools', 'ropgadget', 'capstone'}
