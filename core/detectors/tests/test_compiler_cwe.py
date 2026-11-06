@@ -77,3 +77,73 @@ def test_conflicting_taxonomy_name_and_index_are_not_trusted():
 
 def test_cpp_new_delete_leak_has_its_own_supported_checker():
     assert diagnostic_cwe("cplusplus.NewDeleteLeaks", "Potential leak of memory pointed to by 'p'") == "CWE-401"
+
+
+@pytest.mark.parametrize('reference', [
+    {'ruleIndex': 0}, {'rule': {'index': 0}},
+    {'rule': {'id': '-Wanalyzer-use-after-free'}},
+])
+def test_compiler_sarif_rule_references_preserve_classification_and_default_level(tmp_path, reference):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    rule = {'id': '-Wanalyzer-use-after-free', 'defaultConfiguration': {'level': 'error'}}
+    result = {'message': {'text': 'use after free'}, **reference}
+    report = tmp_path / 'gcc.sarif'
+    report.write_text(json.dumps({'runs': [{'tool': {'driver': {'name': 'gcc', 'rules': [rule]}},
+                                          'results': [result]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['id'] == rule['id'] and diagnostic['kind'] == 'error'
+    assert diagnostic_cwe(diagnostic['id'], diagnostic['message']) == 'CWE-416'
+
+
+def test_compiler_sarif_resolution_is_run_local_and_explicit_level_wins(tmp_path):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    runs = [{'tool': {'driver': {'rules': [
+        {'id': name, 'defaultConfiguration': {'level': 'error'}}]}},
+        'results': [{'ruleIndex': 0, 'level': 'warning', 'message': {'text': 'diagnostic'}}]}
+        for name in ('-Wanalyzer-use-after-free', '-Wanalyzer-double-free')]
+    report = tmp_path / 'gcc.sarif'
+    report.write_text(json.dumps({'runs': runs}))
+    diagnostics = _parse_gcc_sarif(report)
+    assert [row['id'] for row in diagnostics] == ['-Wanalyzer-use-after-free', '-Wanalyzer-double-free']
+    assert [row['kind'] for row in diagnostics] == ['warning', 'warning']
+
+
+@pytest.mark.parametrize('reference, rules, expected_id', [
+    ({'ruleIndex': True}, [{'id': 'one'}], ''),
+    ({'ruleIndex': 99}, [{'id': 'one'}], ''),
+    ({'rule': {'id': 'one'}}, [{'id': 'one'}, {'id': 'one'}], ''),
+    ({'ruleId': 'other', 'ruleIndex': 0}, [{'id': 'one'}], 'other'),
+])
+def test_invalid_compiler_rule_references_cannot_borrow_descriptor_metadata(tmp_path, reference, rules, expected_id):
+    from core.audit.compiler_sweep import _parse_gcc_sarif
+    for rule in rules:
+        rule['defaultConfiguration'] = {'level': 'error'}
+    report = tmp_path / 'gcc.sarif'
+    report.write_text(json.dumps({'runs': [{'tool': {'driver': {'rules': rules}},
+        'results': [{'message': {'text': 'diagnostic'}, **reference}]}]}))
+    diagnostic = _parse_gcc_sarif(report)[0]
+    assert diagnostic['id'] == expected_id and diagnostic['kind'] == ''
+
+
+def test_compiler_sarif_indexes_rules_once_only_when_needed(tmp_path, monkeypatch):
+    from core.audit import compiler_sweep as compiler
+    original = compiler.ResultRuleResolver
+    builds = []
+
+    class MeasuredResolver(original):
+        def __init__(self, run):
+            builds.append(run)
+            super().__init__(run)
+
+    monkeypatch.setattr(compiler, 'ResultRuleResolver', MeasuredResolver)
+    report = tmp_path / 'gcc.sarif'
+    run = {'tool': {'driver': {'rules': [{'id': '-Wanalyzer-use-after-free'}]}}, 'results': [
+        {'ruleId': '-Wanalyzer-use-after-free', 'level': 'warning', 'message': {'text': 'diagnostic'}}
+        for _ in range(100)]}
+    report.write_text(json.dumps({'runs': [run]}))
+    assert len(compiler._parse_gcc_sarif(report)) == 100 and not builds
+    for row in run['results']:
+        row.pop('ruleId')
+        row['ruleIndex'] = 0
+    report.write_text(json.dumps({'runs': [run]}))
+    assert len(compiler._parse_gcc_sarif(report)) == 100 and len(builds) == 1
