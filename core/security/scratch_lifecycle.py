@@ -524,6 +524,13 @@ def main(argv=None) -> int:
             print(f"{sanitise_for_terminal(str(value['id']))}  {sanitise_for_terminal(str(state))}  "
                   f"{sanitise_for_terminal(str(value.get('backend', 'unknown')))}  "
                   f"{sanitise_for_terminal(str(value.get('root', '(unavailable)')))}")
+            for diagnostic in (value.get('tracking_diagnostics') or [])[:6]:
+                if not isinstance(diagnostic, dict):
+                    continue
+                detail = f"{diagnostic.get('stage', 'tracking')}: {diagnostic.get('error', 'unavailable')}"
+                if diagnostic.get('errno') is not None:
+                    detail += f" (errno={diagnostic['errno']})"
+                print('  tracking: ' + sanitise_for_terminal(detail[:1024]))
         return int(failed)
     except (OSError, ValueError, TypeError) as exc:
         print(f'raptor: scratch cleanup unavailable ({type(exc).__name__}); inspect operator state', file=sys.stderr)

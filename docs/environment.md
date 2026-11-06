@@ -886,6 +886,13 @@ fd is a broken route.
 Variables defined by other ecosystems that RAPTOR consumes or forwards
 with specific behavior.
 
+### `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`
+
+The scratch supervisor uses the configured user runtime directory and D-Bus
+session address to decide whether to attempt a delegated systemd user scope.
+If neither supplies a user bus, tracking falls back to retaining scratch.
+They do not grant cgroup permissions or relax analysis sandbox requirements.
+
 ### `PLAYWRIGHT_NODEJS_PATH`
 
 `PLAYWRIGHT_BROWSERS_PATH` selects the trusted browser installation cache.

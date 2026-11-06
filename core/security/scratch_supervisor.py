@@ -24,10 +24,25 @@ _GROUP_DRAIN_GRACE_SECONDS = 10.0
 _DELEGATION_START_SECONDS = 10.0
 
 lifecycle = _module('scratch_lifecycle')
+_CGROUP_LOAD_ERROR = None
 try:
     cgroups = _module('cgroup_scope')
-except (OSError, ImportError, SyntaxError):
+except (OSError, ImportError, SyntaxError) as exc:
     cgroups = None
+    _CGROUP_LOAD_ERROR = str(exc)[:512]
+
+
+def _record_tracking_failure(session_id: str, stage: str, error) -> None:
+    """Keep bounded diagnostics in the private record, away from startup UX."""
+    cause = getattr(error, '__cause__', None) or error
+    item = {'stage': stage, 'error': str(cause)[:512]}
+    if isinstance(cause, OSError):
+        item['errno'] = cause.errno
+    with lifecycle.locked(session_id) as (node, value):
+        diagnostics = value.setdefault('tracking_diagnostics', [])
+        if len(diagnostics) < 6:
+            diagnostics.append(item)
+        lifecycle._write(node, session_id + '.json', value)
 
 
 def _authorized(metadata: Path) -> str:
@@ -176,8 +191,10 @@ def _finish(session_id: str, scope, front, code: int) -> int:
 def _delegated(session_id: str, command: list[str], *, attempt: str | None = None) -> int:
     scope = front = None
     claimed = False
+    stage = 'create session cgroup'
     try:
         scope = cgroups.Scope.create()
+        stage = 'create frontend cgroup'
         front = cgroups.Scope.create(scope.path)
         previous_owner = _claim(session_id, 'cgroup-v2-tracking', scope, front, attempt=attempt)
         claimed = True
@@ -185,7 +202,8 @@ def _delegated(session_id: str, command: list[str], *, attempt: str | None = Non
             with lifecycle.locked(session_id) as (_, value):
                 service_scratch = Path(value['root']) / 'tmp'
             code = _spawn(command, front, service_scratch=service_scratch)
-        except LaunchNotStarted:
+        except LaunchNotStarted as exc:
+            _record_tracking_failure(session_id, "attach frontend to cgroup", exc)
             # Attachment/setup failure is optional for a launcher session. The
             # blocked child has been reaped, so rollback cannot run it twice.
             with lifecycle.locked(session_id) as (node, value):
@@ -196,7 +214,8 @@ def _delegated(session_id: str, command: list[str], *, attempt: str | None = Non
             claimed = False
             return 125
         return _finish(session_id, scope, front, code)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as exc:
+        _record_tracking_failure(session_id, stage, exc)
         if claimed:
             print(f'raptor: session {session_id}: supervision failed; stopping tracked work', file=sys.stderr)
             return _finish(session_id, scope, front, 126)
@@ -214,18 +233,32 @@ def _delegated(session_id: str, command: list[str], *, attempt: str | None = Non
                 item.close()
 
 
-def _can_delegate() -> bool:
+def _delegation_unavailable_reason() -> str | None:
+    if sys.platform != 'linux':
+        return 'systemd cgroup delegation requires Linux'
+    if cgroups is None:
+        return f'cgroup backend could not be loaded: {_CGROUP_LOAD_ERROR or "unavailable"}'
     try:
-        return (sys.platform == 'linux' and cgroups is not None
-                and not os.statvfs(cgroups.CGROUP_ROOT).f_flag & os.ST_RDONLY
-                and Path('/usr/bin/systemd-run').is_file()
-                and (Path('/run/user') / str(os.geteuid()) / 'bus').exists())
-    except OSError:
-        return False
+        if os.statvfs(cgroups.CGROUP_ROOT).f_flag & os.ST_RDONLY:
+            return 'cgroup mount is read-only; use a host session or a delegated container'
+        if not os.access('/usr/bin/systemd-run', os.X_OK):
+            return 'systemd-run is unavailable'
+        runtime = Path(os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.geteuid()}')
+        if not os.environ.get('DBUS_SESSION_BUS_ADDRESS') and not (runtime / 'bus').exists():
+            return 'no systemd user bus; use a login session with a running user manager'
+    except OSError as exc:
+        return f'cgroup delegation prerequisites unavailable (errno={exc.errno})'
+    return None
+
+
+def _can_delegate() -> bool:
+    return _delegation_unavailable_reason() is None
 
 
 def _try_delegated(metadata: Path, session_id: str, command: list[str]) -> int | None:
     if not _can_delegate():
+        _record_tracking_failure(session_id, 'systemd delegation prerequisites',
+                                 _delegation_unavailable_reason() or 'delegation unavailable')
         return None
     attempt = secrets.token_hex(16)
     with lifecycle.locked(session_id) as (node, value):
@@ -236,7 +269,12 @@ def _try_delegated(metadata: Path, session_id: str, command: list[str]) -> int |
               '--metadata', str(metadata), '--attempt', attempt, '--', *command]
     try:
         process = subprocess.Popen(runner)
-    except OSError:
+    except OSError as exc:
+        with lifecycle.locked(session_id) as (node, value):
+            if value.get('delegation_attempt') == attempt:
+                value.pop('delegation_attempt')
+                lifecycle._write(node, session_id + '.json', value)
+        _record_tracking_failure(session_id, 'start systemd user scope', exc)
         return None
     deadline = time.monotonic() + _DELEGATION_START_SECONDS
 
@@ -250,6 +288,8 @@ def _try_delegated(metadata: Path, session_id: str, command: list[str]) -> int |
                 return False
             value.pop('delegation_attempt')
             lifecycle._write(node, session_id + '.json', value)
+        _record_tracking_failure(session_id, 'start systemd user scope',
+                                 'delegation startup deadline exceeded')
         return True
 
     code = _wait(process.pid, startup_expired=startup_expired)
@@ -262,36 +302,17 @@ def _try_delegated(metadata: Path, session_id: str, command: list[str]) -> int |
             lifecycle._write(node, session_id + '.json', value)
     if started:
         return _result(code)
+    _record_tracking_failure(session_id, 'systemd user scope',
+                             f'exited before claiming the session (status={code})')
     return None  # Inner controller never claimed the session or released payload.
 
 
-def _terminal_may_ask() -> bool:
-    try:
-        # The isolated entry point imports only from its owning checkout.
-        root = str(Path(__file__).resolve().parents[2])
-        if root not in sys.path:
-            sys.path.insert(0, root)
-        from core.ux.interactivity import terminal_may_ask
-        return terminal_may_ask()
-    except (ImportError, OSError, RuntimeError, ValueError):
-        return False
-
-
 def _accept_degraded(approved: bool = False) -> bool:
-    print('raptor: cgroup session tracking is unavailable; descendants may outlive this session. '
-          'Unproven scratch will be retained.', file=sys.stderr)
-    if approved:
-        print('raptor: degraded cleanup explicitly approved by --allow-degraded-cleanup.', file=sys.stderr)
-        return True
-    if not _terminal_may_ask():
-        print('raptor: non-interactive launch refused; add --allow-degraded-cleanup to accept the risk.', file=sys.stderr)
-        return False
-    print('Continue with degraded cleanup? [Y/n] ', end='', file=sys.stderr, flush=True)
-    try:
-        answer = input()
-    except (KeyboardInterrupt, EOFError):
-        return False
-    return answer.strip().lower() in {'', 'y', 'yes'}
+    # Compatibility flag remains accepted, but retaining uncertain scratch is
+    # now the safe default. No terminal input or weaker sandbox is required.
+    print('raptor: session process tracking unavailable; temporary files will be retained. '
+          'Details: bin/raptor cleanup --list', file=sys.stderr)
+    return True
 
 
 def supervise(metadata: Path, command: list[str], *, delegated: bool = False,
@@ -307,10 +328,7 @@ def supervise(metadata: Path, command: list[str], *, delegated: bool = False,
     code = _try_delegated(metadata, session_id, command)
     if code is not None:
         return code
-    if not _accept_degraded(allow_degraded):
-        lifecycle.record_closed(session_id, 'never-released')
-        lifecycle.cleanup(session_id)
-        return 130 if _terminal_may_ask() else 126
+    _accept_degraded(allow_degraded)
     _claim(session_id, 'untracked')
     code = _spawn(command)
     with lifecycle.locked(session_id) as (node, value):
@@ -328,7 +346,7 @@ def main(argv=None) -> int:
     parser.add_argument('--delegated', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--attempt', help=argparse.SUPPRESS)
     parser.add_argument('--allow-degraded-cleanup', action='store_true',
-                        help='explicitly accept unavailable session cleanup tracking')
+                        help='compatibility option; unavailable tracking retains scratch automatically')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command[:1] != ['--'] or len(args.command) < 2:

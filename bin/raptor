@@ -485,7 +485,7 @@ Options:
   --trust-repo       Trust target repo's config (skip safety checks)
   --protect-install  Opt in to Linux installation protection
   --allow-degraded-cleanup
-                     Accept unavailable session cleanup tracking (required without a TTY)
+                     Compatibility option; unavailable tracking retains scratch automatically
   -h, --help         Show this help
 
 Projects:
