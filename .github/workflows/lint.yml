@@ -178,19 +178,13 @@ jobs:
   # not to the change that caused it. Running them here closes that
   # gap at review time.
   #
-  # Deliberately NO paths filter: the detectors are repo-global
-  # invariants (any file type can introduce a finding — Python, bash,
-  # libexec scripts, docs for env-var drift) and cheap; a paths filter
-  # is exactly how this coverage gap gets reborn. This workflow's
-  # triggers (pull_request → main, push → main, merge_group) mean a
-  # direct push to main cannot smuggle a finding either.
+  # Keep the workflow and all other invariant detectors global. Only
+  # env-docs and the ReDoS rider use reviewed input-family gates from the
+  # same job; unknown history and scheduled/manual runs retain
+  # both. Documentation references still matter to the miswiring detector.
   #
-  # Pure stdlib Python; no setup beyond checkout + interpreter
-  # (plus a pytest install for the ReDoS census rider at the end).
-  # Wall-clock budget: ~1 min total for all nine; check_miswiring's
-  # single-pass parallel AST index is ~5-10 s on 4-vCPU runners; the
-  # others are ~5-20 s each. timeout-minutes: 10 leaves generous
-  # headroom.
+  # Pure stdlib Python plus pytest for the ReDoS rider. Allow ten minutes
+  # for the global checks; each selected detector reports its own failure.
   repo-invariants:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -205,6 +199,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Select invariant steps from complete changes
+        id: invariant_scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: python3 .github/scripts/repo_invariant_scope.py
+
       # Invocations are verbatim (no flags, pipes, or wrappers) so a
       # failure surfaces each detector's own report unfiltered, and
       # local reproduction is exactly the command shown in the log.
@@ -212,6 +213,7 @@ jobs:
         run: python3 .github/scripts/check_miswiring.py
 
       - name: Run env-var documentation drift check
+        if: ${{ steps.invariant_scope.outputs.env_docs_run != 'false' }}
         run: python3 .github/scripts/check_env_docs.py
 
       - name: Run vocabulary-list guardrail against baseline
@@ -248,12 +250,14 @@ jobs:
       # It is a pytest suite, not a check_*.py detector, so it sits
       # outside the daily-sweep parity set above.
       - name: Install pytest
+        if: ${{ steps.invariant_scope.outputs.redos_run != 'false' }}
         # grep + pip install keeps pyproject.toml the single source
         # of truth for the pytest pin (the ruff idiom above).
         run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run ReDoS idiom census
         id: redos_census
+        if: ${{ steps.invariant_scope.outputs.redos_run != 'false' }}
         env:
           RAPTOR_MAX_SESSION_SECONDS: '120'
         run: |

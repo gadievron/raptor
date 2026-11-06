@@ -182,7 +182,7 @@ def test_ruff_jobs_depend_on_existing_scope_without_new_runner_job():
     assert 'xargs -0 -r ruff check --output-format=github --' in workflow
     assert 'CHANGED_FILES:' not in workflow
     assert "steps.changed.outputs.files" not in workflow
-    assert workflow.count('github.event.merge_group.base_sha') == 2
+    assert workflow.count('github.event.merge_group.base_sha') == 3
 
 
 @pytest.mark.parametrize('text', [
