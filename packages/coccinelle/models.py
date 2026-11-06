@@ -1,6 +1,19 @@
 """Data models for Coccinelle results."""
 
 from dataclasses import dataclass, field
+import math
+
+
+def _coordinate(value) -> int:
+    """Accept legacy integer strings, but never truncate or invent positions."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return 0
+    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        return 0
+    try:
+        return max(0, int(value))
+    except (ValueError, OverflowError):
+        return 0
 
 
 @dataclass
@@ -19,17 +32,19 @@ class SpatchMatch:
     def from_dict(cls, d: dict) -> "SpatchMatch":
         if not d or not isinstance(d, dict):
             return cls(file="", line=0)
+        def text(key: str) -> str:
+            value = d.get(key)
+            return value if isinstance(value, str) else ""
+
+        file = text("file")
         return cls(
-            file=d.get("file", ""),
-            line=int(d.get("line") or 0),
-            column=int(d["col"] if d.get("col") is not None else d.get("column") or 0),
-            line_end=int(d.get("line_end") or 0),
-            column_end=int(
-                d["col_end"] if d.get("col_end") is not None
-                else d.get("column_end") or 0
-            ),
-            rule=d.get("rule", ""),
-            message=d.get("message", ""),
+            file=file if "\x00" not in file else "",
+            line=_coordinate(d.get("line")),
+            column=_coordinate(d["col"] if d.get("col") is not None else d.get("column")),
+            line_end=_coordinate(d.get("line_end")),
+            column_end=_coordinate(d["col_end"] if d.get("col_end") is not None else d.get("column_end")),
+            rule=text("rule"),
+            message=text("message"),
         )
 
     def to_dict(self) -> dict:

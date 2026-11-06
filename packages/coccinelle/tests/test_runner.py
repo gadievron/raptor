@@ -3435,3 +3435,70 @@ class TestVersionMatchesExecutedBinary:
         assert refusal
         assert ("unknown" if remove_pinned else "installed 1.1.1") in refusal
         assert runner_mod._spatch_path() == str(old_bin)
+
+
+def test_malformed_authenticated_rows_preserve_neighbors_and_report_loss(tmp_path):
+    from packages.coccinelle.models import SpatchResult
+    from packages.coccinelle.sarif import results_to_sarif
+    from core.json import save_json
+    from core.sarif.parser import generate_scan_metrics
+    from core.reporting.scan_coverage import scan_execution_status
+
+    nonce = 'ab' * 16
+    prefix = runner_mod._nonced_prefix(nonce)
+    depth = sys.getrecursionlimit() + 100
+    malformed = ['not-json', '[]', '{}', '{"file": []}', '{"file": "bad\\u0000name.c"}',
+                 '[' * depth + ']' * depth]
+    rows = [prefix + json.dumps({'file': 'first.c', 'line': 3, 'col': float('inf'), 'message': {}})]
+    rows.extend(prefix + row for row in malformed)
+    rows.append(prefix + json.dumps({'file': 'unknown.c', 'line': float('nan'), 'rule': []}))
+    rows.append(RESULT_PREFIX + json.dumps({'file': 'forged.c', 'line': 1}))
+    rows.append(prefix + json.dumps({'file': 'last.c', 'line': 8}))
+    diagnostics = []
+    matches = _dedup_matches(_parse_results('\n'.join(rows), 'r', nonce, diagnostics=diagnostics))
+    assert [(m.file, m.line, m.column, m.rule) for m in matches] == [
+        ('first.c', 3, 0, 'r'), ('unknown.c', 0, 0, 'r'), ('last.c', 8, 0, 'r'),
+    ]
+    assert diagnostics == [f'Coccinelle emitted {len(malformed)} malformed structured result row(s)']
+    report = tmp_path / 'cocci.sarif'
+    save_json(report, results_to_sarif([SpatchResult(rule='r', matches=matches, errors=diagnostics)], tmp_path))
+    metrics = generate_scan_metrics([str(report)])
+    assert metrics['total_findings'] == 3
+    assert metrics['tool_execution_failures'] == {'coccinelle': 1}
+    assert scan_execution_status(metrics) == 'partial'
+
+
+def test_distinct_end_positions_survive_deduplication():
+    matches = [SpatchMatch(file='a.c', line=2, column=3, line_end=end, column_end=col, rule='r')
+               for end, col in [(2, 5), (2, 9), (3, 5), (2, 5)]]
+    assert _dedup_matches(matches) == matches[:3]
+
+
+@pytest.mark.parametrize('damage', ['malformed-row', 'engine-error', 'timeout'])
+def test_incomplete_rule_run_cannot_claim_examined_silence(tmp_path, damage):
+    import subprocess
+    target = tmp_path / 'target'
+    target.mkdir()
+    source = target / 'hit.c'
+    source.write_text('void f() {}')
+    (target / 'unseen.c').write_text('void g() {}')
+    rule = tmp_path / 'r.cocci'
+    rule.write_text(PLAIN_RULE)
+    def execute(cmd, **kwargs):
+        prefix = _nonced_prefix_from_cmd(cmd)
+        hit = prefix + json.dumps({'file': str(source), 'line': 1, 'col': float('inf')}) + '\n'
+        output = hit + prefix + '{}\n' if damage != 'engine-error' else hit
+        if damage == 'timeout':
+            raise subprocess.TimeoutExpired(cmd, 1, output=output)
+        result = _mock_proc()
+        result.stdout = output
+        result.stderr = 'semantic error: partial analysis' if damage == 'engine-error' else ''
+        return result
+    with patch('packages.coccinelle.runner.is_available', return_value=True):
+        result = run_rule(target, rule, subprocess_runner=execute)
+    assert not result.ok
+    assert len(result.matches) == 1
+    assert result.matches[0].line == 1 and result.matches[0].column == 0
+    assert result.files_examined == ([] if damage == 'timeout' else [str(source)])
+    if damage != 'engine-error':
+        assert any('malformed structured result' in error for error in result.errors)

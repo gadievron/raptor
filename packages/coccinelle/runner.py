@@ -898,14 +898,15 @@ def run_rule(
             partial_stderr = exc.stderr if isinstance(exc.stderr, str) else (
                 exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
             )
+            errors = [f"Timeout after {timeout}s (partial output captured)"]
             partial_matches = _dedup_matches(
-                _parse_results(partial_stdout, rule_name, nonce=nonce)
-                + _parse_results(partial_stderr, rule_name, nonce=nonce)
+                _parse_results(partial_stdout, rule_name, nonce=nonce, diagnostics=errors)
+                + _parse_results(partial_stderr, rule_name, nonce=nonce, diagnostics=errors)
             )
             return SpatchResult(
                 rule=rule_name, rule_path=str(rule),
                 matches=partial_matches,
-                errors=[f"Timeout after {timeout}s (partial output captured)"],
+                errors=errors,
                 # Wall time actually spent before the kill — leaving
                 # the default 0 misread the SLOWEST invocations as
                 # instantaneous in timing reports.
@@ -924,11 +925,11 @@ def run_rule(
             )
         elapsed = int((time.monotonic() - start) * 1000)
 
-        matches = _dedup_matches(
-            _parse_results(proc.stdout, rule_name, nonce=nonce)
-            + _parse_results(proc.stderr, rule_name, nonce=nonce)
-        )
         errors = _parse_errors(proc.stderr)
+        matches = _dedup_matches(
+            _parse_results(proc.stdout, rule_name, nonce=nonce, diagnostics=errors)
+            + _parse_results(proc.stderr, rule_name, nonce=nonce, diagnostics=errors)
+        )
 
         # Engine failure must never read as verified silence: a
         # nonzero exit whose stderr matches none of the known
@@ -947,10 +948,10 @@ def run_rule(
             )
 
         # files_examined claims verified silence for every listed
-        # file; on a nonzero exit spatch may have died mid-tree, so
-        # nothing beyond the actual matches is verified. Partial
+        # file; errors or output loss can leave a zero-exit run incomplete
+        # too, so nothing beyond actual matches is verified. Partial
         # matches are kept (same stance as the timeout path).
-        if proc.returncode == 0:
+        if proc.returncode == 0 and not errors:
             if file_set:
                 # Verified silence in batch mode is exactly the argv
                 # list: spatch emits NOTHING for a match-free file —
@@ -1364,11 +1365,11 @@ def run_rules_batched(
             return out
 
         elapsed = int((time.monotonic() - start) * 1000)
-        all_matches = _dedup_matches(
-            _parse_results(proc.stdout, "batch", nonce=nonce)
-            + _parse_results(proc.stderr, "batch", nonce=nonce),
-        )
         errors = _parse_errors(proc.stderr)
+        all_matches = _dedup_matches(
+            _parse_results(proc.stdout, "batch", nonce=nonce, diagnostics=errors)
+            + _parse_results(proc.stderr, "batch", nonce=nonce, diagnostics=errors),
+        )
         forged = _warn_forged_markers(
             proc.stdout, proc.stderr,
             nonce=nonce, rule_name="batch", target=target,
@@ -1469,7 +1470,7 @@ def _demux_batch_matches(
 
 
 def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:
-    """Remove duplicate matches (same file+line+col+rule+message),
+    """Remove duplicate matches (same file+full source span+rule+message),
     preserving order.
 
     The ``message`` field MUST be part of the key. Multi-rule cocci
@@ -1479,12 +1480,13 @@ def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:
     landing at line 1 of a one-line function definition that also
     contains a call. Dropping `message` from the key would silently
     coalesce these into a single match, losing the per-message
-    information.
+    information. End positions are equally significant: two match extents
+    starting at the same token must not collapse into an arbitrary span.
     """
     seen: set = set()
     result = []
     for m in matches:
-        key = (m.file, m.line, m.column, m.rule, m.message)
+        key = (m.file, m.line, m.column, m.line_end, m.column_end, m.rule, m.message)
         if key not in seen:
             seen.add(key)
             result.append(m)
@@ -1648,6 +1650,7 @@ for _p in {pos_var}:
 
 def _parse_results(
     output: str, rule_name: str, nonce: str | None = None,
+    *, diagnostics: list[str] | None = None,
 ) -> list[SpatchMatch]:
     """Parse COCCIRESULT lines from spatch stdout or stderr.
 
@@ -1657,17 +1660,21 @@ def _parse_results(
     nonce) planted in hostile source and re-emitted by spatch's diff
     output is NOT parseable evidence (U14-F2). ``nonce=None`` keeps
     the legacy plain-prefix parse for callers that post-process raw
-    spatch output outside a runner invocation (unit tests).
+    spatch output outside a runner invocation (unit tests). When supplied,
+    ``diagnostics`` receives a count-only notice for unusable authenticated
+    rows; raw malformed content is never copied into execution errors.
     """
     prefix = _nonced_prefix(nonce) if nonce else RESULT_PREFIX
     matches = []
+    malformed = 0
     for line in output.splitlines():
         line = line.strip()
         if line.startswith(prefix):
             json_str = line[len(prefix):]
             try:
                 d = json.loads(json_str)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, RecursionError):
+                malformed += 1
                 continue
             # Type-guard: spatch's @script:python harness always emits
             # an object, but a malformed rule (operator-supplied SmPL
@@ -1676,12 +1683,24 @@ def _parse_results(
             # with AttributeError, taking out the WHOLE result-parsing
             # loop for that invocation. Skip non-object payloads.
             if not isinstance(d, dict):
+                malformed += 1
                 continue
             d.setdefault("rule", rule_name)
             try:
-                matches.append(SpatchMatch.from_dict(d))
-            except (TypeError, ValueError, KeyError):
+                match = SpatchMatch.from_dict(d)
+                # No path means no source match. Optional bad coordinates stay
+                # unknown instead of costing this match or neighboring rows.
+                if not match.file:
+                    malformed += 1
+                    continue
+                if not match.rule:
+                    match.rule = rule_name
+                matches.append(match)
+            except (TypeError, ValueError, KeyError, OverflowError):
+                malformed += 1
                 continue
+    if malformed and diagnostics is not None:
+        diagnostics.append(f"Coccinelle emitted {malformed} malformed structured result row(s)")
     return matches
 
 

@@ -525,6 +525,13 @@ findings from the same analyzer run are retained.
 
 ### SARIF Files
 
+Coccinelle output is handled one match at a time. Invalid optional coordinates
+remain unknown without discarding a match with a usable source path, and
+malformed rows do not discard neighboring findings. Unusable result rows
+produce execution diagnostics rather than implying a clean scan. Exact
+duplicates collapse; findings with different end positions remain distinct.
+Execution errors do not credit untouched source files as successfully examined.
+
 Coccinelle and generated Semgrep-stage findings preserve known source spans.
 Unknown start lines remain unlocated; invalid or backwards optional spans
 are omitted rather than turned into a line-one finding. Coccinelle report
