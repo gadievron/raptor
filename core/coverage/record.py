@@ -353,14 +353,22 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
             if not isinstance(error, dict):
                 damaged = True
                 continue
-            file = error.get("path")
-            if file is not None and not isinstance(file, str):
+            level = error.get("level", "error")
+            if (not isinstance(level, str) or level.strip().lower() not in
+                    ("debug", "info", "warn", "warning", "error", "fatal")):
                 damaged = True
-            if not isinstance(file, str) or not file:
+            file = error.get("path")
+            if file is not None and (not isinstance(file, str) or "\x00" in file):
+                damaged = True
+            if not isinstance(file, str) or not file or "\x00" in file:
                 continue
-            reason = error.get("message")
-            reason = reason if isinstance(reason, str) and reason else "error"
-            failed.setdefault((file, reason), {"path": file, "reason": reason})
+            failure_reason = "error"
+            for key in ("message", "long_msg", "short_msg"):
+                text = error.get(key)
+                if isinstance(text, str) and text:
+                    failure_reason = text[:500]
+                    break
+            failed.setdefault((file, failure_reason), {"path": file, "reason": failure_reason})
             kind = error.get("type")
             if isinstance(kind, list) and kind:
                 kind = kind[0]
