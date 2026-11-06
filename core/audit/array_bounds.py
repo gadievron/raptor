@@ -248,7 +248,7 @@ def _solve_access(access):
     profile = BVProfile(access.width, access.signed)
     guards = [PathCondition(text, index) for index, text in enumerate(access.premises + access.domains)]
     if guards:
-        entry = check_path_feasibility(guards, profile=profile)
+        entry = check_path_feasibility(guards, profile=profile, reduce_constraints=False)
         if entry.feasible is not True or entry.unknown or entry.unknown_reasons:
             return entry, None
     variables = {}
@@ -256,7 +256,7 @@ def _solve_access(access):
     outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
                     ge(index, z3.BitVecVal(access.extent, access.width), access.signed))
     result = check_verb_feasibility([(f"{access.index} < 0 OR {access.index} >= {access.extent}", outside)],
-                                    guards, variables, profile=profile)
+                                    guards, variables, profile=profile, reduce_constraints=False)
     return None, result
 
 

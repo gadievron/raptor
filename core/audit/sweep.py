@@ -2881,7 +2881,7 @@ def _run_smt_verb_on_source(
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
-            result = check_negative_bypass(value, limit, profile="int32")
+            result = check_negative_bypass(value, limit, profile="int32", reduce_constraints=False)
         elif verb == "check-null-deref":
             from packages.exploit_feasibility.smt_verbs import check_null_deref
             ptr = _extract_ptr_operand(hypothesis)
@@ -2891,7 +2891,7 @@ def _run_smt_verb_on_source(
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
-            result = check_null_deref(ptr, profile="uint64")
+            result = check_null_deref(ptr, profile="uint64", reduce_constraints=False)
         elif verb == "check-overflow":
             if _lang_has_overflow_safety(file_path):
                 return SweepResult(
@@ -2951,6 +2951,7 @@ def _run_smt_verb_on_source(
                 )
             result = check_overflow(
                 operands, op, profile=operation.profile, guards=premises, kind=operation.kind,
+                reduce_constraints=False,
             )
             from .integer_witness import validate_overflow_result
             result = validate_overflow_result(result, operation, operands, op, integer_abi)
@@ -2978,7 +2979,7 @@ def _run_smt_verb_on_source(
                     rule_id=f"smt:{verb}",
                     details={"summary": gate},
                 )
-            result = check_oob(size, index, profile="uint64", guards=premises)
+            result = check_oob(size, index, profile="uint64", guards=premises, reduce_constraints=False)
         elif verb == "check-overflow-to-oob":
             from packages.exploit_feasibility.smt_verbs import check_overflow_to_oob
             count, elem_size, index = _extract_overflow_to_oob_operands(
@@ -3002,7 +3003,7 @@ def _run_smt_verb_on_source(
                     details={"summary": gate},
                 )
             result = check_overflow_to_oob(
-                count, elem_size, index, profile="uint32", guards=premises,
+                count, elem_size, index, profile="uint32", guards=premises, reduce_constraints=False,
             )
         elif verb == "check-auth-bypass":
             from core.audit.condition_smt import check_auth_bypass
@@ -3187,7 +3188,7 @@ def _run_smt_verb_on_source(
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
-            result = validate_path(conditions)
+            result = validate_path(conditions, reduce_constraints=False)
         else:
             return SweepResult(
                 tool="smt", file_path=file_path,
@@ -3421,7 +3422,7 @@ def _premise_gate(premises: list[str], profile: str) -> str | None:
         )
     try:
         from packages.exploit_feasibility.smt_path import validate_path
-        premise_check = validate_path(premises, profile=profile)
+        premise_check = validate_path(premises, profile=profile, reduce_constraints=False)
     except Exception as exc:  # noqa: BLE001 — degrade, never crash the sweep
         return f"premise encoding failed: {exc}"
     # Dropping a required branch predicate would weaken the reaching path

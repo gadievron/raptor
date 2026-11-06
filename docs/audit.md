@@ -1250,3 +1250,13 @@ Unencoded inputs, undecided redundancy checks and failed serialization
 prevent completeness. Errors in the separate reduction solver retain the
 primary SAT verdict and model while leaving the summary unavailable and
 incomplete.
+
+Audit numeric queries use `reduce_constraints=False`: the complete parsed
+obligation and background axioms are still asserted, but individual tautology
+checks and optional post-SAT constraint reduction are skipped. This keeps
+optional diagnostics out of the worker deadline used for the verdict and
+witness. `wp_complete=False` with an absent predicate and empty conjuncts
+means no summary was requested, independently of the primary verdict. Generic
+SMT library callers retain constraint reduction by default. Necessary entry
+feasibility checks and dual-profile contradiction probes still run; this mode
+is not an overall wall-clock guarantee.
