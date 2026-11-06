@@ -3539,7 +3539,9 @@ def test_aliasing_warning_cannot_supply_evidence(rule):
     "return (int*)&value;",
     "if (0) return *(int*)&value; return 0;",
     "int *p=(int*)&value; return *p;",
-], ids=["address-only", "unreachable-access", "indirect-access"])
+    "int *p=(int*)&value; value=1; return *p;",
+    "int *p=(int*)&value; value=1; return 0;",
+], ids=["address-only", "unreachable-access", "indirect-access", "access-after-store", "unused-after-store"])
 def test_aliasing_warning_needs_an_independent_access_proof(tmp_path, sandbox_spy, body):
     target = tmp_path / "repo"
     target.mkdir()
