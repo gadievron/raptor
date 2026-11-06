@@ -72,6 +72,7 @@ import ast
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -195,22 +196,16 @@ def _open_read_mode(node: ast.Call) -> bool:
     mode)`` carries it at index 1, ``path.open(mode)`` at index 0.
     """
     mode_idx = 0 if isinstance(node.func, ast.Attribute) else 1
-    mode = None
-    if (len(node.args) > mode_idx
-            and isinstance(node.args[mode_idx], ast.Constant)):
-        mode = node.args[mode_idx].value
+    mode = node.args[mode_idx] if len(node.args) > mode_idx else None
     for kw in node.keywords:
-        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-            mode = kw.value.value
-    if mode is None:
-        # No literal mode: the default is read; a dynamic mode is
-        # ambiguous — treat as read (precision cost adjudicated via
-        # baseline, never a silent pass for a hostile-read hole).
-        return not (len(node.args) > mode_idx or
-                    any(kw.arg == "mode" for kw in node.keywords))
-    if not isinstance(mode, str):
+        if kw.arg == "mode":
+            mode = kw.value
+    # A symbolic mode may permit reads. Keep it visible for adjudication.
+    if mode is None or not isinstance(mode, ast.Constant):
+        return True
+    if not isinstance(mode.value, str):
         return False
-    return not any(c in mode for c in "wax")
+    return not any(c in mode.value for c in "wax")
 
 
 #: Inline adjudication marker (shared with the safe-read closure
@@ -230,6 +225,23 @@ class _Visitor(ast.NodeVisitor):
         self.raw: list[tuple[int, str, str]] = []      # lineno, artifact, prim
         self.hardened: list[tuple[int, str, str]] = []
         self._name_artifacts: dict[str, str] = {}
+        self._visitor_methods = {}
+
+    def visit(self, node: ast.AST) -> None:
+        kind = type(node)
+        method = self._visitor_methods.get(kind)
+        if method is None:
+            method = getattr(type(self), "visit_" + kind.__name__, type(self).generic_visit)
+            self._visitor_methods[kind] = method
+        method(self, node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # Parents inspect identifiers/literals through _literals_in; their
+        # context/scalar fields cannot contain another read call.
+        pass
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        pass
 
     def _adjudicated(self, node: ast.Call) -> bool:
         end = getattr(node, "end_lineno", None) or node.lineno
@@ -288,8 +300,12 @@ class _Visitor(ast.NodeVisitor):
                     self.generic_visit(arg)
                 return
             prim: str | None = None
-            if target == "open" and _open_read_mode(node):
-                prim = "open"
+            if target == "open":
+                fd_open = (isinstance(node.func, ast.Attribute)
+                           and isinstance(node.func.value, ast.Name)
+                           and node.func.value.id == "os")
+                if not fd_open and _open_read_mode(node):
+                    prim = "open"
             elif (target in RAW_ATTR_CALLS
                     and isinstance(node.func, ast.Attribute)):
                 if target in ("load", "loads"):
@@ -308,9 +324,6 @@ class _Visitor(ast.NodeVisitor):
                     prim = "readlines"
                 else:
                     prim = target
-            elif target == "open" and isinstance(node.func, ast.Attribute):
-                if _open_read_mode(node):
-                    prim = "open"
             if prim is not None and not self._adjudicated(node):
                 for art in sorted(self._artifacts_for_call(node)):
                     self.raw.append((node.lineno, art, prim))
@@ -330,7 +343,9 @@ def census_file(rel: str, source: str) -> _Visitor | None:
         tree = ast.parse(source)
     except SyntaxError:
         return None
-    v = _Visitor(rel, source.splitlines())
+    # AST locations count physical CR/LF lines, not Unicode string separators.
+    lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    v = _Visitor(rel, lines)
     v.visit(tree)
     return v
 
@@ -339,6 +354,8 @@ def run_census(root: Path) -> tuple[list[dict], list[dict]]:
     """(raw_findings, hardened_readers) over the runtime universe."""
     raw: list[dict] = []
     hardened: list[dict] = []
+    targets = HARDENED_CALLS | RAW_ATTR_CALLS | {"open"}
+    target_pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(targets))) + r")\b")
     for path in runtime_file_universe(root):
         rel = path.relative_to(root).as_posix()
         if rel in HELPER_HOMES:
@@ -346,6 +363,11 @@ def run_census(root: Path) -> tuple[list[dict], list[dict]]:
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            continue
+        # Python normalises identifiers with NFKC. Only skip files that
+        # cannot spell a recognised callee; filenames still come from AST
+        # literals so escaped strings and f-strings retain their coverage.
+        if not target_pattern.search(unicodedata.normalize("NFKC", source)):
             continue
         v = census_file(rel, source)
         if v is None:

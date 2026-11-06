@@ -278,3 +278,54 @@ class TestShippedTree:
             (Path(__file__).resolve().parents[1] / "scripts"
              / "run_dir_reads_baseline.json").read_text())
         assert {finding_key(f) for f in raw} == set(shipped["keys"])
+
+
+@pytest.mark.parametrize("call", [
+    "open('findings.json', mode)",
+    "open('findings.json', mode=mode)",
+    "Path('findings.json').open(mode)",
+    "Path('findings.json').open(mode=mode)",
+])
+def test_symbolic_open_mode_remains_visible(tmp_path, call):
+    raw = _raw(tmp_path, {"core/reader.py": call + "\n"})
+    assert [(f["artifact"], f["primitive"]) for f in raw] == [("findings.json", "open")]
+
+
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_markers_use_physical_source_lines(separator, newline):
+    source = newline.join([
+        f"label = 'a{separator}# raw-open: unrelated string'",
+        "open('findings.json')",
+        "open('report.json')  # raw-open: deliberate fixture",
+    ])
+    visitor = census_module.census_file("core/reader.py", source)
+    assert visitor.raw == [(2, "findings.json", "open")]
+
+
+@pytest.mark.parametrize("call, primitive", [
+    ("ｏｐｅｎ('findings.json')", "open"),
+    ("Path('findings\\x2ejson').read_text()", "read_text"),
+    ("(open)('findings.json')", "open"),
+    ("[Path(f'{p}/findings.json').read_text() for p in paths]", "read_text"),
+    ("(lambda: open('findings.json'))()", "open"),
+])
+def test_prescreen_retains_supported_expression_shapes(tmp_path, call, primitive):
+    raw = _raw(tmp_path, {"core/reader.py": call + "\n"})
+    assert [(f["artifact"], f["primitive"]) for f in raw] == [("findings.json", primitive)]
+
+
+def test_unicode_hardened_callee_remains_visible(tmp_path):
+    raw, hardened = run_census(_plant(tmp_path, {
+        "core/reader.py": "ｌｏａｄ＿ｊｓｏｎ('findings.json')\n",
+    }))
+    assert raw == []
+    assert [(f["artifact"], f["helper"]) for f in hardened] == [("findings.json", "load_json")]
+
+
+def test_fd_exclusion_still_visits_nested_reads(tmp_path):
+    raw = _raw(tmp_path, {"core/reader.py": (
+        "os.open('report.json', flags)\n"
+        "os.open(Path('findings.json').read_text(), flags)\n"
+    )})
+    assert [(f["artifact"], f["primitive"]) for f in raw] == [("findings.json", "read_text")]

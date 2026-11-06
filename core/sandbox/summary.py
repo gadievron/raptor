@@ -228,7 +228,8 @@ def _get_evidence_handle_locked(run_dir: Path):
     if _evidence_open_failed and now < _evidence_next_open_attempt:
         return None
     try:
-        _evidence_handle = _evidence.EvidenceFile.open(run_dir, DENIALS_FILE)
+        _evidence_handle = _evidence.EvidenceFile.open(  # raw-open: EvidenceFile opens O_WRONLY | O_APPEND, not a reader
+            run_dir, DENIALS_FILE)
     except OSError:
         first_failure = not _evidence_open_failed
         _evidence_open_failed = True
@@ -806,7 +807,7 @@ def record_floor_refusal(run_dir: Path, *, floor: str, achievable: str,
                 # transient append through the same validated .audit
                 # channel; inode verification is the held-handle
                 # path's concern, skip it here.
-                transient = _evidence.EvidenceFile.open(
+                transient = _evidence.EvidenceFile.open(  # raw-open: EvidenceFile opens O_WRONLY | O_APPEND, not a reader
                     Path(run_dir), DENIALS_FILE)
                 try:
                     if not transient.write_line(line):
