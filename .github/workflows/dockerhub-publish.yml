@@ -47,6 +47,8 @@ on:
       - '.github/scripts/check_playwright_source.py'
       - '.github/scripts/check_node_release.py'
       - '.github/scripts/write_sbom_checksums.py'
+      - '.github/scripts/check_uv_provenance.py'
+      - 'packages/sca/sbom_inventory/uv_provenance.py'
       - '.github/actions/enable-userns/**'
   schedule:
     # Refresh mutable base images and apt packages, even without source changes.
@@ -317,6 +319,21 @@ jobs:
             python3 .github/scripts/report_sbom_licenses.py --audit-dir /audit \
               --image-digest "$(cat "${RUNNER_TEMP}/container-sbom/image-digest.txt")" --emit-annotations --audit-status "$AUDIT_OUTCOME"
 
+      - name: Bind installed uv to its publisher image
+        id: uv_binding
+        if: steps.license_report.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          uv_container=$(sudo buildah from localhost/raptor-publish:checked)
+          trap 'sudo buildah rm "$uv_container"' EXIT
+          sudo buildah run --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            "$uv_container" -- env PYTHONDONTWRITEBYTECODE=1 \
+            python3 .github/scripts/check_uv_provenance.py \
+              --audit-dir /audit --out /audit/uv-provenance
+
       - name: Make audit artifacts readable
         if: always()
         run: |
@@ -338,6 +355,35 @@ jobs:
             echo "::warning::Container license audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact."
             echo "## Container licenses and notices" >> "$GITHUB_STEP_SUMMARY"
             echo "Audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify and retain uv publisher attestation
+        id: uv_attestation
+        if: steps.uv_binding.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/container-sbom/uv-provenance"
+          # The collector fetched the public bundle by the exact index digest.
+          # Verify the retained bytes without exposing the job token.
+          gh attestation verify index.json --repo astral-sh/uv \
+            --signer-workflow astral-sh/uv/.github/workflows/build-docker.yml \
+            --deny-self-hosted-runners --bundle uv-publisher-attestation.jsonl --format json \
+            > signature-verification.json
+
+      - name: Report uv provenance status
+        if: always() && steps.export_image.outcome == 'success'
+        env:
+          UV_ATTESTATION_OUTCOME: ${{ steps.uv_attestation.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$UV_ATTESTATION_OUTCOME" == 'success' ]]; then
+            echo '### uv publisher provenance' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Installed uv bytes match a digest-checked layer member of an image authenticated against Astral’s build-docker.yml workflow.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'The download includes the binary binding, original OCI documents, signed bundle and verifier result. Compiled dependency membership remains a separate check.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::warning::uv publisher provenance unavailable; inspect uv-provenance in the container-sbom download.'
+            echo 'uv publisher provenance unavailable. No authenticated origin is established by this run.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Hash retained container evidence

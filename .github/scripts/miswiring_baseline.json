@@ -580,6 +580,12 @@
   "artifacts:write_only_artifact::upgrade-verification.md": {
    "note": "Deliberate operator-facing output: sbom verify-plan writes a sanitised Markdown report for humans and CI artifact viewers. Production comparisons use structured plan and scan inputs rather than reparsing rendered prose."
   },
+  "artifacts:write_only_artifact::uv-container-binding.json": {
+   "note": "Final operator-facing byte-matching receipt exported in container-sbom alongside original OCI documents and the publisher signature bundle/verifier result. External reviewers consume it; no runtime reader is intended. Its status explicitly requires separate signature verification and does not claim compiled dependency membership."
+  },
+  "artifacts:write_only_artifact::uv-publisher-attestation.jsonl": {
+   "note": "False positive: uv_provenance.prepare writes the public publisher bundle, then the Verify and retain uv publisher attestation step in dockerhub-publish.yml reads it through gh attestation verify --bundle uv-publisher-attestation.jsonl. The Python artifact indexer does not connect this external CLI reader. Retained in container-sbom for offline verification."
+  },
   "artifacts:write_only_artifact::validate-against.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },

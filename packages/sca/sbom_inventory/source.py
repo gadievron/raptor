@@ -99,10 +99,10 @@ class Source:
             raise ValueError("evidence member exceeds read budget")
         return raw
 
-    def read_json(self, name="", *, projectors=None, observe=None):
+    def read_json(self, name="", *, projectors=None, observe=None, max_bytes=MAX_DOCUMENT_BYTES):
         try:
-            with self.open(name) as stream:
-                return project_object(stream, max_bytes=MAX_DOCUMENT_BYTES,
+            with self.open(name, max_bytes) as stream:
+                return project_object(stream, max_bytes=max_bytes,
                                       projectors=projectors, observe=observe, max_depth=64)
         except (OSError, ValueError):
             raise
