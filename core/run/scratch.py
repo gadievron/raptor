@@ -255,6 +255,7 @@ def scratch_dir(
     dir: str | Path | None = None,
     env: MutableMapping[str, str] | None = None,
     keep: bool = False,
+    keepalive: bool = False,
 ) -> Iterator[Path]:
     """Create a scratch directory, yield it as a :class:`Path`, and
     best-effort-remove it on exit.
@@ -271,6 +272,8 @@ def scratch_dir(
             cleanup collects it. The mapping is the caller's (usually a
             ``get_safe_env()`` copy) — nothing is restored on exit.
         keep: skip cleanup; the caller takes ownership of deletion.
+        keepalive: also protect an explicitly supplied parent. System-tmp
+            scratch is always protected, including when this is False.
 
     The directory is created on ``__enter__`` — if creation raises,
     nothing is cleaned up; if the body raises, cleanup still runs
@@ -296,10 +299,12 @@ def scratch_dir(
     path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
     ready = False
     failed = False
+    protected = parent is None or keepalive
     try:
-        if parent is None:
+        if protected:
             # Protect the allocation even if keepalive/advisory setup fails.
             keepalive_register(path)
+        if parent is None:
             _inode_ceiling_advisory(path)
         if env is not None:
             env["TMPDIR"] = str(path)
@@ -310,7 +315,7 @@ def scratch_dir(
         raise
     finally:
         interrupted = None
-        if parent is None:
+        if protected:
             # Independent teardown: a failed unregister must not strand
             # the tree or replace an exception from setup/the body.
             try:
