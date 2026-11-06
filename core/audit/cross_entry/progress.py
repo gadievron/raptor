@@ -49,6 +49,10 @@ class WorkQueue:
                 namespace TEXT,term TEXT,PRIMARY KEY(namespace,term));
             CREATE TABLE IF NOT EXISTS report_requests (
                 namespace TEXT,key TEXT,request TEXT,PRIMARY KEY(namespace,key));
+            CREATE INDEX IF NOT EXISTS queue_obsolete_views ON views(namespace,extra_file)
+                WHERE status='obsolete';
+            CREATE INDEX IF NOT EXISTS queue_nonnull_turns ON views(namespace,last_turn)
+                WHERE last_turn IS NOT NULL;
         """)
 
     def close(self):
@@ -96,7 +100,9 @@ class WorkQueue:
                               (self.namespace,)).fetchone()
         if row is None:
             return None
-        turn = self.db.execute("SELECT coalesce(max(last_turn),0)+1 FROM views WHERE namespace=?",(self.namespace,)).fetchone()[0]
+        # MAX ignores NULLs. Make that predicate explicit so only this query
+        # uses the partial turn index; pending-view selection keeps its plan.
+        turn = self.db.execute("SELECT coalesce(max(last_turn),0)+1 FROM views WHERE namespace=? AND last_turn IS NOT NULL",(self.namespace,)).fetchone()[0]
         self.db.execute("UPDATE views SET last_turn=? WHERE namespace=? AND id=?",(turn,self.namespace,row["id"]))
         self.db.commit()
         return dict(row)
