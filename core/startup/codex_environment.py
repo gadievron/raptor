@@ -250,6 +250,12 @@ def publish(session_id, pid):
                     else:
                         if previous["environment"]["RAPTOR_SESSION_PID"] != str(pid):
                             raise CodexEnvironmentError("another live process owns this session")
+                if "RAPTOR_LAUNCH_TARGET" not in os.environ:
+                    # A targetless resume may have a new owner/credential.
+                    # Preserve the original base for relative targets, but
+                    # keep this launch's registry and new generation fields.
+                    context["caller_dir"] = prior["caller_dir"]
+                    context["launch_target"] = prior["launch_target"]
             except FileNotFoundError:
                 pass
             content = dumps_canonical(context)

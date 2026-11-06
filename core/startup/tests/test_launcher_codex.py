@@ -106,6 +106,16 @@ def test_codex_model_resume_and_passthrough(launch):
     assert payload['args']==['resume','--last','--model','test-model','--sandbox','read-only']
 
 
+@pytest.mark.parametrize('resume_flag', ['-c', '--continue'])
+def test_targetless_resume_does_not_publish_an_empty_target(launch, resume_flag):
+    result, payload = launch(['codex'], ['--codex', resume_flag], {
+        'RAPTOR_LAUNCH_TARGET': '/stale/inherited/target',
+    })
+    assert result.returncode == 0, result.stderr
+    assert payload['args'] == ['resume', '--last']
+    assert payload['target'] is None
+
+
 def test_codex_target_is_data_and_flags_after_separator_are_verbatim(launch):
     result,payload=launch(['codex'],['--codex','a target; $(false)','--','--config','model_reasoning_effort="low"'])
     assert result.returncode==0,result.stderr
