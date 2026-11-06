@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import core.sandbox.proxy as proxy_mod
+from core.testing.proxy_scope import isolated_proxy_scope
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RAPTOR_SKIP_PROXY_TESTS") == "1",
@@ -29,11 +30,8 @@ _HOST = "portal.example"
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 @pytest.fixture

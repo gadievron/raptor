@@ -41,8 +41,8 @@ class TestProxyEventsTargetPollution(unittest.TestCase):
             self.skipTest("User namespaces not available")
         if not shutil.which("curl"):
             self.skipTest("curl not installed")
-        from core.sandbox.proxy import _reset_for_tests
-        _reset_for_tests()
+        from core.testing.proxy_scope import isolated_proxy_scope
+        self.enterContext(isolated_proxy_scope())
         # Hermetic against leaked proxy env from earlier suites: a
         # dead 127.0.0.1 upstream pointer makes the proxy tunnel
         # instead of screening locally, and denied_host / the local
@@ -58,9 +58,6 @@ class TestProxyEventsTargetPollution(unittest.TestCase):
                     self.addCleanup(os.environ.__setitem__, name, value)
 
 
-    def tearDown(self):
-        from core.sandbox.proxy import _reset_for_tests
-        _reset_for_tests()
 
     @staticmethod
     def _attempt_diag(r) -> str:

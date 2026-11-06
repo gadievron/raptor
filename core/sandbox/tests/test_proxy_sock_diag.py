@@ -45,6 +45,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.testing.proxy_scope import isolated_proxy_scope
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -396,11 +397,8 @@ class TestForcedMissChurnVerdicts:
 
     @pytest.fixture
     def reset_proxy(self):
-        proxy_mod._reset_for_tests()
-        try:
+        with isolated_proxy_scope():
             yield
-        finally:
-            proxy_mod._reset_for_tests()
 
     def test_same_uid_peer_served_under_forced_miss(
             self, reset_proxy, monkeypatch):
@@ -459,11 +457,8 @@ class TestGateEndToEnd:
 
     @pytest.fixture
     def reset_proxy(self):
-        proxy_mod._reset_for_tests()
-        try:
+        with isolated_proxy_scope():
             yield
-        finally:
-            proxy_mod._reset_for_tests()
 
     def test_wrong_uid_from_sock_diag_is_dropped(self, reset_proxy,
                                                  monkeypatch):

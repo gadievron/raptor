@@ -17,15 +17,13 @@ from core.sandbox.proxy import (
     _PROXY_READ_TIMEOUT_S,
     _upstream_handshake_timeout,
 )
+from core.testing.proxy_scope import isolated_proxy_scope
 
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 def test_default_is_per_io_budget(monkeypatch):

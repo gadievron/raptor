@@ -66,6 +66,7 @@ from core.sandbox._request_head import (
 )
 
 from core.testing.sockets import socket_worker_setup
+from core.testing.proxy_scope import isolated_proxy_scope
 
 # ---------------------------------------------------------------------------
 # corpus: normal + hostile request lines (raw bytes, CRLF already
@@ -145,11 +146,8 @@ def fresh_jail():
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 def _read_status(sock: socket.socket, timeout: float) -> "int | None":

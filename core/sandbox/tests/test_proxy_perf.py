@@ -25,6 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.testing.proxy_scope import isolated_proxy_scope
 
 
 @pytest.fixture(autouse=True)
@@ -37,11 +38,8 @@ def _confined_parser_floor(confined_parser_floor: None) -> None:
 
 @pytest.fixture
 def reset_proxy():
-    proxy_mod._reset_for_tests()
-    try:
+    with isolated_proxy_scope():
         yield
-    finally:
-        proxy_mod._reset_for_tests()
 
 
 # ---------------------------------------------------------------------------
