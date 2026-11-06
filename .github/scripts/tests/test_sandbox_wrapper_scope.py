@@ -454,3 +454,83 @@ def test_non_automated_bindings_do_not_become_trigger_inputs(tree, kind, changed
         registry['native'][0]['platforms']['darwin'].update(manual=True, reason='owned manual acceptance')
     assert registry_errors(root, registry) == []
     assert scope.select(root, registry, [changed]) == {'include': []}
+
+
+@pytest.mark.parametrize('case, expected, full', [
+    ('docs-only', set(), False),
+    ('one-wrapper', {'one'}, False),
+    ('two-wrappers', {'one', 'two'}, False),
+    ('missing-base', {'one', 'two'}, True),
+    ('deleted-module', {'one', 'two'}, True),
+    ('shared-harness', {'one', 'two'}, True),
+], ids=['docs-only', 'one-wrapper', 'two-wrappers', 'missing-base', 'deleted-module', 'shared-harness'])
+def test_merge_queue_scopes_complete_git_group(tree, monkeypatch, case, expected, full):
+    from core.testing.gitrepo import git_run
+
+    root, _ = tree
+    git_run(root, 'init', '-b', 'main')
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'group base')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    docs = root / 'docs/guide.md'
+    docs.parent.mkdir()
+    docs.write_text('queued documentation change\n')
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'first queued change')
+    paths = []
+    if case in {'one-wrapper', 'two-wrappers'}:
+        paths.append('core/one/wrapper.py')
+    if case == 'two-wrappers':
+        paths.append('core/two/wrapper.py')
+    if case == 'shared-harness':
+        paths.append('pytest.ini')
+    for rel in paths:
+        path = root / rel
+        path.write_text((path.read_text() if path.exists() else '') + '# queued change\n')
+        git_run(root, 'add', '-A')
+        git_run(root, 'commit', '-qm', 'additional queued change')
+    if case == 'deleted-module':
+        (root / 'core/shared/helper.py').unlink()
+        git_run(root, 'add', '-A')
+        git_run(root, 'commit', '-qm', 'queued removal')
+    monkeypatch.chdir(root)
+    monkeypatch.setenv('EVENT', 'merge_group')
+    monkeypatch.setenv('BASE_SHA', '' if case == 'missing-base' else base)
+    output = root / 'scope-output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    scope.main()
+    rows = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    matrix = json.loads(rows['matrix'])['include']
+    assert rows['run'] == str(bool(expected)).lower()
+    assert {cell['platform'] for cell in matrix} == ({'linux', 'darwin'} if expected else set())
+    for cell in matrix:
+        assert set(cell['families']) == expected
+        assert len(cell['contracts']) == len(expected)
+        assert cell['full'] is full
+
+
+@pytest.mark.parametrize('event', ['schedule', 'workflow_dispatch'])
+def test_scheduled_and_manual_runs_ignore_diff_base(tree, monkeypatch, event):
+    root, _ = tree
+    monkeypatch.chdir(root)
+    monkeypatch.setenv('EVENT', event)
+    monkeypatch.setenv('BASE_SHA', 'a' * 40)
+    monkeypatch.setattr(scope, 'changed_paths', lambda *args: pytest.fail('full run requested Git scoping'))
+    output = root / 'scope-output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    scope.main()
+    rows = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    matrix = json.loads(rows['matrix'])['include']
+    assert len(matrix) == 2
+    assert all(cell['full'] and set(cell['families']) == {'one', 'two'} for cell in matrix)
+
+
+def test_wrapper_workflow_passes_merge_group_base_to_scope():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / '.github/workflows/sandbox-wrappers.yml').read_text())
+    step = next(step for step in workflow['jobs']['scope']['steps'] if step.get('id') == 'scope')
+    assert step['env']['BASE_SHA'] == (
+        '${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}')
+    assert step['env']['EVENT'] == '${{ github.event_name }}'

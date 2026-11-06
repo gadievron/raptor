@@ -37,7 +37,7 @@ jobs:
         id: scope
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: python3 .github/scripts/sandbox_wrapper_scope.py
 
   acceptance:

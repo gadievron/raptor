@@ -338,7 +338,7 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
     full = changed is None or any(p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS) for p in changed)
     if changed is None:
         if not explanations:
-            explain('Full coverage: scheduled/manual/merge-queue run or unavailable change history.')
+            explain('Full coverage: scheduled/manual run or unavailable change history.')
     else:
         triggers = sorted(p for p in changed if p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS))
         if triggers:
@@ -411,7 +411,7 @@ def main() -> None:
     if errors:
         raise SystemExit('\n'.join(errors))
     event = os.environ.get('EVENT', '')
-    changes = None if event in {'schedule', 'workflow_dispatch', 'merge_group'} else changed_paths(repo, os.environ.get('BASE_SHA', ''))
+    changes = None if event in {'schedule', 'workflow_dispatch'} else changed_paths(repo, os.environ.get('BASE_SHA', ''))
     explanations = []
     matrix = select(repo, registry, changes, explanations=explanations)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
