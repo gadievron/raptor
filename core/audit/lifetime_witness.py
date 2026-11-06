@@ -679,20 +679,23 @@ def _lifetime_macro_table(
         _join_continuations,
         _parse_define,
         _strip_comments,
-        resolve_include_closure,
+        _iter_include_closure,
     )
 
-    files, unresolved = resolve_include_closure(target_path, rel_file)
+    unresolved: list[str] = []
     defs: dict[str, list[MacroDef]] = {}
     poisoned: set[str] = set()
     scanned = 0
-    from core.source import read_text_capped
+    from core.source import DEFAULT_MAX_SOURCE_CHARS, read_text_capped
 
-    for path in files:
-        got = read_text_capped(path)
-        if got is None:
-            continue
-        text = got[0]
+    for path, text in _iter_include_closure(target_path, rel_file, unresolved=unresolved):
+        if len(text) > DEFAULT_MAX_SOURCE_CHARS:
+            # The closure budget is larger than this consumer's legacy cap.
+            # Keep its capped prefix shaping and unreadability behaviour.
+            got = read_text_capped(path)
+            if got is None:
+                continue
+            text = got[0]
         scanned += 1
         for line in _join_continuations(_strip_comments(text)):
             dm = _DIRECTIVE_RE.match(line)
