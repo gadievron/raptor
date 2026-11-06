@@ -148,13 +148,14 @@ def _reserve_unavailable_ollama():
     another process cannot claim the port between discovery and use.
     """
     global _HERMETIC_OLLAMA_HOST
+    previous = _HERMETIC_OLLAMA_HOST
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
         reserved.bind(("127.0.0.1", 0))
-        _HERMETIC_OLLAMA_HOST = f"http://127.0.0.1:{reserved.getsockname()[1]}"
         try:
+            _HERMETIC_OLLAMA_HOST = f"http://127.0.0.1:{reserved.getsockname()[1]}"
             yield
         finally:
-            _HERMETIC_OLLAMA_HOST = None
+            _HERMETIC_OLLAMA_HOST = previous
 
 
 @contextlib.contextmanager
