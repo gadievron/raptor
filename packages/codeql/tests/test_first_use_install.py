@@ -321,7 +321,7 @@ def test_failed_version_output_is_not_recorded(tmp_path, monkeypatch):
     command.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('CODEQL_CLI', raising=False)
-    monkeypatch.setattr('shutil.which', lambda name: str(command) if name == 'codeql' else None)
+    monkeypatch.setattr('shutil.which', lambda name: str(command) if name in ('codeql', str(command)) else None)
     assert 'codeql' not in collect_toolchain()
     assert tool_version('codeql') is None
     assert codeql.version() is None

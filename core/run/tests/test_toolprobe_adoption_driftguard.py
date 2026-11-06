@@ -34,6 +34,7 @@ _PROBE_ADOPTERS = [
     # run's provenance manifest — was an exec-the-bare-name drift in
     # the chokepoint's OWN package.
     "core/run/provenance.py",
+    "packages/codeql/version_probe.py",
 ]
 
 # A version-probe re-growth: subprocess/run_trusted invoked with a

@@ -504,55 +504,9 @@ class DatabaseManager:
         return None
 
     def get_codeql_version(self) -> str | None:
-        r"""Get CodeQL version.
-
-        Returns the dotted-version number (e.g. ``"2.16.4"``) extracted
-        from `codeql version` output, or None on failure. Pre-fix the
-        function returned the WHOLE first line, which on modern CodeQL
-        looks like::
-
-            CodeQL command-line toolchain release 2.16.4.
-
-        Callers comparing against version strings (semver, regex
-        `\d+\.\d+`) then matched against the trailing prose, not the
-        version number, and either crashed or silently mismatched.
-        """
-        try:
-            # `env=RaptorConfig.get_safe_env()` so the version probe
-            # doesn't inherit the parent's env. Pre-fix the bare
-            # `subprocess.run` carried LD_PRELOAD / LD_LIBRARY_PATH /
-            # PYTHONPATH / etc. through to the codeql binary —
-            # codeql is a JVM launcher that respects JAVA_TOOL_OPTIONS
-            # and other JVM env vars (which can attach a Java agent
-            # at startup, equivalent to LD_PRELOAD for Java). Same
-            # env-hygiene posture as the database-creation Popen
-            # below.
-            result = subprocess.run(
-                temporary_command([self.codeql_cli, "version"]),  # type: ignore[list-item]
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-                env=RaptorConfig.get_safe_env(),
-            )
-            if result.returncode == 0:
-                # Parse first dotted-version-shaped token from stdout.
-                # `re.ASCII` so Unicode digits don't sneak in (see
-                # packages/exploit_feasibility/profiles.py for the same
-                # rationale applied to glibc parsing).
-                # (?<!\d) pins the scan to digit-run starts (identical first
-                # match; unpinned, a hostile digit run is re-read from
-                # every offset — quadratic).
-                m = re.search(r'(?<!\d)\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
-                if m:
-                    return m.group(0)
-                # Fallback for unexpected output: return first line so
-                # operators still see SOMETHING in logs/banners.
-                return result.stdout.strip().split('\n')[0] or None
-            return None
-        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
-            logger.warning("Failed to get CodeQL version: %s", e)
-            return None
+        """Fresh CodeQL version, using the same parser as query compatibility."""
+        from .version_probe import read_codeql_version
+        return read_codeql_version(self.codeql_cli)
 
     def supports_buildless(self, language: str) -> tuple:
         """Probe whether the CLI supports ``--build-mode=none`` for *language*.

@@ -22,7 +22,7 @@ def _bare_runner(version="2.26.3"):
     runner = QueryRunner.__new__(QueryRunner)  # bypass __init__
     runner.codeql_cli = "codeql"
     if version is not None:
-        runner._version_probe = version
+        runner._codeql_version = lambda: version
     return runner
 
 
@@ -63,8 +63,7 @@ class TestActiveThreatModels:
         from core.config import RaptorConfig
         monkeypatch.setattr(RaptorConfig, "CODEQL_THREAT_MODELS_ENABLED", True)
         monkeypatch.setattr(RaptorConfig, "CODEQL_THREAT_MODELS", ("local",))
-        runner = _bare_runner(version=None)
-        runner._version_probe = ""  # failed probe, cached
+        runner = _bare_runner(version="")
         assert runner.active_threat_models() == ()
 
     def test_unparseable_version_skips_flag(self, monkeypatch):
@@ -73,9 +72,9 @@ class TestActiveThreatModels:
         monkeypatch.setattr(RaptorConfig, "CODEQL_THREAT_MODELS", ("local",))
         assert _bare_runner(version="nightly").active_threat_models() == ()
 
-    def test_config_reads_are_fresh_after_gate_cached(self, monkeypatch):
+    def test_config_reads_are_fresh_after_version_cached(self, monkeypatch):
         # Per-run CLI overrides flip the config AFTER a runner may
-        # already exist; only the version gate is cached.
+        # already exist; only the version fact is cached.
         from core.config import RaptorConfig
         monkeypatch.setattr(RaptorConfig, "CODEQL_THREAT_MODELS_ENABLED", True)
         monkeypatch.setattr(RaptorConfig, "CODEQL_THREAT_MODELS", ("local",))
@@ -99,21 +98,29 @@ class TestActiveThreatModels:
 
 
 class TestVersionProbe:
-    def test_probe_parses_dotted_version(self, monkeypatch):
+    def test_probe_parses_dotted_version(self, monkeypatch, tmp_path):
         runner = _bare_runner(version=None)
+        binary = tmp_path / "codeql"
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+        runner.codeql_cli = str(binary)
         proc = MagicMock(returncode=0,
-                         stdout="CodeQL command-line toolchain release 2.20.1.")
+                         stdout="CodeQL command-line toolchain release 2.20.1.", stderr="")
         with patch("packages.codeql.query_runner.subprocess.run",
                    return_value=proc):
             assert runner._codeql_version() == "2.20.1"
 
-    def test_probe_failure_cached_as_none(self, monkeypatch):
+    def test_probe_failure_remains_retryable(self, monkeypatch, tmp_path):
         runner = _bare_runner(version=None)
+        binary = tmp_path / "codeql"
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+        runner.codeql_cli = str(binary)
         with patch("packages.codeql.query_runner.subprocess.run",
                    side_effect=OSError("no codeql")) as mock_run:
             assert runner._codeql_version() is None
             assert runner._codeql_version() is None
-            assert mock_run.call_count == 1  # cached, not re-probed
+            assert mock_run.call_count == 2
 
 
 class TestRunSuiteCommand:

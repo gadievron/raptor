@@ -24,7 +24,7 @@ from typing import Any, ClassVar
 if __name__ == "__main__":
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.analysis.rule_versions import rule_version_refusal
+from core.analysis.rule_versions import VersionProbeCache, rule_version_refusal, version_tuple as _release_version
 from core.security.capped_read import read_capped_text
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -309,6 +309,7 @@ class QueryRunner:
             raise RuntimeError(msg)
 
         self.codeql_cli: str = resolved_cli
+        self._version_cache = VersionProbeCache()
         logger.info("Query runner initialized with CodeQL: %s", self.codeql_cli)
 
     def _sandbox_tool_paths(self) -> list:
@@ -418,38 +419,14 @@ class QueryRunner:
         return _vendored_stdlib_roots(language, codeql_cli=self.codeql_cli)
 
     def _codeql_version(self) -> str | None:
-        """CLI version string (e.g. ``"2.26.3"``), cached per instance.
+        """Reuse successful facts only while this runner's CLI is unchanged."""
+        from .version_probe import read_codeql_version
 
-        Same probe posture as DatabaseManager.get_codeql_version:
-        `env=get_safe_env()` so the JVM launcher doesn't inherit
-        LD_PRELOAD / JAVA_TOOL_OPTIONS-class variables from the parent.
-        Never raises — an absent/odd CLI reads as None so callers
-        degrade instead of crash.
-        """
-        cached = getattr(self, "_version_probe", None)
-        if cached is not None:
-            return cached or None
-        version = None
-        try:
-            result = subprocess.run(
-                temporary_command([self.codeql_cli, "version"]),  # type: ignore[list-item]
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-                env=RaptorConfig.get_safe_env(),
-            )
-            if result.returncode == 0:
-                # (?<!\d) pins the scan to digit-run starts — same note as
-                # database_manager's version probe.
-                m = re.search(r'(?<!\d)\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
-                if m:
-                    version = m.group(0)
-        except Exception as e:  # noqa: BLE001 — best-effort probe
-            logger.warning("Failed to get CodeQL version: %s", e)
-        # Cache falsy as "" so a failed probe isn't retried per suite.
-        self._version_probe = version or ""
-        return version
+        cache = getattr(self, "_version_cache", None)
+        if cache is None:
+            cache = VersionProbeCache()
+            self._version_cache = cache
+        return cache.get(lambda: read_codeql_version(self.codeql_cli), lambda: self.codeql_cli)
 
     #: language → [(search_dir, pack_name)] for learned/derived model
     #: packs. Set by the agent BEFORE the parallel analysis phase and
@@ -479,40 +456,28 @@ class QueryRunner:
 
         Empty when the kill-switch is off, the configured set is empty,
         or the CLI predates ``--threat-model``
-        (:data:`THREAT_MODEL_MIN_VERSION`). The version-gate outcome is
-        cached per instance; the config reads are fresh on every call
-        so per-run CLI overrides (``--threat-models`` /
-        ``--no-threat-models``) take effect regardless of call order.
+        (:data:`THREAT_MODEL_MIN_VERSION`). Version facts are cached by CLI
+        identity; the comparison and config reads stay fresh so recovery,
+        executable changes and per-run overrides take effect immediately.
         """
         if not RaptorConfig.CODEQL_THREAT_MODELS_ENABLED:
             return ()
         models = tuple(RaptorConfig.CODEQL_THREAT_MODELS or ())
         if not models:
             return ()
-        gate = getattr(self, "_threat_model_gate", None)
-        if gate is None:
-            version = self._codeql_version()
-            gate = False
-            if version:
-                try:
-                    parts = tuple(int(p) for p in version.split(".")[:3])
-                except ValueError:
-                    logger.info(
-                        "threat models skipped: unparseable CodeQL "
-                        "version %r", version,
-                    )
-                else:
-                    gate = parts >= THREAT_MODEL_MIN_VERSION
-                    if not gate:
-                        logger.info(
-                            "threat models skipped: CodeQL %s < %s",
-                            version,
-                            ".".join(map(str, THREAT_MODEL_MIN_VERSION)),
-                        )
+        version = self._codeql_version()
+        parts = _release_version(version)
+        gate = parts is not None and parts >= THREAT_MODEL_MIN_VERSION
+        previous_notice = getattr(self, "_threat_model_notice", ())
+        self._threat_model_notice = version
+        if not gate and previous_notice != version:
+            if version is None:
+                logger.info("threat models skipped: CodeQL version unknown")
+            elif parts is None:
+                logger.info("threat models skipped: unparseable CodeQL version %r", version)
             else:
-                logger.info(
-                    "threat models skipped: CodeQL version unknown")
-            self._threat_model_gate = gate
+                logger.info("threat models skipped: CodeQL %s < %s", version,
+                            ".".join(map(str, THREAT_MODEL_MIN_VERSION)))
         return models if gate else ()
 
     def _threat_model_args(self) -> list:

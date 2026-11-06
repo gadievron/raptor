@@ -18,8 +18,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(RaptorConfig, 'CODEQL_OFFLINE', False)
     runner = QueryRunner.__new__(QueryRunner)
     runner.codeql_cli = '/usr/bin/true'
-    runner._version_probe = '2.23.8'
-    runner._threat_model_gate = True
+    runner._codeql_version = lambda: '2.23.8'
     runner.additional_model_packs = None
     database, output, pack = (tmp_path/name for name in ('db', 'out', 'pack'))
     for folder in (database, output, pack):

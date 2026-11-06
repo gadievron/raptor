@@ -7,11 +7,9 @@ and intelligent caching.
 
 import os
 import shutil
-import subprocess
 
 from .language_detector import LanguageDetector, LanguageInfo
 from core.build.build_detector import BuildDetector, BuildSystem
-from core.config import RaptorConfig
 from .database_manager import DatabaseManager, DatabaseResult, DatabaseMetadata
 from .query_runner import QueryRunner, QueryResult
 from .tunables import CodeQLTunables
@@ -44,15 +42,9 @@ def version() -> str | None:
     cli = resolve_bootstrap(_resolve_cli(), install=False)
     if not cli:
         return None
-    try:
-        out = subprocess.run(
-            [cli, "version", "--format=terse"],
-            capture_output=True, text=True, timeout=10,
-            env=RaptorConfig.get_safe_env(),
-        )
-        return (out.stdout.strip() or None) if out.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    from .version_probe import read_codeql_version
+    return read_codeql_version(cli)
+
 
 
 __all__ = [

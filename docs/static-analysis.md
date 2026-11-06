@@ -83,6 +83,15 @@ Semgrep pass (`--expanded-semgrep`).
 
 ## Rule version requirements
 
+CodeQL query runners reuse only successful version probes of the selected CLI
+launcher. Changing that launcher invalidates the cached answer; temporary
+probe failures can recover on a later check. Concurrent checks share an
+in-flight probe. Supported CLI flags are checked against the current version
+answer, so a prior failed probe does not permanently suppress them. Query
+compatibility and database metadata share a version reader that distinguishes
+CodeQL banners from dependency messages. The diagnostic version API also uses
+that reader without triggering first-use installation.
+
 Coccinelle checks declared rule requirements against a successful, unambiguous
 version probe of the pinned executable. Unknown versions refuse only rules
 that declare a minimum; rules without a declaration still run. A rule sweep

@@ -30,7 +30,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any
 
-from core.analysis.rule_versions import rule_version_refusal, version_tuple as _release_version
+from core.analysis.rule_versions import VersionProbeCache, rule_version_refusal, version_tuple as _release_version
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
@@ -516,33 +516,10 @@ def version_tuple() -> tuple | None:
 
 def _rule_version_probe() -> Callable[[], str | None]:
     """One positive cache entry for one rule sweep, tied to its pinned binary."""
-    cached_key: tuple[object, ...] | None = None
-    cached_value: str | None = None
-
-    def identity() -> tuple[object, ...] | None:
-        binary = _spatch_path()
-        if binary is None:
-            return None
-        try:
-            stat = os.stat(binary)
-            return (binary, stat.st_dev, stat.st_ino, stat.st_size,
-                    stat.st_mtime_ns, stat.st_ctime_ns)
-        except OSError:
-            return None
+    cache = VersionProbeCache()
 
     def installed() -> str | None:
-        nonlocal cached_key, cached_value
-        key = identity()
-        if key is not None and key == cached_key:
-            return cached_value
-        value = version()
-        if key is None:
-            return value
-        if identity() != key:
-            return None
-        if _release_version(value) is not None:
-            cached_key, cached_value = key, value
-        return value
+        return cache.get(version, _spatch_path)
 
     return installed
 
