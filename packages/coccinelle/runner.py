@@ -1505,10 +1505,18 @@ def _walk_c_h(target: Path) -> set[str]:
     headers are NEVER parsed; ``_collect_files_examined`` filters
     them back out so the claim tracks what spatch actually saw.
     """
-    return (
-        {str(f) for f in target.rglob("*.c")}
-        | {str(f) for f in target.rglob("*.h")}
-    )
+    files: set[str] = set()
+    for path in target.rglob("*"):
+        if not path.name.endswith((".c", ".h")):
+            continue
+        try:
+            if path.is_file():
+                files.add(str(path))
+        except OSError as exc:
+            # Older supported Python versions can raise for inaccessible
+            # metadata. An unverifiable entry cannot establish file coverage.
+            logger.debug("Coccinelle source inventory skipped an entry: %s", type(exc).__name__)
+    return files
 
 
 def _collect_files_examined(
