@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytest.importorskip("tree_sitter")
 
 from core.analysis.sanitizer_cut_postpass import (  # noqa: E402
@@ -279,7 +281,7 @@ class TestBudget:
         def fake_monotonic():
             return next(ticks, 1e9)
 
-        monkeypatch.setattr(scp.time, "monotonic", fake_monotonic)
+        patch_module_attribute(monkeypatch, scp, "time", "monotonic", fake_monotonic)
         stats = run_postpass([sarif_path], repo, out,
                              budget_seconds=180.0)
         assert stats["budget_exhausted_skips"] == 1

@@ -17,6 +17,8 @@ import pytest
 
 from core.sandbox.mount_ns import _copy_etc_tree
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def hostile_umask():
@@ -397,7 +399,7 @@ def test_ca_bundle_precedes_unrelated_payload(tmp_path, monkeypatch, bundle, bud
         (unrelated/str(index)).write_bytes(b'x'*32)
         (certificate.parent/f'000{index}.pem').write_bytes(b'x'*32)
     clock = [0.0]
-    monkeypatch.setattr(mns.time, 'monotonic', lambda: clock[0])
+    patch_module_attribute(monkeypatch, mns, "time", 'monotonic', lambda: clock[0])
     def copy_only(*args, **kwargs):
         clock[0] += 1.0
         raise OSError('cross-device')

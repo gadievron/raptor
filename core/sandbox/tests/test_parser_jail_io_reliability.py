@@ -13,6 +13,8 @@ import pytest
 from core.sandbox import parser_jail as jail_mod
 from core.sandbox._request_head import ParsedRequestLine, ParseRefusal
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.mark.parametrize("census", [[], {}, 1, None])
 def test_invalid_census_is_a_protocol_refusal(monkeypatch, census):
@@ -57,7 +59,7 @@ def test_decoder_recursion_failure_is_protocol_error(monkeypatch, frame):
 @pytest.mark.parametrize("frame", ["ready", "verdict"])
 def test_header_and_payload_share_one_deadline(monkeypatch, frame):
     clock = [0.0]
-    monkeypatch.setattr(jail_mod.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, jail_mod, "time", "monotonic", lambda: clock[0])
     monkeypatch.setattr(jail_mod, "_READY_TIMEOUT_S", 1.0)
     monkeypatch.setattr(jail_mod, "_ROUNDTRIP_TIMEOUT_S", 1.0)
     payload = b'{"ok":true,"host":"example.com","port":443}'
@@ -114,7 +116,7 @@ def test_header_and_payload_share_one_deadline(monkeypatch, frame):
 
 def test_recv_fragments_cannot_reset_deadline(monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr(jail_mod.time, "monotonic", lambda: clock[0])
+    patch_module_attribute(monkeypatch, jail_mod, "time", "monotonic", lambda: clock[0])
 
     class FragmentSocket:
         timeout = 5.0

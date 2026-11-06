@@ -24,6 +24,8 @@ from core.http.urllib_backend import (
     _HostCircuitBreaker,
 )
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _reset_default_breaker(monkeypatch):
@@ -1295,7 +1297,7 @@ class TestHostCircuitBreaker:
         the open threshold."""
         import core.http.urllib_backend as ub
         t = [1000.0]
-        monkeypatch.setattr(ub.time, "monotonic", lambda: t[0])
+        patch_module_attribute(monkeypatch, ub, "time", "monotonic", lambda: t[0])
         cb = _HostCircuitBreaker(threshold=2, window=60.0, cooldown=120.0)
         cb.record_failure("a.example", 443)
         t[0] = 1100.0  # +100s, past the 60s window
@@ -1306,7 +1308,7 @@ class TestHostCircuitBreaker:
     def test_cooldown_elapses_closes_circuit(self, monkeypatch):
         import core.http.urllib_backend as ub
         t = [1000.0]
-        monkeypatch.setattr(ub.time, "monotonic", lambda: t[0])
+        patch_module_attribute(monkeypatch, ub, "time", "monotonic", lambda: t[0])
         cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
         cb.record_failure("a.example", 443)
         cb.record_failure("a.example", 443)

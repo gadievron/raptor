@@ -8,12 +8,14 @@ import pytest
 from core.audit import prep_profile
 from core.audit.prep_profile import PrepProfile, profile_call
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def test_results_and_errors_are_preserved(monkeypatch):
     profile = PrepProfile()
     config = SimpleNamespace(prep_profile=profile)
     clock = iter((10.0, 12.0, 20.0, 23.0))
-    monkeypatch.setattr(prep_profile.time, "perf_counter", lambda: next(clock))
+    patch_module_attribute(monkeypatch, prep_profile, "time", "perf_counter", lambda: next(clock))
     result = object()
     assert profile_call(config, "peer_groups.resolve", lambda: result) is result
     failure = ValueError("original failure")
@@ -44,7 +46,7 @@ def test_cache_observations_distinguish_empty_hit_from_miss():
 
 
 def test_no_profile_does_not_read_clock(monkeypatch):
-    monkeypatch.setattr(prep_profile.time, "perf_counter", lambda: pytest.fail("clock read"))
+    patch_module_attribute(monkeypatch, prep_profile, "time", "perf_counter", lambda: pytest.fail("clock read"))
     result = []
     assert profile_call(SimpleNamespace(), "test", lambda: result) is result
 
@@ -59,7 +61,7 @@ def test_clock_or_recording_failure_cannot_change_result(monkeypatch):
 
     monkeypatch.setattr(profile, "record", fail)
     assert profile_call(config, "test", lambda: result) is result
-    monkeypatch.setattr(prep_profile.time, "perf_counter", fail)
+    patch_module_attribute(monkeypatch, prep_profile, "time", "perf_counter", fail)
     assert profile_call(config, "test", lambda: result) is result
 
 

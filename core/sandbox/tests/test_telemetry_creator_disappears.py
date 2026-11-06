@@ -6,6 +6,8 @@ import pytest
 
 from core.sandbox import telemetry_mac as mac
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.mark.parametrize('prefix', [0, 5])
 def test_waiting_caller_recovers_failed_creator(tmp_path, monkeypatch, prefix):
@@ -38,7 +40,7 @@ def test_waiting_caller_recovers_failed_creator(tmp_path, monkeypatch, prefix):
 
     winner = threading.Thread(target=creator, name='failing-key-creator')
     monkeypatch.setattr(os, 'write', write)
-    monkeypatch.setattr(mac.time, 'sleep', allow_failed_creator_to_exit)
+    patch_module_attribute(monkeypatch, mac, "time", 'sleep', allow_failed_creator_to_exit)
     try:
         winner.start()
         assert partial_ready.wait(2)
@@ -58,7 +60,7 @@ def test_waiting_caller_recovers_failed_creator(tmp_path, monkeypatch, prefix):
 def test_repeated_missing_winners_have_bounded_creation_attempts(tmp_path, monkeypatch):
     monkeypatch.setattr(mac, '_key_path', lambda: tmp_path / 'key')
     monkeypatch.setattr(mac, '_read_existing_key', lambda path: None)
-    monkeypatch.setattr(mac.time, 'sleep', lambda seconds: None)
+    patch_module_attribute(monkeypatch, mac, "time", 'sleep', lambda seconds: None)
     attempts = []
 
     def lose_creation(*args, **kwargs):
@@ -86,7 +88,7 @@ def test_transient_read_errors_keep_existing_retry_budget(tmp_path, monkeypatch)
         return original_read(path)
 
     monkeypatch.setattr(mac, '_read_existing_key', unreadable_then_healthy)
-    monkeypatch.setattr(mac.time, 'sleep', lambda seconds: None)
+    patch_module_attribute(monkeypatch, mac, "time", 'sleep', lambda seconds: None)
     assert mac._load_or_create_key() == key
     assert len(reads) == 6
     assert key_path.read_bytes() == key
@@ -99,7 +101,7 @@ def test_unreadable_existing_key_does_not_repeat_creation_budget(tmp_path, monke
     key_path.chmod(0o600)
     monkeypatch.setattr(mac, '_key_path', lambda: key_path)
     monkeypatch.setattr(mac, '_read_existing_key', lambda path: None)
-    monkeypatch.setattr(mac.time, 'sleep', lambda seconds: None)
+    patch_module_attribute(monkeypatch, mac, "time", 'sleep', lambda seconds: None)
     original_open = os.open
     attempts = []
 

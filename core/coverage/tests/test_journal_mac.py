@@ -16,6 +16,8 @@ import pytest
 from core.coverage import journal_mac
 from core.security import mac_key
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 # ---------------------------------------------------------------------------
 # Key loader: short-read tolerance
@@ -78,7 +80,7 @@ def _lose_creation_race(monkeypatch, tmp_path):
         return real_open(path, flags, mode)
 
     monkeypatch.setattr(os, "open", fake_open)
-    monkeypatch.setattr(mac_key.time, "sleep", lambda s: None)
+    patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
 
 def test_race_loser_retries_through_empty_read(

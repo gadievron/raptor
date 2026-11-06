@@ -8,6 +8,8 @@ import pytest
 
 from core.sandbox import parser_jail as jail_mod
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class FakeProcess:
     pid = 12345
@@ -140,7 +142,7 @@ def test_spawn_backoff_saturates_without_overflow(monkeypatch, previous, delay):
         raise failure
 
     monkeypatch.setattr(jail, "_spawn_worker_locked", unavailable)
-    monkeypatch.setattr(jail_mod.time, "monotonic", lambda: 100.0)
+    patch_module_attribute(monkeypatch, jail_mod, "time", "monotonic", lambda: 100.0)
     with pytest.raises(jail_mod.ParserJailUnavailable) as raised:
         jail.start()
     assert raised.value is failure

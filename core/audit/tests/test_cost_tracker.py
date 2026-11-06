@@ -7,6 +7,8 @@ import math
 
 from core.audit.cost_tracker import PhaseCost, PhaseCostLedger
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 class TestPhaseCost:
     def test_defaults_zero(self):
@@ -121,7 +123,7 @@ class TestPhaseWallClock:
         def fake_monotonic():
             return state["now"]
 
-        monkeypatch.setattr(ct_mod.time, "monotonic", fake_monotonic)
+        patch_module_attribute(monkeypatch, ct_mod, "time", "monotonic", fake_monotonic)
         return state
 
     def test_phases_serialize_pass_wall_time(self, monkeypatch):

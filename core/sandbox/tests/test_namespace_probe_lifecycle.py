@@ -11,6 +11,8 @@ import pytest
 
 from core.sandbox import probes
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux namespace probes")
 PID = 424242
 
@@ -30,8 +32,8 @@ def synthetic_pid_never_opens_a_real_pidfd(monkeypatch):
 @pytest.fixture
 def clock(monkeypatch):
     value = [0.0]
-    monkeypatch.setattr(probes.time, "monotonic", lambda: value[0])
-    monkeypatch.setattr(probes.time, "sleep", lambda seconds: value.__setitem__(0, value[0] + seconds))
+    patch_module_attribute(monkeypatch, probes, "time", "monotonic", lambda: value[0])
+    patch_module_attribute(monkeypatch, probes, "time", "sleep", lambda seconds: value.__setitem__(0, value[0] + seconds))
     monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.03)
     monkeypatch.setattr(probes, "_PROBE_CHILD_REAP_TIMEOUT_S", 0.03)
     return value

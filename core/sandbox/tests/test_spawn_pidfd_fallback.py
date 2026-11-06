@@ -10,6 +10,8 @@ import pytest
 
 from core.sandbox import _spawn as spawn
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.mark.parametrize('failure', ['open', 'send'])
 def test_same_group_child_is_killed_after_pidfd_failure(monkeypatch, failure):
@@ -35,9 +37,9 @@ def test_failed_signals_cannot_leave_an_unbounded_wait(monkeypatch, caplog):
     monkeypatch.setattr(spawn.os, 'pidfd_open', Mock(side_effect=OSError(errno.EMFILE, 'full')), raising=False)
     monkeypatch.setattr(spawn.os, 'kill', Mock(side_effect=PermissionError(errno.EPERM, 'blocked')))
     monkeypatch.setattr(spawn.os, 'waitpid', Mock(return_value=(0, 0)))
-    monkeypatch.setattr(spawn.time, 'sleep', lambda delay: None)
+    patch_module_attribute(monkeypatch, spawn, "time", 'sleep', lambda delay: None)
     with monkeypatch.context() as scoped:
-        scoped.setattr(spawn.time, 'monotonic', Mock(side_effect=[100.0, 106.0]))
+        patch_module_attribute(scoped, spawn, "time", 'monotonic', Mock(side_effect=[100.0, 106.0]))
         spawn._kill_and_reap(123)
     assert 'did not reap within cleanup budget' in caplog.text
     assert spawn.os.waitpid.call_args.args == (123, os.WNOHANG)
@@ -65,7 +67,7 @@ def test_stopped_status_does_not_complete_reaping(monkeypatch):
     stopped = (signal.SIGSTOP << 8) | 0x7f
     wait = Mock(side_effect=[(123, stopped), InterruptedError(), (123, 0)])
     monkeypatch.setattr(spawn.os, 'waitpid', wait)
-    monkeypatch.setattr(spawn.time, 'sleep', lambda delay: None)
+    patch_module_attribute(monkeypatch, spawn, "time", 'sleep', lambda delay: None)
     spawn._kill_and_reap(123)
     assert wait.call_count == 3
 

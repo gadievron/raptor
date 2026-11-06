@@ -6,6 +6,8 @@ import pytest
 
 from core.sandbox import parser_jail as jail
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 def unhealthy_worker(monkeypatch):
     owner = jail.ParserJail()
@@ -38,7 +40,7 @@ def test_status_failure_cleans_old_worker_before_replacement(monkeypatch):
 
 
 def test_failed_replacement_remains_typed_and_backs_off(monkeypatch):
-    monkeypatch.setattr(jail.time, "monotonic", lambda: 100.0)
+    patch_module_attribute(monkeypatch, jail, "time", "monotonic", lambda: 100.0)
     owner, process, socket, reap = unhealthy_worker(monkeypatch)
     failure = jail.ParserJailUnavailable('replacement unavailable')
     spawn = Mock(side_effect=failure)
