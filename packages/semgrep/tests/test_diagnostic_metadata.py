@@ -131,6 +131,7 @@ def test_real_filesystem_names_and_optional_skip_fields_remain_supported(tmp_pat
 
 
 def test_malformed_skips_preserve_runner_findings(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "is_available", lambda: True)
     monkeypatch.setattr(runner, "scope_isolation_available", lambda: True)
     source = tmp_path / 'good.py'
     source.write_text('foo()\n')
