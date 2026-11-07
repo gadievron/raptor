@@ -15,12 +15,12 @@ and resume keep working.
 """
 
 import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.json import load_json
 from core.run import (
     RUN_METADATA_FILE,
@@ -155,8 +155,9 @@ class TestOwnershipViaStub(unittest.TestCase):
         env = os.environ.copy()
         env["_RAPTOR_TRUSTED"] = "1"
         env.pop("RAPTOR_CALLER_DIR", None)
-        return subprocess.run(
+        return run_standalone_cli(
             [sys.executable, LIFECYCLE] + list(args),
+            data_home=os.environ["XDG_DATA_HOME"],
             capture_output=True, text=True, env=env, cwd=cwd,
         )
 
@@ -209,6 +210,22 @@ class TestOwnershipViaStub(unittest.TestCase):
             self.assertEqual(
                 load_json(out / RUN_METADATA_FILE)["status"], "interrupted",
             )
+
+
+def test_stale_launch_preserves_ownership_refusal(tmp_path, monkeypatch):
+    monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
+    out = tmp_path / "audit-run"
+    start_run(out, "audit")
+
+    refused = TestOwnershipViaStub._run("complete", str(out), "--command", "understand")
+    assert refused.returncode == 1, refused.stderr
+    assert "owned by command 'audit'" in refused.stderr
+    assert load_json(out / RUN_METADATA_FILE)["status"] == "running"
+
+    owned = TestOwnershipViaStub._run("complete", str(out), "--command", "audit")
+    assert owned.returncode == 0, owned.stderr
+    assert load_json(out / RUN_METADATA_FILE)["status"] == "completed"
 
 
 if __name__ == "__main__":
