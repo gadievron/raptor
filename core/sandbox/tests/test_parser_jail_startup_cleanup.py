@@ -92,7 +92,7 @@ def test_startup_owns_resources_until_commit(monkeypatch, stage):
             raise KeyboardInterrupt()
         return {"ready": True, "landlock": True}
 
-    monkeypatch.setattr(jail_mod.socket, "socketpair", socketpair)
+    patch_module_attribute(monkeypatch, jail_mod, "socket", "socketpair", socketpair)
     patch_module_attribute(monkeypatch, jail_mod, "subprocess", "Popen", popen)
     monkeypatch.setattr(jail, "_read_ready_frame", ready)
     monkeypatch.setattr(jail_mod, "_raptor_dir", lambda: "/tmp")

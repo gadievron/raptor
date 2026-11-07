@@ -6,7 +6,6 @@ import os
 import json
 import resource
 import socket
-from types import SimpleNamespace
 
 import pytest
 
@@ -40,7 +39,7 @@ def test_decoder_recursion_failure_is_protocol_error(monkeypatch, frame):
     def too_deep(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(jail_mod, "json", SimpleNamespace(loads=too_deep))
+    patch_module_attribute(monkeypatch, jail_mod, "json", "loads", too_deep)
     if frame == "verdict":
         with pytest.raises(jail_mod._ProtocolError) as raised:
             jail_mod._validate_verdict(b"{}")
@@ -106,7 +105,7 @@ def test_header_and_payload_share_one_deadline(monkeypatch, frame):
     else:
         jail._sock = sock
         monkeypatch.setattr(jail, "_new_req_id", lambda: 17)
-        monkeypatch.setattr(jail_mod.select, "poll", QuietPoll)
+        patch_module_attribute(monkeypatch, jail_mod, "select", "poll", QuietPoll)
         with pytest.raises(OSError, match="round-trip timed out"):
             jail._roundtrip_locked(b"request")
     assert clock[0] == pytest.approx(1.0)

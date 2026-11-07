@@ -48,6 +48,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from core.testing.module_bindings import mock_module_attribute
+
 from core.sandbox import seatbelt_audit
 
 
@@ -177,8 +179,7 @@ def test_f070_l332_warmup_popen_oserror_logs_warning(tmp_path, caplog):
     with patch.object(_probes, "_find_sandbox_binary",
                       return_value="/usr/bin/sandbox-exec"), \
          patch.object(seatbelt_audit, "Path") as path_cls, \
-         patch.object(seatbelt_audit.subprocess, "Popen",
-                      side_effect=OSError("EACCES")):
+         mock_module_attribute(seatbelt_audit, "subprocess", "Popen", side_effect=OSError("EACCES")):
         path_cls.return_value.exists.return_value = True
         # Also need _proc set so the warm-up function doesn't hit its
         # earlier "self._proc is None" guard.

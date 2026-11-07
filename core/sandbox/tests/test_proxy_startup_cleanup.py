@@ -6,12 +6,14 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 
 
 @pytest.fixture(autouse=True)
 def parser_stub(monkeypatch):
-    monkeypatch.setattr(proxy_mod.parser_jail, "get_parser_jail", lambda: Mock())
+    patch_module_attribute(monkeypatch, proxy_mod, "parser_jail", "get_parser_jail", lambda: Mock())
 
 
 @pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
@@ -21,7 +23,7 @@ def test_thread_start_failure_preserves_original_error(monkeypatch, failure_type
     thread = Mock()
     thread.start.side_effect = failure
     thread.join.side_effect = RuntimeError("cannot join unstarted thread")
-    monkeypatch.setattr(proxy_mod.threading, "Thread", Mock(return_value=thread))
+    patch_module_attribute(monkeypatch, proxy_mod, "threading", "Thread", Mock(return_value=thread))
     with pytest.raises(failure_type) as raised:
         proxy.__init__([])
     assert raised.value is failure
@@ -43,13 +45,13 @@ def test_worker_starting_after_timeout_never_creates_a_loop(monkeypatch):
         def join(self, timeout):
             pass
 
-    monkeypatch.setattr(proxy_mod.threading, "Thread", DeferredThread)
+    patch_module_attribute(monkeypatch, proxy_mod, "threading", "Thread", DeferredThread)
     monkeypatch.setattr(proxy_mod, "_PROXY_CONNECT_TIMEOUT_S", 0.01)
     proxy = object.__new__(proxy_mod.EgressProxy)
     with pytest.raises(RuntimeError, match="did not become ready"):
         proxy.__init__([])
     create = Mock(side_effect=AssertionError("cancelled worker must not bind"))
-    monkeypatch.setattr(proxy_mod.asyncio, "new_event_loop", create)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "new_event_loop", create)
     deferred[0].target()
     create.assert_not_called()
     assert proxy._loop is None
@@ -75,8 +77,9 @@ def test_readiness_failure_cancels_pending_listener_creation(monkeypatch, failur
         assert entered.wait(5)
         monkeypatch.setattr(proxy._ready, "wait", Mock(side_effect=failure))
 
-    monkeypatch.setattr(proxy_mod.asyncio, "start_server", stalled_bind)
-    monkeypatch.setattr(proxy_mod.threading.Thread, "start", start)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "start_server", stalled_bind)
+    local_thread = type("FaultThread", (proxy_mod.threading.Thread,), {"start": start})
+    patch_module_attribute(monkeypatch, proxy_mod, "threading", "Thread", local_thread)
     try:
         with pytest.raises(failure_type) as raised:
             proxy.__init__([])
@@ -97,7 +100,7 @@ def test_listener_creation_error_is_reported_and_loop_closed(monkeypatch):
     async def fail(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(proxy_mod.asyncio, "start_server", fail)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "start_server", fail)
     with pytest.raises(RuntimeError, match="failed to start") as raised:
         proxy.__init__([])
     assert raised.value.__cause__ is failure
@@ -139,9 +142,10 @@ def test_worker_resuming_after_cleanup_closes_new_loop_without_binding(monkeypat
         monkeypatch.setattr(proxy._ready, "wait", Mock(side_effect=failure))
 
     bind = Mock(side_effect=AssertionError("cancelled startup must not bind"))
-    monkeypatch.setattr(proxy_mod.asyncio, "new_event_loop", delayed_loop)
-    monkeypatch.setattr(proxy_mod.asyncio, "start_server", bind)
-    monkeypatch.setattr(proxy_mod.threading.Thread, "start", start)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "new_event_loop", delayed_loop)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "start_server", bind)
+    local_thread = type("FaultThread", (proxy_mod.threading.Thread,), {"start": start})
+    patch_module_attribute(monkeypatch, proxy_mod, "threading", "Thread", local_thread)
     try:
         with pytest.raises(KeyboardInterrupt) as raised:
             proxy.__init__([])
