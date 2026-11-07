@@ -8,8 +8,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.sandbox.tests import socket_server
 from core.sandbox.tests import test_proxy_upstream_errors as errors_mod
 from core.sandbox.tests import test_proxy_upstream_gate2 as gate_mod
+from core.testing.module_bindings import patch_module_attribute
 
 
 CALLERS = [
@@ -38,6 +40,8 @@ def test_caller_failure_stops_upstream(owner, name, kind, stage, error, monkeypa
         ))
         # This wrapper tests cleanup, not the owning test's Linux /proc census.
         patcher.setattr(errors_mod, "_open_fds", lambda: 0)
+        # The FD census is fake here; collecting the worker heap adds no coverage.
+        patch_module_attribute(patcher, errors_mod, "gc", "collect", lambda: 0)
         patcher.setattr(errors_mod, "_send_connect", Mock(side_effect=failure))
         caller = getattr(getattr(errors_mod, owner)(), name)
         with pytest.raises(error, match="injected upstream caller failure"):
@@ -123,13 +127,17 @@ def test_start_then_raise_retires_real_upstream_acceptor(module, kind, error, mo
         assert entered.wait(2)
         raise error("injected upstream post-start failure")
 
+    class StartFailureThread(threading.Thread):
+        start = start_then_raise
+
     sockets = SimpleNamespace(**vars(socket))
     sockets.socket = lambda *a, **kw: Listener()
     upstream = None
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "socket", sockets)
-            patcher.setattr(threading.Thread, "start", start_then_raise)
+            patch_module_attribute(patcher, socket_server, "threading", "Thread", StartFailureThread)
+            assert threading.Thread.start is real_start
             upstream = getattr(module, kind)()
             with pytest.raises(error, match="injected upstream post-start failure"):
                 upstream.start()
