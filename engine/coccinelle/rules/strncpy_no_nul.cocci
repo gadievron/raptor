@@ -13,8 +13,9 @@
 // https://man7.org/linux/man-pages/man3/strncmp.3.html
 // @role: detection
 
-// Match the copied prefix, not a same-spelled count changed after copying.
-@bounded_use@
+// Match the copied prefix on every path, not a same-spelled count changed
+// after copying. Explicit forall keeps a clean path from hiding a changed one.
+@bounded_use forall@
 expression DST, SRC, OTHER;
 identifier N;
 assignment operator op_dst, op_n;
@@ -43,7 +44,7 @@ strncmp(OTHER, DST, N)@p
 strncat(OTHER, DST, N)@p
 )
 
-@bounded_constant_use@
+@bounded_constant_use forall@
 expression DST, SRC, OTHER;
 constant N;
 assignment operator op_dst;

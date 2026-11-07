@@ -3,7 +3,7 @@
 The rules are some-path (`exists`): an advance guarded by the WRONG
 condition (`if (n > 0) buf += n;`) is still unchecked on that path,
 and the direct `buf += snprintf(...)` form leaves no room for any
-check at all. Paths passing through `n >= remaining` stay excluded.
+check at all. Only supported exits or guarded update branches are excluded.
 """
 
 from __future__ import annotations
@@ -188,6 +188,10 @@ def test_cursor_relationships_keep_production_batching(tmp_path, monkeypatch):
         'void budget(char *buf, int left, const char *fmt, va_list ap) { left -= vsnprintf(buf, left, fmt, ap); }\n'
         'void replaced(char *buf, int left) { int n = snprintf(buf, left, "x"); n = clamp(n, left); buf += n; }\n'
         'void tally(char *buf, int left) { int total = 0; total += snprintf(buf, left, "x"); }\n'
+        'void logged(char *buf, int left) { int n = snprintf(buf, left, "x"); if (n >= left) log_size(n); buf += n; }\n'
+        'void guarded(char *buf, int left) { int n = snprintf(buf, left, "x"); if (n >= left) return; buf += n; }\n'
+        'void changed_count(char *d, char *s, char *o, int n, int stop) { strncpy(d, s, n); if (stop) n++; strncmp(d, o, n); }\n'
+        'void bounded_count(char *d, char *s, char *o, int n) { strncpy(d, s, n); strncmp(d, o, n); }\n'
         'void twice(int fd) { close(fd); close(fd); }\n',
     )
     original = runner._confined_default_runner
@@ -204,11 +208,75 @@ def test_cursor_relationships_keep_production_batching(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_confined_default_runner", observe)
     results = runner.run_rules_batched(
-        source, [_RULE, _RULE.with_name("double_close.cocci")],
+        source, [_RULE, _RULE.with_name("double_close.cocci"),
+                 _RULE.with_name("strncpy_no_nul.cocci")],
         allow_scripting=True, no_includes=True, timeout=60,
     )
-    assert set(results) == {"snprintf_advance", "double_close"}
+    assert set(results) == {"snprintf_advance", "double_close", "strncpy_no_nul"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
-    assert len(results["snprintf_advance"].matches) == 2
+    assert len(results["snprintf_advance"].matches) == 3
     assert len(results["double_close"].matches) == 1
+    assert len(results["strncpy_no_nul"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.parametrize("api", ["snprintf", "vsnprintf"])
+@pytest.mark.parametrize("declaration", [False, True], ids=["assignment", "declaration"])
+def test_truncation_guards_require_effect_and_cover_the_actual_update(tmp_path, api, declaration):
+    bodies = [
+        ("buf += n;", True),
+        ("if (stop) { buf += n; } else { remaining -= n; }", True),
+        ("if (n >= remaining) log_size(n); buf += n;", True),
+        ("(void)(n >= remaining); buf += n;", True),
+        ("if (n >= remaining) buf += n;", True),
+        ("if (n >= remaining && stop) return; buf += n;", True),
+        ("if (stop) { if (n >= remaining) return; } buf += n;", True),
+        ("if (n >= remaining) { if (stop) return; } buf += n;", True),
+        ("if (n >= remaining) { log_size(n); return; } buf += n;", False),
+        ("if (n >= remaining) return; buf += n;", False),
+        ("if (n >= remaining) return; log_size(n); buf += n;", False),
+        ("if (n < remaining) { log_size(n); buf += n; }", False),
+        ("if (n < 0 || n >= remaining) return; buf += n;", False),
+        ("if (n >= remaining || n < 0) return; remaining -= n;", False),
+        ("if (remaining <= n) return; buf = n + buf;", False),
+        ("if (n < remaining) { buf += n; }", False),
+        ("if (n >= 0 && n < remaining) { remaining -= n; }", False),
+        ("if (n < remaining && n >= 0) { buf = buf + n; }", False),
+        ("if (n >= remaining) log_size(n); else { buf += n; }", False),
+        ("if (n < 0 || n >= remaining) log_size(n); else { remaining -= n; }", False),
+        ("if (n >= 0 && n < remaining && stop) { buf += n; }", True),
+        ("if (n > remaining) return; buf += n;", True),
+        ("if (n < 0) return; buf += n;", True),
+        ("if (n >= other_size) return; buf += n;", True),
+        ("buf += n; if (n >= remaining) return;", True),
+        ("if (n < remaining) { buf += n; } else { buf += n; }", True),
+        ("if (n < remaining) { remaining -= n; } buf += n;", True),
+        ("if (n >= remaining) { remaining -= n; return; } buf += n;", True),
+    ]
+    lines = ["#include <stdarg.h>", "#include <stdio.h>"]
+    expected = set()
+    for index, (body, reports) in enumerate(bodies):
+        lines.append(f"void guard_{index}(char *buf, int remaining, int stop, int other_size, const char *fmt, va_list ap) {{")
+        if not declaration:
+            lines.append("int n;")
+        arguments = '"%s", "x"' if api == "snprintf" else "fmt, ap"
+        lines.append(f'{"int " if declaration else ""}n = {api}(buf, remaining, {arguments});')
+        if reports:
+            expected.add(len(lines))
+        lines += [body, "}"]
+    # A guard for an older value cannot cover a fresh formatting result.
+    signature = "char *buf, int remaining, const char *fmt, va_list ap"
+    call = f"{api}(buf, remaining, {arguments})"
+    lines += [f"void reformat({signature}) {{", f"int n = {call};",
+              "if (n >= remaining) return;", f"n = {call};"]
+    expected.add(len(lines))
+    lines += ["buf += n;", "}"]
+    lines += [f"void prechecked({signature}) {{", "int n = 0;",
+              "if (n >= remaining) return;", "{",
+              f'{"int " if declaration else ""}n = {call};']
+    expected.add(len(lines))
+    lines += ["buf += n;", "}", "}"]
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected)

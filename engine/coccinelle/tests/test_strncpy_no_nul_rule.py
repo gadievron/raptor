@@ -98,6 +98,8 @@ def test_string_read_roles_and_destination_tracking(tmp_path, slot):
         ("strncpy(dst, src, 4);", f"strncmp({pair}, 4);", False),
         ("strncpy(dst, src, 4);", f"strncmp({pair}, 8);", True),
         ("strncpy(dst, src, n + 1); n++;", f"strncmp({pair}, n + 1);", True),
+        ("if (stop) n++;", f"strncmp({pair}, n);", True),
+        ("if (stop) n += 1;", f"strncmp({pair}, n);", True),
         ("n++;", f"strncmp({pair}, n);", True),
         ("n += 1;", f"strncmp({pair}, n);", True),
         ("rewrite_count(&n);", f"strncmp({pair}, n);", True),
@@ -126,7 +128,7 @@ def test_string_read_roles_and_destination_tracking(tmp_path, slot):
     ]
     lines, expected = [], set()
     for index, (between, use, reports) in enumerate(cases):
-        lines += [f"void case_{index}(char *dst, char *src, char *other, int n, int limit) {{",
+        lines += [f"void case_{index}(char *dst, char *src, char *other, int n, int limit, int stop) {{",
                   "strncpy(dst, src, n);", between, use, "}"]
         if reports:
             expected.add(len(lines) - 1)

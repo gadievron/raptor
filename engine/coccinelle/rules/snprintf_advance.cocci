@@ -9,26 +9,21 @@
 // the buffer size argument. Unchecked arithmetic can exceed the provided
 // write window or underflow the remaining count; later writes may overflow.
 //
-// The safe pattern: check `if (n >= remaining)` (or equivalent) before
-// advancing. The `when !=` guard below excludes paths where
-// n >= remaining appears, which covers:
-//   if (n >= remaining) ...
-//   if (n < 0 || n >= remaining) ...
-//   if (n >= remaining || n < 0) ...
+// Supported exclusions are specific to each update: an all-path truncation
+// guard that returns before it, or an update inside a supported non-truncated
+// branch. Merely evaluating/logging a comparison does not exclude an update,
+// and a safe update cannot hide a different unsafe update from the same call.
 //
 // Known limitations:
-// - Guard patterns with explicit casts (e.g., (size_t)n >= remaining)
-//   are not matched by the exclusion and may cause false positives.
+// - These are truncation guards, not a proof of complete error handling.
+// - Unsupported casts, goto/loop exits and other guard spellings remain
+//   candidates. Wrappers, alias writes and side-effecting size expressions
+//   require review outside this local structural model.
 // - Rewriting the return value, cursor or size ends local tracking; a
 //   replacement value is not assumed safe or followed through aliases.
-// - The comparison exclusion does not establish the branch effect: a
-//   logging-only check can still hide a candidate.
-// - snprintf wrappers that return the clamped value are not tracked.
 //
-// The rules are `exists` (some-path): an advance nested inside a
-// conditional (`if (n > 0) buf += n;` — a guard, but the wrong one)
-// is still an unchecked advance on that path. Paths that DO pass
-// through `n >= remaining` stay excluded by the when-guard.
+// Candidate rules remain some-path: an unhandled branch still reports even
+// when a separate branch returns or performs a guarded update.
 //
 // Covers CWE-120 (Buffer Copy without Checking Size of Input) /
 // CWE-787 (Out-of-bounds Write).
@@ -61,22 +56,24 @@ position p;
   vsnprintf@p(((NULL_BASE *)0), size, ...)
 )
 
-// Declaration form: T n = snprintf(buf, remaining, ...);
-
-@snprintf_decl exists@
+// All-path helper: an optional/conditional return must not hide the
+// unguarded path to an update. Protected operand positions are exported;
+// candidate rules consult them only at their actual update operands.
+@snprintf_checked_decl forall@
 expression buf, remaining;
 identifier n;
 type T;
 assignment operator op_n, op_buf, op_remaining;
-position p != snprintf_null_destination.p;
+statement S;
+position update;
 @@
 
 (
-  T n = snprintf@p(buf, remaining, ...);
+  T n = snprintf(buf, remaining, ...);
 |
-  T n = vsnprintf@p(buf, remaining, ...);
+  T n = vsnprintf(buf, remaining, ...);
 )
-... when != n >= remaining
+... when any
     when != n op_n ...
     when != &n
     when != n++
@@ -96,15 +93,228 @@ position p != snprintf_null_destination.p;
     when != remaining--
     when != --remaining
 (
-  buf += n;
+if (\( n >= remaining \| n < 0 || n >= remaining \| n >= remaining || n < 0 \)) { ... return ...; }
+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
 |
-  buf = buf + n;
+if (\( n < remaining \| n >= 0 && n < remaining \| n < remaining && n >= 0 \)) {
+<+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
+...+>
+}
 |
-  buf = n + buf;
+if (\( n >= remaining \| n < 0 || n >= remaining \| n >= remaining || n < 0 \)) S else {
+<+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
+...+>
+}
+)
+
+// All-path helper: an optional/conditional return must not hide the
+// unguarded path to an update. Protected operand positions are exported;
+// candidate rules consult them only at their actual update operands.
+@snprintf_checked_assign forall@
+expression buf, remaining;
+expression n;
+assignment operator op_n, op_buf, op_remaining;
+statement S;
+position update;
+@@
+
+(
+  n = snprintf(buf, remaining, ...);
 |
-  remaining -= n;
+  n = vsnprintf(buf, remaining, ...);
+)
+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+(
+if (\( n >= remaining \| n < 0 || n >= remaining \| n >= remaining || n < 0 \)) { ... return ...; }
+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
 |
-  remaining = remaining - n;
+if (\( n < remaining \| n >= 0 && n < remaining \| n < remaining && n >= 0 \)) {
+<+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
+...+>
+}
+|
+if (\( n >= remaining \| n < 0 || n >= remaining \| n >= remaining || n < 0 \)) S else {
+<+... when any
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+n@update
+...+>
+}
+)
+
+// Declaration form: T n = snprintf(buf, remaining, ...);
+
+@snprintf_decl exists@
+expression buf, remaining;
+identifier n;
+type T;
+assignment operator op_n, op_buf, op_remaining;
+position p != snprintf_null_destination.p;
+position update != {snprintf_checked_decl.update, snprintf_checked_assign.update};
+@@
+
+(
+  T n = snprintf@p(buf, remaining, ...);
+|
+  T n = vsnprintf@p(buf, remaining, ...);
+)
+... when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
+(
+  buf += n@update;
+|
+  buf = buf + n@update;
+|
+  buf = n@update + buf;
+|
+  remaining -= n@update;
+|
+  remaining = remaining - n@update;
 )
 
 @script:python@
@@ -127,6 +337,7 @@ for _p in p:
 expression buf, remaining, n;
 assignment operator op_n, op_buf, op_remaining;
 position p != snprintf_null_destination.p;
+position update != {snprintf_checked_decl.update, snprintf_checked_assign.update};
 @@
 
 (
@@ -134,8 +345,7 @@ position p != snprintf_null_destination.p;
 |
   n = vsnprintf@p(buf, remaining, ...);
 )
-... when != n >= remaining
-    when != n op_n ...
+... when != n op_n ...
     when != &n
     when != n++
     when != ++n
@@ -154,15 +364,15 @@ position p != snprintf_null_destination.p;
     when != remaining--
     when != --remaining
 (
-  buf += n;
+  buf += n@update;
 |
-  buf = buf + n;
+  buf = buf + n@update;
 |
-  buf = n + buf;
+  buf = n@update + buf;
 |
-  remaining -= n;
+  remaining -= n@update;
 |
-  remaining = remaining - n;
+  remaining = remaining - n@update;
 )
 
 @script:python@

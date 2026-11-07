@@ -267,7 +267,11 @@ unsigned integer promotions require `unsigned int` rather than `int`.
 The `snprintf`/`vsnprintf` cursor check follows return values into pointer
 advances and remaining-size updates for the same formatting destination.
 It excludes unrelated length tallies and ends local tracking when the return
-value, cursor or size changes. Reports remain candidates for bounds review.
+value, cursor or size changes. Supported truncation exits and non-truncated
+update branches are excluded per update. A comparison that only logs, a return
+that covers only some paths, or an update inside the truncation branch does not
+hide a candidate. Unsupported casts, goto/loop exits, error handling and aliases
+still require review. Reports remain candidates for bounds review.
 
 The `snprintf`/`vsnprintf` boundary check reports review candidates when a
 return value is compared with `> size`: equality also means truncation.
@@ -281,7 +285,9 @@ boundary. Aliases and arbitrary compound guard logic require manual review.
 The `strncpy` termination check follows direct destinations into string uses,
 including either input of `strcmp` and `strcat`. It excludes `strncmp` and
 `strncat` source reads bounded by the same unchanged local or literal copy
-count; `strncat` still requires a terminated destination. Destination replacement ends tracking.
+count on every path; a conditional count change retains the candidate.
+`strncat` still requires a terminated destination. Destination replacement
+ends tracking.
 Nonzero fills and zero-byte `memset` calls do not establish termination.
 For supported literal formats, it checks the actual argument conversion,
 including positional arguments and width/precision arguments. Pointer displays,
