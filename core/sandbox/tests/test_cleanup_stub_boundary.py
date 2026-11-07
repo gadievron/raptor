@@ -11,6 +11,10 @@ import pytest
 from core.sandbox import _spawn
 from core.sandbox.tests.capability import requires_landlock
 
+import core.sandbox._spawn as _storage_fault_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux spawn cleanup')
 
 
@@ -51,7 +55,7 @@ def test_cleanup_refuses_unsafe_recursive_implementation(tmp_path, monkeypatch):
         pytest.fail('unsafe recursive cleanup was called')
 
     unsafe.avoids_symlink_attacks = False
-    monkeypatch.setattr(shutil, 'rmtree', unsafe)
+    patch_module_attribute(monkeypatch, _storage_fault_consumer, 'shutil', 'rmtree', unsafe)
     _spawn._cleanup_stub(str(stub))
     assert marker.read_text() == 'leave'
     empty = tmp_path / 'empty'

@@ -22,6 +22,18 @@ from core.audit.corpus.run_corpus import (
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.audit.corpus.run_corpus as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_storage_tempfile(monkeypatch):
+    """Keep root selection and allocation on the same owned tempfile view."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.audit.corpus.run_corpus as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+
 
 @pytest.fixture(autouse=True)
 def _history_store_in_tmp(tmp_path: Path,
@@ -1689,13 +1701,12 @@ class TestExcerptTreeKeepalive:
     loop releases it."""
 
     @pytest.fixture(autouse=True)
-    def _isolated(self, monkeypatch, tmp_path):
-        import tempfile
+    def _isolated(self, monkeypatch, tmp_path, _owned_storage_tempfile):
 
         from core.run import scratch as scratch_mod
         monkeypatch.setattr(scratch_mod, "_keepalive_paths", set())
         # Keep the mkdtemp inside the test's private tmp.
-        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
 
     def test_registered_until_release(self, tmp_path):
         from core.run import scratch as scratch_mod

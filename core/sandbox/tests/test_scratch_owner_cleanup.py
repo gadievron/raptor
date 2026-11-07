@@ -10,6 +10,20 @@ import pytest
 from core.atomic_fs import rmtree_hardened
 from core.sandbox import host, observe_cli
 
+import core.run.scratch as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_storage_tempfile(monkeypatch):
+    """Keep root selection and allocation on the same owned tempfile view."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.scratch as consumer_0
+    import core.sandbox.observe_cli as consumer_1
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setattr(consumer_1, "tempfile", private)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_scratch_ownership(monkeypatch):
@@ -26,7 +40,7 @@ def _isolate_scratch_ownership(monkeypatch):
 
 @pytest.mark.parametrize("mode", [0o000, 0o500, 0o555])
 def test_observe_reclaims_restricted_output(tmp_path, monkeypatch, mode):
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(tmp_path))
     path = None
     try:
         with ExitStack() as stack:
@@ -177,7 +191,7 @@ def test_concurrent_host_cleanup_removes_tree_once(tmp_path, monkeypatch):
 def test_observe_keepalive_tracks_context_ownership(tmp_path, monkeypatch, keep):
     from core.run import scratch, tmp_reaper
 
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(tmp_path))
     monkeypatch.setattr(tmp_reaper, "_RUNTIME_DIR_PREFIXES", set())
     live = set()
     monkeypatch.setattr(scratch, "keepalive_register", lambda p: live.add(Path(p)))
@@ -208,7 +222,7 @@ def test_executable_fallback_is_kept_alive_until_scope_ends(tmp_path, monkeypatc
     from core.run import scratch
     from core.sandbox import exec_stage
 
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(tmp_path))
     monkeypatch.setattr(exec_stage, "exec_workdir", lambda: None)
     live = set()
     monkeypatch.setattr(scratch, "keepalive_register", lambda p: live.add(Path(p)))

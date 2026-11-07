@@ -26,6 +26,18 @@ from core.sandbox import evidence as ev
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.sandbox.evidence as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_storage_tempfile(monkeypatch):
+    """Keep root selection and allocation on the same owned tempfile view."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.sandbox.evidence as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+
 
 pytestmark = pytest.mark.skipif(
     not _sys.platform.startswith(("linux", "darwin")),
@@ -317,7 +329,7 @@ class TestAnonymousFd:
         # the private dir also strengthens the positive property: the
         # unlinked file provably went to the observed directory.
         patch_module_attribute(monkeypatch, ev, 'sys', "platform", "darwin")
-        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
         fd = ev.anonymous_fd(b"macos-branch")
         monkeypatch.undo()
         try:

@@ -21,6 +21,8 @@ from core.testing.module_bindings import patch_module_attribute
 
 import core.run.tmp_reaper as _tempfile_owner
 
+import core.atomic_fs as _storage_fault_consumer
+
 
 @pytest.fixture(autouse=True)
 def _owned_tempfile_namespace(monkeypatch):
@@ -281,7 +283,6 @@ class TestDirReaping:
         # Own short root instead of the tmp_root fixture: AF_UNIX paths
         # cap at ~108 chars and a nested pytest basetemp (custom TMPDIR)
         # blows past it. Same workaround as test_proxy_netns_enforcement.
-        import shutil
         import tempfile
         short_root = tempfile.mkdtemp(prefix="rpt_", dir="/tmp")
         monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: short_root)
@@ -1535,8 +1536,7 @@ class TestUnverifiableOwnerDirs:
 
         import core.run.tmp_reaper as reaper_mod
         d = self._dir(tmp_path, 1, age_s=25 * 3600)
-        monkeypatch.setattr(
-            shutil, "rmtree", lambda *a, **kw: None)
+        patch_module_attribute(monkeypatch, _storage_fault_consumer, 'shutil', 'rmtree', lambda *a, **kw: None)
         with caplog.at_level(_logging.INFO, logger="core.run.tmp_reaper"):
             got = reaper_mod.reap_dead_pid_dirs(
                 tmp_path, "raptor-pytest-", pid_suffix=True)
@@ -1617,7 +1617,7 @@ class TestMidSweepVanish:
                 real_rmtree(target)  # another actor wins the race
             return real_rmtree(path, *args, **kwargs)
 
-        monkeypatch.setattr(shutil, "rmtree", racing_rmtree)
+        patch_module_attribute(monkeypatch, _storage_fault_consumer, 'shutil', 'rmtree', racing_rmtree)
         got = reaper_mod.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True)
         assert got == [target, sibling]  # newest-first delete order
