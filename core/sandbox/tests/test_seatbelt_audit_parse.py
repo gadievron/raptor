@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import os
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import evidence as evidence_mod
 from core.sandbox import seatbelt_audit
 from core.sandbox.seatbelt import SANDBOX_KEXT_SENDER
@@ -377,8 +379,8 @@ def _no_pgid(monkeypatch):
     from a canned record that never existed on the test host)."""
     def _raise(pid):
         raise ProcessLookupError(pid)
-    monkeypatch.setattr(seatbelt_audit.os, "getpgid", _raise)
-    monkeypatch.setattr(seatbelt_audit.os, "getsid", _raise)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getpgid", _raise)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getsid", _raise)
 
 
 def test_unscoped_streamer_accepts_any_pid(tmp_path):
@@ -425,8 +427,8 @@ def test_process_group_widens_scope(tmp_path, monkeypatch):
     def _no_sid(pid):
         raise ProcessLookupError(pid)
 
-    monkeypatch.setattr(seatbelt_audit.os, "getpgid", fake_getpgid)
-    monkeypatch.setattr(seatbelt_audit.os, "getsid", _no_sid)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getpgid", fake_getpgid)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getsid", _no_sid)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     streamer.register_target_pid(1234)
     assert streamer._record_in_scope(_scope_record(777)) is True   # same pgid
@@ -455,8 +457,8 @@ def test_session_widens_scope(tmp_path, monkeypatch):
         except KeyError:
             raise ProcessLookupError(pid) from None
 
-    monkeypatch.setattr(seatbelt_audit.os, "getpgid", fake_getpgid)
-    monkeypatch.setattr(seatbelt_audit.os, "getsid", fake_getsid)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getpgid", fake_getpgid)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "getsid", fake_getsid)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     streamer.register_target_pid(1234)
     # Different pgid, same session — the shim-forked sandbox subtree.
@@ -604,8 +606,7 @@ def test_log_streamer_o_nofollow_blocks_symlink(tmp_path):
 
 def test_credential_path_touch_escalates_once(tmp_path, monkeypatch):
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     record = {"type": "read", "path": "/Users/x/.ssh/id_rsa",
               "target_pid": 4242}
@@ -622,8 +623,7 @@ def test_credential_path_touch_escalates_once(tmp_path, monkeypatch):
 
 def test_non_credential_path_does_not_escalate(tmp_path, monkeypatch):
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     record = {"type": "read", "path": "/tmp/ordinary-file.txt",
               "target_pid": 4242}
@@ -634,8 +634,7 @@ def test_non_credential_path_does_not_escalate(tmp_path, monkeypatch):
 def test_credential_path_escalation_ignores_non_read_write_types(
         tmp_path, monkeypatch):
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     # "seccomp" bucket (mach-lookup, process-*, etc.) never carries the
     # same "did the target actually see file content" implication a
@@ -651,8 +650,7 @@ def test_credential_path_escalation_disabled_by_env_var(
         tmp_path, monkeypatch):
     monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     record = {"type": "write", "path": "/Users/x/.aws/credentials",
               "target_pid": 4242}
@@ -664,7 +662,7 @@ def test_credential_path_escalation_survives_stderr_write_failure(
         tmp_path, monkeypatch):
     def raising_write(fd, data):
         raise OSError("stderr closed")
-    monkeypatch.setattr(seatbelt_audit.os, "write", raising_write)
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", raising_write)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     record = {"type": "write", "path": "/Users/x/.netrc",
               "target_pid": 4242}
@@ -677,8 +675,7 @@ def test_credential_path_escalation_survives_stderr_write_failure(
 def test_credential_path_banner_sanitises_control_chars(
         tmp_path, monkeypatch):
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     # The path is attacker-controlled (the target chose what to touch);
     # ESC/BEL are ASCII so ascii/replace encoding alone keeps them.
@@ -757,8 +754,7 @@ def test_credential_banner_cap_matches_linux_tracer(tmp_path):
 def test_credential_path_escalation_tolerates_missing_target_pid(
         tmp_path, monkeypatch):
     writes = []
-    monkeypatch.setattr(seatbelt_audit.os, "write",
-                        lambda fd, data: writes.append((fd, data)))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "os", "write", lambda fd, data: writes.append((fd, data)))
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     # never-raise-out-of-the-hot-path: a record shape without
     # target_pid must not KeyError the read loop.
