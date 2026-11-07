@@ -57,29 +57,33 @@ rules:
               - metavariable-regex:
                   metavariable: $KEY
                   regex: ^['"](HTTP_HOST|HTTP_X_FORWARDED_HOST|HTTP_REFERER|PHP_SELF|REQUEST_URI|QUERY_STRING)['"]$
-      # Only unfiltered request reads are sources. Keep filter/options
-      # selection literal, and taint the return value rather than arguments.
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
       - patterns:
-          - pattern: $READER($INPUT, $NAME)
-          - metavariable-regex:
-              metavariable: $READER
-              constant-propagation: false
-              regex: '(?i)^\\?filter_input$'
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
           - metavariable-regex:
               metavariable: $INPUT
               constant-propagation: false
               regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
-          - pattern-not-inside: |
-              namespace $N;
-              ...
-              function $READER(...) { ... }
-              ...
-          - pattern-not-inside: |
-              namespace $N {
-                ...
-                function $READER(...) { ... }
-                ...
-              }
           - pattern-not-inside: |
               namespace $N;
               ...
@@ -92,27 +96,33 @@ rules:
                 ...
               }
         exact: true
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
       - patterns:
-          - pattern: $READER($INPUT, $NAME, $FILTER)
-          - metavariable-regex:
-              metavariable: $READER
-              constant-propagation: false
-              regex: '(?i)^\\?filter_input$'
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME, $FILTER)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME, $FILTER)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
           - metavariable-regex:
               metavariable: $INPUT
               constant-propagation: false
               regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
-          - pattern-not-inside: |
-              namespace $N;
-              ...
-              function $READER(...) { ... }
-              ...
-          - pattern-not-inside: |
-              namespace $N {
-                ...
-                function $READER(...) { ... }
-                ...
-              }
           - pattern-not-inside: |
               namespace $N;
               ...
