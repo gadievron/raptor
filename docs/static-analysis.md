@@ -333,6 +333,16 @@ operand types and more complex cleanup paths still require review. The
 existing exclusions for literal products and products with a `sizeof`
 factor remain; absence of a candidate does not establish overflow safety.
 
+The user-copy size check reports review candidates for `copy_to_user` sizes
+spelled with a different pointee type and `copy_from_user` sizes taken from
+an actual source pointer. Equivalent scalar signedness/qualifier spellings,
+actual array-size expressions, and copies into a pointer object of the same
+type stay quiet. A one-dimensional array-spelled function parameter is
+pointer-sized and remains covered. Different type names do not prove different byte sizes, and a
+pointer-sized partial copy can be intentional. Check the target ABI, source
+and destination extents, and intended copy contract before reporting a bug.
+Unresolved source types can remain outside the check's coverage.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
