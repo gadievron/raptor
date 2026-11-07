@@ -59,7 +59,7 @@ def _request(mode, invariant, source, line, pre_conditions, timeout_ms, deadline
 
 def _binding(request):
     return {
-        "query_contract": "mathematical-invariant-worker-v1",
+        "query_contract": "mathematical-invariant-worker-v2",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8")
         ).hexdigest(),

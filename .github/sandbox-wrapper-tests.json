@@ -830,9 +830,10 @@
             "core/audit/tests/test_smt_worker_native.py::test_native_memory_limit",
             "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted",
             "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker",
-            "core/audit/tests/test_invariant_batch.py::test_native_confined_batch"
+            "core/audit/tests/test_invariant_batch.py::test_native_confined_batch",
+            "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness"
           ],
-          "expected": 16
+          "expected": 18
         },
         "darwin": {
           "tests": [
@@ -842,9 +843,10 @@
             "core/audit/tests/test_smt_worker_native.py::test_native_timeout_returns_no_verdict",
             "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted",
             "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker",
-            "core/audit/tests/test_invariant_batch.py::test_native_confined_batch"
+            "core/audit/tests/test_invariant_batch.py::test_native_confined_batch",
+            "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness"
           ],
-          "expected": 15
+          "expected": 17
         }
       }
     },
