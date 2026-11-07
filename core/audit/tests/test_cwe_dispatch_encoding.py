@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 import core.audit.joern_verify as joern_verify
 from core.audit.cwe_dispatch import (
     CWE_NOT_TOOL_VERIFIABLE,
@@ -400,7 +402,6 @@ class TestCliDispatchability:
 
     def test_sweep_cli_dispatches_encoding_residual(self, tmp_path):
         import os
-        import subprocess
         import sys
 
         target = tmp_path / "tgt"
@@ -411,7 +412,7 @@ class TestCliDispatchability:
         repo = Path(__file__).resolve().parents[3]
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(repo / "libexec" / "raptor-audit"),
              "sweep", "--tool", "smt",
              "--smt-verb", "check-encoding-residual",
