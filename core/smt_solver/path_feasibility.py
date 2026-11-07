@@ -567,10 +567,26 @@ def reserve_anon_names(texts: list[str], vars_: dict[str, Any]) -> None:
                 vars_.setdefault(match.group(), None)
 
 
-def _next_anon_index(vars_: dict[str, Any]) -> int:
+def _native_constant_names(expressions) -> set[str]:
+    """Collect free declarations hidden inside aliases and derived terms."""
+    names, seen = set(), set()
+    pending = [expr for expr in expressions if z3.is_expr(expr)]
+    while pending:
+        expr = pending.pop()
+        identity = (id(expr.ctx), expr.get_id())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if z3.is_const(expr) and expr.decl().kind() == z3.Z3_OP_UNINTERPRETED:
+            names.add(str(expr.decl().name()))
+        pending.extend(expr.children())
+    return names
+
+
+def _next_anon_index(vars_: dict[str, Any], reserved: set[str]) -> int:
     """Lowest unused index; sparse or huge source suffixes cannot inflate it."""
     index = 0
-    while f'_anon_{index}' in vars_:
+    while f'_anon_{index}' in vars_ or f'_anon_{index}' in reserved:
         index += 1
     return index
 
@@ -603,7 +619,11 @@ def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     later, even when a low-level caller has not pre-reserved its guards.
     """
     _validate_var_registry(vars_, profile)
+    reserved = set(vars_) | _native_constant_names(vars_.values())
     variable = z3.FreshConst(z3.BitVecSort(profile.width), prefix="_anon_operand")
+    # Native fresh counters do not reserve explicitly declared names.
+    while str(variable.decl().name()) in reserved:
+        variable = z3.FreshConst(z3.BitVecSort(profile.width), prefix="_anon_operand")
     vars_[str(variable.decl().name())] = variable
     return variable
 
@@ -812,6 +832,7 @@ def _substitute_calls(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
     anon_map: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
+    reserved_native_names: set[str] | None = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with free Z3 variables.
 
@@ -829,11 +850,14 @@ def _substitute_calls(
     optional anon_map records occurrence labels only; it is never an alias
     oracle. Definition summaries may independently equate results through
     their modeled arguments, while range summaries leave them independent.
+    Reserve underlying native names as well as source keys: registry aliases
+    and other predicates in a verb frame can hide an existing _anon_N symbol.
 
     Unbalanced parentheses are left for the condition parser to reject.
     """
     reserve_anon_names([text], vars_)
-    counter = _next_anon_index(vars_)
+    reserved = _native_constant_names(vars_.values()) | (reserved_native_names or set())
+    counter = _next_anon_index(vars_, reserved)
     out: list[str] = []
     i = 0
     n = len(text)
@@ -843,7 +867,7 @@ def _substitute_calls(
             j = find_call_end(text, m.end())
             if j is not None:
                 call_text = text[i:j]
-                while f'_anon_{counter}' in vars_:
+                while f'_anon_{counter}' in vars_ or f'_anon_{counter}' in reserved:
                     counter += 1
                 placeholder = f'_anon_{counter}'
                 counter += 1
@@ -891,6 +915,7 @@ def _parse_condition(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
     anon_map: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
+    reserved_native_names: set[str] | None = None,
 ) -> Any | Rejection:
     """Parse a single condition string into a Z3 boolean expression.
 
@@ -952,6 +977,7 @@ def _parse_condition(
         canonicalised, vars_, profile=profile,
         anon_map=anon_map,
         axiom_sink=axiom_sink,
+        reserved_native_names=reserved_native_names,
     )
 
     # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
@@ -1069,6 +1095,7 @@ def _classify_text_condition(
     profile: BVProfile,
     anon_map: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
+    reserved_native_names: set[str] | None = None,
 ) -> tuple[str | None, tuple[str, Any] | None, Rejection | None]:
     """Parse one text condition and classify it.
 
@@ -1090,6 +1117,7 @@ def _classify_text_condition(
         cond.text, vars_, profile=profile,
         anon_map=anon_map,
         axiom_sink=axiom_sink,
+        reserved_native_names=reserved_native_names,
     )
     if isinstance(expr, Rejection):
         _get_logger().debug(
@@ -1132,6 +1160,7 @@ class _ConditionBatch:
 def _classify_conditions(
     conditions: list[PathCondition], vars_: dict[str, Any], solver: Any,
     *, profile: BVProfile, use_call_summaries: bool = True,
+    reserved_native_names: set[str] | None = None,
 ) -> _ConditionBatch:
     """Parse a complete guard frame without dropping its background theory.
 
@@ -1154,6 +1183,7 @@ def _classify_conditions(
             cond, vars_, solver, profile=profile,
             anon_map=batch.anon_map,
             axiom_sink=batch.axioms if use_call_summaries else None,
+            reserved_native_names=reserved_native_names,
         )
         batch.axiom_epochs.extend([epoch] * (len(batch.axioms) - previous_axioms))
         if sat_display is not None:
@@ -1662,11 +1692,13 @@ def check_verb_feasibility(
         )
     tautology_solver = _new_solver() if reduce_constraints else None
     solver = _new_solver()
-    batch = _classify_conditions(text_guards, vars_, tautology_solver, profile=profile)
     # Operand calls remain independent occurrences. Their theory has no
     # established scalar segment across rejected mutations.
     operand_model = operand_model if operand_model is not None else CallOperandModel()
     operand_axioms = list(operand_model.axioms)
+    reserved = _native_constant_names(expr for _, expr in [*intrinsic, *operand_axioms])
+    batch = _classify_conditions(text_guards, vars_, tautology_solver, profile=profile,
+                                 reserved_native_names=reserved)
     return _solve_pending(
         list(intrinsic) + batch.pending, solver,
         batch.satisfied, batch.unknown, batch.rejections,
