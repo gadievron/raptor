@@ -104,9 +104,7 @@ for isolation and cleanup patterns, see
 - Tests live in `tests/` subdirectories alongside the code they test.
 - Use `pytest`. No `jsonschema` validation — assert on actual data shapes.
 - Test against production-class object shapes, not toy stubs.
-- Include the [companion checks for test changes](docs/developers.md#companion-checks-for-test-changes):
-  live-tool caller inventories, fixture ownership harnesses, and CI-lane
-  dependencies must stay aligned with the tests they cover.
+- Follow the [companion checks for test changes](docs/developers.md#companion-checks-for-test-changes).
 - Keep tests hermetic: own temporary state and restore process state and
   resources on success and failure. Follow the
   [hermetic test guidelines](docs/developers.md#writing-hermetic-tests),
@@ -119,71 +117,36 @@ for isolation and cleanup patterns, see
   suite stays under a few seconds.
 
 
+### Sandbox wrapper tests
+
+Policy-owning sandbox wrappers need reviewed executable tests for their
+security contract. Follow the [wrapper testing guide](docs/developers.md#sandbox-wrapper-tests)
+when adding or changing an entrypoint.
+
+
 ## Style
 
 - Run `ruff check --fix` on every file you touch before committing.
 - Match the style of surrounding code.
 
 
+## Documentation
+
+Most `docs/` pages are user-facing. Keep contributor and implementation
+instructions in the appropriate technical references; follow the
+[documentation audience guidance](docs/developers.md#documentation-audiences).
+
+
 ## CI checks
 
-Beyond the test suite and lint (which run on every PR — including
-`check_command_metadata.py`, which requires every `.claude/commands/*.md`
-to carry a parseable `dispatch:` field whose target exists on disk), the
-repo-invariant detectors are PR gates too: the `repo-invariants` job in
-`.github/workflows/lint.yml` runs them on every pull request, push to
-`main`, and merge-queue entry, and
-`.github/workflows/miswiring-scan.yml` re-runs the same set daily as a
-belt-and-braces sweep. A new finding fails the job; deliberate
-exceptions go in the detector's baseline JSON with a note. For moves and
-renames, follow [Refactors and audit records](docs/developers.md#refactors-and-audit-records):
-review entries keyed by the old path/symbol and run the affected gate along
-with functional tests. The two you are most likely to hit:
+Changes must pass the relevant tests, lint, and repository-invariant gates.
+Fix new findings, or document a deliberate exception with its review note.
+Include the [companion checks](docs/developers.md#companion-checks-for-test-changes)
+and [audit-record review](docs/developers.md#refactors-and-audit-records) that
+apply to your change, including after a rebase.
 
-- **Miswiring scan** (`.github/scripts/check_miswiring.py`) — detects
-  kwarg/signature mismatches, broken in-repo imports, dead definitions,
-  write-only or reader-orphan run artifacts, silently-swallowed
-  exceptions, and config fields / CLI flags / env vars that are parsed
-  but never read. New findings fail against
-  `.github/scripts/miswiring_baseline.json`: fix the miswiring, or
-  (deliberately, with a note) add the key to the baseline.
-
-- **Vocab-list guardrail** (`.github/scripts/check_vocab_lists.py`) —
-  flags new literal function-name lists (or regex alternations) longer
-  than nine names outside the data-pack and taxonomy seams. Vocabulary
-  belongs in a data pack (`core/audit/data/vocab_packs/`,
-  `core/function_taxonomy/data/packs/`,
-  `engine/coccinelle/source_intel/crypto/packs/`), the study-learned
-  domain model, or the central taxonomy — not hardcoded in logic. New
-  findings fail against `.github/scripts/vocab_baseline.json`; route the
-  names through one of those seams, or baseline the entry with a note.
-  Fixed event, report, and persistence field schemas can also trigger the
-  census. Review those separately from learned domain vocabularies; a schema
-  baseline note must identify the format and its producer/consumer contract.
-  Run `python3 .github/scripts/check_vocab_lists.py` after changing a large
-  literal mapping or name set, before submitting or merging the change.
-
-
-### Deliberate keep-blocks (REVISIT)
-
-The miswiring baseline carries two blocks of dead-code entries that
-were deliberately KEPT by operator decision (2026-08-16) rather than
-deleted — each entry's `note` says why:
-
-- `kept: public API surface … — revisit` —
-  `packages/exploit_feasibility` names kept as library surface with
-  zero in-repo consumers.
-- `kept: pending work — autonomous fuzzing loop feature seed …` —
-  `packages/autonomous` seeds for the planned autonomous fuzzing loop,
-  unwired since introduction.
-
-The convention is grep, not automation (deliberate — these are
-judgement calls, not mechanically decidable): when you touch one of
-those modules, grep the baseline for its keep-block phrasing
-(`grep 'kept:' .github/scripts/miswiring_baseline.json`) and re-ask
-whether the block still deserves keeping — wire the entries you are
-adopting, or delete the ones your change obsoletes and drain their
-baseline entries in the same commit.
+See [CI controls](docs/ci-controls.md) for the gate inventory, local commands,
+and baseline review rules.
 
 
 ## Security conventions
@@ -230,52 +193,3 @@ Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes d
 what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:`
 for security changes, `docs:` for documentation. Anything without a prefix lands in
 "Other changes". No strict convention required, but it helps.
-
-### Sandbox wrapper tests
-
-Every policy-owning sandbox wrapper must have an executable test case. The
-registry in `.github/sandbox-wrapper-tests.json` binds each source file and its
-sandbox entrypoints to reviewed pytest cases. The CI census detects direct public
-sandbox calls, including import aliases, outside the sandbox backend itself.
-Self-confining or delegated workers without a direct call need an explicit
-registry row and discovery rationale. Backend implementations remain covered by
-`core/sandbox/tests`.
-
-A binding must exercise the adapter's dispatch or refusal path and assert its
-security contract; an import-only test is insufficient. Multiple dispatch paths
-need cases for their different policies. Update the bindings when adding an
-entrypoint. The census enforces registration and selector existence; reviewing
-whether the assertions cover the policy remains part of code review.
-
-Run the selected contracts with the project environment:
-
-```sh
-python .github/scripts/run_sandbox_wrapper_tests.py --lane contracts --report-dir out/wrapper-contracts
-```
-
-The `Sandbox wrapper acceptance` workflow runs those contracts on Linux and
-macOS, followed by existing native suites for binary inspection, streamed output,
-pwntools, SMT, radare2, Python/Ruby gadget parsers, Joern's guard, PoC execution,
-fuzz/build dispatch and symbolic workers. Linux additionally exercises loader and
-procfs probes. These are real platform backends: expected execution counts are
-checked, and a required skipped case fails acceptance. Linux containment results
-do not substitute for Seatbelt results.
-
-```sh
-python .github/scripts/run_sandbox_wrapper_tests.py --lane native --report-dir out/wrapper-native
-```
-
-The plan and summary distinguish native execution from cells not exercised.
-Vendor-dependent Joern service and CodeQL traced-build cases, and rr cases that
-need compatible Linux perf/PMU hardware, require explicit selection on a prepared
-host. They are not counted as hosted CI passes. For example:
-
-```sh
-python .github/scripts/run_sandbox_wrapper_tests.py --lane native --family rr-record-pack --include-manual --report-dir out/wrapper-rr
-```
-
-Other vendor adapters have portable dispatch contracts; the matrix does not claim
-that every installed vendor tool has been exercised natively. Add native families
-as their dependencies can be provisioned reliably. The runner uses disposable
-HOME, output and scratch directories, copies no account state, and launches no
-frontend. Native probes use owned files and processes.

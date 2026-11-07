@@ -27,6 +27,7 @@ The tree, docstrings, and `--help` output own API and CLI details;
 
 **On this page:**
 
+- [Documentation audiences](#documentation-audiences)
 - [Working on the development version](#working-on-the-development-version)
 - [The two-layer split](#the-two-layer-split)
 - [Layering rules](#layering-rules)
@@ -35,8 +36,18 @@ The tree, docstrings, and `--help` output own API and CLI details;
 - [CLI help-text standard](#cli-help-text-standard)
 - [Sandbox: what code may assume](#sandbox-what-code-may-assume)
 - [Running tests](#running-tests)
+- [Sandbox wrapper tests](#sandbox-wrapper-tests)
 - [Writing hermetic tests](#writing-hermetic-tests)
 - [Mechanical gates you will hit](#mechanical-gates-you-will-hit)
+
+## Documentation audiences
+
+Most pages under `docs/` are user-facing. Keep them focused on user tasks,
+configuration, observable behavior, and limitations. Contributor process,
+CI mechanics, and implementation detail belong in explicitly technical
+references such as this guide, the architecture reference, and CI controls.
+Follow each page's stated audience and purpose; link to the appropriate
+reference instead of duplicating its detail in user instructions.
 
 ## Working on the development version
 
@@ -299,6 +310,55 @@ status after printing the paths, without exiting your interactive shell.
 preserves a failing pipeline status. The text log remains useful if the
 process crashes; JUnit XML may be incomplete if pytest cannot finish.
 
+### Sandbox wrapper tests
+
+Every policy-owning sandbox wrapper must have an executable test case. The
+registry in `.github/sandbox-wrapper-tests.json` binds each source file and its
+sandbox entrypoints to reviewed pytest cases. The CI census detects direct public
+sandbox calls, including import aliases, outside the sandbox backend itself.
+Self-confining or delegated workers without a direct call need an explicit
+registry row and discovery rationale. Backend implementations remain covered by
+`core/sandbox/tests`.
+
+A binding must exercise the adapter's dispatch or refusal path and assert its
+security contract; an import-only test is insufficient. Multiple dispatch paths
+need cases for their different policies. Update the bindings when adding an
+entrypoint. The census enforces registration and selector existence; reviewing
+whether the assertions cover the policy remains part of code review.
+
+Run the selected contracts with the project environment:
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane contracts --report-dir out/wrapper-contracts
+```
+
+The `Sandbox wrapper acceptance` workflow runs those contracts on Linux and
+macOS, followed by existing native suites for binary inspection, streamed output,
+pwntools, SMT, radare2, Python/Ruby gadget parsers, Joern's guard, PoC execution,
+fuzz/build dispatch and symbolic workers. Linux additionally exercises loader and
+procfs probes. These are real platform backends: expected execution counts are
+checked, and a required skipped case fails acceptance. Linux containment results
+do not substitute for Seatbelt results.
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane native --report-dir out/wrapper-native
+```
+
+The plan and summary distinguish native execution from cells not exercised.
+Vendor-dependent Joern service and CodeQL traced-build cases, and rr cases that
+need compatible Linux perf/PMU hardware, require explicit selection on a prepared
+host. They are not counted as hosted CI passes. For example:
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane native --family rr-record-pack --include-manual --report-dir out/wrapper-rr
+```
+
+Other vendor adapters have portable dispatch contracts; the matrix does not claim
+that every installed vendor tool has been exercised natively. Add native families
+as their dependencies can be provisioned reliably. The runner uses disposable
+HOME, output and scratch directories, copies no account state, and launches no
+frontend. Native probes use owned files and processes.
+
 ### AddressSanitizer on macOS
 
 A sanitizer-enabled program can hang before `main()` with an older selected
@@ -551,52 +611,13 @@ record was separated from its code. Gate commands live in [CI controls](ci-contr
 
 ## Mechanical gates you will hit
 
-The full control inventory, triggers, and reproduce-locally commands
-are in [ci-controls.md](ci-controls.md). The ones that bite
-contributors, one line each:
+Run the repository-invariant checks relevant to your change alongside its
+functional tests and lint. These gates also inspect relationships that a
+passing unit test does not establish, such as registered call sites, artifact
+consumers, and reviewed exceptions. Documentation references can affect some
+findings, so include relevant gates after documentation changes or a rebase.
 
-- **ruff** (PR-blocking) — `F401`/`F811`/`F821`/`F841` over changed
-  Python files; config in `pyproject.toml`.
-- **command-metadata** (PR-blocking,
-  `.github/scripts/check_command_metadata.py`) — every
-  `.claude/commands/*.md` needs a parseable `dispatch:` field whose
-  target exists on disk.
-- **env-docs** (PR gate + daily sweep, `.github/scripts/check_env_docs.py`) — extracts
-  every environment variable the tree reads or writes; an undocumented
-  operator-facing variable fails, and so does a stale entry in
-  [environment.md](environment.md).
-- **vocab-lists** (PR gate + daily sweep, `.github/scripts/check_vocab_lists.py`) —
-  literal identifier lists longer than nine names outside the data-pack
-  seams fail. Learned domain names belong in the vocabulary seams. Fixed
-  serialization schemas (event/report/persistence field names) can trigger
-  the same census: review the fields and their producer/consumer contract,
-  then record the exact key, kind, count, and rationale in
-  `.github/scripts/vocab_baseline.json`. This is a reviewed exception for
-  that schema, not a blanket exemption for dictionaries. Run
-  `python3 .github/scripts/check_vocab_lists.py` before submitting or merging
-  additions or changes to large literal mappings or name sets; include the
-  reviewed baseline change with the schema change.
-- **miswiring** (PR gate + daily sweep, `.github/scripts/check_miswiring.py`) — dead
-  definitions, kwarg/signature mismatches, swallowed exceptions,
-  parsed-but-never-read flags. Note it counts textual mentions in
-  `docs/`, `.claude/`, `bin/`, `tiers/`, and `.github/` as
-  references — a doc line can keep a symbol "alive".
-- **optional-dep-imports** (PR gate + daily sweep) — test files importing optional
-  packages need an import guard, or they pass on developer hosts and
-  fail on bare CI.
-- **canonical-json** (PR gate + daily sweep, `.github/scripts/check_canonical_json.py`)
-  — canonical JSON byte forms are frozen: inside the MAC/hash module
-  list every raw `json.dumps` must be `core.json.dumps_canonical` or
-  baselined with a note, and a `json.dumps` result flowing into
-  `hashlib`/`hmac` anywhere is a new canonical site that must be
-  routed through `dumps_canonical` or baselined.
-- **ci-controls doc guard** (PR,
-  `.github/tests/test_ci_controls_docs.py`) — every path named in
-  [ci-controls.md](ci-controls.md) must exist on disk.
-- **preflight hazards** (PR, `.github/workflows/preflight.yml`) —
-  re-runs the PR's changed tests under CI-reality hazards (hidden
-  optional deps, shuffle legs, duration guard).
-
-Each baseline file under `.github/scripts/*_baseline.json` is an
-exception list whose target size is zero: fix the finding, or baseline
-it deliberately with a note.
+[CI controls](ci-controls.md#gate-details-and-local-reproduction) owns the
+control inventory, triggers, and local commands.
+[Reviewing invariant findings](ci-controls.md#reviewing-invariant-findings)
+explains baseline review, fixed schemas, and deferred cleanup notes.
