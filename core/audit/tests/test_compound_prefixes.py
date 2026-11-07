@@ -54,7 +54,7 @@ def test_compound_and_unary_prefixes_reach_real_overflow_disproof(prefix, extra,
     result = sweep._run_smt_verb_inner(file_path='record.' + language, function_name='Read', verb='check-overflow',
                                      source=source(prefix, extra), hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v19'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v20'
 
 
 @pytest.mark.parametrize('prefix,extra', [

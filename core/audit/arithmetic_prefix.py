@@ -5,6 +5,8 @@ It does not infer values for locals, execute user conversions, or guess
 implementation-defined signed narrowing behavior.
 """
 
+from core.smt_solver.sizeof_model import builtin_integer_sizeof
+
 from .arithmetic_operation import _unwrap
 from .arithmetic_prefix_obligations import PrefixProofBudget, binary_domain, unary_domain
 from .arithmetic_expression_types import MAX_PREFIX_DEPTH as _MAX_DEPTH, expression_kind
@@ -93,11 +95,10 @@ class PrefixIntegerModel:
         if argument is not None and argument.type == "type_descriptor" and argument.child_by_field_name("declarator") is None:
             type_node = self.descriptor_base(argument)
             spelling = self.text(type_node)
-            if spelling == "char":
-                return (1, 1)
-            kind = integer_type(spelling, self.abi)
-            if spelling in {"bool", "_Bool"}:
-                kind = None  # the ABI does not assert Boolean storage size
+            value = builtin_integer_sizeof(spelling, self.abi)
+            if value is None:
+                return (1, None) if node.type == "alignof_expression" else (0, None)
+            return (1, value) if node.type == "alignof_expression" else (value, value)
         elif argument is not None and argument.type == "cast_expression":
             kind = self.cast_kind(argument)
             if kind is not None and kind.width == 1:

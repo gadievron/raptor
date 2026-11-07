@@ -731,7 +731,7 @@ class TestInconclusiveBookingTripwire:
         config = OrchestratorConfig(target_path=tgt, out_dir=out)
         monkeypatch.setattr(
             inv, "check_invariant_preservation",
-            lambda invariant, source: SimpleNamespace(
+            lambda invariant, source, **kwargs: SimpleNamespace(
                 outcome="inconclusive", invariant=invariant,
                 reason="invariant outside the linear fragment"),
         )

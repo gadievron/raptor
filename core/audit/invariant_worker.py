@@ -7,18 +7,40 @@ import math
 from core.json import dumps_canonical
 from core.smt_solver import session
 from .invariant_outcomes import aggregate_verdicts
+from .integer_abi import integer_abi_record
 
 _MAX_SOURCE = 65536
 _MAX_TEXT = 8192
 _MAX_SITES = 256
 _REQUEST_FIELDS = frozenset(
-    {"mode", "invariant", "source", "line", "pre_conditions", "timeout_ms", "deadline"}
+    {
+        "mode",
+        "invariant",
+        "source",
+        "line",
+        "pre_conditions",
+        "timeout_ms",
+        "deadline",
+        "integer_abi",
+    }
 )
-_SITE_FIELDS = frozenset({"line", "code", "verdict", "reason", "model"})
+_SITE_FIELDS = frozenset({"line", "code", "verdict", "reason", "model", "integer_abi"})
 _RESULT_FIELDS = frozenset({"outcome", "invariant", "sites", "reason", "rule_id"})
 
 
-def _request(mode, invariant, source, line, pre_conditions, timeout_ms, deadline):
+def _request(
+    mode,
+    invariant,
+    source,
+    line,
+    pre_conditions,
+    timeout_ms,
+    deadline,
+    integer_abi=None,
+):
+    abi_record = integer_abi_record(integer_abi)
+    if integer_abi is not None and integer_abi != "unknown" and abi_record is None:
+        return None
     if (
         not isinstance(mode, str)
         or mode not in {"function", "site"}
@@ -55,19 +77,20 @@ def _request(mode, invariant, source, line, pre_conditions, timeout_ms, deadline
         pre_conditions=list(pre_conditions),
         timeout_ms=min(timeout_ms, (1 << 31) - 1),
         deadline=deadline,
+        integer_abi=abi_record,
     )
 
 
 def _binding(request):
     return {
-        "query_contract": "mathematical-invariant-worker-v7",
+        "query_contract": "mathematical-invariant-worker-v8",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8")
         ).hexdigest(),
     }
 
 
-def _site(raw):
+def _site(raw, integer_abi=None):
     from .invariant_smt import SiteResult
 
     if (
@@ -82,6 +105,11 @@ def _site(raw):
         or not isinstance(raw["verdict"], str)
         or raw["verdict"]
         not in {"preserved", "preserved_nonneg", "violable", "unknown", "out_of_scope"}
+        or raw["integer_abi"] != integer_abi
+        or (
+            raw["integer_abi"] is not None
+            and integer_abi_record(raw["integer_abi"]) != raw["integer_abi"]
+        )
         or not isinstance(raw["model"], dict)
         or len(raw["model"]) > 256
     ):
@@ -97,14 +125,20 @@ def _site(raw):
         return None
     if bool(model) != (raw["verdict"] in {"violable", "preserved_nonneg"}):
         return None
-    return SiteResult(**{**raw, "model": dict(model)})
+    return SiteResult(
+        **{
+            **raw,
+            "model": dict(model),
+            "integer_abi": dict(integer_abi) if integer_abi is not None else None,
+        }
+    )
 
 
 def _result(raw, request):
     from .invariant_smt import InvariantPreservationResult, RULE_ID
 
     if request["mode"] == "site":
-        site = _site(raw)
+        site = _site(raw, request["integer_abi"])
         if site is not None and request["line"] and site.line != request["line"]:
             return None
         return site
@@ -121,7 +155,7 @@ def _result(raw, request):
         or len(raw["sites"]) > _MAX_SITES
     ):
         return None
-    sites = [_site(item) for item in raw["sites"]]
+    sites = [_site(item, request["integer_abi"]) for item in raw["sites"]]
     if any(site is None for site in sites):
         return None
     if sites:
@@ -134,7 +168,15 @@ def _result(raw, request):
 
 
 def run_check(
-    mode, invariant, source, *, line=0, pre_conditions=(), timeout_ms=5000, deadline
+    mode,
+    invariant,
+    source,
+    *,
+    line=0,
+    pre_conditions=(),
+    timeout_ms=5000,
+    deadline,
+    integer_abi=None,
 ):
     """Parent-side transport: no source binding or native solver execution."""
     from .condition_smt import _run_z3_child
@@ -155,7 +197,7 @@ def run_check(
         )
 
     request = _request(
-        mode, invariant, source, line, pre_conditions, timeout_ms, deadline
+        mode, invariant, source, line, pre_conditions, timeout_ms, deadline, integer_abi
     )
     if request is None:
         return decline(
@@ -207,6 +249,7 @@ def run_request(args):
                 request["invariant"],
                 request["source"],
                 timeout_ms=request["timeout_ms"],
+                integer_abi=request["integer_abi"],
             )
         else:
             result = _check_site_preservation(
@@ -215,5 +258,10 @@ def run_request(args):
                 line=request["line"],
                 pre_conditions=tuple(request["pre_conditions"]),
                 timeout_ms=request["timeout_ms"],
+                integer_abi=request["integer_abi"],
             )
+    for site in result.sites if request["mode"] == "function" else [result]:
+        site.integer_abi = (
+            dict(request["integer_abi"]) if request["integer_abi"] is not None else None
+        )
     return {"binding": _binding(request), "result": asdict(result)}

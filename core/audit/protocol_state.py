@@ -744,6 +744,7 @@ def check_invariant_multi_site(
     *,
     max_sites: int = MAX_SITES_PER_INVARIANT,
     budget_s: float = INVARIANT_BUDGET_S,
+    integer_abi=None,
 ) -> dict[str, Any]:
     """Every census write site of every invariant identifier, across
     functions, gets the existing inductive step
@@ -821,7 +822,7 @@ def check_invariant_multi_site(
         # startup both consume the outer budget; each site retains its
         # normal native cap inside the worker.
         remaining_ms = int(max(0.0, budget_s - (time.monotonic() - t0)) * 1000)
-        results = check_site_batch(invariant, runnable, timeout_ms=remaining_ms)
+        results = check_site_batch(invariant, runnable, timeout_ms=remaining_ms, integer_abi=integer_abi)
         if results is None or len(results) != len(runnable):
             results = [SiteResult(line=record["line"], code=record["code"], verdict="unknown",
                                  reason="confined invariant batch unavailable or incomplete")
@@ -975,6 +976,7 @@ def _adjudicate_invariant(
     context: Any = None,
     inventory: dict[str, Any] | None = None,
     budget_s: float = INVARIANT_BUDGET_S,
+    integer_abi=None,
 ) -> StateEvidence:
     try:
         import z3  # noqa: F401
@@ -984,7 +986,7 @@ def _adjudicate_invariant(
         )
 
     multi = check_invariant_multi_site(
-        invariant, index, source_texts, budget_s=budget_s,
+        invariant, index, source_texts, budget_s=budget_s, integer_abi=integer_abi,
     )
     receipt_entry = _invariant_receipt(domain_model, invariant)
     inv_receipt: dict[str, Any] = {
@@ -1151,6 +1153,7 @@ def run_protocol_state_check(
     source_texts: dict[str, str] | None = None,
     state_index: dict[str, Any] | None = None,
     budget_s: float = INVARIANT_BUDGET_S,
+    integer_abi=None,
 ) -> StateEvidence:
     """Adjudicate one protocol-state hypothesis.
 
@@ -1190,7 +1193,7 @@ def run_protocol_state_check(
     if invariant:
         return _adjudicate_invariant(
             invariant, index, source_texts, domain_model, state_vocab,
-            context=context, inventory=inventory, budget_s=budget_s,
+            context=context, inventory=inventory, budget_s=budget_s, integer_abi=integer_abi,
         )
 
     # Legs 1+2 — receipts re-derived, outcome capped at detection
@@ -1315,6 +1318,7 @@ def run_protocol_state_prepass(
     context: Any = None,
     domain_model: dict[str, Any] | None = None,
     budget_s: float = 30.0,
+    integer_abi=None,
 ) -> dict[str, Any]:
     """Standing pre-pass: legs 1+2 emit **leads only** (they exist to
     make the LLM form the right hypothesis with receipts attached);
@@ -1478,7 +1482,7 @@ def run_protocol_state_prepass(
             res = _adjudicate_invariant(
                 invariant, index, source_texts, domain_model,
                 state_vocab, context=context, inventory=inventory,
-                budget_s=min(INVARIANT_BUDGET_S, budget_s),
+                budget_s=min(INVARIANT_BUDGET_S, budget_s), integer_abi=integer_abi,
             )
             telemetry[
                 "confirmed" if res.outcome == "confirmed" else

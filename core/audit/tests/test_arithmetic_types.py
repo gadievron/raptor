@@ -122,9 +122,11 @@ def test_explicit_math_api_shows_why_uint32_was_the_wrong_product_frame():
 @pytest.mark.parametrize("ctype", ["signed char", "unsigned char"])
 def test_narrow_storage_does_not_allow_arbitrary_promoted_int_values(c_grammar, ctype):
     pytest.importorskip("z3")
-    text = f"int Read({ctype} a, {ctype} b) {{ return a * b; }}"
+    # Addition distinguishes narrow storage domains from unrestricted int
+    # inputs without making this domain check depend on nonlinear solving.
+    text = f"int Read({ctype} a, {ctype} b) {{ return a + b; }}"
     result = sweep._run_smt_verb_inner(file_path="record.c", function_name="Read", verb="check-overflow",
-                                     source=text, hypothesis="integer overflow in `a` * `b`", integer_abi="ilp32")
+                                     source=text, hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32")
     assert result.outcome == "refuted", result.errors
     assert result.details["source_operation"]["profile"] == "int32"
 

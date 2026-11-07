@@ -7394,6 +7394,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                     context_map=context_map,
                 ),
                 domain_model=prep_domain_model,
+                **({"integer_abi": getattr(config, "integer_abi", None)} if _ch_name == "protocol_state" else {}),
             )
             for mf in _ch_out.get("mechanical", []):
                 key = f"{mf['file']}:{mf['function']}"
@@ -23285,6 +23286,7 @@ def _run_tool_chain(
                     domain_model=ps_dm,
                     invariant=tool_cfg.get("invariant") or None,
                     source_texts=ps_texts,
+                    integer_abi=getattr(config, "integer_abi", None),
                     state_index=_hypothesis_state_index(
                         config, effective_target, file_path, ps_texts,
                     ),
@@ -23355,6 +23357,7 @@ def _run_tool_chain(
                 inv_res = check_invariant_preservation(
                     tool_cfg.get("invariant", ""),
                     source or "",
+                    integer_abi=getattr(config, "integer_abi", None),
                 )
                 _record_invariant_receipt(
                     config, file_path, function_name, inv_res,

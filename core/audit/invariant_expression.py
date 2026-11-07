@@ -227,7 +227,7 @@ def _evaluate(node, values):
 
 
 def validate_counterexample(
-    lhs, op, rhs, new_expr, var, conditions, model, *, nonnegative=False
+    lhs, op, rhs, new_expr, var, conditions, model, *, nonnegative=False, integer_abi=None
 ):
     """Replay the exact pre-state, guards, assignment and violated post-state.
 
@@ -271,6 +271,11 @@ def validate_counterexample(
     ):
         return False
     if any(kind == "sizeof" and model[name] < 0 for name, kind in symbols.items()):
+        return False
+    from .invariant_sizeof import resolved_sizeof_values
+
+    expressions = [lhs, rhs, new_expr, *(node for a, _, b in conditions for node in (a, b))]
+    if any(model[name] != value for name, value in resolved_sizeof_values(expressions, integer_abi).items()):
         return False
     if nonnegative and any(model[name] < 0 for name in symbols):
         return False
