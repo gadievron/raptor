@@ -49,6 +49,7 @@ from .extractors import (
 from .languages import LANGUAGE_MAP, detect_language
 from .lookup import lookup_function, normalise_path
 import logging
+from core.atomic_fs import rename_without_replace
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -660,21 +661,33 @@ def _publish_checklist_form(
     """
     final_dir = _sharded_dir_for(checklist_path)
     stale = None
+    previous_identity = None
     try:
         if os.path.lexists(final_dir):
+            previous = final_dir.lstat()
+            previous_identity = (previous.st_dev, previous.st_ino)
             stale = _retired_name(checklist_path.parent, "stale")
-            os.rename(final_dir, stale)
-        os.replace(staged, final_dir if sharded else checklist_path)
+            rename_without_replace(final_dir, stale)
+        if sharded:
+            rename_without_replace(staged, final_dir)
+        else:
+            os.replace(staged, checklist_path)
     except BaseException:
-        if stale is not None and os.path.lexists(stale):
+        if stale is not None and previous_identity is not None:
             try:
-                if not os.path.lexists(final_dir):
-                    os.rename(stale, final_dir)
+                retired = stale.lstat()
+            except FileNotFoundError:
+                pass  # Retirement did not complete.
+            except BaseException:
+                logger.warning("could not inspect previous checklist at %s", stale, exc_info=True)
+            else:
+                if (retired.st_dev, retired.st_ino) == previous_identity:
+                    try:
+                        rename_without_replace(stale, final_dir)
+                    except BaseException:
+                        logger.warning("could not restore previous checklist at %s", stale, exc_info=True)
                 else:
-                    logger.warning("previous checklist retained at %s", stale)
-            except OSError:
-                logger.warning("could not restore previous checklist at %s", stale,
-                               exc_info=True)
+                    logger.warning("refusing unrelated checklist recovery entry at %s", stale)
         raise
     if sharded:
         try:

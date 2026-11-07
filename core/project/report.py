@@ -14,6 +14,7 @@ from typing import Any, TYPE_CHECKING
 from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.fs_lock import artifact_lock
 from core.run.scratch import scratch_dir
+from core.atomic_fs import rename_without_replace
 from core.json import dumps_artifact, dumps_display, save_json
 from core.security.prompt_output_sanitise import (
     sanitise_code,
@@ -460,26 +461,45 @@ def export_findings_directory(
             backup = stage / "previous"
             published = False
             failed = False
+            previous_identity = None
             try:
                 result = _write_findings_directory(
                     findings, output_dir, stage / "next", project_name=project_name,
                     sca_findings=sca_findings, readjudication=readjudication,
                 )
                 if os.path.lexists(final):
-                    final.rename(backup)
-                (stage / "next").rename(final)
+                    previous = final.lstat()
+                    previous_identity = (previous.st_dev, previous.st_ino)
+                    rename_without_replace(final, backup)
+                rename_without_replace(stage / "next", final)
                 published = True
                 return result
             except BaseException:
                 failed = True
-                if os.path.lexists(backup):
+                if previous_identity is not None:
                     try:
-                        backup.rename(final)
+                        retired = backup.lstat()
+                    except FileNotFoundError:
+                        pass  # Retirement did not complete.
                     except BaseException:
-                        logger.exception("Restore findings report manually from %s", backup)
+                        logger.exception("Cannot inspect findings recovery entry at %s", backup)
+                    else:
+                        if (retired.st_dev, retired.st_ino) == previous_identity:
+                            try:
+                                rename_without_replace(backup, final)
+                            except BaseException:
+                                logger.exception("Restore findings report manually from %s", backup)
+                        else:
+                            logger.warning("Refusing unrelated findings recovery entry at %s", backup)
                 raise
             finally:
                 if not published and os.path.lexists(backup):
+                    # Only the previous report is recovery data. The failed
+                    # new bundle can be regenerated and may be just as large.
+                    try:
+                        _clear_generated_findings_dir(stage / "next")
+                    except BaseException:
+                        logger.warning("Unpublished findings cleanup failed at %s", stage, exc_info=True)
                     logger.warning("Findings recovery tree retained at %s", stage)
                 else:
                     try:

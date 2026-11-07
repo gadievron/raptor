@@ -63,7 +63,7 @@ def test_failed_publication_restores_old_sharded_checklist(
     inv.save_checklist(cache, document("old"))
     before = inv.read_checklist(cache)
     final = cache / ("checklist" if big else "checklist.json")
-    rename, replace = os.rename, os.replace
+    rename, replace = inv.rename_without_replace, os.replace
 
     def fault(operation):
         def move(src, dst, *args, **kwargs):
@@ -77,7 +77,7 @@ def test_failed_publication_restores_old_sharded_checklist(
 
         return move
 
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fault(rename))
+    monkeypatch.setattr(inv, "rename_without_replace", fault(rename))
     patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", fault(replace))
     with pytest.raises(error):
         inv.save_checklist(cache, document("new", big))
@@ -90,7 +90,7 @@ def test_failed_retirement_is_not_reported_as_success(cache, monkeypatch, big):
     inv.save_checklist(cache, document("old"))
     before = inv.read_checklist(cache)
     active = cache / "checklist"
-    rename = os.rename
+    rename = inv.rename_without_replace
     rmtree = shutil.rmtree
 
     def fail(src, dst, *args, **kwargs):
@@ -102,7 +102,7 @@ def test_failed_retirement_is_not_reported_as_success(cache, monkeypatch, big):
         if Path(path) != active:
             return rmtree(path, *args, **kwargs)
 
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", fail)
+    monkeypatch.setattr(inv, "rename_without_replace", fail)
     monkeypatch.setattr(shutil, "rmtree", blocked)
     with pytest.raises(OSError):
         inv.save_checklist(cache, document("new", big))
@@ -265,20 +265,16 @@ def test_failed_rollback_retains_recovery_copy_and_original_error(cache, monkeyp
     inv.save_checklist(cache, document("old"))
     active = cache / "checklist"
     original = OSError("original publication failure")
-    rename, replace = os.rename, os.replace
-
-    def move(src, dst, *args, **kwargs):
-        if Path(dst) == active and Path(src).name.startswith(".checklist-stale-"):
-            raise PermissionError("rollback failed")
-        return rename(src, dst, *args, **kwargs)
+    rename = inv.rename_without_replace
 
     def publish(src, dst, *args, **kwargs):
         if Path(dst) == active:
+            if Path(src).name.startswith(".checklist-stale-"):
+                raise PermissionError("rollback failed")
             raise original
-        return replace(src, dst, *args, **kwargs)
+        return rename(src, dst, *args, **kwargs)
 
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", move)
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "replace", publish)
+    monkeypatch.setattr(inv, "rename_without_replace", publish)
     with pytest.raises(OSError) as caught:
         inv.save_checklist(cache, document("new"))
     assert caught.value is original
@@ -352,7 +348,7 @@ def test_error_immediately_after_retirement_still_restores_old_form(
     inv.save_checklist(cache, document("old"))
     before = inv.read_checklist(cache)
     active = cache / "checklist"
-    rename = os.rename
+    rename = inv.rename_without_replace
 
     def retire(src, dst, *args, **kwargs):
         result = rename(src, dst, *args, **kwargs)
@@ -360,7 +356,7 @@ def test_error_immediately_after_retirement_still_restores_old_form(
             raise error("retirement completed before error")
         return result
 
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "rename", retire)
+    monkeypatch.setattr(inv, "rename_without_replace", retire)
     with pytest.raises(error):
         inv.save_checklist(cache, document("new", big))
     assert inv.read_checklist(cache) == before
