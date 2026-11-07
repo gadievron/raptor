@@ -721,10 +721,13 @@ def parse_observe_log(run_dir, *,
         if rec.get("type") == "audit_summary":
             # Omitted fields remain compatible with older writers. Present
             # status fields must have the producer's exact boolean shape.
-            for field in ("reader_failed", "reader_drained"):
+            for field in ("reader_failed", "lineage_failed", "reader_drained", "producer_reaped",
+                          "lineage_stopped", "stdout_closed"):
                 if field in rec and type(rec[field]) is not bool:
                     profile.capture_incomplete = True
-            if rec.get("reader_failed") is True or rec.get("reader_drained") is False:
+            if (rec.get("reader_failed") is True or rec.get("lineage_failed") is True
+                    or any(rec.get(field) is False for field in
+                           ("reader_drained", "producer_reaped", "lineage_stopped", "stdout_closed"))):
                 profile.capture_incomplete = True
             # A supplied loss counter is clean only as an exact integer zero.
             for field in ("append_failures", "parse_ambiguous_records_dropped"):

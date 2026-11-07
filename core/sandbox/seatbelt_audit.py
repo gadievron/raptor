@@ -44,6 +44,7 @@ drain period.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
 import logging
@@ -631,8 +632,15 @@ class LogStreamer:
         self._reader_failed = False
         self._append_failures = 0  # guarded by _append_lock
         self._stopped = threading.Event()
-        self._stop_lock = threading.Lock()
+        # One lifecycle lock serialises start, registration and stop.
+        # Startup failure may enter shutdown while holding this lock.
+        self._stop_lock = threading.RLock()
         self._stop_complete = False
+        self._shutdown_started = False
+        self._exit_registered = False
+        self._producer_reaped = False
+        self._stdout_closed = False
+        self._lineage_failed = False
         self._capture_closed = False
         # Lineage state (see class docstring; _require_scope itself is
         # assigned with the PID-scoping block below). All of it is
@@ -666,8 +674,6 @@ class LogStreamer:
         # registered its child. See the class docstring.
         self._require_scope = bool(require_scope)
         self._target_pid = int(target_pid) if target_pid is not None else None
-        if self._target_pid is not None:
-            self.register_target_pid(self._target_pid)
         # Per-run provenance secret — included in every record so the
         # parser can drop spoofed entries written by the target
         # binary into the bind-mounted JSONL. Held in process state
@@ -741,6 +747,10 @@ class LogStreamer:
         self._ambiguous_admitted = 0
         self._ambiguous_dropped = 0
         self._ambiguous_cap_marker_emitted = False
+        # Registration can start a thread. Finish construction first so
+        # every cleanup path has a fully initialised owner.
+        if self._target_pid is not None:
+            self.register_target_pid(self._target_pid)
 
     def register_target_pid(self, pid: int) -> None:
         """Mark ``pid`` — and its process group and session, when
@@ -766,6 +776,12 @@ class LogStreamer:
         new session, the scope degrades to the caller's own session:
         wider than one run, still strictly narrower than host-wide.
         """
+        with self._stop_lock:
+            if self._shutdown_started or self._capture_closed:
+                raise RuntimeError("seatbelt audit streamer is stopped")
+            self._register_target_pid_locked(pid)
+
+    def _register_target_pid_locked(self, pid: int) -> None:
         pid = int(pid)
         pgid: int | None = None
         try:
@@ -788,10 +804,20 @@ class LogStreamer:
         if (self._require_scope
                 and self._lineage_poller is None
                 and self._lineage_poll_interval > 0):
-            self._lineage_poller = threading.Thread(
-                target=self._lineage_poll_loop, daemon=True,
-            )
-            self._lineage_poller.start()
+            self._register_exit_cleanup()
+            try:
+                self._lineage_poller = threading.Thread(
+                    target=self._lineage_poll_loop, daemon=True,
+                )
+                self._lineage_poller.start()
+            except Exception:
+                # Live ppid lookup remains available, but historical
+                # descendant attribution is no longer a complete capture.
+                self._lineage_failed = True
+                logger.warning("seatbelt audit lineage poller could not start", exc_info=True)
+            except BaseException:
+                self._lineage_failed = True
+                raise
         # Flush the pre-registration buffer through the gate. The
         # scope is set before the swap above, so a record the reader
         # processes concurrently either lands in `pending` (swapped
@@ -809,6 +835,7 @@ class LogStreamer:
                 self._refresh_lineage_from_tree()
             self._refresh_lineage_from_tree()
         except Exception:
+            self._lineage_failed = True
             # A dead poller degrades attribution for post-exit
             # records (they fall back to the live ppid walk) — worth
             # a warning, never a crash.
@@ -978,8 +1005,26 @@ class LogStreamer:
         events can never pass the scoped predicate and the gate
         would always time out. Callers choosing predicate-level
         scoping trade away the cold-start attachment confirmation."""
-        if self._proc is not None or self._capture_closed:
-            raise RuntimeError("seatbelt audit streamer has already been started or stopped")
+        with self._stop_lock:
+            if self._proc is not None or self._capture_closed or self._shutdown_started:
+                raise RuntimeError("seatbelt audit streamer has already been started or stopped")
+            self._register_exit_cleanup()
+            try:
+                self._start_locked()
+            except BaseException:
+                self._reader_failed = True
+                try:
+                    self._stop_locked(drain_timeout=5, kill_timeout=10)
+                except BaseException:
+                    # Preserve the startup exception. The registered owner
+                    # remains reachable until shutdown can be confirmed.
+                    logger.warning("seatbelt audit startup cleanup incomplete", exc_info=True)
+                if self._producer_reaped and self._threads_stopped() and self._stdout_closed:
+                    self._reader = None
+                    self._proc = None
+                raise
+
+    def _start_locked(self) -> None:
         predicate = self._build_predicate()
         self._proc = subprocess.Popen(
             [
@@ -1009,70 +1054,39 @@ class LogStreamer:
             # streamer's lifecycle.
             start_new_session=True,
         )
-        try:
-            if self._target_pid is not None:
-                # PID-scoped predicate — the warm-up's synthetic
-                # workload events can't match it (see docstring), so
-                # the gate is structurally unavailable here and
-                # warm_up_required cannot apply: callers choosing
-                # predicate-level scoping trade away the cold-start
-                # attachment confirmation (_macos_spawn never does).
-                logger.debug(
-                    "seatbelt audit: warm-up gate skipped — predicate "
-                    "is PID-scoped to %d and cannot see the synthetic "
-                    "workload's events",
-                    self._target_pid,
+        if self._target_pid is not None:
+            # PID-scoped predicate — the warm-up's synthetic
+            # workload events can't match it (see docstring), so
+            # the gate is structurally unavailable here and
+            # warm_up_required cannot apply: callers choosing
+            # predicate-level scoping trade away the cold-start
+            # attachment confirmation (_macos_spawn never does).
+            logger.debug(
+                "seatbelt audit: warm-up gate skipped — predicate "
+                "is PID-scoped to %d and cannot see the synthetic "
+                "workload's events",
+                self._target_pid,
+            )
+        elif not self._warm_up_until_attached():
+            if self._warm_up_required:
+                # Public start() tears down the producer before
+                # re-raising and retains any unresolved resource owner.
+                # A refused attachment never loses its cleanup handle.
+                raise AuditWarmUpError(
+                    f"log-stream warm-up attachment was not "
+                    f"confirmed within {_WARM_UP_TIMEOUT_S}s — "
+                    f"refusing to proceed with an unproven audit "
+                    f"feed (warm_up_required=True)"
                 )
-            elif not self._warm_up_until_attached():
-                if self._warm_up_required:
-                    # Fail closed: the raise lands in the except arm
-                    # below, which tears down the `log stream`
-                    # subprocess before re-raising, so a refused
-                    # attachment never leaks a zombie streamer.
-                    raise AuditWarmUpError(
-                        f"log-stream warm-up attachment was not "
-                        f"confirmed within {_WARM_UP_TIMEOUT_S}s — "
-                        f"refusing to proceed with an unproven audit "
-                        f"feed (warm_up_required=True)"
-                    )
-                logger.debug(
-                    "seatbelt audit: warm-up gate did not see kext events "
-                    "from synthetic workload within %ss; proceeding in "
-                    "best-effort mode (early records from the real "
-                    "workload may be missed)",
-                    _WARM_UP_TIMEOUT_S,
-                )
-            self._reader = threading.Thread(target=self._read_loop, daemon=True)
-            self._reader.start()
-        except BaseException:
-            # Startup owns the producer until the reader starts, including
-            # thread construction/start failures and warm-up cancellation.
-            proc = self._proc
-            try:
-                with contextlib.suppress(OSError):
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001 — any wait failure must escalate to kill
-                    with contextlib.suppress(OSError):
-                        proc.kill()
-                    try:
-                        proc.wait(timeout=10)
-                    except Exception:  # noqa: BLE001 — preserve the startup failure
-                        logger.debug(
-                            "seatbelt audit: could not reap log-stream "
-                            "process after failed startup",
-                            exc_info=True,
-                        )
-            finally:
-                # No reader owns stdout after a refused startup.
-                # Close it even when the process has already exited.
-                with contextlib.suppress(Exception):
-                    if proc.stdout is not None:
-                        proc.stdout.close()
-                self._reader = None
-                self._proc = None
-            raise
+            logger.debug(
+                "seatbelt audit: warm-up gate did not see kext events "
+                "from synthetic workload within %ss; proceeding in "
+                "best-effort mode (early records from the real "
+                "workload may be missed)",
+                _WARM_UP_TIMEOUT_S,
+            )
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
 
     def _warm_up_until_attached(self) -> bool:
         """Spawn a synthetic ``sandbox-exec`` workload and drain
@@ -1282,11 +1296,8 @@ class LogStreamer:
             logger.warning("seatbelt audit reader thread crashed",
                            exc_info=True)
         finally:
-            if self._proc is not None and self._proc.stdout is not None:
-                close_stdout = getattr(self._proc.stdout, "close", None)
-                if close_stdout is not None:
-                    with contextlib.suppress(OSError):
-                        close_stdout()
+            if not self._close_producer_stdout():
+                self._reader_failed = True
 
     def _filter_and_append(self, record: dict) -> None:
         """Scope gate + budget + JSONL append for one parsed record."""
@@ -1480,15 +1491,81 @@ class LogStreamer:
             self._append_failures += 1
             raise
 
-    def stop(self, *, drain_timeout: float = 1.5) -> None:
-        """Drain and finalise once, including concurrent stop calls."""
-        with self._stop_lock:
-            if self._stop_complete:
-                return
-            self._stop(drain_timeout=drain_timeout)
-            self._stop_complete = True
+    def _register_exit_cleanup(self) -> None:
+        """Keep a live owner reachable before acquiring process/thread resources."""
+        if not self._exit_registered:
+            atexit.register(self._stop_at_exit)
+            self._exit_registered = True
 
-    def _stop(self, *, drain_timeout: float) -> None:
+    def _stop_at_exit(self) -> None:
+        # Do not mutate the exit registry from within a running handler.
+        # Normal explicit stop unregisters; interpreter shutdown owns this
+        # invocation and will release the callback itself.
+        with self._stop_lock:
+            self._exit_registered = False
+            self._stop_locked(drain_timeout=1.5, kill_timeout=1)
+
+    def _threads_stopped(self) -> bool:
+        return all(thread is None or not thread.is_alive()
+                   for thread in (self._reader, self._lineage_poller))
+
+    def _close_producer_stdout(self) -> bool:
+        # Do not call from the parent while the reader is live: a buffered
+        # stream's close may wait on the reader's blocked I/O lock.
+        stream = self._proc.stdout if self._proc is not None else None
+        close = getattr(stream, "close", None)
+        if close is None or getattr(stream, "closed", False) is True:
+            self._stdout_closed = True
+            return True
+        try:
+            close()
+        except OSError:
+            logger.warning("seatbelt audit producer stdout close failed", exc_info=True)
+            return False
+        self._stdout_closed = True
+        return True
+
+    def _stop_producer(self, *, drain_timeout: float, kill_timeout: float) -> bool:
+        """A bounded wait is the confirmation; signal success alone is not."""
+        if self._proc is None or self._producer_reaped:
+            return True
+        with contextlib.suppress(OSError):
+            self._proc.terminate()
+        try:
+            self._proc.wait(timeout=drain_timeout)
+            return True
+        except Exception:
+            logger.warning("seatbelt audit: producer wait failed; forcing shutdown", exc_info=True)
+        with contextlib.suppress(OSError):
+            self._proc.kill()
+        try:
+            self._proc.wait(timeout=kill_timeout)
+            return True
+        except Exception:
+            logger.warning("seatbelt audit: producer could not be reaped after kill", exc_info=True)
+            return False
+
+    def stop(self, *, drain_timeout: float = 1.5) -> None:
+        """Finalise capture once; retry unresolved process/thread cleanup.
+
+        A bounded cleanup timeout retains ownership and the exit callback.
+        Later calls retry cleanup without writing another summary.
+        """
+        with self._stop_lock:
+            self._stop_locked(drain_timeout=drain_timeout, kill_timeout=1)
+
+    def _stop_locked(self, *, drain_timeout: float, kill_timeout: float) -> None:
+        if self._stop_complete:
+            return
+        self._shutdown_started = True
+        self._stop(drain_timeout=drain_timeout, kill_timeout=kill_timeout)
+        self._stop_complete = (self._capture_closed and self._producer_reaped
+                               and self._threads_stopped() and self._stdout_closed)
+        if self._stop_complete and self._exit_registered:
+            atexit.unregister(self._stop_at_exit)
+            self._exit_registered = False
+
+    def _stop(self, *, drain_timeout: float, kill_timeout: float = 1) -> None:
         """Stop the streamer. Gives `log stream` a brief window to
         flush any in-flight records, then terminates.
 
@@ -1506,44 +1583,13 @@ class LogStreamer:
         was silently dropped, yet the summary still asserted a
         healthy capture.
         """
-        if self._proc is not None:
-            # Terminate the producer: no new lines are generated, the
-            # pipe's write end closes, and whatever is already
-            # buffered drains to EOF under the reader.
-            with contextlib.suppress(OSError):
-                self._proc.terminate()
-            try:
-                self._proc.wait(timeout=drain_timeout)
-            except (subprocess.TimeoutExpired, OSError) as exc:
-                if isinstance(exc, OSError):
-                    logger.warning(
-                        "seatbelt audit: producer wait failed; forcing shutdown",
-                        exc_info=True,
-                    )
-                with contextlib.suppress(OSError):
-                    self._proc.kill()
-                try:
-                    self._proc.wait(timeout=1)
-                except (subprocess.TimeoutExpired, OSError):
-                    logger.warning(
-                        "seatbelt audit: producer could not be reaped after kill",
-                        exc_info=True,
-                    )
-            # Drain the reader to EOF before the summary fires (the
-            # append lock makes the summary the last write only for
-            # appends that RACE it — records the reader hasn't parsed
-            # yet would simply be lost after it). Bounded join: the
-            # kernel log streamer buffers messages in its stdout
-            # pipe, and bytes already in the buffer still need
-            # parsing after the terminate above. Operators are
-            # willing to wait 3s for shutdown to fully drain the
-            # audit trail; missing the last few sandbox-denial
-            # events is a worse outcome than a 3s extra shutdown
-            # delay. Daemon status preserves the original "don't
-            # block exit forever" intent — a hung reader after 3s
-            # still gets killed by interpreter shutdown.
-            if self._reader is not None and self._reader.is_alive():
-                self._reader.join(timeout=3.0)
+        self._producer_reaped = self._stop_producer(
+            drain_timeout=drain_timeout, kill_timeout=kill_timeout,
+        )
+        # Join regardless of producer state; a failed-startup reader may
+        # exist even if process creation/ownership did not commit.
+        if self._reader is not None and self._reader.is_alive():
+            self._reader.join(timeout=3.0)
         reader_exited = self._reader is None or not self._reader.is_alive()
         reader_drained = reader_exited and not self._reader_failed
         if not reader_drained:
@@ -1551,11 +1597,8 @@ class LogStreamer:
                 "seatbelt audit: reader did not drain before shutdown; "
                 "audit capture is incomplete",
             )
-        if reader_exited and self._proc is not None and self._proc.stdout is not None:
-            close_stdout = getattr(self._proc.stdout, "close", None)
-            if close_stdout is not None:
-                with contextlib.suppress(OSError):
-                    close_stdout()
+        if reader_exited:
+            self._close_producer_stdout()
         # Stop flag AFTER the drain: _read_loop runs to EOF by design
         # (see its docstring); the flag's remaining consumer is the
         # lineage poller's clock.
@@ -1565,6 +1608,12 @@ class LogStreamer:
         if (self._lineage_poller is not None
                 and self._lineage_poller.is_alive()):
             self._lineage_poller.join(timeout=2.0)
+        lineage_stopped = (self._lineage_poller is None
+                           or not self._lineage_poller.is_alive())
+        # Finalisation seals evidence even when resources need another
+        # cleanup attempt. Never duplicate or rewrite the final summary.
+        if self._capture_closed:
+            return
         # Records still pending mean no scope was ever registered
         # (the spawn failed before register_target_pid) — they are
         # unattributable, so drop + count as foreign.
@@ -1618,6 +1667,11 @@ class LogStreamer:
                     # Parse-ratio surface for operators reading the JSONL
                     # (extra keys tolerated by consumers per contract).
                     summary["reader_drained"] = reader_drained
+                    summary["producer_reaped"] = self._producer_reaped
+                    summary["lineage_stopped"] = lineage_stopped
+                    summary["stdout_closed"] = self._stdout_closed
+                    if self._lineage_failed:
+                        summary["lineage_failed"] = True
                     if self._append_failures:
                         summary["append_failures"] = self._append_failures
                     if self._reader_failed:
@@ -1658,7 +1712,9 @@ class LogStreamer:
                                     self._reader_failed = True
                     finally:
                         if (self._reader_failed or self._append_failures
-                                or not reader_drained):
+                                or not reader_drained or not self._producer_reaped
+                                or not lineage_stopped or not self._stdout_closed
+                                or self._lineage_failed):
                             from .summary import _record_evidence_write_failure
                             _record_evidence_write_failure(self._run_dir)
         except OSError:

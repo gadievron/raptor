@@ -23,7 +23,7 @@ def test_stop_finalizes_despite_wait_errors(tmp_path, monkeypatch, caplog, wait_
     proc.wait.side_effect = wait_results
     owner._proc = proc
     reader = Mock()
-    reader.is_alive.side_effect = [True, False]
+    reader.is_alive.side_effect = lambda: not reader.join.called
     owner._reader = reader
     evidence = Mock()
     owner._evidence = evidence
@@ -37,15 +37,21 @@ def test_stop_finalizes_despite_wait_errors(tmp_path, monkeypatch, caplog, wait_
     reader.join.assert_called_once_with(timeout=3.0)
     assert proc.stdout.closed
     assert owner._stopped.is_set()
-    assert owner._capture_closed and owner._stop_complete
+    reaped = not isinstance(wait_results[-1], BaseException)
+    assert owner._capture_closed and owner._stop_complete is reaped
     evidence.close.assert_called_once_with()
     assert owner._evidence is None
     assert len(summaries) == 1
     assert summaries[0]['type'] == 'audit_summary'
     assert summaries[0]['reader_drained'] is True
     assert 'producer' in caplog.text
+    assert summaries[0]['producer_reaped'] is reaped
+    if not reaped:
+        proc.wait.side_effect = None
+        proc.wait.return_value = 0
     owner.stop()
-    assert proc.wait.call_count == 2
+    assert owner._stop_complete
+    assert proc.wait.call_count == (2 if reaped else 3)
     assert len(summaries) == 1
 
 
