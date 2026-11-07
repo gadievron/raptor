@@ -1960,9 +1960,7 @@ class TestJoernFlowEscalator:
         )
         assert RULE_HANDLER_OUTCOME in confirmed
         assert calls, "escalator did not run through the tool chain"
-        record = json.loads(
-            (out / ".audit-log.jsonl").read_text().splitlines()[-1],
-        )
+        record = _fail_open_receipt(out)
         assert record["reachability"]["status"] == "tainted"
         assert "joern:flow" in record["corroboration"]
 
@@ -2084,8 +2082,7 @@ class TestDispatchWiring:
         assert confirmed == [RULE_IGNORED_RETURN]
         assert counters["fail_open"].confirmed == 1
         # Receipt persisted via append_audit_log.
-        log = (out / ".audit-log.jsonl").read_text()
-        record = json.loads(log.splitlines()[-1])
+        record = _fail_open_receipt(out)
         assert record["action"] == "fail_open_check"
         assert record["outcome"] == "confirmed"
         assert record["rule_id"] == RULE_IGNORED_RETURN
@@ -2151,9 +2148,7 @@ class TestDispatchWiring:
             cs.run_compiler_analyzer_sweep = original
         assert "compiler:-Wunused-result" in confirmed
         assert RULE_IGNORED_RETURN in confirmed
-        record = json.loads(
-            (out / ".audit-log.jsonl").read_text().splitlines()[-1],
-        )
+        record = _fail_open_receipt(out)
         assert record["corroboration"] == ["compiler:-Wunused-result"]
 
     def test_rule_ids_are_tool_evidence(self):
@@ -2577,3 +2572,11 @@ class TestMechanismBoundRefutation:
             "empty catch hides sanitiser failures")
         assert not rx.search(
             "verification errors are silently ignored")
+
+
+def _fail_open_receipt(out):
+    """Select the domain receipt, independently of later telemetry events."""
+    records = [json.loads(line) for line in (out / ".audit-log.jsonl").read_text().splitlines()]
+    receipts = [record for record in records if record.get("action") == "fail_open_check"]
+    assert len(receipts) == 1, records
+    return receipts[0]
