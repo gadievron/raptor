@@ -1,7 +1,14 @@
 """Pin parent-side fake-HOME operations against directory symlink swaps."""
+from contextlib import suppress
 import os
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _close_after_error(fd):
+    """Attempt one cleanup close without replacing the active failure."""
+    with suppress(OSError):
+        os.close(fd)
 
 
 def _open_directory(path):
@@ -12,11 +19,11 @@ def _open_directory(path):
             if not component:
                 continue
             nxt = os.open(component, _DIR_FLAGS, dir_fd=fd)
-            os.close(fd)
-            fd = nxt
+            previous, fd = fd, nxt
+            os.close(previous)
         return fd
     except BaseException:
-        os.close(fd)
+        _close_after_error(fd)
         raise
 
 
@@ -25,9 +32,16 @@ def open_home(path):
     path = os.path.abspath(path)
     parent = _open_directory(os.path.realpath(os.path.dirname(path)))
     try:
-        return os.open(os.path.basename(path), _DIR_FLAGS, dir_fd=parent)
-    finally:
+        home = os.open(os.path.basename(path), _DIR_FLAGS, dir_fd=parent)
+    except BaseException:
+        _close_after_error(parent)
+        raise
+    try:
         os.close(parent)
+    except BaseException:
+        _close_after_error(home)
+        raise
+    return home
 
 
 def _mkdir_open(name, parent):
@@ -43,8 +57,14 @@ def prepare_home(output):
     output_fd = _open_directory(os.path.realpath(output))
     try:
         home = _mkdir_open('.home', output_fd)
-    finally:
+    except BaseException:
+        _close_after_error(output_fd)
+        raise
+    try:
         os.close(output_fd)
+    except BaseException:
+        _close_after_error(home)
+        raise
     try:
         for components in (('.config',), ('.cache',),
                            ('.local', 'share'), ('.local', 'state')):
@@ -52,9 +72,15 @@ def prepare_home(output):
             try:
                 for component in components:
                     nxt = _mkdir_open(component, parent)
-                    os.close(parent)
-                    parent = nxt
-            finally:
+                    previous, parent = parent, nxt
+                    os.close(previous)
+            except BaseException:
+                _close_after_error(parent)
+                raise
+            else:
                 os.close(parent)
-    finally:
+    except BaseException:
+        _close_after_error(home)
+        raise
+    else:
         os.close(home)
