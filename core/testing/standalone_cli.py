@@ -1,17 +1,17 @@
 """Test-only execution of standalone CLIs with owned launch state."""
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 
 
-def run_standalone_cli(args, *, env=None, data_home=None, **kwargs):
-    """Preserve test transport configuration while owning home and launch state.
+@contextmanager
+def standalone_cli_env(*, env=None, data_home=None):
+    """Own launch state without changing the caller's process or environment.
 
-    Use only for standalone behavior; session inheritance tests must supply
-    their actual launch context instead. Pass an explicitly test-owned
-    data_home when parent and child must verify each other's signed artifacts.
+    Pass a test-owned data_home when related processes share signed artifacts.
     """
     with TemporaryDirectory(prefix="raptor-cli-test-") as directory:
         root = Path(directory)
@@ -29,6 +29,17 @@ def run_standalone_cli(args, *, env=None, data_home=None, **kwargs):
         )
         if data_home is not None:
             child_env["XDG_DATA_HOME"] = str(data_home)
+        yield child_env
+
+
+def run_standalone_cli(args, *, env=None, data_home=None, **kwargs):
+    """Preserve test transport configuration while owning home and launch state.
+
+    Use only for standalone behavior; session inheritance tests must supply
+    their actual launch context instead. Pass an explicitly test-owned
+    data_home when parent and child must verify each other's signed artifacts.
+    """
+    with standalone_cli_env(env=env, data_home=data_home) as child_env:
         kwargs.setdefault("timeout", 60)
         if "input" not in kwargs:
             kwargs.setdefault("stdin", subprocess.DEVNULL)

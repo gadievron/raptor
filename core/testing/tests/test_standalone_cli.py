@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from core.testing.standalone_cli import run_standalone_cli
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 
 @pytest.mark.parametrize("trusted", [False, True])
@@ -58,4 +58,20 @@ def test_explicit_owned_data_home_survives_multiple_children(tmp_path, monkeypat
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == expected
     assert (data_home / "owned-marker").read_text() == "shared"
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_owned_environment_cleans_up_when_custom_runner_raises(tmp_path, error):
+    data_home = tmp_path / "shared-data"
+    data_home.mkdir()
+    before = dict(os.environ)
+    with pytest.raises(error):
+        with standalone_cli_env(data_home=data_home) as env:
+            home, scratch = Path(env["HOME"]), Path(env["TMPDIR"])
+            assert home.is_dir() and scratch.is_dir()
+            assert env["XDG_DATA_HOME"] == str(data_home)
+            raise error("custom runner failed")
+    assert not home.exists() and not scratch.exists()
+    assert data_home.is_dir()
     assert dict(os.environ) == before
