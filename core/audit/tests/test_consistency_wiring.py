@@ -10,16 +10,20 @@ pre-pass emits a promote-capable finding with PeerEvidence receipts
 from __future__ import annotations
 
 import json
+import builtins
 import os
 import sys
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue  # noqa: F401
+
 from core.testing.standalone_cli import run_standalone_cli
+from core.testing.module_views import module_function_view
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -90,9 +94,9 @@ def _prep_for_with_owned_keys(tmp_path_factory, *, wur: bool):
     assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
     import core.audit.orchestrator as orch
+    from core.audit import capabilities
     from core.audit.orchestrator import (
         OrchestratorConfig,
-        _compute_audit_prep,
     )
 
     config = OrchestratorConfig(
@@ -108,18 +112,32 @@ def _prep_for_with_owned_keys(tmp_path_factory, *, wur: bool):
     # phase is incidental substrate (18 sandboxed Coccinelle rule runs
     # on spatch-equipped hosts, ~6s of the fixture's setup — the same
     # seam test_budget_terminal stubs, with its own wiring tests).
-    # Manual patch/restore because module-scoped fixtures cannot take
-    # the function-scoped monkeypatch. Full variadic signature + the
-    # real (dict, set) return contract: a wrong-shaped stub dies inside
-    # the phase's blanket except and "works" by swallowed crash instead
-    # of by stubbing.
+    # Own the relative capability import as well: host tool/JVM discovery
+    # is unrelated to the real consistency pre-pass and receipt checks.
+    # scoped_function_imports handles absolute imports; this prep call uses
+    # module_function_view's import hook for `from .capabilities import ...`.
     _real_mechanical = orch._run_mechanical_detectors
-    orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
-    try:
-        with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
-            prep = _compute_audit_prep(config)
-    finally:
-        orch._run_mechanical_detectors = _real_mechanical
+    _real_joern = orch._resolve_joern_evidence_raw
+    _real_probe = capabilities.probe_capabilities
+    private_caps = module_function_view(capabilities, bindings={
+        "probe_capabilities": lambda *args, **kwargs: capabilities.AuditCapabilities(),
+    })
+    inherited = vars(orch).get("__builtins__", builtins)
+    import_real = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+
+    def import_for_prep(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 1 and name == "capabilities":
+            return private_caps
+        return import_real(name, globals, locals, fromlist, level)
+
+    private_prep = module_function_view(orch, bindings={
+        "_run_mechanical_detectors": lambda *args, **kwargs: ({}, set()),
+        "_resolve_joern_evidence_raw": lambda *args, **kwargs: ({}, None),
+    }, import_hook=import_for_prep)
+    prep = private_prep._compute_audit_prep(config)
+    assert orch._run_mechanical_detectors is _real_mechanical
+    assert orch._resolve_joern_evidence_raw is _real_joern
+    assert capabilities.probe_capabilities is _real_probe
     assert prep is not None
     return prep, out, target, config
 
@@ -222,6 +240,7 @@ class TestEndToEndPromotePath:
         assert t["leads_seeded"] >= 1
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestChannelDispatch:
     def test_tier_counter_and_cheap_lane_membership(self):
         from core.audit.orchestrator import (

@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue  # noqa: F401
+
 from core.analysis.gadget_oracle import (
     GadgetOracleEvidence,
     RULE_ABSENCE,
@@ -22,6 +24,7 @@ from core.analysis.gadget_oracle import (
 _HYP = "POP chain: a __destruct gadget reaches unlink via property state"
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestChainBuilders:
     def test_cwe_hook_appends_leg_on_php(self):
         from core.audit.orchestrator import _cwe_fallback_chain

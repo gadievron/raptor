@@ -22,6 +22,8 @@ import re
 
 import pytest
 
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue  # noqa: F401
+
 from core.audit.cwe_dispatch import (
     dark_verify_applicable,
     dark_verify_statuses,
@@ -64,6 +66,7 @@ class TestDispatchEntries:
         assert entry.get("joern") is True
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestChainEmission:
     @pytest.mark.parametrize("cwe", _NEW_FAMILY_CWES)
     def test_flow_chain_entry(self, cwe):
