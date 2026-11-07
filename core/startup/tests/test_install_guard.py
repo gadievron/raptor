@@ -12,16 +12,29 @@ import sys
 
 import pytest
 
+from core.startup import install_guard as guard
 from core.testing.module_bindings import patch_module_attribute
 
 # Keep kernel checks independent of the host's unrelated tool environment.
 KERNEL_PYTHON = '/usr/bin/python3' if Path('/usr/bin/python3').exists() else sys.executable
 
 GUARD = Path(__file__).resolve().parents[1] / 'install_guard.py'
-spec = importlib.util.spec_from_file_location('install_guard', GUARD)
-guard = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = guard
-spec.loader.exec_module(guard)
+
+
+def test_reloading_test_helpers_preserves_picklable_worker(monkeypatch):
+    """Ownership harnesses load this file again in the same interpreter."""
+    from multiprocessing.reduction import ForkingPickler
+
+    original = sys.modules[guard.__name__]
+    spec = importlib.util.spec_from_file_location("owned_install_guard_tests", __file__)
+    module = importlib.util.module_from_spec(spec)
+    with monkeypatch.context() as scope:
+        scope.setitem(sys.modules, spec.name, module)
+        scope.setattr(sys, "path", sys.path.copy())
+        spec.loader.exec_module(module)
+        assert module.guard is guard
+        assert sys.modules[guard.__name__] is original
+        assert ForkingPickler.dumps(guard._compile_bytecode)
 
 
 def test_grants_cannot_cover_code(tmp_path, monkeypatch):
