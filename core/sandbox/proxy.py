@@ -112,7 +112,7 @@ import struct
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -1651,6 +1651,25 @@ class _ProxyStreamOwner:
             self._registry.discard(writer)
 
 
+def _positive_proxy_timeout(value, name: str):
+    """Validate before acquiring resources or widening shared configuration."""
+    valid = type(value) in (int, float) and value > 0
+    try:
+        valid = valid and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{name} must be a finite positive number")
+    return value
+
+
+def _proxy_count(value, name: str, *, allow_zero: bool = False):
+    if type(value) is not int or value < (0 if allow_zero else 1):
+        qualifier = "nonnegative" if allow_zero else "positive"
+        raise ValueError(f"{name} must be a {qualifier} integer")
+    return value
+
+
 class EgressProxy:
     """HTTPS CONNECT proxy with hostname allowlist.
 
@@ -1666,9 +1685,21 @@ class EgressProxy:
                  no_proxy: str | None = None,
                  audit_log_only: bool = False,
                  audit_enforce: bool = False) -> None:
+        """Start a proxy after validating timer and resource budgets.
+
+        Timeouts are finite positive numbers. Buffer size is a positive
+        integer; max_tunnels is a nonnegative integer, with zero retaining
+        the explicit refuse-all behavior.
+        """
+        idle_timeout = _positive_proxy_timeout(idle_timeout, "idle_timeout")
+        total_timeout = _positive_proxy_timeout(total_timeout, "total_timeout")
+        max_tunnels = _proxy_count(max_tunnels, "max_tunnels", allow_zero=True)
+        buffer_size = _proxy_count(buffer_size, "buffer_size")
+        self._exit_callback: Callable[[], None] | None = None
         self._hosts_lock = threading.Lock()
         self._allowed_hosts: set[str] = {h.lower() for h in allowed_hosts}
-        _warn_doh_hosts(self._allowed_hosts)
+        with contextlib.suppress(OSError, ValueError):
+            _warn_doh_hosts(self._allowed_hosts)
         # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
         # event AND a record_denial entry, then falls through to the
         # connect path — operator workflows that hit gate 1 keep working
@@ -2017,7 +2048,8 @@ class EgressProxy:
         with self._hosts_lock:
             new = {h.lower() for h in hosts}
             self._allowed_hosts.update(new)
-            _warn_doh_hosts(new)
+            with contextlib.suppress(OSError, ValueError):
+                _warn_doh_hosts(new)
 
     def update_idle_timeout(self, seconds: float) -> None:
         """Raise the idle timeout if *seconds* exceeds the current value.
@@ -2026,14 +2058,16 @@ class EgressProxy:
         so a late caller (e.g. LLM egress needing 1800s for thinking
         models) doesn't regress the timeout for earlier callers.
         """
+        seconds = _positive_proxy_timeout(seconds, "idle_timeout")
         with self._idle_timeout_lock:
             if seconds > self._idle_timeout:
                 prev = self._idle_timeout
                 self._idle_timeout = seconds
-                logger.info(
-                    "egress proxy: idle timeout raised %.0fs → %.0fs",
-                    prev, seconds,
-                )
+                with contextlib.suppress(OSError, ValueError):
+                    logger.info(
+                        "egress proxy: idle timeout raised %.0fs → %.0fs",
+                        prev, seconds,
+                    )
 
     def acquire_audit_log_only(self) -> None:
         """Increment the audit-mode reference count and ensure
@@ -3402,7 +3436,9 @@ class EgressProxy:
             logger.debug(
                 "egress proxy listening on 127.0.0.1:%s (allowlist: %s)", self.port, sorted(self._allowed_hosts)
             )
-            self._ready.set()
+            # Signal readiness from a running loop, not in the gap
+            # before run_forever where immediate lane binds would fail.
+            self._loop.call_soon(self._ready.set)
             self._heartbeat_task = self._loop.create_task(
                 self._stats_heartbeat())
             self._loop.run_forever()
@@ -4652,7 +4688,11 @@ def get_proxy(
     """Return the process-wide proxy singleton, creating it on first call.
 
     Additional calls mutate the allowlist in place (UNION semantics) and
-    return the same instance. Thread-safe.
+    return the same serving instance. Thread-safe. Invalid caller inputs
+    are rejected before changing existing configuration. A stopped proxy
+    is retired before replacement; incomplete cleanup remains owned and
+    raises RuntimeError so callers can retry rather than share a dying loop.
+    New activation failures roll back the loop and its exact exit callback.
 
     *idle_timeout* widens the per-tunnel idle timeout via max semantics:
     on first call it overrides the default (300s); on subsequent calls
@@ -4671,25 +4711,16 @@ def get_proxy(
     mutation doesn't reconfigure the running proxy.
     """
     global _instance
+    # Consume and validate caller iterables before changing shared state.
+    hosts = frozenset(host.lower() for host in allowed_hosts)
+    if idle_timeout is not None:
+        _positive_proxy_timeout(idle_timeout, "idle_timeout")
     with _lock:
-        # Dead-thread detection: if a previous get_proxy() created the
-        # singleton but its event-loop thread has since died (uncaught
-        # exception that bypassed our handler guards, asyncio internals
-        # crashing, thread killed externally), tear it down so the next
-        # call creates a fresh instance. Without this, callers silently
-        # get a zombie proxy that accepts connections but never relays.
-        if _instance is not None and not _instance.is_alive():
-            logger.error(
-                "egress proxy: singleton thread has died — "
-                "discarding stale instance and creating a fresh one"
-            )
-            # Broad by design: stop() on a proxy whose loop thread
-            # already died runs against violated internal invariants —
-            # any failure mode is acceptable as long as the stale
-            # instance is discarded below.
-            with contextlib.suppress(Exception):
-                _instance.stop()
-            _instance = None
+        if _instance is not None and (_instance._stopping or not _instance.is_alive()):
+            with contextlib.suppress(OSError, ValueError):
+                logger.warning(
+                    "egress proxy: retiring a stopped or stopping singleton before replacement")
+            _retire_proxy_locked()
 
         if _instance is None:
             import os as _os
@@ -4724,32 +4755,80 @@ def get_proxy(
                 "RAPTOR_PROXY_AUDIT_ENFORCE", "",
             ).strip().lower()
             audit_enforce = _enforce_raw in ("1", "true", "yes", "on")
-            _instance = EgressProxy(allowed_hosts,
-                                    upstream_proxy=upstream,
-                                    no_proxy=no_proxy,
-                                    audit_enforce=audit_enforce)
-            atexit.register(_instance.stop)
-            # atexit never fires on SIGTERM — add the signal-aware
-            # teardown (closes listeners, unlinks unix-lane sockets)
-            # with the default disposition re-delivered afterwards.
-            # SIGKILL remains uncatchable; see the hook's docstring
-            # for the residual.
-            _install_sigterm_cleanup()
-            if upstream:
-                logger.info(
-                    "egress proxy: tunnelling via upstream %s (no_proxy=%s)", upstream, no_proxy or 'none'
-                )
+            kwargs = {"idle_timeout": idle_timeout} if idle_timeout is not None else {}
+            candidate = EgressProxy(hosts, upstream_proxy=upstream,
+                                    no_proxy=no_proxy, audit_enforce=audit_enforce,
+                                    **kwargs)
+            try:
+                # Keep the exact callable, even if stop is later wrapped.
+                # Set it before registration so partial registration failures
+                # can also be undone without touching another owner's hook.
+                candidate._exit_callback = candidate.stop
+                atexit.register(candidate._exit_callback)
+                _instance = candidate
+                _install_sigterm_cleanup()
+                if upstream:
+                    with contextlib.suppress(OSError, ValueError):
+                        logger.info(
+                            "egress proxy: tunnelling via upstream %s (no_proxy=%s)",
+                            upstream, no_proxy or 'none')
+                if candidate._stopping or not candidate.is_alive():
+                    raise RuntimeError(
+                        'egress proxy stopped during activation; retry acquisition')
+            except BaseException as failure:
+                # Failed startup stays owned until its loop is confirmed
+                # closed. Retained candidates are marked non-serving before
+                # cleanup, and a later acquisition retries their retirement.
+                _instance = candidate
+                candidate._stopping = True
+                try:
+                    _retire_proxy_locked()
+                except BaseException as cleanup_failure:
+                    failure.add_note(
+                        "proxy cleanup retained for retry: " + type(cleanup_failure).__name__)
+                raise
         else:
-            _instance.add_hosts(allowed_hosts)
-        if idle_timeout is not None:
-            _instance.update_idle_timeout(idle_timeout)
+            # A worker-thread first call cannot install a native signal
+            # handler. Retry when a later main-thread caller reuses it.
+            _install_sigterm_cleanup()
+            _instance.add_hosts(hosts)
+            if idle_timeout is not None:
+                _instance.update_idle_timeout(idle_timeout)
+            if _instance._stopping or not _instance.is_alive():
+                raise RuntimeError(
+                    "egress proxy stopped during acquisition; retry after cleanup")
         return _instance
+
+
+def _retire_proxy_locked() -> None:
+    """Release only a fully stopped singleton; caller holds _lock.
+
+    Explicit stop and the bound atexit callback do not alter the callback
+    registry. Detach here, during normal acquisition/reset, avoiding changes
+    to atexit registrations from inside an exit callback.
+    """
+    global _instance
+    instance = _instance
+    if instance is None:
+        return
+    instance._stopping = True
+    cleanup_error = None
+    try:
+        instance.stop(drain_timeout=0)
+    except Exception as exc:  # a dead instance may have damaged teardown state
+        cleanup_error = exc
+    loop = instance._loop
+    if instance.is_alive() or loop is not None and not loop.is_closed():
+        raise RuntimeError(
+            "previous egress proxy cleanup is incomplete; retry after it stops") from cleanup_error
+    callback = instance._exit_callback
+    if callback is not None:
+        atexit.unregister(callback)
+        instance._exit_callback = None
+    _instance = None
 
 
 def _reset_for_tests() -> None:
     """Tear down the singleton and join its thread. Test-only."""
-    global _instance
     with _lock:
-        if _instance is not None:
-            _instance.stop(drain_timeout=0)
-            _instance = None
+        _retire_proxy_locked()
