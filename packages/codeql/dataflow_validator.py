@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
 
@@ -226,10 +226,12 @@ class DataflowValidation:
     prerequisites: list[str]
     error: str | None = None
     # Which path (0-based, primary first) the verdict is grounded on,
-    # and how many of the result's paths were SMT-checked. Additive —
+    # and how many paths received an SMT diagnostic attempt. Additive —
     # consumers that predate multi-path checking can ignore these.
     smt_path_index: int = 0
     smt_paths_checked: int = 1
+    # Optional mathematical diagnostics; never a source reachability proof.
+    smt_diagnostics: dict | None = None
 
 
 PATH_CONDITIONS_SCHEMA = {
@@ -264,46 +266,13 @@ _OVERFLOW_MARKERS_RE = __import__("re").compile(
 )
 
 
-# Confidence we report alongside an SMT-infeasible verdict.
-#
-# Pre-fix this number was inlined as a magic literal `0.7` at
-# the verdict construction site, with an inline comment "Some
-# confidence since SMT is a strong signal, but not perfect."
-# The same value also appeared in the human-readable
-# `reasoning` string ("Confidence is capped at 0.7 because…").
-# Two copies = drift risk: a future tightening or loosening of
-# the calibration would change one site and silently leave the
-# user-facing reasoning text wrong.
-#
-# The value itself is policy: we trust SMT's `feasible=False`
-# verdict more than an LLM's gut call (so > 0.5) but not as
-# absolute (the verdict is conditional on LLM-extracted path
-# predicates, which can be wrong if the LLM misparses a
-# branch). 0.7 was chosen to match the existing scorecard
-# bucket "high but not certain" — see
-# `docs/scorecard/confidence-bands.md` for the calibration
-# reference (or, if absent, treat this constant as the source
-# of truth that doc should match).
+# Retained confidence policy for the separately source-bound string-theory
+# prescreen. Generic UNSAT over extracted predicates no longer mints a
+# not-exploitable verdict, regardless of its numeric confidence.
 SMT_INFEASIBLE_CONFIDENCE = 0.7
 
-# Upper bound on how many (codeFlow, threadFlow) paths of one SARIF
-# result get the SMT feasibility treatment. A result's paths are
-# checked in order and checking stops at the first sat/indeterminate
-# path, so the cap only bites when earlier paths keep coming back
-# unsat — the case where the extra LLM condition-extraction calls buy
-# soundness (declaring a finding infeasible on path 1 alone while
-# path 2 is live is a false suppression).
-#
-# Soundness contract at the cap: the cap bounds WORK (per-path LLM
-# condition extraction + solver calls), never EVIDENCE. Refutation
-# requires every one of the result's paths to be checked-unsat; when
-# the result carries more paths than the cap allows, all-checked-unsat
-# is indeterminate and the finding falls through to full LLM analysis.
-# Trade-off, both directions: raising the cap buys refutation coverage
-# on many-flow results at the price of extra LLM extraction calls per
-# stubbornly-unsat finding; lowering it saves those calls but sends
-# more many-flow findings to the (more expensive) full analysis — it
-# can never widen refutation, because truncated coverage never refutes.
+# Compatibility constant for older consumers. Unbound predicate diagnostics
+# no longer prune or select SARIF paths, so this does not authorize refutation.
 MAX_SMT_PATHS = 3
 
 
@@ -342,7 +311,7 @@ def _infer_bv_profile(rule_id: str | None, llm_hint: dict) -> BVProfile:
     supplied field and fills the missing one from the heuristic default.
     """
     heuristic_width = 32 if _is_overflow_rule(rule_id or "") else 64
-    heuristic_signed = False  # unsigned is correct for most path conditions
+    heuristic_signed = False  # modeling default, not established source signedness
 
     # Accept only sensible LLM-emitted values; ignore anything else.
     # Pre-fix `raw_width > 0` accepted any positive int including
@@ -708,20 +677,18 @@ class DataflowValidator:
             "occurrence of an identifier denotes the same value (single static "
             "assignment). If a variable is reassigned between two guards in the path, "
             "rename later occurrences so they read as distinct values:\n"
-            "  GOOD: [\"strlen(input_pre) > 100\", \"strlen(input_post) < 50\"]\n"
-            "        (the realloc between them produced input_post)\n"
-            "  BAD:  [\"strlen(input) > 100\", \"strlen(input) < 50\"]\n"
-            "        (same name on both sides of a realloc — the solver merges them\n"
-            "        into one variable and refutes a real path).\n"
-            "When a function call appears in a condition (e.g. strlen(s)), keep the "
-            "exact call text identical across guards that reference the SAME value — "
-            "textual identity is how the solver shares variables across conditions.\n\n"
-            "Also emit two per-path type hints so SMT uses the correct bitvector semantics:\n"
+            "  GOOD: [\"size_pre > 100\", \"size_post < 50\"]\n"
+            "  BAD:  [\"size > 100\", \"size < 50\"] across a size assignment.\n"
+            "Function-call occurrences are opaque independent results; repeated text "
+            "does not establish that two executions return the same value.\n\n"
+            "Also emit optional per-path modeling hints. These are assumptions, not "
+            "verified source types; a uniform profile cannot represent arbitrary C "
+            "promotions or mixed integer types:\n"
             "  - path_width: 32 when the dominant variables are C int/unsigned int "
             "(CWE-190 32-bit wraparound lives here); 64 for size_t/uint64_t.\n"
             "  - path_signed: true if variables are signed ints (int, int32_t) and "
-            "you want overflow reasoning that matches C's UB semantics; false for "
-            "unsigned / pointer arithmetic. Default false.\n\n"
+            "you want signed comparisons; false for unsigned comparisons. "
+            "These hints do not establish C arithmetic definedness.\n\n"
             "Set negated=true on a condition if it must be FALSE for the path to "
             "proceed (i.e. a check that was bypassed)."
         )
@@ -793,7 +760,7 @@ class DataflowValidator:
         repo_path: Path,
     ) -> DataflowValidation | None:
         """Run the string-theory prescreen over ALL of the result's
-        paths; materialise the demoted (SMT-unsat-shaped) verdict on
+        paths; materialise the source-bound prescreen verdict on
         refutation, None otherwise. Failures degrade to None — the
         prescreen must never block the normal validation flow."""
         try:
@@ -850,13 +817,11 @@ class DataflowValidator:
         dataflow: DataflowPath,
         repo_path: Path
     ) -> DataflowValidation:
-        """
-        Validate dataflow path exploitability using LLM.
+        """Validate source flow, retaining optional predicate-model diagnostics.
 
-        When ``dataflow.alternatives`` is populated (SARIF results with
-        multiple codeFlows), the SMT pre-check refutes the finding only
-        if every checked path (up to MAX_SMT_PATHS) is unsat; the first
-        sat/indeterminate path carries the downstream LLM analysis.
+        Extracted predicates and type hints cannot establish a source-path
+        refutation or select a different SARIF path. Source-bound prescreens
+        and the existing review policy retain their separate contracts.
 
         Args:
             dataflow: DataflowPath object
@@ -873,159 +838,56 @@ class DataflowValidator:
         # liftable charset validator whose accepted language provably
         # excludes the sink's danger characters (Z3 regex-intersection
         # emptiness — the smt_barrier proof applied to live findings),
-        # demote exactly like an SMT-unsat verdict: confidence-capped
+        # retain its source-bound prescreen contract: confidence-capped
         # non-exploitable with the barrier evidence attached, before
         # any LLM call. No signal → normal flow, nothing dropped.
         prescreen = self._injection_prescreen(dataflow, repo_path)
         if prescreen is not None:
             return prescreen
 
-        # SMT pre-check: extract path conditions (plus a bitvector type
-        # hint from the LLM) and test joint satisfiability.  A finding
-        # is provably unreachable only when EVERY checked path is unsat
-        # — alternative codeFlows are consulted (up to MAX_SMT_PATHS
-        # total) before the expensive LLM call is skipped. The per-path
-        # LLM condition extraction runs lazily: an alternative is only
-        # extracted after all earlier paths came back unsat.
-        total_paths = 1 + len(dataflow.alternatives)
-        candidate_paths = [dataflow, *dataflow.alternatives[:MAX_SMT_PATHS - 1]]
-        refuted: list = []
-        smt_result = None
+        # Extracted predicates, scalar identities and type hints are not
+        # source-bound premises. Even an owned UNSAT core proves only a
+        # contradiction in this supplied model. It cannot suppress the
+        # finding or discard the primary SARIF path in favor of another.
         active_index = 0
         smt_paths_checked = 1
-        for path_index, candidate in enumerate(candidate_paths):
-            conditions, profile_hint = self._extract_path_conditions(candidate, repo_path)
-            profile = _infer_bv_profile(candidate.rule_id, profile_hint)
-            # Overflow-family rules: steer the witness toward the
-            # maximum of the sink-adjacent variable so a sat model
-            # lands in the wraparound region instead of the trivial
-            # x=0 assignment. Witness-only — the sat/unsat verdict is
-            # unaffected, and an unresolvable target skips steering.
+        profile = None
+        try:
+            conditions, profile_hint = self._extract_path_conditions(dataflow, repo_path)
+            profile = _infer_bv_profile(dataflow.rule_id, profile_hint)
             prefer = None
-            if _is_overflow_rule(candidate.rule_id):
+            if _is_overflow_rule(dataflow.rule_id):
                 target = _steering_target(conditions)
                 if target is not None:
                     prefer = (target, "max")
-            # Signedness honesty: ``_infer_bv_profile``'s ``signed`` is a
-            # heuristic default (unsigned) unless the LLM hint pinned it
-            # with an explicit boolean. Under a guessed-unsigned profile
-            # the ubiquitous C signed error check (``ret < 0``) encodes
-            # as ``ULT(ret, 0)`` — unsat — so one signedness-mismatched
-            # guard anywhere in the path would refute the whole finding
-            # pre-LLM. When signedness is a guess, a refutation is only
-            # honored after the dual-profile contradiction checks;
-            # a pinned hint keeps the cheaper single-profile check.
             signed_pinned = isinstance(profile_hint.get("signed"), bool)
-            check = (
-                check_path_feasibility if signed_pinned
-                else check_path_feasibility_dual
-            )
+            check = check_path_feasibility if signed_pinned else check_path_feasibility_dual
             smt_result = check(
                 conditions, profile=profile, prefer_witness=prefer,
-                # Extraction hints do not establish callee identity, return
-                # types, or effects. Name-based summaries are conditional
-                # math assumptions and must not suppress source findings.
                 use_call_summaries=False,
             )
-            # A profile hint does not establish the return width or signedness
-            # of opaque calls. Even dual signedness checks can refute a narrow
-            # encoding of a perfectly feasible wider return. Honor only an
-            # owned native core independent of these untyped call terms.
-            if (smt_result.feasible is False and smt_result.anon_var_map
-                    and smt_result.refutation_uses_call_terms is not False):
-                smt_result = replace(
-                    smt_result, feasible=None, wp_complete=False,
-                    reasoning=(smt_result.reasoning + "; unbound call return types: "
-                               "encoded contradiction cannot refute the source path"),
-                )
-            if smt_result.feasible is False:
-                self.logger.info(
-                    "SMT: path %d/%d infeasible — %s",
-                    path_index + 1, len(candidate_paths), smt_result.reasoning,
-                )
-                refuted.append(smt_result)
-                continue
-            # sat or indeterminate — this path carries the analysis.
-            active_index = path_index
-            smt_paths_checked = path_index + 1
-            dataflow = candidate
-            break
-        else:
-            paths_checked = len(candidate_paths)
-            if total_paths > paths_checked:
-                # Truncated coverage: every CHECKED path is unsat, but
-                # the result carries paths the cap kept unchecked — a
-                # live path may be among them, so refuting here would
-                # be a false suppression. Demote to indeterminate and
-                # fall through to full LLM analysis on the primary
-                # path (the pre-SMT behavior).
-                self.logger.info(
-                    "SMT: %d of %d dataflow paths checked (all unsat) — "
-                    "cap %d truncated coverage; refutation requires all "
-                    "paths, proceeding to full analysis",
-                    paths_checked, total_paths, MAX_SMT_PATHS,
-                )
-                smt_paths_checked = paths_checked
-                smt_result = PathSMTResult(
-                    feasible=None,
-                    satisfied=[],
-                    unsatisfied=[
-                        f"path {i + 1}: {cond}"
-                        for i, r in enumerate(refuted)
-                        for cond in r.unsatisfied
-                    ],
-                    unknown=[],
-                    model={},
-                    smt_available=True,
-                    reasoning=(
-                        f"checked {paths_checked} of {total_paths} "
-                        f"dataflow paths (all unsat); "
-                        f"{total_paths - paths_checked} path(s) were not "
-                        f"SMT-checked, so infeasibility is unproven"
-                    ),
-                )
-            else:
-                if paths_checked == 1:
-                    assert smt_result is not None
-                    reasoning = (
-                        f"SMT analysis: {smt_result.reasoning}. Path conditions are mutually exclusive. "
-                        f"Confidence is capped at {SMT_INFEASIBLE_CONFIDENCE} because this formal verdict depends on "
-                        "LLM-extracted predicates which may have parsing or coverage limitations."
-                    )
-                    barriers = smt_result.unsatisfied
-                else:
-                    per_path = "; ".join(
-                        f"path {i + 1}: {r.reasoning}" for i, r in enumerate(refuted)
-                    )
-                    reasoning = (
-                        f"SMT analysis: all {paths_checked} dataflow paths refuted ({per_path}). "
-                        f"Confidence is capped at {SMT_INFEASIBLE_CONFIDENCE} because this formal verdict depends on "
-                        "LLM-extracted predicates which may have parsing or coverage limitations."
-                    )
-                    barriers = [
-                        f"path {i + 1}: {cond}"
-                        for i, r in enumerate(refuted)
-                        for cond in r.unsatisfied
-                    ]
-                return DataflowValidation(
-                    is_exploitable=False,
-                    confidence=SMT_INFEASIBLE_CONFIDENCE,
-                    sanitizers_effective=True,
-                    bypass_possible=False,
-                    bypass_strategy=None,
-                    attack_complexity="high",
-                    reasoning=reasoning,
-                    barriers=barriers,
-                    prerequisites=[],
-                    smt_path_index=paths_checked - 1,
-                    smt_paths_checked=paths_checked,
-                )
+        except Exception as exc:
+            # Optional diagnostic work must not abort source validation on
+            # malformed extraction, broken native bindings or solver errors.
+            self.logger.debug("SMT diagnostics unavailable", exc_info=True)
+            smt_result = PathSMTResult(
+                feasible=None, satisfied=[], unsatisfied=[], unknown=[], model={},
+                smt_available=False,
+                reasoning=f"SMT diagnostic unavailable ({type(exc).__name__}); source analysis required",
+            )
+        smt_diagnostics = {
+            "oracle_scope": "llm-extracted-predicates",
+            "modeled_feasible": smt_result.feasible,
+            "reasoning": smt_result.reasoning,
+            "model": dict(smt_result.model or {}),
+            "conflicts": list(smt_result.unsatisfied),
+            "unparsed": list(smt_result.unknown),
+            "assumed_width": profile.width if profile is not None else None,
+            "assumed_signed": profile.signed if profile is not None else None,
+        }
 
-        # Fast-tier FP prefilter. Runs after SMT (a definitive
-        # infeasibility verdict beats anything the cheap LLM can
-        # offer) but before the source-context disk reads — short-
-        # circuiting saves both the full-tier LLM round-trip and the
-        # context-gathering I/O.
+        # The existing fast-tier review policy runs independently of the
+        # mathematical diagnostics, before gathering full source context.
         from core.llm.scorecard import (
             prefilter_decision,
             record_prefilter_outcome,
@@ -1054,14 +916,19 @@ class DataflowValidator:
             result = self._short_circuit_fp_dataflow_result(cheap_reasoning)
             result.smt_path_index = active_index
             result.smt_paths_checked = smt_paths_checked
+            result.smt_diagnostics = smt_diagnostics
             return result
 
-        # Path is sat or indeterminate — run full LLM analysis.
-        # Pass the SMT model (concrete variable values) as 
-        # candidate inputs. Skip if no Z3.
+        # Mathematical models and conflicts are diagnostic, not executable
+        # source inputs, sanitizer proofs or source reachability verdicts.
         smt_hint = (
-            f"\nSMT pre-analysis: {smt_result.reasoning}"
-            + (f"\nCandidate input values: {smt_result.model}" if smt_result.model else "")
+            "\nSMT diagnostic over LLM-extracted predicates and assumed types "
+            "(not a source reachability or sanitizer proof): "
+            + smt_result.reasoning
+            + (f"\nEncoded conflicts: {smt_result.unsatisfied}" if smt_result.unsatisfied else "")
+            + (f"\nDiagnostic model values: {smt_result.model}" if smt_result.model else "")
+            + "\nRecheck predicates, variable versions and C conversions against the source; "
+              "the diagnostic cannot refute the source path."
         ) if smt_result.smt_available else ""
 
         source_context = self.read_source_context(
@@ -1183,7 +1050,7 @@ class DataflowValidator:
             # is validator-owned state, never an LLM-settable field.
             _valid_keys = {
                 f.name for f in _dataclass_fields(DataflowValidation)
-            } - {"error"}
+            } - {"error", "smt_diagnostics"}
             validation = DataflowValidation(**{
                 k: v for k, v in response_dict.items() if k in _valid_keys
             })
@@ -1191,6 +1058,7 @@ class DataflowValidator:
             # anything the response happened to carry.
             validation.smt_path_index = active_index
             validation.smt_paths_checked = smt_paths_checked
+            validation.smt_diagnostics = smt_diagnostics
 
             self.logger.info(
                 "Dataflow validation: exploitable=%s, confidence=%.2f",
@@ -1245,6 +1113,7 @@ class DataflowValidator:
                 error=str(e) or type(e).__name__,
                 smt_path_index=active_index,
                 smt_paths_checked=smt_paths_checked,
+                smt_diagnostics=smt_diagnostics,
             )
 
     def validate_finding(

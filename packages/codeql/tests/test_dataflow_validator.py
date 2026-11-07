@@ -359,7 +359,6 @@ from core.smt_solver import z3_available  # noqa: E402
 from core.smt_solver.path_feasibility import PathCondition  # noqa: E402
 from packages.codeql.dataflow_validator import (  # noqa: E402
     MAX_SMT_PATHS,
-    SMT_INFEASIBLE_CONFIDENCE,
     DataflowValidator,
 )
 
@@ -478,33 +477,30 @@ class TestMultiPathSMT:
         ):
             return v.validate_dataflow_path(dp, _Path("/nonexistent-repo"))
 
-    def test_first_unsat_second_sat_proceeds(self):
+    def test_unbound_unsat_cannot_discard_primary_path(self):
         v = _validator()
         result = self._validate(v, [
             _smt(False, "contradiction", ["x > 1", "x < 0"]),
             _smt(True, "sat"),
         ])
-        # The alternative path rescued the finding — full LLM analysis ran.
         assert result.is_exploitable is True
-        assert result.smt_path_index == 1
-        assert result.smt_paths_checked == 2
-        # Condition extraction ran once per checked path (lazy).
-        assert v._extract_path_conditions.call_count == 2
+        assert result.smt_path_index == 0
+        assert result.smt_paths_checked == 1
+        assert v._extract_path_conditions.call_count == 1
+        assert result.smt_diagnostics["modeled_feasible"] is False
+        assert result.smt_diagnostics["conflicts"] == ["x > 1", "x < 0"]
 
-    def test_all_paths_unsat_refutes_with_bookkeeping(self):
+    def test_model_contradiction_cannot_skip_source_review(self):
         v = _validator()
         result = self._validate(v, [
             _smt(False, "c1", ["a == 1", "a == 2"]),
             _smt(False, "c2", ["b != b"]),
         ])
-        assert result.is_exploitable is False
-        assert result.confidence == SMT_INFEASIBLE_CONFIDENCE
-        assert result.smt_paths_checked == 2
-        assert "all 2 dataflow paths refuted" in result.reasoning
-        assert "path 1: a == 1" in result.barriers
-        assert "path 2: b != b" in result.barriers
-        # No full LLM analysis happened.
-        assert v.llm.generate_structured.call_count == 0
+        assert result.is_exploitable is True
+        assert result.reasoning == _FULL_RESPONSE["reasoning"]
+        assert result.barriers == []
+        assert v.llm.generate_structured.call_count == 1
+        assert result.smt_diagnostics["oracle_scope"] == "llm-extracted-predicates"
 
     def test_first_sat_checks_only_one_path(self):
         v = _validator()
@@ -513,19 +509,14 @@ class TestMultiPathSMT:
         assert result.smt_paths_checked == 1
         assert v._extract_path_conditions.call_count == 1
 
-    def test_single_path_unsat_keeps_legacy_shape(self):
+    def test_single_path_unsat_is_diagnostic(self):
         v = _validator()
-        dp = v.extract_dataflow_from_sarif(_sarif_two_flows())
-        dp.alternatives = []
-        with patch(
-            "packages.codeql.dataflow_validator.check_path_feasibility_dual",
-            return_value=_smt(False, "contradiction", ["x > 1", "x < 0"]),
-        ):
-            result = v.validate_dataflow_path(dp, _Path("/nonexistent-repo"))
-        assert result.is_exploitable is False
-        assert result.barriers == ["x > 1", "x < 0"]
-        assert "Path conditions are mutually exclusive" in result.reasoning
+        result = self._validate_with_alternatives(v, 0, _smt(False, "contradiction", ["x > 1", "x < 0"]))
+        assert result.is_exploitable is True
+        assert result.barriers == []
+        assert result.smt_diagnostics["conflicts"] == ["x > 1", "x < 0"]
         assert result.smt_paths_checked == 1
+        assert v.llm.generate_structured.call_count == 1
 
     def _validate_with_alternatives(self, v, n_alternatives, smt_result):
         dp = v.extract_dataflow_from_sarif(_sarif_two_flows())
@@ -543,45 +534,24 @@ class TestMultiPathSMT:
         ):
             return v.validate_dataflow_path(dp, _Path("/nonexistent-repo"))
 
-    def test_truncated_unsat_coverage_never_refutes(self):
-        # 5 total paths, cap 3: every CHECKED path is unsat, but two
-        # paths were never SMT-checked — a live path may be among
-        # them, so the finding must fall through to full LLM analysis
-        # instead of being refuted.
+    @pytest.mark.parametrize("n_alternatives", [MAX_SMT_PATHS - 1, MAX_SMT_PATHS + 1])
+    def test_unverified_models_do_not_buy_more_path_extraction(self, n_alternatives):
         v = _validator()
-        result = self._validate_with_alternatives(
-            v, 4, _smt(False, "c", ["u"]),
-        )
-        assert result.is_exploitable is True  # full analysis ran
+        result = self._validate_with_alternatives(v, n_alternatives, _smt(False, "c", ["u"]))
+        assert result.is_exploitable is True
         assert v.llm.generate_structured.call_count == 1
-        # The cap still bounds WORK: extraction ran once per checked
-        # path, never for the uncovered remainder.
-        assert v._extract_path_conditions.call_count == MAX_SMT_PATHS
-        assert result.smt_paths_checked == MAX_SMT_PATHS
-        # The verdict is grounded on the primary path.
+        assert v._extract_path_conditions.call_count == 1
+        assert result.smt_paths_checked == 1
         assert result.smt_path_index == 0
 
-    def test_full_coverage_at_exactly_the_cap_still_refutes(self):
-        # cap == total paths: coverage is complete, so all-unsat is a
-        # sound refutation — the cap must not weaken it.
-        v = _validator()
-        result = self._validate_with_alternatives(
-            v, MAX_SMT_PATHS - 1, _smt(False, "c", ["u"]),
-        )
-        assert result.is_exploitable is False
-        assert (
-            f"all {MAX_SMT_PATHS} dataflow paths refuted"
-            in result.reasoning
-        )
-        assert result.smt_paths_checked == MAX_SMT_PATHS
-        assert v.llm.generate_structured.call_count == 0
 
 
 class TestSignednessProfileSelection:
-    """Refutation soundness: when the LLM hint does not pin signedness
-    the heuristic profile is a guess, so the SMT pre-check must require
-    both signedness profiles to agree (the dual checker); a pinned hint
-    keeps the cheaper single-profile check."""
+    """Choose an explicit modeling profile without granting source authority.
+
+    Guessed signedness uses the dual checker; an explicit hint selects one
+    profile. Neither choice establishes actual source types or conversions.
+    """
 
     def _run(self, v):
         dp = v.extract_dataflow_from_sarif(_sarif_two_flows())
@@ -880,8 +850,8 @@ def test_unbound_callee_models_cannot_suppress_findings(tmp_path, hint, ordinary
         'packages.codeql.dataflow_validator.load_methodology', return_value='',
     ), patch('core.smt_solver.path_feasibility._summarise_call', side_effect=AssertionError('unbound summary built')):
         result = validator.validate_dataflow_path(path, tmp_path)
-    assert result.is_exploitable is (not ordinary_contradiction)
-    assert validator.llm.generate_structured.call_count == (0 if ordinary_contradiction else 1)
+    assert result.is_exploitable is True
+    assert validator.llm.generate_structured.call_count == 1
 
 
 @pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
@@ -900,7 +870,7 @@ def test_alternative_path_with_unbound_callee_reaches_analysis(tmp_path, hint):
     ):
         result = validator.validate_dataflow_path(path, tmp_path)
     assert result.is_exploitable is True
-    assert result.smt_path_index == 1 and result.smt_paths_checked == 2
+    assert result.smt_path_index == 0 and result.smt_paths_checked == 1
     assert validator.llm.generate_structured.call_count == 1
 
 
@@ -929,8 +899,8 @@ def test_untyped_wide_call_return_cannot_refute_source_path(tmp_path, hint, ordi
         'packages.codeql.dataflow_validator.load_methodology', return_value='',
     ):
         result = validator.validate_dataflow_path(path, tmp_path)
-    assert result.is_exploitable is (not ordinary_contradiction)
-    assert validator.llm.generate_structured.call_count == (0 if ordinary_contradiction else 1)
+    assert result.is_exploitable is True
+    assert validator.llm.generate_structured.call_count == 1
 
 
 @pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
