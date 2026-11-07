@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Dict, List, Optional, Sequence
 
 _APPLICABLE_CWES = frozenset({"CWE-120", "CWE-131", "CWE-805"})
@@ -150,6 +151,9 @@ _RETURN_CHECK_RE = re.compile(
     r'\s*\{[^}]{0,1000}?(?:return|goto|break|exit)',
 )
 
+_BOUND_RETURN_IMPL = _RETURN_CHECK_RE
+_BOUND_MAX_IMPL = _MAX_CHECK_RE
+
 
 def _find_line(source: str, pos: int) -> int:
     return source.count('\n', 0, pos) + 1
@@ -219,11 +223,20 @@ def _var_has_upper_bound(
     concatenates unrelated functions, and a same-named bound in a
     DIFFERENT function must not read as a guard on this chain.
     """
-    prefix = source[start:before_pos]
-    for m in _RETURN_CHECK_RE.finditer(prefix):
+    # At the primary function's origin, endpos has the same regex boundary
+    # as a copied prefix. A nonzero start retains slicing: it creates a new
+    # left word boundary that finditer(source, start, endpos) would not.
+    native_window = (type(before_pos) is int and before_pos >= 4096
+                     and type(source) is str and type(start) is int and start == 0
+                     and _RETURN_CHECK_RE is _BOUND_RETURN_IMPL
+                     and _MAX_CHECK_RE is _BOUND_MAX_IMPL)
+    prefix = source if native_window else source[start:before_pos]
+    for m in (_RETURN_CHECK_RE.finditer(prefix, 0, before_pos) if native_window
+              else _RETURN_CHECK_RE.finditer(prefix)):
         if m.group(1) == var_name:
             return m.group(2)
-    for m in _MAX_CHECK_RE.finditer(prefix):
+    for m in (_MAX_CHECK_RE.finditer(prefix, 0, before_pos) if native_window
+              else _MAX_CHECK_RE.finditer(prefix)):
         lhs = m.group(1).strip()
         op = m.group(2)
         rhs = m.group(3).strip()
@@ -249,6 +262,78 @@ def length_sites_present(
         _BYTE_EXTRACT_RE.search(search_source)
         or _FIELD_READ_RE.search(search_source)
     )
+
+
+_CALL_RE_MODULE = re
+_CALL_FINDALL_IMPL = re.findall
+_COPY_IMPL = _COPY_RE
+_SECOND_RECV_IMPL = _SECOND_RECV_RE
+_LINE_IMPL = _find_line
+
+
+class _ProtocolCalls:
+    """Lazy, bounded indexes over native call matches in one invocation.
+
+    Overflow retains the full direct scan; these are work limits, never
+    finding caps. Lists retain regex order and keep distinct call sites.
+    """
+
+    def __init__(self, source: str, pattern: re.Pattern[str], buffer_group: int, *,
+                 index_lengths: bool = True):
+        self.source = source
+        self.pattern = pattern
+        self.buffer_group = buffer_group
+        self.index_lengths = index_lengths
+        self.prepared = False
+        self.by_buffer: dict[str, list[re.Match[str]]] = {}
+        self.by_length: dict[str, list[re.Match[str]]] = {}
+        self.tokens: dict[re.Match[str], set[str]] = {}
+        self.overflow = False
+
+    def matches(self, pattern, *, buffer: str | None = None, length: str | None = None):
+        if (pattern is not self.pattern or re is not _CALL_RE_MODULE
+                or re.findall is not _CALL_FINDALL_IMPL):
+            return pattern.finditer(self.source)
+        if not self.prepared:
+            self.prepared = True
+            rows = list(islice(pattern.finditer(self.source), 1025))
+            if len(rows) > 1024:
+                self.overflow = True
+            else:
+                chars = links = 0
+                for match in rows:
+                    destination = match.group(self.buffer_group).strip()
+                    expression = match.group(4).strip()
+                    chars += len(destination) + len(expression)
+                    if chars > 256 * 1024:
+                        self.overflow = True
+                        break
+                    variables = set(re.findall(r'\b(\w+)\b', expression))
+                    links += len(variables)
+                    if links > 8192:
+                        self.overflow = True
+                        break
+                    base = destination.split('[')[0].split('+')[0].strip()
+                    self.by_buffer.setdefault(base, []).append(match)
+                    if self.index_lengths:
+                        for variable in variables:
+                            self.by_length.setdefault(variable, []).append(match)
+                    self.tokens[match] = variables
+            if self.overflow:
+                self.by_buffer.clear()
+                self.by_length.clear()
+                self.tokens.clear()
+        if self.overflow:
+            return pattern.finditer(self.source)
+        if buffer is not None:
+            return iter(self.by_buffer.get(buffer, ()))
+        return iter(self.by_length.get(length, ()))
+
+    def variables(self, match, expression: str) -> set[str]:
+        if (re is _CALL_RE_MODULE and re.findall is _CALL_FINDALL_IMPL
+                and type(match) is re.Match and match in self.tokens):
+            return self.tokens[match]
+        return set(re.findall(r'\b(\w+)\b', expression))
 
 
 def check_proto_length(
@@ -295,6 +380,19 @@ def check_proto_length(
     if not length_candidates:
         return findings
 
+    # Foreign strings and replaced providers keep their original operations.
+    native = (type(source) is str and type(search_source) is str
+              and re is _CALL_RE_MODULE and re.findall is _CALL_FINDALL_IMPL)
+    line_fact: tuple[int, int] | None = None
+
+    def candidate_line(pos):
+        nonlocal line_fact
+        if native and _find_line is _LINE_IMPL:
+            if line_fact is None or line_fact[0] != pos:
+                line_fact = (pos, _find_line(source, pos))
+            return line_fact[1]
+        return _find_line(source, pos)
+
     allocs: Dict[str, Dict[str, Any]] = {}
     for m in _ALLOC_RE.finditer(search_source):
         buf_var = m.group(1).strip()
@@ -307,6 +405,12 @@ def check_proto_length(
             "size_vars": size_vars,
             "pos": m.start(),
         }
+
+    repeated = native and (len(length_candidates) > 1 or len(allocs) > 1 or len(search_source) >= 4096)
+    copy_sites = (_ProtocolCalls(search_source, _COPY_RE, 2)
+                  if native and repeated and _COPY_RE is _COPY_IMPL else None)
+    recv_sites = (_ProtocolCalls(search_source, _SECOND_RECV_RE, 3, index_lengths=False)
+                  if native and repeated and _SECOND_RECV_RE is _SECOND_RECV_IMPL else None)
 
     for len_var, len_info in length_candidates.items():
         for buf_var, alloc in allocs.items():
@@ -321,13 +425,15 @@ def check_proto_length(
             if bound is not None:
                 continue
 
-            for m in _COPY_RE.finditer(search_source):
+            for m in (copy_sites.matches(_COPY_RE, buffer=buf_var) if copy_sites is not None
+                      else _COPY_RE.finditer(search_source)):
                 dst = m.group(2).strip()
                 copy_len = m.group(4).strip()
                 dst_base = dst.split('[')[0].split('+')[0].strip()
                 if dst_base != buf_var:
                     continue
-                copy_len_vars = set(re.findall(r'\b(\w+)\b', copy_len))
+                copy_len_vars = (copy_sites.variables(m, copy_len) if copy_sites is not None
+                                 else set(re.findall(r'\b(\w+)\b', copy_len)))
                 if len_var not in copy_len_vars:
                     continue
 
@@ -338,7 +444,8 @@ def check_proto_length(
                 )
                 line = (
                     0 if len_info["pos"] >= primary_len
-                    else _find_line(source, len_info["pos"])
+                    else (candidate_line(len_info["pos"]) if native and repeated
+                          else _find_line(source, len_info["pos"]))
                 )
                 findings.append(ProtoLengthFinding(
                     function=function_name,
@@ -361,7 +468,8 @@ def check_proto_length(
                     (len_var, line, alloc["pos"], m.start()),
                 )
 
-            for m in _SECOND_RECV_RE.finditer(search_source):
+            for m in (recv_sites.matches(_SECOND_RECV_RE, buffer=buf_var) if recv_sites is not None
+                      else _SECOND_RECV_RE.finditer(search_source)):
                 if m.start() < alloc["pos"]:
                     continue
                 recv_buf = m.group(3).strip()
@@ -369,7 +477,8 @@ def check_proto_length(
                 recv_buf_base = recv_buf.split('[')[0].split('+')[0].strip()
                 if recv_buf_base != buf_var:
                     continue
-                recv_len_vars = set(re.findall(r'\b(\w+)\b', recv_len))
+                recv_len_vars = (recv_sites.variables(m, recv_len) if recv_sites is not None
+                                 else set(re.findall(r'\b(\w+)\b', recv_len)))
                 if len_var not in recv_len_vars:
                     continue
 
@@ -380,7 +489,8 @@ def check_proto_length(
                 )
                 line = (
                     0 if len_info["pos"] >= primary_len
-                    else _find_line(source, len_info["pos"])
+                    else (candidate_line(len_info["pos"]) if native and repeated
+                          else _find_line(source, len_info["pos"]))
                 )
                 findings.append(ProtoLengthFinding(
                     function=function_name,
@@ -404,11 +514,13 @@ def check_proto_length(
                 )
 
     for len_var, len_info in length_candidates.items():
-        for m in _COPY_RE.finditer(search_source):
+        for m in (copy_sites.matches(_COPY_RE, length=len_var) if copy_sites is not None
+                  else _COPY_RE.finditer(search_source)):
             if m.start() < len_info["pos"]:
                 continue
             copy_len = m.group(4).strip()
-            copy_len_vars = set(re.findall(r'\b(\w+)\b', copy_len))
+            copy_len_vars = (copy_sites.variables(m, copy_len) if copy_sites is not None
+                             else set(re.findall(r'\b(\w+)\b', copy_len)))
             if len_var not in copy_len_vars:
                 continue
 
@@ -429,7 +541,8 @@ def check_proto_length(
             )
             line = (
                 0 if len_info["pos"] >= primary_len
-                else _find_line(source, len_info["pos"])
+                else (candidate_line(len_info["pos"]) if native and repeated
+                      else _find_line(source, len_info["pos"]))
             )
             findings.append(ProtoLengthFinding(
                 function=function_name,
