@@ -10,11 +10,17 @@ from core.audit import condition_smt, invariant_smt as inv, invariant_worker as 
 from core.smt_solver import session
 
 
-def call(mode="site", source="Count++;"):
+def call(mode="site", source="Count++;", *, timeout_ms=5000):
     if mode == "function":
-        return inv.check_invariant_preservation("Count <= Limit", source)
+        return inv.check_invariant_preservation(
+            "Count <= Limit", source, timeout_ms=timeout_ms
+        )
     return inv.check_site_preservation(
-        "Count <= Limit", source, line=7, pre_conditions=("Count == Limit",)
+        "Count <= Limit",
+        source,
+        line=7,
+        pre_conditions=("Count == Limit",),
+        timeout_ms=timeout_ms,
     )
 
 
@@ -199,7 +205,7 @@ def test_input_budgets_refuse_before_worker_dispatch(monkeypatch, changes):
 
 
 def test_setup_time_consumes_the_original_deadline(monkeypatch):
-    pytest.importorskip('z3')
+    pytest.importorskip("z3")
     clock = [0.0]
     monkeypatch.setattr(session, "monotonic", lambda: clock[0])
 
@@ -273,7 +279,7 @@ def test_unit_fixture_restores_borrowed_transport(request, exit_mode):
 )
 def test_native_confined_invariant_worker(mode, source, expected):
     pytest.importorskip("z3")
-    result = call(mode, source)
+    result = call(mode, source, timeout_ms=30_000)
     assert (result.outcome if mode == "function" else result.verdict) == expected, (
         result.to_dict()
     )

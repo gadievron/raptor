@@ -294,10 +294,12 @@ def test_native_confined_batch(guarded, count):
             dict(code="Count=Limit;", line=index + 1, pre_conditions=[])
             for index in range(count)
         ]
-    results = call(sites)
+    # This is worker delivery coverage; deterministic clock tests own expiry.
+    results = call(sites, timeout_ms=30_000)
+    assert results is not None, "native invariant batch returned no complete reply"
     assert [result.verdict for result in results] == (
         ["preserved"] * count if guarded else ["preserved", "violable"]
-    )
+    ), [result.to_dict() for result in results]
 
 
 def test_site_formulas_remain_independent_with_conflicting_preconditions(

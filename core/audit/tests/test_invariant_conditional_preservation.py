@@ -132,7 +132,7 @@ def test_audit_tool_chain_books_conditional_preservation_as_inconclusive(tmp_pat
 )
 def test_native_worker_keeps_conditional_preservation_scoped(guarded):
     code = "if(Limit>=0)Count=0;" if guarded else "Count=0;"
-    result = inv.check_invariant_preservation("Count <= Limit", code)
+    result = inv.check_invariant_preservation("Count <= Limit", code, timeout_ms=30_000)
     assert result.outcome == ("preserved" if guarded else "inconclusive"), (
         result.to_dict()
     )

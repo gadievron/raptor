@@ -194,7 +194,7 @@ def test_c_branch_metadata_survives_batch_dispatch():
     ids=["grouped-update", "guarded-update"],
 )
 def test_native_source_bound_invariant_worker(code, verdict):
-    result = inv.check_site_preservation("Count <= Limit", code)
+    result = inv.check_site_preservation("Count <= Limit", code, timeout_ms=30_000)
     assert result.verdict == verdict, result.to_dict()
 
 
@@ -227,7 +227,7 @@ def test_assembly_is_not_vacuous_source_preservation():
 
 
 @pytest.mark.parametrize("mode", ["site", "batch"])
-@pytest.mark.parametrize("version", [2, 3, 4, 5])
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 6])
 def test_pre_source_admission_receipts_are_not_reused(monkeypatch, mode, version):
     from core.audit import condition_smt
 
