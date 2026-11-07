@@ -39,6 +39,8 @@ from core.audit.tests._live_transport import (
     run_compiler_analyzer_sweep_guarded,
 )
 
+import core.audit.compiler_sweep as _tool_lookup_consumer
+
 FIXTURES = Path(__file__).parent / "fixtures" / "compiler_sweep"
 
 compiler_sweep._reset_probe_cache()
@@ -429,10 +431,7 @@ class TestToolchainFallback:
         self, tmp_path, sandbox_spy, monkeypatch,
     ):
         real_which = shutil.which
-        monkeypatch.setattr(
-            shutil, "which",
-            lambda name, *a, **k: None if name == "gcc" else real_which(name, *a, **k),
-        )
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name, *a, **k: None if name == 'gcc' else real_which(name, *a, **k))
         result = _sweep(
             tmp_path, "uaf.c", "CWE-416",
             "use-after-free of `p` in use_after_free",
@@ -447,7 +446,7 @@ class TestToolchainFallback:
         assert result.outcome == "confirmed"
 
     def test_both_missing_is_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda *a, **k: None)
         # Deliberate toolchain fault: this leg MINTS the not-installed
         # error on purpose, so it bypasses the transport guard (which
         # reads exactly that shape as a degraded runtime) and calls
@@ -1919,8 +1918,7 @@ class TestLayer2SweepEndToEnd:
         self, tmp_path, sandbox_spy, monkeypatch, name, text,
     ):
         real_which = shutil.which
-        monkeypatch.setattr(shutil, "which", lambda n, *a, **k: None
-                            if n == "gcc" else real_which(n, *a, **k))
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda n, *a, **k: None if n == 'gcc' else real_which(n, *a, **k))
         target = tmp_path / "repo"
         _write(target, name, text)
         result = _guarded_compiler_sweep(
@@ -1932,8 +1930,7 @@ class TestLayer2SweepEndToEnd:
 
     def test_control_still_confirms(self, tmp_path, sandbox_spy, monkeypatch):
         real_which = shutil.which
-        monkeypatch.setattr(shutil, "which", lambda n, *a, **k: None
-                            if n == "gcc" else real_which(n, *a, **k))
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda n, *a, **k: None if n == 'gcc' else real_which(n, *a, **k))
         target = tmp_path / "repo"
         _write(target, "ctl.c", _NULL_FN)
         result = _guarded_compiler_sweep(
@@ -2547,8 +2544,7 @@ class TestDistinctNameQuotaEndToEnd:
         self, tmp_path, sandbox_spy, monkeypatch,
     ):
         real_which = shutil.which
-        monkeypatch.setattr(shutil, "which", lambda n, *a, **k: None
-                            if n == "gcc" else real_which(n, *a, **k))
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda n, *a, **k: None if n == 'gcc' else real_which(n, *a, **k))
         monkeypatch.setattr(compiler_sweep, "_MAX_DISTINCT_MARKER_NAMES", 4)
         target = tmp_path / "repo"
         body = "".join(f'#line {i} "n{i}.c"\nint v{i};\n' for i in range(1, 10))
@@ -2883,8 +2879,7 @@ class TestResolutionLimitEndToEnd:
 
     def _sweep(self, tmp_path, monkeypatch, text):
         real_which = shutil.which
-        monkeypatch.setattr(shutil, "which", lambda n, *a, **k: None
-                            if n == "gcc" else real_which(n, *a, **k))
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda n, *a, **k: None if n == 'gcc' else real_which(n, *a, **k))
         target = tmp_path / "repo"
         _write(target, "q.c", text)
         compiler_sweep._reset_tu_cache()
@@ -3496,8 +3491,7 @@ class TestBoundedResolutionEndToEnd:
     @pytest.mark.parametrize("kind", ["hops", "budget", "deadline"])
     def test_limit_is_inconclusive(self, tmp_path, sandbox_spy, monkeypatch, kind):
         real_which = shutil.which
-        monkeypatch.setattr(shutil, "which", lambda n, *a, **k: None
-                            if n == "gcc" else real_which(n, *a, **k))
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda n, *a, **k: None if n == 'gcc' else real_which(n, *a, **k))
         (tmp_path / "repo").mkdir()
         target = (tmp_path / "repo").resolve()
         (target / "real").mkdir()

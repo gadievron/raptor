@@ -35,6 +35,9 @@ from core.audit.sweep import SweepResult
 from core.git.clone import safe_git_readonly_command
 from core.testing import git_run, init_scratch_repo
 
+import core.audit.git_oracle as _tool_lookup_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 HAVE_GIT = shutil.which("git") is not None
 
 needs_git = pytest.mark.skipif(not HAVE_GIT, reason="git not installed")
@@ -262,7 +265,7 @@ class TestGracefulEmptiness:
     def test_git_absent(self, tmp_path, monkeypatch):
         target = tmp_path / "repo"
         (target / ".git").mkdir(parents=True)
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda *a, **k: None)
         result = corroborate_finding(target_path=target, file_path="a.c")
         assert not result.available
         assert result.records == []
