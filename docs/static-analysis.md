@@ -261,6 +261,11 @@ It flags narrow integer, `_Bool` and real `float` extraction where argument
 promotion requires a different type. Use the actual promoted type: some
 unsigned integer promotions require `unsigned int` rather than `int`.
 
+The `snprintf`/`vsnprintf` cursor check follows return values into pointer
+advances and remaining-size updates for the same formatting destination.
+It excludes unrelated length tallies and ends local tracking when the return
+value, cursor or size changes. Reports remain candidates for bounds review.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

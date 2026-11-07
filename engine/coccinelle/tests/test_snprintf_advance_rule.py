@@ -62,7 +62,7 @@ class TestPositives:
             }
         """)
         assert len(results) == 1
-        assert "no truncation check possible" in results[0]["message"]
+        assert "Candidate: snprintf return value used directly" in results[0]["message"]
 
 
 class TestNegatives:
@@ -87,3 +87,128 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("api", ["snprintf", "vsnprintf"])
+@pytest.mark.parametrize("declaration", [False, True], ids=["assignment", "declaration"])
+def test_cursor_return_value_relationships(tmp_path, api, declaration):
+    arguments = '"%s", fmt' if api == "snprintf" else "fmt, ap"
+    call = f'{api}(buf, remaining, {arguments})'
+    updates = ("buf += n;", "buf = buf + n;", "buf = n + buf;",
+               "remaining -= n;", "remaining = remaining - n;")
+    barriers = (
+        "", "n = 0;", "n = clamp(n, remaining);", "rewrite(&n);",
+        "n += 1;", "n -= 1;", "n *= 0;", "n /= 2;", "n %= 2;",
+        "n <<= 1;", "n >>= 1;", "n &= 0;", "n ^= 1;", "n |= 1;",
+        "n++;", "++n;", "n--;", "--n;",
+        "buf = other;", "replace(&buf);", "buf++;", "buf += 1;",
+        "remaining = other_size;", "rewrite(&remaining);",
+        "remaining++;", "remaining &= mask;",
+    )
+    signature = "char *buf, char *other, int remaining, int other_size, int mask, const char *fmt, va_list ap"
+    lines = ["#include <stdarg.h>", "#include <stdio.h>"]
+    expected = set()
+    for update in updates:
+        for barrier in barriers:
+            lines += [f"void case_{len(lines)}({signature}) {{"]
+            if not declaration:
+                lines += ["int n;"]
+            lines += [f'{"int " if declaration else ""}n = {call};']
+            call_line = len(lines)
+            lines += [barrier, update, "}"]
+            if not barrier:
+                expected.add(call_line)
+    for destination in ("NULL", "0", "(void *)0", "((void *)0)"):
+        lines += [f"void length_only_{len(lines)}({signature}) {{"]
+        if not declaration:
+            lines += ["int n;"]
+        null_call = call.replace("(buf,", f"({destination},", 1)
+        lines += [f'{"int " if declaration else ""}n = {null_call};', "remaining -= n;", "}"]
+    for index in range(24):
+        lines += [f"void repeated_{index}({signature}) {{"]
+        if not declaration:
+            lines += ["int n;"]
+        lines += [f'{"int " if declaration else ""}n = {call};']
+        expected.add(len(lines))
+        lines += ["buf += n;", "remaining -= n;", "}"]
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in results}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(results) == len(expected)
+
+
+@pytest.mark.parametrize("api", ["snprintf", "vsnprintf"])
+def test_inline_cursor_and_budget_updates_exclude_length_tallies(tmp_path, api):
+    def call(destination, size):
+        arguments = '"%s", fmt' if api == "snprintf" else "fmt, ap"
+        return f"{api}({destination}, {size}, {arguments})"
+
+    own = call("buf", "remaining")
+    other = call("other", "other_size")
+    cases = (
+        (f"buf += {own};", True),
+        (f"buf = buf + {own};", True),
+        (f"buf = {own} + buf;", True),
+        (f"remaining -= {own};", True),
+        (f"remaining = remaining - {own};", True),
+        (f"buf += {other};", False),
+        (f"buf = {other} + buf;", False),
+        (f"total += {own};", False),
+        (f"total = total + {own};", False),
+        (f'total += {call("NULL", "0")};', False),
+        (f'remaining -= {call("NULL", "remaining")};', False),
+        (f'remaining -= {call("0", "remaining")};', False),
+        (f'remaining -= {call("(void *)0", "remaining")};', False),
+        (f'remaining -= {call("((void *)0)", "remaining")};', False),
+        (f'buf += {call("other", "remaining")};', False),
+        (f'remaining -= {call("other", "other_size")};', False),
+    )
+    lines = ["#include <stdarg.h>", "#include <stdio.h>"]
+    expected = set()
+    signature = "char *buf, char *other, int remaining, int other_size, const char *fmt, va_list ap"
+    for body, should_report in cases:
+        lines += [f"void inline_{len(lines)}({signature}) {{", "int total = 0;", body, "}"]
+        if should_report:
+            expected.add(len(lines) - 1)
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in results}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(results) == len(expected)
+
+
+@pytest.mark.integration
+def test_cursor_relationships_keep_production_batching(tmp_path, monkeypatch):
+    from packages.coccinelle import runner
+
+    source = tmp_path / "batch.c"
+    source.write_text(
+        '#include <stdarg.h>\n'
+        '#include <stdio.h>\n'
+        'void cursor(char *buf, int left) { buf += snprintf(buf, left, "x"); }\n'
+        'void budget(char *buf, int left, const char *fmt, va_list ap) { left -= vsnprintf(buf, left, fmt, ap); }\n'
+        'void replaced(char *buf, int left) { int n = snprintf(buf, left, "x"); n = clamp(n, left); buf += n; }\n'
+        'void tally(char *buf, int left) { int total = 0; total += snprintf(buf, left, "x"); }\n'
+        'void twice(int fd) { close(fd); close(fd); }\n',
+    )
+    original = runner._confined_default_runner
+    invocations = []
+
+    def observe(*args, **kwargs):
+        execute = original(*args, **kwargs)
+
+        def invoke(argv, **options):
+            invocations.append(tuple(argv))
+            return execute(argv, **options)
+
+        return invoke
+
+    monkeypatch.setattr(runner, "_confined_default_runner", observe)
+    results = runner.run_rules_batched(
+        source, [_RULE, _RULE.with_name("double_close.cocci")],
+        allow_scripting=True, no_includes=True, timeout=60,
+    )
+    assert set(results) == {"snprintf_advance", "double_close"}
+    assert all(result.returncode == 0 and not result.errors for result in results.values()), results
+    assert len(results["snprintf_advance"].matches) == 2
+    assert len(results["double_close"].matches) == 1
+    assert len(invocations) == 1, invocations

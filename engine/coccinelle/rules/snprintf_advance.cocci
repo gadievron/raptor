@@ -6,8 +6,8 @@
 // (remaining -= n) without first checking whether the output was
 // truncated. snprintf returns the number of characters that WOULD
 // have been written (excluding the null terminator), which can exceed
-// the buffer size argument. Using this value to advance past the
-// buffer end causes an out-of-bounds write.
+// the buffer size argument. Unchecked arithmetic can exceed the provided
+// write window or underflow the remaining count; later writes may overflow.
 //
 // The safe pattern: check `if (n >= remaining)` (or equivalent) before
 // advancing. The `when !=` guard below excludes paths where
@@ -18,9 +18,11 @@
 //
 // Known limitations:
 // - Guard patterns with explicit casts (e.g., (size_t)n >= remaining)
-//   are not matched by the exclusion and may cause false negatives.
-// - Indirect checks (e.g., clamping n via min(n, remaining)) are not
-//   recognised as safe.
+//   are not matched by the exclusion and may cause false positives.
+// - Rewriting the return value, cursor or size ends local tracking; a
+//   replacement value is not assumed safe or followed through aliases.
+// - The comparison exclusion does not establish the branch effect: a
+//   logging-only check can still hide a candidate.
 // - snprintf wrappers that return the clamped value are not tracked.
 //
 // The rules are `exists` (some-path): an advance nested inside a
@@ -32,13 +34,41 @@
 // CWE-787 (Out-of-bounds Write).
 // @role: detection
 
+// Explicit null destinations are length-only or invalid-call cases, not
+// an identified buffer window. Use positions to share this exclusion across
+// tracked-return and inline forms, including ordinary object-pointer casts.
+@snprintf_null_destination@
+type NULL_BASE;
+expression size;
+position p;
+@@
+
+(
+  snprintf@p(NULL, size, ...)
+|
+  vsnprintf@p(NULL, size, ...)
+|
+  snprintf@p(0, size, ...)
+|
+  vsnprintf@p(0, size, ...)
+|
+  snprintf@p((NULL_BASE *)0, size, ...)
+|
+  vsnprintf@p((NULL_BASE *)0, size, ...)
+|
+  snprintf@p(((NULL_BASE *)0), size, ...)
+|
+  vsnprintf@p(((NULL_BASE *)0), size, ...)
+)
+
 // Declaration form: T n = snprintf(buf, remaining, ...);
 
 @snprintf_decl exists@
 expression buf, remaining;
 identifier n;
 type T;
-position p;
+assignment operator op_n, op_buf, op_remaining;
+position p != snprintf_null_destination.p;
 @@
 
 (
@@ -47,10 +77,30 @@ position p;
   T n = vsnprintf@p(buf, remaining, ...);
 )
 ... when != n >= remaining
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
 (
   buf += n;
 |
   buf = buf + n;
+|
+  buf = n + buf;
 |
   remaining -= n;
 |
@@ -68,14 +118,15 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "snprintf_advance",
-          "message": "snprintf return value '%s' used to advance '%s' without truncation check — if output was truncated, pointer moves past buffer end" % (n, buf)}
+          "message": "Candidate: snprintf return '%s' reaches a cursor or remaining-size update for '%s'; review bounds, errors and truncation handling" % (n, buf)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // Assignment form: n = snprintf(buf, remaining, ...);
 
 @snprintf_assign exists@
 expression buf, remaining, n;
-position p;
+assignment operator op_n, op_buf, op_remaining;
+position p != snprintf_null_destination.p;
 @@
 
 (
@@ -84,10 +135,30 @@ position p;
   n = vsnprintf@p(buf, remaining, ...);
 )
 ... when != n >= remaining
+    when != n op_n ...
+    when != &n
+    when != n++
+    when != ++n
+    when != n--
+    when != --n
+    when != buf op_buf ...
+    when != &buf
+    when != buf++
+    when != ++buf
+    when != buf--
+    when != --buf
+    when != remaining op_remaining ...
+    when != &remaining
+    when != remaining++
+    when != ++remaining
+    when != remaining--
+    when != --remaining
 (
   buf += n;
 |
   buf = buf + n;
+|
+  buf = n + buf;
 |
   remaining -= n;
 |
@@ -105,26 +176,40 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "snprintf_advance",
-          "message": "snprintf return value '%s' used to advance '%s' without truncation check — if output was truncated, pointer moves past buffer end" % (n, buf)}
+          "message": "Candidate: snprintf return '%s' reaches a cursor or remaining-size update for '%s'; review bounds, errors and truncation handling" % (n, buf)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-// Direct form: buf += snprintf(...) — the return value is consumed
-// in the advance itself, so no truncation check is even possible
-// before the pointer moves.
+// Direct forms consume the return before a truncation check can intervene.
+// Bind the formatting destination and size to the actual updated cursor or
+// budget. Unrelated length accumulators and explicit null destinations are
+// outside this buffer-window pattern.
 
 @snprintf_direct@
 expression buf;
-position p;
+expression remaining;
+position p != snprintf_null_destination.p;
 @@
 
 (
-* buf += snprintf@p(...)
+* buf += snprintf@p(buf, remaining, ...)
 |
-* buf = buf + snprintf@p(...)
+* buf = buf + snprintf@p(buf, remaining, ...)
 |
-* buf += vsnprintf@p(...)
+* buf = snprintf@p(buf, remaining, ...) + buf
 |
-* buf = buf + vsnprintf@p(...)
+* remaining -= snprintf@p(buf, remaining, ...)
+|
+* remaining = remaining - snprintf@p(buf, remaining, ...)
+|
+* buf += vsnprintf@p(buf, remaining, ...)
+|
+* buf = buf + vsnprintf@p(buf, remaining, ...)
+|
+* buf = vsnprintf@p(buf, remaining, ...) + buf
+|
+* remaining -= vsnprintf@p(buf, remaining, ...)
+|
+* remaining = remaining - vsnprintf@p(buf, remaining, ...)
 )
 
 @script:python@
@@ -137,5 +222,5 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "snprintf_advance",
-          "message": "snprintf return value added directly to '%s' with no truncation check possible — if output was truncated, pointer moves past buffer end" % buf}
+          "message": "Candidate: snprintf return value used directly to update the cursor or remaining size for '%s'; review bounds, errors and truncation handling" % buf}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
