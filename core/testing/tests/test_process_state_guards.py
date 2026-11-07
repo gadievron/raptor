@@ -3,6 +3,7 @@
 import ast
 import builtins
 from contextlib import ExitStack, contextmanager
+from functools import lru_cache
 import itertools
 import logging
 import os
@@ -31,9 +32,22 @@ def _node(path, name):
     return next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
 
 
-def _function(path, name, *, imports=None, publication_error=None):
+@lru_cache(maxsize=None)
+def _fixture_code(path, name, inject_error):
+    # Source is immutable within a test run. Cache code, not function globals.
     node = _node(path, name)
     node.decorator_list = []
+    if inject_error:
+        class Fault(ast.NodeTransformer):
+            def visit_Assign(self, item):
+                if any(isinstance(n, ast.Name) and n.id == "_HERMETIC_OLLAMA_HOST" for n in item.targets) and isinstance(item.value, ast.JoinedStr):
+                    return [item, ast.Raise(exc=ast.Call(func=ast.Name(id="PublicationError", ctx=ast.Load()), args=[], keywords=[]), cause=None)]
+                return item
+        node = Fault().visit(node)
+    return compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(ROOT / path), "exec")
+
+
+def _function(path, name, *, imports=None, publication_error=None):
     namespace = dict(pytest=pytest, os=os, Path=Path, _tempfile=tempfile,
                      _SESSIONS_DIR_SEQ=itertools.count(), socket=socket)
     if imports:
@@ -42,14 +56,8 @@ def _function(path, name, *, imports=None, publication_error=None):
             return imports[name] if name in imports else real_import(name, *args, **kwargs)
         namespace["__builtins__"] = {**vars(builtins), "__import__": import_owned}
     if publication_error is not None:
-        class Fault(ast.NodeTransformer):
-            def visit_Assign(self, item):
-                if any(isinstance(n, ast.Name) and n.id == "_HERMETIC_OLLAMA_HOST" for n in item.targets) and isinstance(item.value, ast.JoinedStr):
-                    return [item, ast.Raise(exc=ast.Call(func=ast.Name(id="PublicationError", ctx=ast.Load()), args=[], keywords=[]), cause=None)]
-                return item
-        node = Fault().visit(node)
         namespace["PublicationError"] = publication_error
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(ROOT / path), "exec"), namespace)
+    exec(_fixture_code(path, name, publication_error is not None), namespace)
     return namespace[name], namespace
 
 
