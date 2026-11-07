@@ -4338,6 +4338,13 @@ def _build_api_regex(api: str) -> re.Pattern[str]:
 _DANGEROUS_API_RE = {
     api: _build_api_regex(api.lower()) for api in _DANGEROUS_APIS
 }
+# The default regex requires its final literal even when the module prefix
+# is omitted. Retain the actual matcher identity: runtime replacements must
+# still run their own searches, not inherit this proof from a reused API key.
+_DANGEROUS_API_LITERALS = {
+    api: (pattern, api.lower().rsplit(".", 1)[-1])
+    for api, pattern in _DANGEROUS_API_RE.items()
+}
 _DANGEROUS_APIS_LOWER = frozenset(api.lower() for api in _DANGEROUS_APIS)
 
 # Detection vocabulary matched against SCANNED third-party code —
@@ -4433,7 +4440,12 @@ def _classify_role(
 
     if source:
         src_lower = source.lower()
+        native = type(src_lower) is str and len(src_lower) >= 4096
         for api, pattern in _DANGEROUS_API_RE.items():
+            if native and type(api) is str:
+                literal = _DANGEROUS_API_LITERALS.get(api)
+                if literal is not None and pattern is literal[0] and literal[1] not in src_lower:
+                    continue
             if pattern.search(src_lower):
                 dangerous_apis.append(api)
 
@@ -4548,18 +4560,35 @@ def _extract_sinks(
                 return sinks
 
     result = []
+    # Small lists keep their cheap membership path. Index only a proven
+    # native history; an adapter query restores ordered list comparisons.
+    seen: list[Any] | set[str] = result
     for sink in context_map.get("sinks", []):
         if sink.get("file") == file_path and sink.get("function") == function_name:
             target = sink.get("target", "")
-            if target and target not in result:
+            if not target:
+                continue
+            if type(target) is not str:
+                seen = result
+            if target not in seen:
                 result.append(target)
+                if isinstance(seen, set):
+                    seen.add(target)
+                elif len(result) == 16 and all(type(value) is str for value in result):
+                    seen = set(result)
 
     sd = context_map.get("sink_discovery", {})
     for tr in sd.get("transitive_reach", []):
         if tr.get("file") == file_path and tr.get("function") == function_name:
             for s in tr.get("reachable_sinks", []):
-                if s not in result:
+                if type(s) is not str:
+                    seen = result
+                if s not in seen:
                     result.append(s)
+                    if isinstance(seen, set):
+                        seen.add(s)
+                    elif len(result) == 16 and all(type(value) is str for value in result):
+                        seen = set(result)
 
     return result
 
