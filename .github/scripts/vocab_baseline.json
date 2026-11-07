@@ -1203,6 +1203,11 @@
     "kind": "literal",
     "note": "serialization field names, not a name vocabulary"
   },
+  "core/audit/verification_metrics.py::record": {
+    "count": 12,
+    "kind": "literal",
+    "note": "closed verification-attempt JSONL event schema written by record_attempt and consumed by summarize_attempts and the metrics CLI: event/time, checker location and identity, reuse origin, outcome/reason, elapsed time and nullable unattributed cost; diagnostic serialization fields, not learned function names or finding-verdict authority"
+  },
   "core/build/build_detector.py::_VALIDATION_COMMANDS": {
     "count": 18,
     "kind": "literal",
