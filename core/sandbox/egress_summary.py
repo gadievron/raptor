@@ -20,7 +20,7 @@ from typing import Any
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
 from core.sandbox.evidence import _unique_evidence_object
 from core.security.capped_read import read_capped
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 
 EGRESS_SUMMARY_FILE = "egress-summary.json"
 
@@ -273,6 +273,6 @@ def finalize_egress_summary(output_dir: Path) -> dict[str, Any] | None:
         log.debug(
             "finalize_egress_summary failed for %s: %s: %s",
             sanitise_for_terminal(str(output_dir)), type(exc).__name__,
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
         return None
