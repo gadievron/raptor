@@ -493,6 +493,14 @@ on the same worker or from files shared by other workers.
   a path and later removing the first equal string. Prefer a subprocess
   when the behavior requires interpreter startup or process-lifetime
   initialization. Library imports should leave path setup to entry points.
+- **Choose the child's launch context.** A subprocess inherits the caller's
+  environment; a fresh interpreter alone does not isolate launcher credentials
+  or scratch metadata. Standalone CLI tests should use
+  `core.testing.standalone_cli` to own that state. Tests of session inheritance
+  must instead construct a valid owned launch context. When parent and child
+  exchange signed artifacts, explicitly share a test-owned signing directory
+  for the required lifetime, including module-scoped setup. Exercise rejection
+  of stale inherited state without weakening production guards.
 - **Finish background work.** Stop and join owned threads, shut down
   executors and servers, and terminate and reap owned children in teardown.
   A daemon flag does not provide test cleanup. Use events or a readiness
@@ -599,6 +607,12 @@ For fixture changes, run the specific ownership harness and domain tests,
 using the randomized-order commands above. Run CI-filter tests in the
 pytest-only environment defined by `.github/workflows/tests.yml`, rather
 than relying solely on the fully provisioned development environment.
+
+When changing an evidence format or moving records between fields, trace the
+writer, authentication binding, and downstream readers together. Keep data
+quality separate from behavior classification: filtering bookkeeping records
+must not erase capture loss or turn an unobserved event into proven absence.
+Include an end-to-end reader check alongside local serialization tests.
 
 ### Refactors and audit records
 
