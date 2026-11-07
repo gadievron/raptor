@@ -702,6 +702,11 @@
     "kind": "literal",
     "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
   },
+  "core/audit/evidence_trace.py::build_verification_trace": {
+    "count": 14,
+    "kind": "literal",
+    "note": "verification_trace JSON serializer field names (claim, scope, channel bookkeeping, receipt markers and limitations), not target function names or detection vocabulary; the normal findings-graded.json export tests consume these schema keys"
+  },
   "core/audit/findings_export.py::_MECHANISM_STOPWORDS": {
     "count": 23,
     "kind": "literal",
