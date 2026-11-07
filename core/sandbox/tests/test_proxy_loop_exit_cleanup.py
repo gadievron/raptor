@@ -110,7 +110,7 @@ def test_new_binds_are_refused_once_shutdown_starts(proxy, tmp_path, unix):
 
 @pytest.mark.parametrize("unix", [False, True])
 def test_listener_finishing_during_shutdown_is_closed_before_publication(
-    proxy, tmp_path, monkeypatch, unix,
+    proxy, short_socket_path, monkeypatch, unix,
 ):
     server = Mock(_sockets=[], sockets=[])
 
@@ -122,7 +122,7 @@ def test_listener_finishing_during_shutdown_is_closed_before_publication(
     patch_module_attribute(monkeypatch, proxy_mod, "asyncio", method, bind)
     with pytest.raises(RuntimeError, match="stopped during listener creation"):
         if unix:
-            proxy.bind_unix(str(tmp_path / "proxy.sock"))
+            proxy.bind_unix(short_socket_path)
         else:
             proxy.bind_tcp_lane()
     server.close.assert_called_once()
@@ -130,3 +130,9 @@ def test_listener_finishing_during_shutdown_is_closed_before_publication(
     assert proxy._tcp_lanes == {}
     assert proxy._unix_servers == {}
     assert proxy._unix_lanes == {}
+
+
+@pytest.fixture
+def short_socket_path():
+    with tempfile.TemporaryDirectory(prefix="r76-exit-", dir="/tmp") as directory:
+        yield directory + "/proxy.sock"

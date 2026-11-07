@@ -1604,9 +1604,36 @@ def _submit_to_loop(coroutine, loop):
     """Release the actual coroutine if its loop rejects submission."""
     try:
         return asyncio.run_coroutine_threadsafe(coroutine, loop)
-    except RuntimeError:
+    except BaseException:
         coroutine.close()
         raise
+
+
+@dataclass(eq=False)
+class _LaneBinding:
+    """Retain a listener through cross-thread activation and rollback."""
+
+    lane: _Lane
+    path: str | None = None
+    server: asyncio.AbstractServer | None = None
+    raw_socket: socket.socket | None = None
+    inode: tuple[int, int] | None = None
+    port: int | None = None
+    abandoned: bool = False
+    creating: bool = False
+    retired: bool = False
+
+    def unlink(self) -> None:
+        # A path is a name, not an ownership token. Never delete a
+        # replacement socket or file installed after our bind.
+        if self.path is None or self.inode is None:
+            return
+        try:
+            current = os.lstat(self.path)
+        except FileNotFoundError:
+            return
+        if (current.st_dev, current.st_ino) == self.inode:
+            os.unlink(self.path)
 
 
 class _ProxyStreamOwner:
@@ -1754,6 +1781,7 @@ class EgressProxy:
         self._unix_lanes: dict[str, _Lane] = {}
         self._tcp_lanes: dict[int, _Lane] = {}
         self._tcp_lane_servers: dict[int, asyncio.AbstractServer] = {}
+        self._lane_bindings: set[_LaneBinding] = set()
         self._idle_timeout = idle_timeout
         self._idle_timeout_lock = threading.Lock()
         self._total_timeout = total_timeout
@@ -2148,38 +2176,11 @@ class EgressProxy:
         Thread-safe: schedules server creation on the proxy's event
         loop and blocks until it is ready.
         """
-        if self._stopping or self._loop is None or not self._loop.is_running():
-            msg = "proxy event loop is stopping or not running"
-            raise RuntimeError(msg)
-
-        import os as _os
-
-        lane = _Lane(label=label,
-                     allowed_hosts=_normalise_lane_hosts(allowed_hosts),
-                     allowed_ports=_normalise_lane_ports(allowed_ports))
-        async def _bind():
-            if self._stopping:
-                raise RuntimeError("proxy is stopping")
-            old_umask = _os.umask(0o077)
-            try:
-                srv = await asyncio.start_unix_server(
-                    lambda r, w: self._track_client(r, w, lane=lane),
-                    path=path,
-                )
-            finally:
-                _os.umask(old_umask)
-            if self._stopping:
-                srv.close()
-                raise RuntimeError("proxy stopped during listener creation")
-            with self._unix_lock:
-                self._unix_servers[path] = srv
-            with self._lanes_lock:
-                self._unix_lanes[path] = lane
-            return srv
-
-        future = _submit_to_loop(_bind(), self._loop)
-        future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
-        logger.debug("egress proxy: unix socket bound at %s", path)
+        path = os.fsdecode(os.fspath(path))
+        self._bind_lane(_LaneBinding(
+            _Lane(label=label,
+                  allowed_hosts=_normalise_lane_hosts(allowed_hosts),
+                  allowed_ports=_normalise_lane_ports(allowed_ports)), path=path))
 
     def bind_tcp_lane(self, *, label: str = "sandbox",
                       allowed_hosts: "Iterable[str] | None" = None,
@@ -2198,59 +2199,166 @@ class EgressProxy:
         that as "no lane" and fail CLOSED (audit leniency unavailable,
         enforcement intact).
         """
-        if self._stopping or self._loop is None or not self._loop.is_running():
-            msg = "proxy event loop is stopping or not running"
-            raise RuntimeError(msg)
+        binding = _LaneBinding(_Lane(
+            label=label, allowed_hosts=_normalise_lane_hosts(allowed_hosts),
+            allowed_ports=_normalise_lane_ports(allowed_ports)))
+        self._bind_lane(binding)
+        return binding.port
 
-        lane = _Lane(label=label,
-                     allowed_hosts=_normalise_lane_hosts(allowed_hosts),
-                     allowed_ports=_normalise_lane_ports(allowed_ports))
-
-        async def _bind():
-            if self._stopping:
-                raise RuntimeError("proxy is stopping")
-            srv = await asyncio.start_server(
-                lambda r, w: self._track_client(r, w, lane=lane),
-                host="127.0.0.1", port=0,
-            )
-            if self._stopping:
-                srv.close()
-                raise RuntimeError("proxy stopped during listener creation")
-            port = srv.sockets[0].getsockname()[1]
+    def _bind_lane(self, binding: _LaneBinding) -> None:
+        loop = self._loop
+        if self._stopping or loop is None or not loop.is_running():
+            raise RuntimeError("proxy event loop is stopping or not running")
+        if threading.current_thread() is self._thread:
+            raise RuntimeError("blocking lane bind cannot run on the proxy loop")
+        # Reserve the Unix name before submitting work. A concurrent bind
+        # cannot replace either an active listener or a pending activation.
+        with self._lanes_lock:
+            if binding.path is not None:
+                with self._unix_lock:
+                    exists = binding.path in self._unix_servers
+                if exists or any(b.path == binding.path for b in self._lane_bindings):
+                    raise RuntimeError("proxy Unix lane path is already owned")
+            self._lane_bindings.add(binding)
+        try:
+            future = _submit_to_loop(self._activate_lane(binding), loop)
+        except BaseException:
             with self._lanes_lock:
-                self._tcp_lanes[port] = lane
-                self._tcp_lane_servers[port] = srv
-            return port
+                self._lane_bindings.discard(binding)
+            raise
+        try:
+            future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
+        except BaseException:
+            # Publication and abandonment share one lock. Even a bind that
+            # completed just before result() timed out must be rolled back.
+            with self._lanes_lock:
+                binding.abandoned = True
+            future.cancel()
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._rollback_lane, binding)
+            raise
+        with contextlib.suppress(OSError, ValueError):
+            logger.debug("egress proxy: lane %r bound (%s)", binding.lane.label,
+                         binding.path if binding.path is not None else binding.port)
 
-        future = _submit_to_loop(_bind(), self._loop)
-        port = future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
-        logger.info("egress proxy: tcp lane %r bound at 127.0.0.1:%d",
-                    label, port)
-        return port
+    async def _activate_lane(self, binding: _LaneBinding) -> None:
+        # run_coroutine_threadsafe may have a cancelled destination future.
+        # Retrieve the owned task's result even when no caller can receive it.
+        def finished(task):
+            if not task.cancelled():
+                task.exception()
+        asyncio.current_task().add_done_callback(finished)
+        committed = False
+        binding.creating = True
+        try:
+            if binding.abandoned or self._stopping:
+                raise RuntimeError("proxy stopped before listener creation")
+            handler = lambda r, w: self._track_client(r, w, lane=binding.lane)
+            if binding.path is not None:
+                # Bind without asyncio's implicit unlink of an existing name.
+                # Set permissions BEFORE listening, without changing the
+                # process-wide umask across an asynchronous operation.
+                sock = binding.raw_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.setblocking(False)
+                sock.bind(binding.path)
+                st = os.lstat(binding.path)
+                binding.inode = (st.st_dev, st.st_ino)
+                os.chmod(binding.path, 0o600)
+                kwargs = {"cleanup_socket": False} if sys.version_info >= (3, 13) else {}
+                binding.server = await asyncio.start_unix_server(
+                    handler, sock=sock, start_serving=False, **kwargs)
+            else:
+                binding.server = await asyncio.start_server(
+                    handler, host="127.0.0.1", port=0, start_serving=False)
+            if binding.abandoned or self._stopping:
+                raise RuntimeError("proxy stopped during listener creation")
+            if binding.path is None:
+                binding.port = binding.server.sockets[0].getsockname()[1]
+            await binding.server.start_serving()
+            with self._lanes_lock:
+                if binding.abandoned or self._stopping:
+                    raise RuntimeError("proxy stopped during listener creation")
+                if binding.path is None:
+                    self._tcp_lanes[binding.port] = binding.lane
+                    self._tcp_lane_servers[binding.port] = binding.server
+                else:
+                    with self._unix_lock:
+                        self._unix_servers[binding.path] = binding.server
+                    self._unix_lanes[binding.path] = binding.lane
+                committed = True
+        finally:
+            binding.creating = False
+            if not committed:
+                self._rollback_lane(binding)
+
+    def _rollback_lane(self, binding: _LaneBinding) -> None:
+        # Called only on the owning loop (or after it has closed). Keep the
+        # handle and reservation if close/unlink fails so shutdown can retry.
+        if binding.creating:
+            # The factory may already own the prebound socket while its
+            # result is suspended. Let activation's finally retire it; do
+            # not close the socket underneath that server's ownership.
+            return
+        try:
+            self._retire_lane(binding)
+        except (OSError, RuntimeError):
+            with contextlib.suppress(OSError, ValueError):
+                logger.warning("egress proxy: listener cleanup retained for retry")
+
+    def _retire_lane(self, binding: _LaneBinding) -> None:
+        if binding.retired:
+            return
+        if binding.server is not None:
+            binding.server.close()
+        if binding.raw_socket is not None:
+            binding.raw_socket.close()
+        binding.unlink()
+        with self._lanes_lock:
+            if binding.path is None:
+                if self._tcp_lane_servers.get(binding.port) is binding.server:
+                    self._tcp_lane_servers.pop(binding.port, None)
+                    self._tcp_lanes.pop(binding.port, None)
+            else:
+                with self._unix_lock:
+                    if self._unix_servers.get(binding.path) is binding.server:
+                        self._unix_servers.pop(binding.path, None)
+                        self._unix_lanes.pop(binding.path, None)
+            binding.retired = True
+            self._lane_bindings.discard(binding)
+
+    def _close_lane(self, key: str | int) -> None:
+        # Leave registries intact until the owning loop confirms close.
+        def close() -> None:
+            with self._lanes_lock:
+                bindings = [b for b in self._lane_bindings
+                            if (b.path == key if isinstance(key, str)
+                                else b.path is None and b.port == key)]
+                for binding in bindings:
+                    binding.abandoned = True
+            for binding in bindings:
+                if not binding.creating:
+                    self._retire_lane(binding)
+
+        loop = self._loop
+        if loop is None:
+            return
+        if loop.is_closed() or threading.current_thread() is self._thread:
+            with contextlib.suppress(RuntimeError, OSError):
+                close()
+        elif loop.is_running():
+            async def on_loop():
+                close()
+            with contextlib.suppress(RuntimeError, TimeoutError, OSError):
+                future = _submit_to_loop(on_loop(), loop)
+                future.result(timeout=2.0)
 
     def close_tcp_lane(self, port: int) -> None:
-        """Stop the TCP lane listener at *port*. Idempotent.
+        """Stop accepting on a TCP lane; retain ownership until closed.
 
-        Mirrors unbind_unix: stops accepting, does not cancel tunnels
-        already relaying (their handler holds the lane object).
+        Idempotent. Existing tunnels retain their captured lane and continue
+        relaying. Failed or delayed closes remain available for retry/stop.
         """
-        with self._lanes_lock:
-            srv = self._tcp_lane_servers.pop(port, None)
-            self._tcp_lanes.pop(port, None)
-        if srv is None:
-            return
-        if self._loop is not None and self._loop.is_running():
-            async def _close() -> None:
-                srv.close()
-            # Loop may shut down between the is_running() check and
-            # scheduling (RuntimeError); a wedged loop times out the
-            # future (TimeoutError).
-            with contextlib.suppress(RuntimeError, TimeoutError):
-                future = _submit_to_loop(
-                    _close(), self._loop,
-                )
-                future.result(timeout=2.0)
-        logger.info("egress proxy: tcp lane at 127.0.0.1:%d closed", port)
+        self._close_lane(port)
 
     def set_lane_audit(self, key: "str | int", value: bool) -> bool:
         """Set the audit-log-only bit on one lane.
@@ -2318,29 +2426,7 @@ class EgressProxy:
         Thread-safe. Idempotent — no-op if *path* was never bound or
         was already unbound.
         """
-        with self._unix_lock:
-            srv = self._unix_servers.pop(path, None)
-        with self._lanes_lock:
-            self._unix_lanes.pop(path, None)
-        if srv is None:
-            return
-
-        if self._loop is not None and self._loop.is_running():
-            async def _close() -> None:
-                srv.close()
-            # Same failure modes as close_tcp_lane: loop shutdown race
-            # (RuntimeError) or a wedged loop (TimeoutError).
-            with contextlib.suppress(RuntimeError, TimeoutError):
-                future = _submit_to_loop(
-                    _close(), self._loop,
-                )
-                future.result(timeout=2.0)
-        import os as _os
-        try:
-            _os.unlink(path)
-        except OSError:
-            pass
-        logger.debug("egress proxy: unix socket unbound at %s", path)
+        self._close_lane(os.fsdecode(os.fspath(path)))
 
     async def _handle_unix_client(
         self, reader: asyncio.StreamReader,
@@ -3167,15 +3253,10 @@ class EgressProxy:
 
     def _release_unix_paths(self) -> None:
         """Release explicit-stop path ownership, including after loop death."""
-        with self._unix_lock:
-            paths = list(self._unix_servers)
-            self._unix_servers.clear()
         with self._lanes_lock:
-            for path in paths:
-                self._unix_lanes.pop(path, None)
-        for path in paths:
-            with contextlib.suppress(OSError):
-                os.unlink(path)
+            bindings = [b for b in self._lane_bindings if b.path is not None]
+        for binding in bindings:
+            self._rollback_lane(binding)
 
     def _close_listeners(self) -> list:
         """Close every listener on its owning loop, retaining lane handles.
@@ -3185,6 +3266,12 @@ class EgressProxy:
         exit retains handles for the caller's later explicit release.
         """
         servers = set()
+        with self._lanes_lock:
+            bindings = list(self._lane_bindings)
+            for binding in bindings:
+                binding.abandoned = True
+                if binding.server is not None:
+                    servers.add(binding.server)
         if self._server is not None:
             servers.add(self._server)
         with self._unix_lock:
