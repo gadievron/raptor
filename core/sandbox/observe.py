@@ -329,7 +329,8 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
                    seccomp_engaged: bool = False,
                    seccomp_profile: str | None = None,
                    degraded_net_deny: bool = False,
-                   udp_block_engaged: bool = False) -> None:
+                   udp_block_engaged: bool = False,
+                   proxy_events: list | None = None) -> None:
     """Enrich sandbox_info when stderr shows evidence of sandbox enforcement.
 
     Only fires for an enforcement layer that is actually engaged this call:
@@ -337,14 +338,29 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
     `landlock_engaged`. Writes inside `writable_paths` are always normal
     filesystem permission errors, never Landlock.
 
+    Pass proxy_events (including an empty list) for proxied invocations;
+    only recorded policy denials establish network blocking in that mode.
+
     Wording is factual: we log what was observed, not a verdict on intent.
     A single stderr cannot distinguish Landlock EACCES from ordinary EACCES,
     so we do not claim maliciousness.
     """
-    if not stderr:
-        return
+    stderr = stderr or ""
     reported = set()
     blocked_evidence = []
+    if proxy_events is not None:
+        # A proxied client can fail because the remote server closes TLS,
+        # DNS fails, or the proxy is unavailable. Its stderr cannot prove
+        # a policy denial. Use only this invocation's proxy verdicts.
+        from .proxy import _STATS_DENIED_RESULTS
+        if any(event.get("result") in _STATS_DENIED_RESULTS for event in proxy_events):
+            logger.info(
+                "Sandbox: egress proxy denied a connection during: %s (rc=%s)",
+                sanitise_for_terminal(cmd_display), returncode,
+            )
+            blocked_evidence.append("Outbound connection denied by egress proxy policy")
+            record_denial(cmd_display, returncode, "network")
+        reported.add("network")
     for category, pattern in _BLOCKED_PATTERNS:
         if pattern not in stderr or category in reported:
             continue

@@ -8341,8 +8341,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # Surface a concise summary in the top-level evidence for
             # quick-triage readers of sandbox_info.
             allowed = sum(1 for e in events if e["result"] == "allowed")
-            denied = sum(1 for e in events
-                         if e["result"] in ("denied_host", "denied_resolved_ip"))
+            from .proxy import _STATS_DENIED_RESULTS
+            denied = sum(1 for e in events if e["result"] in _STATS_DENIED_RESULTS)
             summary = (
                 f"egress: {allowed} allowed, {denied} denied "
                 f"({len(events)} total)"
@@ -8405,10 +8405,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             sys.platform == "linux" and seccomp_profile
             and seccomp_profile != "none" and check_seccomp_available()
         )
-        if stderr_text and (network_engaged or landlock_engaged or seccomp_engaged):
+        if ((stderr_text or events)
+                and (network_engaged or landlock_engaged or seccomp_engaged or use_egress_proxy)):
             _check_blocked(stderr_text, cmd_display, result.returncode,
                           result.sandbox_info,  # type: ignore[attr-defined]
                           network_engaged=network_engaged,
+                          proxy_events=events if use_egress_proxy else None,
                           landlock_engaged=landlock_engaged,
                           writable_paths=writable_paths,
                           seccomp_engaged=seccomp_engaged,
