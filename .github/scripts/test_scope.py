@@ -856,6 +856,22 @@ def compute_tier_dispatch(
         f for f in changed_non_py
         if any(f.startswith(r + "/") for r in SCAN_ROOTS)
     ] + [f for f in changed_files if in_data_root(f)]
+    # (1) Directory ownership needs no import edges. Resolve it before building
+    # the graph so a tier-owned data refresh does not parse the whole tree.
+    # Mixed changes still build the graph for code, scripts and resources
+    # whose fixture/package consumers must be discovered.
+    forced_tiers: set[str] = set()
+    unowned_resources: list[str] = []
+    for rf in resource_files:
+        tier_hits = {
+            name for name, cfg in TIERS.items()
+            if any(file_in_dir(Path(rf), d) for d in cfg.get("test_dirs", []))
+        }
+        if tier_hits:
+            forced_tiers |= tier_hits
+        else:
+            unowned_resources.append(rf)
+    resource_files = unowned_resources
     script_literals = {
         literal: set() for path in changed_files
         if path.startswith(("bin/", "libexec/"))
@@ -872,7 +888,7 @@ def compute_tier_dispatch(
     elif changed_py or resource_files:
         reverse_graph, parse_failures = build_graph(all_py, repo)
     else:
-        # Metadata-only changes have no graph seeds. Tier-specific extra
+        # Metadata and tier-owned data have no graph seeds. Tier-specific extra
         # triggers below still run (for example workflow lint checks).
         reverse_graph, parse_failures = {}, 0
     if parse_failures:
@@ -901,21 +917,11 @@ def compute_tier_dispatch(
     # routing wholesale (see DATA_ROOTS). Route each one through the
     # first mapping that claims it; a file NO mapping claims cannot be
     # scoped, so fail toward full dispatch rather than toward zero.
-    forced_tiers: set[str] = set()
     resource_seeds: set[Path] = set()
     data_map: dict[Path, set[Path]] | None = None
     unmapped: list[str] = []
     for rf in resource_files:
         rp = Path(rf)
-        # (1) Directory ownership: a resource inside a tier's test
-        # tree belongs to that tier (packages/sca/data/* → sca).
-        tier_hits = {
-            name for name, cfg in TIERS.items()
-            if any(file_in_dir(rp, d) for d in cfg.get("test_dirs", []))
-        }
-        if tier_hits:
-            forced_tiers |= tier_hits
-            continue
         # (2) Fixture data: tests that reference the file's fixture
         # directory (built lazily — it parses every test file).
         if data_map is None:

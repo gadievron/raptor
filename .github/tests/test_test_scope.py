@@ -1409,3 +1409,73 @@ def test_lane_closure_includes_literal_special_paths(tmp_path):
         Probe().test_every_tracked_test_file_is_claimed_by_a_lane()
     for rel in expected:
         assert repr(rel) in str(caught.value)
+
+
+class TestOwnedResourceDispatchWork:
+    @pytest.mark.parametrize("changed,expected", [
+        (["packages/sca/data/new.json"], ["sca"]),
+        (["engine/rules/deleted.cocci"], ["engine"]),
+        (["core/sandbox/tests/fixtures/input.bin"], ["sandbox"]),
+        (["packages/sca/data/new.json", "engine/rules/deleted.cocci",
+          "core/sandbox/tests/fixtures/input.bin", ".github/workflows/lint.yml"],
+         ["ci_lint", "engine", "sandbox", "sca"]),
+    ], ids=["sca-refresh", "deleted-engine-data", "sandbox-fixture", "mixed-tiers-metadata"])
+    def test_owned_data_needs_no_graph_or_fixture_census(
+        self, tmp_path, monkeypatch, changed, expected,
+    ):
+        tests = {
+            "sca": "packages/sca/tests/test_shape.py",
+            "engine": "engine/rules/tests/test_rule.py",
+            "sandbox": "core/sandbox/tests/test_contract.py",
+            "ci_lint": ".github/tests/test_workflow.py",
+        }
+        for name in tests.values():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("def test_contract(): pass\n")
+
+        def unexpected_work(*args, **kwargs):
+            pytest.fail("tier-owned data must not build a graph or fixture census")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_work)
+        monkeypatch.setattr("test_scope.build_data_file_map", unexpected_work)
+        result = compute_tier_dispatch(changed, tmp_path)
+        assert _active(result) == sorted([*expected, "redos_census"])
+        for tier in expected:
+            assert result[tier]["files"] == [Path(tests[tier])]
+        assert result["python"]["files"] == []
+        assert result["_stats"]["closure"] == 0
+        assert not _is_full_dispatch(result)
+
+    @pytest.mark.parametrize("extra,full", [
+        ("core/pkga/mod.py", False),
+        ("core/pkga/data/rules.json", False),
+        ("core/pkga/tests/fixtures/sample.json", False),
+        ("core/orphan/blob.bin", True),
+        ("packages/sca_neighbor/data/input.json", True),
+        ("libexec/unmapped-entry", True),
+    ], ids=["code", "package-resource", "fixture", "unmapped-resource", "sibling-prefix", "script"])
+    def test_mixed_changes_keep_graph_and_conservative_fallback(
+        self, mini_repo, monkeypatch, extra, full,
+    ):
+        import test_scope as scoper
+
+        calls = []
+        original = scoper.build_graph
+
+        def record_graph(*args, **kwargs):
+            calls.append(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(scoper, "build_graph", record_graph)
+        result = compute_tier_dispatch(
+            ["packages/sca/data/popular/pypi.json", extra], mini_repo,
+        )
+        assert len(calls) == 1
+        assert _is_full_dispatch(result) == full
+        assert result["sca"]["run"]
+        if not full:
+            assert _active(result) == ["python", "redos_census", "sca"]
+            assert Path("core/pkga/tests/test_mod.py") in result["python"]["files"]
+        if extra.startswith("libexec/"):
+            assert "literal_references" in calls[0]
