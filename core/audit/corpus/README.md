@@ -155,6 +155,25 @@ ties to its exact label set.
 
 ## Scoring
 
+To compare verification availability with saved scores, without running audits:
+
+```sh
+python3 -m core.audit.corpus.verification_report before.json after.json --output verification-comparison.json
+```
+
+The report separates models, modes, profiles, and label kinds. It shows recorded
+verification availability for TP, FP, FN, TN, and error rows, with per-class and
+per-tool breakdowns in the JSON. Older rows without snapshots remain unknown;
+tool markers alone do not supply observations. Malformed snapshot counts remain
+separate and do not change verdict metrics. Raw-label scores and explicit mode
+conformance are reported separately. Runs stay separate descriptive summaries,
+not paired or controlled comparisons; observation counts are not proof counts
+or distinct checker executions. Only the supplied results files are read, and
+the report does not revalidate snapshots, follow artifact references, or alter
+scoring gates. The optional output must differ from every input path.
+Recorded total spend and wall/LLM time stay at run level; they are not split
+across cohorts, and missing total spend is not estimated from label costs.
+
 Three layers, all emitted by the run summary and recomputable offline
 with `corpus_metrics`:
 
