@@ -5610,27 +5610,42 @@ def _detect_framework_guarantees(
 ) -> list[dict[str, Any]]:
     """Detect framework guarantees applicable to this file.
 
-    Checks every CWE each framework covers, deduplicating by
-    (framework, pattern) to avoid repeating the same guarantee.
+    Reuse native CWE matches within this call and emit each matched
+    (framework, pattern) once, retaining the first match's details.
     """
     try:
         from .framework_model import FRAMEWORK_GUARANTEES, framework_negates_cwe
         detected = []
-        seen = set()
+        seen_catalogue = set()
+        emitted = set()
+        matches = {}
         for g in FRAMEWORK_GUARANTEES:
             for cwe in g.negates_cwe:
                 key = (g.framework, g.pattern)
-                if key in seen:
+                if key in seen_catalogue:
                     continue
-                match = framework_negates_cwe(file_path, source, cwe)
+                if type(cwe) is str:
+                    if cwe not in matches:
+                        matches[cwe] = framework_negates_cwe(file_path, source, cwe)
+                    match = matches[cwe]
+                else:
+                    match = framework_negates_cwe(file_path, source, cwe)
                 if match:
-                    detected.append({
+                    row = {
                         "framework": match.framework,
                         "pattern": match.pattern,
                         "guarantees": match.guarantees,
                         "negates_cwe": match.negates_cwe,
-                    })
-                    seen.add(key)
+                    }
+                    # Different catalogue entries can resolve to the same
+                    # actual guarantee. Deduplicate the returned identity.
+                    native = type(row["framework"]) is str and type(row["pattern"]) is str
+                    identity = (row["framework"], row["pattern"])
+                    if not native or identity not in emitted:
+                        detected.append(row)
+                        if native:
+                            emitted.add(identity)
+                    seen_catalogue.add(key)
         return detected
     except Exception:
         logger.debug("framework detection failed", exc_info=True)
