@@ -276,32 +276,9 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
         file='packages/codeql/dataflow_validator.py',
         func_name='DataflowValidator.validate_dataflow_path',
-        attr='reasoning',
-        expr_text='{smt_result.reasoning}',
-        audit_note=(
-            'f-string builds DataflowValidation.reasoning return field '
-            '(operator-displayed in reports). The source '
-            'smt_result.reasoning is RAPTOR-internal SMT output, not '
-            'attacker-controlled'
-        ),
-    ),
-    AllowlistEntry(
-        file='packages/codeql/dataflow_validator.py',
-        func_name='DataflowValidator.validate_dataflow_path',
         attr='rule_id',
         expr_text='{dataflow.rule_id}',
         audit_note='builds scorecard cell name (codeql:<rule_id>), not LLM prompt',
-    ),
-    AllowlistEntry(
-        file='packages/codeql/dataflow_validator.py',
-        func_name='DataflowValidator.validate_dataflow_path',
-        attr='reasoning',
-        expr_text='{r.reasoning}',
-        audit_note=(
-            'DataflowValidation.reasoning return field; r iterates the '
-            'per-path SMT results (refuted list) — RAPTOR-internal '
-            'solver output, same provenance as smt_result.reasoning'
-        ),
     ),
     # ----- packages/hypothesis_validation/runner.py -----
     AllowlistEntry(
