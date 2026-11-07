@@ -18,6 +18,7 @@ from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_literals import integer_literal_value, source_integer_atom
 from .integer_witness import evaluate_integer_operation, validate_integer_witness
+from .function_execution_frame import ordinary_function_frame
 
 MAX_SOURCE_CHARS = 65536
 _MAX_NODES = 2048
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "common-width-literal-frame-v4",
+        "query_contract": "common-width-literal-frame-v5",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -50,7 +51,12 @@ def _nodes(root):
     return nodes
 
 
-def _signature(function, text, abi, language):
+def _signature(function, data, abi, language):
+    def text(node):
+        return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
+
+    if not ordinary_function_frame(function, data, language):
+        return None
     body = function.child_by_field_name("body")
     result = function.child_by_field_name("type")
     declarator = function.child_by_field_name("declarator")
@@ -62,13 +68,11 @@ def _signature(function, text, abi, language):
         return None
     if not has_builtin_integer_type(result, text(result), language) or (text(result) != "void" and integer_type(text(result), abi) is None):
         return None
-    for child in function.named_children:
-        if child in (body, result, declarator) or child.type == "comment":
-            continue
-        if child.type in {"storage_class_specifier", "function_specifier"} and text(child) in {"static", "extern", "inline"}:
-            continue
-        return None
-    if any(child not in (name, params) and child.type != "comment" for child in declarator.named_children):
+    # Literal tuples model free-function calls. A noexcept specification
+    # needs no runtime value/receiver binding; member/ref qualifiers and
+    # trailing return types remain outside this narrow caller frame.
+    if any(child not in (name, params) and child.type != "comment"
+           and not (language == "cpp" and child.type == "noexcept") for child in declarator.named_children):
         return None
     parameters = []
     children = [child for child in params.named_children if child.type != "comment"]
@@ -123,7 +127,7 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
 
     functions = [node for node in root.named_children if node.type == "function_definition"]
-    signatures = [(node, _signature(node, text, abi, language)) for node in functions]
+    signatures = [(node, _signature(node, data, abi, language)) for node in functions]
     callees = [(node, signature) for node, signature in signatures if signature is not None and signature[0] == function_name]
     if len(callees) != 1:
         return result

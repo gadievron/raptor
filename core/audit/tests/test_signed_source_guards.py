@@ -133,4 +133,4 @@ def test_confined_literal_caller_checks_the_same_negative_guard(tmp_path, argume
     decision = evaluate_caller_gate(tmp_path, "record.c", "Read", "check-array-bounds", "Data[Index]",
                                     source=source, def_span=(1, 1), integer_abi="ilp32")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v4"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v5"
