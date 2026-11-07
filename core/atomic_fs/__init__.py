@@ -34,7 +34,9 @@ Symlink handling at the destination path:
     contract. If a caller wants to write through a symlink to its
     target, they should resolve the path first.
 
-``publish_new_directory`` publishes complete same-filesystem directory trees
+``rename_without_replace`` moves any owned entry to an absent name;
+``publish_new_directory`` additionally requires a real source directory.
+The directory helper publishes complete same-filesystem directory trees
 without replacing an occupied destination. It provides atomic visibility,
 not fsync durability; callers retain staging ownership on failure.
 
@@ -100,7 +102,7 @@ import stat as _stat
 import threading
 from pathlib import Path
 
-from .directory import publish_new_directory  # noqa: F401 — public filesystem primitive
+from .directory import publish_new_directory, rename_without_replace  # noqa: F401 — public filesystem primitives
 
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)

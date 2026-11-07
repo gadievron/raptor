@@ -39,7 +39,7 @@ def test_swap_failure_restores_previous_report(tmp_path, monkeypatch, fail_at, c
     previous.mkdir()
     marker = previous / "old"
     marker.write_text("previous report")
-    rename = Path.rename
+    rename = report.rename_without_replace
     calls = 0
 
     def fail_once(path, destination):
@@ -51,7 +51,7 @@ def test_swap_failure_restores_previous_report(tmp_path, monkeypatch, fail_at, c
             raise OSError("swap failed")
         return rename(path, destination)
 
-    monkeypatch.setattr(Path, "rename", fail_once)
+    monkeypatch.setattr(report, "rename_without_replace", fail_once)
     with pytest.raises(KeyboardInterrupt if cancel else OSError):
         report.export_findings_directory([], tmp_path)
     assert marker.read_text() == "previous report"
@@ -62,7 +62,7 @@ def test_failed_rollback_retains_recovery_copy(tmp_path, monkeypatch, caplog):
     previous = tmp_path / "findings"
     previous.mkdir()
     (previous / "old").write_text("recover me")
-    rename = Path.rename
+    rename = report.rename_without_replace
     calls = 0
 
     def fail_publish_and_restore(path, destination):
@@ -72,12 +72,13 @@ def test_failed_rollback_retains_recovery_copy(tmp_path, monkeypatch, caplog):
             raise OSError("publication failed")
         return rename(path, destination)
 
-    monkeypatch.setattr(Path, "rename", fail_publish_and_restore)
+    monkeypatch.setattr(report, "rename_without_replace", fail_publish_and_restore)
     with pytest.raises(OSError, match="publication failed"):
         report.export_findings_directory([], tmp_path)
     roots = list(tmp_path.glob(".findings-stage-*"))
     assert len(roots) == 1
     assert (roots[0] / "previous" / "old").read_text() == "recover me"
+    assert not (roots[0] / "next").exists()
     assert str(roots[0]) in caplog.text
 
 
