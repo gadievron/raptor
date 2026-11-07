@@ -54,6 +54,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(HELPER), *[str(a) for a in args]],
         capture_output=True, text=True, env=env, cwd=REPO_ROOT,
+        timeout=30,
     )
 
 
@@ -591,10 +592,20 @@ class TestSinglePartAndCli:
         assert "\x1b" not in proc.stderr
         assert "\x07" not in proc.stderr
 
-    def test_cli_usage_errors(self, tmp_path):
-        assert _run_cli("parts").returncode == 1
-        assert _run_cli("parts", "Z", tmp_path).returncode == 1
-        assert _run_cli("parts", "D", tmp_path / "missing").returncode == 1
+    @pytest.mark.parametrize("case,diagnostic", [
+        ("missing-stage", "parts <A|B|C|D|E|F> <workdir>"),
+        ("invalid-stage", "parts <A|B|C|D|E|F> <workdir>"),
+        ("missing-workdir", "ERROR: workdir not found:"),
+    ], ids=["missing-stage", "invalid-stage", "missing-workdir"])
+    def test_cli_usage_errors(self, tmp_path, case, diagnostic):
+        args = ["parts"]
+        if case == "invalid-stage":
+            args.extend(["Z", tmp_path])
+        elif case == "missing-workdir":
+            args.extend(["D", tmp_path / "missing"])
+        proc = _run_cli(*args)
+        assert proc.returncode == 1, (proc.stdout, proc.stderr)
+        assert diagnostic in proc.stderr, (proc.stdout, proc.stderr)
 
     def test_assembled_output_passes_the_promote_gate(self, tmp_path):
         # Assembly and the promote gate compose: what `parts` writes,
@@ -613,6 +624,7 @@ class TestSinglePartAndCli:
              str(REPO_ROOT / "libexec" / "raptor-validate-schema"),
              "stage", str(tmp_path / "stage-c.json")],
             capture_output=True, text=True, env=env, cwd=REPO_ROOT,
+            timeout=30,
         )
         assert gate.returncode == 0, gate.stderr
 

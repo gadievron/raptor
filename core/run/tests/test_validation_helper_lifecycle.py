@@ -50,7 +50,7 @@ def _run_stage0(tmp_path: Path, *extra: str, no_bridge: bool = True):
     if no_bridge:
         args.append("--no-bridge")
     args.extend(extra)
-    result = subprocess.run(args, capture_output=True, text=True, env=env)
+    result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=30)
     return result, out
 
 
