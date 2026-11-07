@@ -64,6 +64,41 @@ _ENV_VAR = "RAPTOR_WORK_DIR"
 _lock = threading.Lock()
 _resolved = False
 _cached: Path | None = None
+_cached_identity: tuple[int, int] | None = None
+
+
+def _reset_after_fork() -> None:
+    # Locks and cached allocations belong to the parent process. A child
+    # must neither wait for a vanished thread nor reuse its parent's scratch.
+    global _lock, _resolved, _cached, _cached_identity
+    _lock = threading.Lock()
+    _resolved = False
+    _cached = None
+    _cached_identity = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def _same_session(path: Path, identity: tuple[int, int] | None) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and (info.st_dev, info.st_ino) == identity)
+
+
+def _remove_owned_session(path: Path, identity: tuple[int, int], owner_pid: int) -> None:
+    """Exit cleanup may remove only this process's original allocation."""
+    if os.getpid() != owner_pid or not _same_session(path, identity):
+        return
+    try:
+        if not rmtree_hardened(path):
+            logger.warning("workdir: could not fully remove owned session %s", path)
+    except OSError:
+        logger.warning("workdir: owned session cleanup failed for %s", path, exc_info=True)
 
 
 def _family_name() -> str:
@@ -129,7 +164,7 @@ def _sweep_dead_sessions(root: Path) -> None:
         rmtree_hardened(entry.path)
 
 
-def _create_session_dir() -> Path | None:
+def _create_session_dir() -> tuple[Path, tuple[int, int]] | None:
     base = os.environ.get(_ENV_VAR, "").strip() or tempfile.gettempdir()
     root = Path(base) / _family_name()
     try:
@@ -170,8 +205,27 @@ def _create_session_dir() -> Path | None:
         except OSError as exc:
             logger.debug("workdir: cannot create %s (%s)", candidate, exc)
             return None
-        atexit.register(rmtree_hardened, candidate)
-        return candidate
+        # Pin the allocation before handing it to the cache or exit handler.
+        # A failed registration must not strand newly allocated scratch.
+        identity = None
+        try:
+            info = candidate.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                return None
+            identity = (info.st_dev, info.st_ino)
+            atexit.register(_remove_owned_session, candidate, identity, os.getpid())
+        except BaseException:
+            # lstat itself may fail; only a confirmed identity permits removal.
+            if identity is not None:
+                try:
+                    _remove_owned_session(candidate, identity, os.getpid())
+                except BaseException:
+                    logger.warning("workdir: allocation rollback failed for %s", candidate,
+                                   exc_info=True)
+            raise
+        if not _same_session(candidate, identity):
+            return None
+        return candidate, identity
     return None
 
 
@@ -190,10 +244,11 @@ def exec_workdir() -> Path | None:
         ) as tmpdir:
             ...
 
-    The resolved value is cached for the life of the process (one
-    session dir per process, like the launcher's one per session).
+    The resolved value is cached per process while its directory identity
+    remains unchanged. Forked children allocate independently; exit cleanup
+    removes only the creating process's original allocation.
     """
-    global _resolved, _cached
+    global _resolved, _cached, _cached_identity
     # Temp-root placement advisory (WSL): every executed-artifact
     # temp resolution funnels through here, making it the second
     # entry chokepoint (with core.run.scratch.scratch_dir) for the
@@ -211,13 +266,19 @@ def exec_workdir() -> Path | None:
     with _lock:
         # A cached dir someone removed mid-run must not surface as a
         # tempfile failure downstream — drop the cache and re-resolve.
-        if _resolved and _cached is not None and not _cached.is_dir():
+        if _resolved and _cached is not None and not _same_session(_cached, _cached_identity):
             _resolved = False
             _cached = None
+            _cached_identity = None
         if not _resolved:
             if _inside_family(Path(tempfile.gettempdir()).resolve()):
                 _cached = None
             else:
-                _cached = _create_session_dir()
+                allocation = _create_session_dir()
+                if allocation is not None:
+                    _cached, _cached_identity = allocation
+                else:
+                    _cached = None
+                    _cached_identity = None
             _resolved = True
         return _cached
