@@ -3,13 +3,39 @@
 from contextlib import contextmanager, ExitStack, suppress
 import os
 import signal
+import subprocess
+
+
+def run_in_process_group(args, *, timeout, input=None, check=False,
+                         start_new_session=False, **kwargs):
+    """Run a trusted POSIX test probe with bounded cleanup of its group.
+
+    Other keyword arguments follow Popen. Keep the inherited session unless
+    the probe explicitly needs a session leader; a private group suffices
+    to stop descendants on timeout without altering session provenance.
+    """
+    if input is not None:
+        if kwargs.get("stdin") is not None:
+            raise ValueError("stdin and input cannot both be supplied")
+        kwargs["stdin"] = subprocess.PIPE
+    process = subprocess.Popen(
+        args, start_new_session=start_new_session,
+        process_group=None if start_new_session else 0, **kwargs,
+    )
+    with reap_on_exit(process, process_group=True):
+        stdout, stderr = process.communicate(input=input, timeout=timeout)
+        result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
 
 
 @contextmanager
 def reap_on_exit(process, *, process_group=False, wait_timeout=5):
     """Reap a child and close its streams on every exit path.
 
-    process_group requires a private group created with start_new_session=True.
+    process_group requires a private group created with start_new_session=True
+    or process_group=0.
     """
     try:
         yield process

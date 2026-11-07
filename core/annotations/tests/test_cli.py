@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from core.testing.processes import reap_on_exit
+from core.testing.processes import reap_on_exit, run_in_process_group
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"
@@ -56,14 +56,15 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
     if env:
         real_env.update(env)
     if not tty and stdin_path is None:
-        result = subprocess.run(
+        result = run_in_process_group(
             [sys.executable, str(CLI), *args],
             env=real_env,
-            capture_output=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
             input=input_text,
             check=False,
             start_new_session=setsid,
+            timeout=60,
         )
         return _Result(result.returncode, result.stdout, result.stderr)
 
@@ -85,9 +86,10 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
         proc = subprocess.Popen(
             [sys.executable, str(CLI), *args],
             env=real_env, text=True, start_new_session=setsid,
+            process_group=None if setsid else 0,
             **kwargs,
         )
-        with reap_on_exit(proc, process_group=setsid):
+        with reap_on_exit(proc, process_group=True):
             send = input_text if kwargs["stdin"] == subprocess.PIPE else None
             out, err = proc.communicate(input=send, timeout=60)
             return _Result(proc.returncode, out or "", err or "")
@@ -108,12 +110,13 @@ class TestTrustMarker:
     def test_refuses_without_marker(self, tmp_path):
         env = {k: v for k, v in os.environ.items()
                if k not in ("_RAPTOR_TRUSTED", "CLAUDECODE")}
-        result = subprocess.run(
+        result = run_in_process_group(
             [sys.executable, str(CLI), "ls", "--base", str(tmp_path)],
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
             check=False,
+            timeout=30,
         )
         assert result.returncode == 2
         assert "internal dispatch" in result.stderr
@@ -993,11 +996,12 @@ class TestReviewNoteDelegationInheritsContext:
         review = REPO_ROOT / "libexec" / "raptor-review"
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"
-        r = subprocess.run(
+        r = run_in_process_group(
             [sys.executable, str(review), "note",
              "src/a.py", "f", "-m", "note body",
              "--base", str(tmp_path)],
-            env=env, capture_output=True, text=True, check=False,
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, check=False, timeout=30,
         )
         if r.returncode != 0 and "--base" in r.stderr:
             import pytest
