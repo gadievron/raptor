@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 from core.concepts.tests._study_cli import run_study_main
 
 
@@ -252,7 +254,7 @@ def _run_prep(args: list[str], *, in_process=True) -> subprocess.CompletedProces
         return run_study_main(_load_prep, _PREP_PATH, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
+    return run_standalone_cli(  # noqa: PLW1510 - callers assert on returncode
         [sys.executable, str(_PREP_PATH)] + args,
         env=env,
         capture_output=True,

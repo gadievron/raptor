@@ -22,6 +22,8 @@ from typing import Any
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 from core.audit.backlog_drain import (
     BACKLOG_FILENAME,
     DRAIN_REPORT_FILENAME,
@@ -535,7 +537,7 @@ class TestCLI:
     def _run(self, *argv: str) -> subprocess.CompletedProcess[str]:
         repo = Path(__file__).resolve().parents[3]
         env = dict(os.environ, _RAPTOR_TRUSTED="1")
-        return subprocess.run(
+        return run_standalone_cli(
             [sys.executable, str(repo / "libexec" / "raptor-audit"),
              "backlog", *argv],
             capture_output=True, text=True, env=env, cwd=repo,
