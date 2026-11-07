@@ -75,7 +75,8 @@ def test_cache_does_not_retain_callbacks_or_their_owner(binary):
     cache = VersionProbeCache()
     assert cache.get(owner.installed, owner.executable) == '1.3.0'
     del owner
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert reference() is None
 
 

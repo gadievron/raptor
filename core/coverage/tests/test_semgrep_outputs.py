@@ -79,14 +79,15 @@ def test_raw_results_are_released_before_reading_the_next_pack(monkeypatch):
     references = []
 
     def load(path, **kwargs):
-        gc.collect()
+        # These acyclic fixture objects need no scan of unrelated old generations.
+        gc.collect(0)
         assert all(reference() is None for reference in references)
         payload = Payload()
         references.append(weakref.ref(payload))
         return {'results': payload, 'paths': {'scanned': [str(path) + '.c']}}
     monkeypatch.setattr(coverage, 'load_json', load)
     summary = coverage.read_semgrep_outputs([Path('first'), Path('second')])
-    gc.collect()
+    gc.collect(0)
     assert summary.record['files_examined'] == ['first.c', 'second.c']
     assert all(reference() is None for reference in references)
 

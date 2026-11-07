@@ -53,7 +53,8 @@ def test_keyword_cache_does_not_retain_source_text(matchers):
     hit = bool(matchers(frozenset({'free'}))(text))
     assert hit
     del text
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert ref() is None
 
 

@@ -25,7 +25,8 @@ def test_observer_does_not_keep_the_previous_decoded_report_alive(monkeypatch):
     references = []
 
     def load(path):
-        gc.collect()
+        # These acyclic fixture objects need no scan of unrelated old generations.
+        gc.collect(0)
         assert all(reference() is None for reference in references)
         payload = Payload()
         references.append(weakref.ref(payload))
@@ -33,7 +34,7 @@ def test_observer_does_not_keep_the_previous_decoded_report_alive(monkeypatch):
     monkeypatch.setattr(parser, 'load_sarif', load)
     observed = []
     parser.generate_scan_metrics(['a', 'b'], on_source_report=lambda path, data: observed.append(path))
-    gc.collect()
+    gc.collect(0)
     assert observed == ['a', 'b']
     assert all(reference() is None for reference in references)
 

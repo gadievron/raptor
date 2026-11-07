@@ -72,7 +72,8 @@ def test_cache_does_not_retain_function_source():
     result = context._load_language_patterns('a.c', source)
     assert result
     del source
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert ref() is None
 
 

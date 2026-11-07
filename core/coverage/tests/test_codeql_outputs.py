@@ -104,7 +104,8 @@ def test_decoded_result_payloads_are_not_retained(tmp_path):
     accumulator = coverage.CodeQLCoverageAccumulator(tmp_path)
     accumulator.add_report(data)
     del data, payload
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert reference() is None
     assert accumulator.build_record()['files_examined'] == ['a.c']
 
