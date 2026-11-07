@@ -394,6 +394,9 @@ class TestCompareRuns:
         # skipped rows are excluded from the matched/reviewed counts
         assert (diff["matched_a"], diff["reviewed_a"]) == (2, 3)
         assert (diff["matched_b"], diff["reviewed_b"]) == (3, 4)
+        assert diff["common_label_matches"] == {
+            "matched_a": 1, "reviewed_a": 2, "matched_b": 2, "reviewed_b": 3,
+        }
         assert diff["cost_delta"] == pytest.approx(2.0)
         changes = {c["function_id"] for c in diff["attribution_changes"]}
         assert "a.c:f" in changes
@@ -403,6 +406,40 @@ class TestCompareRuns:
         assert "errored (1)" in report
         assert "clean -> finding" in report
         assert "wrong_verdict -> attributed" in report
+        assert "Matched on shared labels (reviewed): 1/2 -> 2/3 (+1)" in report
+        assert "shared labels have different non-skipped counts" in report
+
+    def test_different_run_sizes_do_not_change_shared_label_summary(self):
+        a, b = _run_rec("a"), _run_rec("b")
+        shared = _label_rec("shared.c:f", "clean", match=True)
+        labels_a = {"shared.c:f": shared, "extra.c:g": _label_rec("extra.c:g", "clean", match=True)}
+        labels_b = {"shared.c:f": dict(shared)}
+        diff = history.compare_runs(a, b, labels_a, labels_b)
+        assert diff["common_label_matches"] == {
+            "matched_a": 1, "reviewed_a": 1, "matched_b": 1, "reviewed_b": 1,
+        }
+        assert (diff["matched_a"], diff["matched_b"]) == (2, 1)
+        assert diff["flips"] == {}
+        output = history.format_compare(diff)
+        assert "Matched on shared labels (reviewed): 1/1 -> 1/1 (+0)" in output
+        assert "Matched in whole runs (reviewed): 2/2 -> 1/1 (-1)" in output
+
+    def test_disjoint_runs_report_no_shared_comparison(self):
+        diff = history.compare_runs(_run_rec("a"), _run_rec("b"),
+                                    {"a.c:f": _label_rec("a.c:f", "clean")},
+                                    {"b.c:g": _label_rec("b.c:g", "clean")})
+        assert diff["common_label_matches"] == {
+            "matched_a": 0, "reviewed_a": 0, "matched_b": 0, "reviewed_b": 0,
+        }
+        assert "no shared labels" in history.format_compare(diff)
+
+    def test_legacy_comparison_without_shared_summary_still_formats(self):
+        run = _run_rec("a")
+        diff = history.compare_runs(run, run, {}, {})
+        del diff["common_label_matches"]
+        output = history.format_compare(diff)
+        assert "Matched in whole runs" in output
+        assert "Matched on shared labels" not in output
 
     def test_no_flips(self):
         run = _run_rec("v")
