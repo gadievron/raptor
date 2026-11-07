@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.web.tests import http_server as http_support
+
 from core.llm.dispatcher.tests.test_web_http_fixture_cleanup import _CASES
 
 
@@ -60,7 +63,7 @@ def _record_servers(monkeypatch, fault):
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(socketserver.TCPServer, "__init__", initialize)
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
             yield servers, threads, joined
     finally:
         # Independent retirement also contains failures of the code under test.
