@@ -130,15 +130,27 @@ def consume(payload):
         for name in names:
             if not re.fullmatch(re.escape(prefix) + r'[0-9]+\.json', name):
                 continue
+            valid = False
+            claimed = False
             try:
                 value = json.loads(environment._read(directory, name))
-                if (isinstance(value, dict) and set(value) == {'generation', 'argv', 'status', 'run'}
+                valid = (isinstance(value, dict) and set(value) == {'generation', 'argv', 'status', 'run'}
                         and value['generation'] == _generation(context)
                         and value['argv'] == _digest(expected)
                         and type(value['status']) is int and 0 <= value['status'] <= 255
                         and (value['run'] is None or isinstance(value['run'], str)
-                             and value['run'].startswith('/') and '\0' not in value['run'])):
-                    statuses.append((value['status'], value['run']))
+                             and value['run'].startswith('/') and '\0' not in value['run']))
+            except FileNotFoundError:
+                pass  # Another hook consumed the listed receipt before our read.
             finally:
-                os.unlink(name, dir_fd=directory)
+                try:
+                    os.unlink(name, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                else:
+                    claimed = True
+            # Successful removal is the single-use claim. A hook that loses
+            # this race must not attribute even a previously valid outcome.
+            if claimed and valid:
+                statuses.append((value['status'], value['run']))
     return (command, statuses[0][1], expected[1:]) if len(statuses) == 1 and statuses[0][0] != 0 else None

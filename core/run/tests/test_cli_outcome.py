@@ -240,3 +240,70 @@ def test_lifecycle_restores_once_and_scopes_discovery(context, tmp_path, monkeyp
     assert restores == ['session']
     assert bool(discoveries) is not recorded_run
     assert (run / '.raptor-tool-failure').exists() is same_owner
+
+
+@pytest.mark.parametrize('phase', ['read', 'unlink'])
+def test_vanished_receipt_is_a_lost_claim(context, monkeypatch, phase):
+    _, directory, payload = context
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    filename = next(directory.glob('outcome-*')).name
+    unlink = outcome.os.unlink
+    read = outcome.environment._read
+    if phase == 'read':
+        def competing_read(fd, name):
+            if name == filename:
+                unlink(name, dir_fd=fd)
+            return read(fd, name)
+        monkeypatch.setattr(outcome.environment, '_read', competing_read)
+    else:
+        def competing_unlink(name, **kwargs):
+            if name == filename:
+                unlink(name, **kwargs)
+            return unlink(name, **kwargs)
+        monkeypatch.setattr(outcome.os, 'unlink', competing_unlink)
+    assert outcome.consume(payload) is None
+    assert not list(directory.glob('outcome-*'))
+
+
+def test_two_consumers_cannot_attribute_the_same_outcome(context, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    _, directory, payload = context
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    barrier = Barrier(2)
+    read = outcome.environment._read
+
+    def concurrent_read(fd, name):
+        value = read(fd, name)
+        barrier.wait(timeout=5)
+        return value
+
+    monkeypatch.setattr(outcome.environment, '_read', concurrent_read)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(outcome.consume, [payload, payload]))
+    assert sum(result is not None for result in results) == 1
+    assert next(result for result in results if result is not None)[0] == payload['tool_input']['command']
+    assert not list(directory.glob('outcome-*'))
+
+
+def test_failed_removal_does_not_attribute_outcome(context, monkeypatch):
+    _, directory, payload = context
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    filename = next(directory.glob('outcome-*')).name
+    unlink = outcome.os.unlink
+
+    def refused(name, **kwargs):
+        if name == filename:
+            raise PermissionError('cannot claim receipt')
+        return unlink(name, **kwargs)
+
+    with monkeypatch.context() as race:
+        race.setattr(outcome.os, 'unlink', refused)
+        with pytest.raises(PermissionError):
+            outcome.consume(payload)
+    assert (directory / filename).is_file()
+    assert outcome.consume(payload) is not None

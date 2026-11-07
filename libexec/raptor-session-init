@@ -59,12 +59,12 @@ if __name__ == "__main__" and sys.argv[1:2] in (["--codex-launch-context"], ["--
 # from a missing context in an ordinary RAPTOR command.
 _CODEX_BOOTSTRAP = sys.argv[1:] == ["--codex-bootstrap"]
 if _CODEX_BOOTSTRAP:
-    import uuid
+    import re
     session_id = os.environ.get("CODEX_THREAD_ID", "")
-    try:
-        if str(uuid.UUID(session_id)) != session_id:
-            raise ValueError
-    except ValueError:
+    # Match session_scope.validate_id without importing application code
+    # before process_init enforces protected-import policy. Session seeding
+    # validates the ID again through the shared session-scope validator.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
         sys.exit("RAPTOR: --codex-bootstrap requires a valid CODEX_THREAD_ID")
     os.environ["CODEX"] = "1"
     os.environ["RAPTOR_CODEX_HOOK"] = "1"
