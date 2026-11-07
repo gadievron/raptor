@@ -600,6 +600,19 @@ _FINGERPRINT_ISLICE_IMPL = islice
 _FINGERPRINT_DEQUE_IMPL = deque
 
 
+def _fingerprint_cacheable(text: str) -> bool:
+    """Admit only bounded text and the original pure fingerprint providers."""
+    return (type(text) is str and len(text) <= 16 * 1024
+            and _normalise_tokens is _NORMALISE_IMPL and _fingerprints is _FINGERPRINTS_IMPL
+            and _containment is _CONTAINMENT_IMPL
+            and _STRING_RE is _STRING_IMPL and _LINE_COMMENT_RE is _COMMENT_IMPL
+            and _TOKEN_RE is _TOKEN_IMPL and _KEYWORDS is _FEATURE_KEYWORDS_IMPL
+            and zlib is _CRC_MODULE_IMPL and zlib.crc32 is _CRC_IMPL
+            and islice is _FINGERPRINT_ISLICE_IMPL and deque is _FINGERPRINT_DEQUE_IMPL
+            and type(K_GRAM) is int and K_GRAM == 5
+            and type(WINNOW_WINDOW) is int and WINNOW_WINDOW == 4)
+
+
 def fix_anchored_drift(
     anchors: list[dict[str, Any]],
     source_texts: dict[str, str],
@@ -634,11 +647,15 @@ def fix_anchored_drift(
         )
         return []
     deviations: list[CloneDriftDeviation] = []
-    # A body may be checked against many fixes. Reuse only pure native facts,
-    # within this call; 32 bodies of at most 16 KiB bound retained work.
+    # Bodies and fixed regions may recur across anchors. Each fact table
+    # stays within this call and holds at most 32 texts of at most 16K characters.
+    # Fixed regions also retain the existing MAX_REGION_CHARS clipping.
     body_prints_memo: BoundedMemo[frozenset[int]] | None = (
         BoundedMemo(32) if (type(anchors) is list or type(anchors) is tuple) and len(anchors) > 1
         else None
+    )
+    region_prints_memo: BoundedMemo[frozenset[int]] | None = (
+        BoundedMemo(32) if body_prints_memo is not None else None
     )
     for anchor in anchors:
         file_path = str(anchor.get("file") or "")
@@ -660,16 +677,13 @@ def fix_anchored_drift(
         region = "\n".join(
             ln for ln in region.splitlines() if guard not in ln
         )
-        region_prints = _fingerprints(_normalise_tokens(region))
-        if (body_prints_memo is not None and type(body) is str and len(body) <= 16 * 1024
-                and _normalise_tokens is _NORMALISE_IMPL and _fingerprints is _FINGERPRINTS_IMPL
-                and _containment is _CONTAINMENT_IMPL
-                and _STRING_RE is _STRING_IMPL and _LINE_COMMENT_RE is _COMMENT_IMPL
-                and _TOKEN_RE is _TOKEN_IMPL and _KEYWORDS is _FEATURE_KEYWORDS_IMPL
-                and zlib is _CRC_MODULE_IMPL and zlib.crc32 is _CRC_IMPL
-                and islice is _FINGERPRINT_ISLICE_IMPL and deque is _FINGERPRINT_DEQUE_IMPL
-                and type(K_GRAM) is int and K_GRAM == 5
-                and type(WINNOW_WINDOW) is int and WINNOW_WINDOW == 4):
+        if region_prints_memo is not None and _fingerprint_cacheable(region):
+            region_prints, _ = region_prints_memo.get_or_compute(
+                region, lambda: _fingerprints(_normalise_tokens(region)),
+            )
+        else:
+            region_prints = _fingerprints(_normalise_tokens(region))
+        if body_prints_memo is not None and _fingerprint_cacheable(body):
             body_prints, _ = body_prints_memo.get_or_compute(
                 body, lambda: _fingerprints(_normalise_tokens(body)),
             )

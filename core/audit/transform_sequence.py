@@ -19,6 +19,8 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from bisect import bisect_right
+from itertools import islice
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -131,6 +133,20 @@ class _OrderingRule:
 
 def _pat(*patterns: str) -> list[re.Pattern[str]]:
     return [re.compile(p, re.IGNORECASE) for p in patterns]
+
+
+_ENUMERATE_IMPL = enumerate
+_ANY_IMPL = any
+_ALL_IMPL = all
+_SET_IMPL = set
+_LEN_IMPL = len
+_PATTERN_TYPE = re.Pattern
+_RULE_TYPE = _OrderingRule
+_SEQUENCE_TYPE = TransformSequence
+_STEP_TYPE = TransformStep
+_VIOLATION_TYPE = TransformOrderViolation
+_PRECEDE_IMPL = _OrderingRule.matches_precede
+_FOLLOW_IMPL = _OrderingRule.matches_follow
 
 
 # Keyword-pair gaps in the ordering rules are bounded ({0,200}), same
@@ -310,6 +326,29 @@ _DOUBLE_ENCODE_CLASSES: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
+def _matching_positions(names: list[str], pattern) -> list[int]:
+    """Reuse native name classifications; foreign matchers retain direct calls."""
+    if (type(pattern) is not _PATTERN_TYPE or all is not _ALL_IMPL
+            or set is not _SET_IMPL or len is not _LEN_IMPL or len(names) < 64
+            or not all(type(n) is str and len(n) <= 512 for n in islice(names, 64))
+            or len(set(islice(names, 64))) > 16):
+        return [i for i, name in enumerate(names) if pattern.search(name)]
+    matches: dict[str, bool] = {}
+    positions: list[int] = []
+    for i, name in enumerate(names):
+        if type(name) is str and len(name) <= 512:
+            matched = matches.get(name)
+            if matched is None:
+                matched = pattern.search(name) is not None
+                if len(matches) < 256:
+                    matches[name] = matched
+        else:
+            matched = pattern.search(name)
+        if matched:
+            positions.append(i)
+    return positions
+
+
 def _check_duplicate_transforms(
     seq: TransformSequence,
 ) -> list[TransformOrderViolation]:
@@ -327,7 +366,8 @@ def _check_duplicate_transforms(
     encoding_flagged: set = set()
 
     for class_name, pattern in _DOUBLE_ENCODE_CLASSES:
-        positions = [i for i, name in enumerate(step_names) if pattern.search(name)]
+        positions = (_matching_positions(step_names, pattern) if _LEN_IMPL(step_names) >= 64
+                     else [i for i, name in enumerate(step_names) if pattern.search(name)])
         if len(positions) < 2:
             continue
 
@@ -722,6 +762,7 @@ def _check_sequence_against_catalog(
         # Find all positions where must_precede and must_follow match
         precede_positions: list[int] = []
         follow_positions: list[int] = []
+        native_positions = enumerate is _ENUMERATE_IMPL
 
         for i, name in enumerate(step_names):
             if rule.matches_precede(name):
@@ -734,6 +775,8 @@ def _check_sequence_against_catalog(
 
         # Violation: a must_follow step appears BEFORE a must_precede step
         for fi in follow_positions:
+            eligible = (islice(precede_positions, bisect_right(precede_positions, fi), None)
+                        if native_positions and _LEN_IMPL(precede_positions) >= 8 else precede_positions)
             violations.extend(TransformOrderViolation(
                         file=seq.file,
                         function=seq.function,
@@ -749,7 +792,7 @@ def _check_sequence_against_catalog(
                         ),
                         confidence="high",
                         catalog_rule=rule.name,
-                    ) for pi in precede_positions if fi < pi)
+                    ) for pi in eligible if fi < pi)
 
     return violations
 
@@ -845,6 +888,25 @@ def _annotate_sibling_counts(
 ) -> None:
     """Annotate each violation with the count of sibling sequences
     that apply the same rule's transforms in the correct order."""
+    if _native_sibling_inputs(violations, all_seqs):
+        rules = {}
+        for rule in ORDERING_RULES:
+            rules.setdefault(rule.name, rule)  # first matching catalog name wins
+        needed: dict[str, set[tuple[str, str]]] = {}
+        for v in violations:
+            if v.catalog_rule and v.catalog_rule in rules:
+                needed.setdefault(v.catalog_rule, set()).add((v.file, v.function))
+        indices = {name: _correct_sibling_index(rules[name], all_seqs, groups)
+                   for name, groups in needed.items()}
+        for v in violations:
+            index = indices.get(v.catalog_rule)
+            if index is None:
+                continue  # unknown catalog rows retain their existing annotations
+            total, counts, first, outside = index
+            group = (v.file, v.function)
+            v.siblings_correct = total - counts.get(group, 0)
+            v.sibling_locations = [f"{fp}:{fn}" for fp, fn in outside.get(group, first)]
+        return
     for v in violations:
         if not v.catalog_rule:
             continue
@@ -872,6 +934,64 @@ def _annotate_sibling_counts(
 
         v.siblings_correct = len(correct)
         v.sibling_locations = correct[:5]
+
+
+def _native_sibling_inputs(violations, sequences) -> bool:
+    """Bound preparation, retaining direct behavior for adapters and overrides."""
+    return (
+        all is _ALL_IMPL and any is _ANY_IMPL and enumerate is _ENUMERATE_IMPL
+        and set is _SET_IMPL and len is _LEN_IMPL
+        and type(violations) is list and 2 <= len(violations) <= 4096
+        and type(sequences) is list and len(sequences) >= 8
+        and type(ORDERING_RULES) is list and len(ORDERING_RULES) <= 128
+        and _RULE_TYPE.matches_precede is _PRECEDE_IMPL and _RULE_TYPE.matches_follow is _FOLLOW_IMPL
+        and _VIOLATION_TYPE.__setattr__ is object.__setattr__
+        and all(type(v) is _VIOLATION_TYPE and type(v.file) is str and type(v.function) is str
+                and (type(v.catalog_rule) is str or v.catalog_rule is None) for v in violations)
+        and all(type(rule) is _RULE_TYPE and type(rule.name) is str
+                and 'matches_precede' not in vars(rule) and 'matches_follow' not in vars(rule)
+                and type(rule.must_precede_patterns) is list and type(rule.must_follow_patterns) is list
+                and all(type(p) is _PATTERN_TYPE for p in rule.must_precede_patterns)
+                and all(type(p) is _PATTERN_TYPE for p in rule.must_follow_patterns) for rule in ORDERING_RULES)
+        and all(type(seq) is _SEQUENCE_TYPE and type(seq.file) is str and type(seq.function) is str
+                and type(seq.steps) is list
+                and all(type(step) is _STEP_TYPE and type(step.call_name) is str for step in seq.steps)
+                for seq in sequences)
+    )
+
+
+def _correct_sibling_index(rule, sequences, needed):
+    """Count all correct rows, retaining only the first five exclusion prefixes.
+
+    An excluded group outside the global first five cannot change that prefix.
+    At most five groups need an alternative prefix; duplicate locations remain.
+    """
+    total = 0
+    counts: dict[tuple[str, str], int] = {}
+    first: list[tuple[str, str]] = []
+    outside: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for seq in sequences:
+        last_precede = -1
+        first_follow = None
+        for i, step in enumerate(seq.steps):
+            if rule.matches_precede(step.call_name):
+                last_precede = i
+            if first_follow is None and rule.matches_follow(step.call_name):
+                first_follow = i
+        if last_precede < 0 or first_follow is None or first_follow <= last_precede:
+            continue
+        group = (seq.file, seq.function)
+        total += 1
+        if group in needed:
+            counts[group] = counts.get(group, 0) + 1
+        for excluded, rows in outside.items():
+            if group != excluded and len(rows) < 5:
+                rows.append(group)
+        if len(first) < 5:
+            if group not in outside:
+                outside[group] = [row for row in first if row != group]
+            first.append(group)
+    return total, counts, first, outside
 
 
 def format_transform_sequences_for_prompt(
