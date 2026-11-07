@@ -1,3 +1,5 @@
+# raptor: confirm-only
+# Word-splitting checks do not refute all CWE-88 option-parsing risks.
 rules:
   # CWE-88: argument injection — request data lands inside a shell
   # command string with no per-argument quoting. escapeshellcmd is
@@ -5,8 +7,8 @@ rules:
   # for the command as a whole but leaves spaces and leading dashes
   # untouched, so a value placed in argument position can still smuggle
   # extra options/arguments ("-oProxyCommand=...", "--include=/etc/*").
-  # Only escapeshellarg (single argument, fully quoted) or a numeric
-  # cast neutralizes argument boundaries.
+  # escapeshellarg (one quoted argument) and modeled numeric results
+  # neutralize word splitting, not the target program's option parser.
   #
   # Known FP modes:
   #   - Values validated by means the rule cannot see (ctype_alnum
@@ -135,40 +137,58 @@ rules:
               }
         exact: true
     pattern-sanitizers:
-      - pattern: escapeshellarg(...)
+      - patterns:
+          - pattern: $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:escapeshellarg|intval|floatval|count|sizeof|strlen)$'
         exact: true
-      - pattern: intval(...)
+      - pattern-either:
+          - pattern: (int) $X
+          - pattern: (float) $X
+          - pattern: (bool) $X
         exact: true
-      - pattern: (int) $X
+      # Assignment forms preserve return-only sanitization on newer engines.
+      - patterns:
+          - pattern: $SAFE = $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:escapeshellarg|intval|floatval|count|sizeof|strlen)$'
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
         exact: true
-      - pattern: (float) $X
-        exact: true
-      # Semgrep 1.177 needs simple-local assignment results marked too.
-      # Exact matching keeps unsafe calls inside the RHS visible.
       - patterns:
           - pattern-either:
-              - pattern: $SAFE = escapeshellarg(...)
-              - pattern: $SAFE = intval(...)
               - pattern: $SAFE = (int) $X
               - pattern: $SAFE = (float) $X
+              - pattern: $SAFE = (bool) $X
           - metavariable-regex:
               metavariable: $SAFE
               regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
         exact: true
     pattern-sinks:
-      - pattern: exec(...)
-      - pattern: system(...)
-      - pattern: passthru(...)
-      - pattern: shell_exec(...)
-      - pattern: popen(...)
-      # proc_open with an argv ARRAY bypasses the shell entirely (no
-      # word splitting, no metacharacters) — it is this rule's own
-      # recommended remediation and must not fire. Only the
-      # string-command form is a sink; the other sink functions are
-      # string-only by signature.
+      # Only command argument 1 is parsed as a command string. Output/status,
+      # mode, descriptor, cwd and environment arguments do not supply its words.
       - patterns:
-          - pattern: proc_open($CMD, ...)
-          - pattern-not: proc_open([...], ...)
-          - pattern-not: proc_open(array(...), ...)
+          - pattern: $SINK($COMMAND, ...)
+          - metavariable-regex:
+              metavariable: $SINK
+              constant-propagation: false
+              regex: '(?i)^\\?(?:exec|system|passthru|shell_exec|popen)$'
+          - focus-metavariable: $COMMAND
+      - patterns:
+          - pattern: $SINK($COMMAND, ...)
+          - metavariable-regex:
+              metavariable: $SINK
+              constant-propagation: false
+              regex: '(?i)^\\?proc_open$'
+          # Literal argv arrays bypass command-string word splitting.
+          # Program-specific option parsing remains outside this rule.
+          - pattern-not: $SINK([...], ...)
+          - pattern-not: $SINK(array(...), ...)
+          - focus-metavariable: $COMMAND
     metadata:
       cwe: ["CWE-88"]

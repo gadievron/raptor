@@ -1,3 +1,5 @@
+# raptor: confirm-only
+# Socket writes do not refute header/mail or other CWE-93 channel shapes.
 rules:
   # CWE-93: CRLF injection into protocol streams (SMTP/IMAP/NNTP/FTP
   # command channels). Request data reaching a socket write without
@@ -346,22 +348,29 @@ rules:
               regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
         exact: true
     pattern-sinks:
-      # fwrite/fputs count only when the handle is provably a network
-      # stream (opened in the same function): a plain fwrite to a file
-      # handle is log injection, a different class.
+      # Inspect only the payload (argument 2), not a request-derived host's
+      # socket handle, byte count or flags. Stream writes retain the existing
+      # same-function network-opener guard; parameter/file streams stay out.
       - patterns:
-          - pattern-either:
-              - pattern: fwrite($SOCK, ...)
-              - pattern: fputs($SOCK, ...)
-          - pattern-either:
-              - pattern-inside: |
-                  $SOCK = fsockopen(...);
-                  ...
-              - pattern-inside: |
-                  $SOCK = stream_socket_client(...);
-                  ...
-      # The socket_* API is sockets-only, no handle-origin proof needed.
-      - pattern: socket_write(...)
-      - pattern: socket_send(...)
+          - pattern: $WRITE($SOCK, $DATA, ...)
+          - metavariable-regex:
+              metavariable: $WRITE
+              constant-propagation: false
+              regex: '(?i)^\\?(?:fwrite|fputs)$'
+          - pattern-inside: |
+              $SOCK = $OPEN(...);
+              ...
+          - metavariable-regex:
+              metavariable: $OPEN
+              constant-propagation: false
+              regex: '(?i)^\\?(?:fsockopen|stream_socket_client)$'
+          - focus-metavariable: $DATA
+      - patterns:
+          - pattern: $WRITE($SOCK, $DATA, ...)
+          - metavariable-regex:
+              metavariable: $WRITE
+              constant-propagation: false
+              regex: '(?i)^\\?(?:socket_write|socket_send)$'
+          - focus-metavariable: $DATA
     metadata:
       cwe: ["CWE-93"]

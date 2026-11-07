@@ -285,6 +285,30 @@ a narrower, string-level check for single-quoted attributes in `echo` or
 `print`: a safe attribute interpolation with request data elsewhere in the
 same string can still report. A no-match remains inconclusive in `/audit`.
 
+PHP command-string checks inspect the first argument of `exec`, `system`,
+`passthru`, `shell_exec`, `popen` and `proc_open`, including qualified and
+mixed-case built-in spellings. Request data in output/status variables,
+mode, descriptors, working directory or environment does not by itself
+establish argument injection in the command string. Literal `proc_open`
+argument arrays are excluded; indirect array construction needs review.
+Function matching is syntactic; runtime-selected functions, application
+shadows and imported aliases need separate review.
+
+Per-argument quoting and modeled numeric results clear only the returned
+value. Ignored conversions do not sanitize the original variable, and
+`escapeshellcmd` does not establish per-argument quoting. Program-specific
+option parsing is a separate question: even a quoted word may be treated as
+an option. A no-match remains inconclusive for CWE-88 in `/audit`.
+
+PHP socket CRLF checks inspect the second argument of `fwrite`, `fputs`,
+`socket_write` and `socket_send`. Request-derived handles, byte counts and
+flags do not by themselves establish CRLF in a fixed payload. Stream writes
+retain the same-function network-opener check, now covering qualified and
+mixed-case `fsockopen` and `stream_socket_client` calls. Handle aliases and
+later reassignment are not fully resolved. Header/mail channels and unknown
+stream origins need separate review; a no-match is inconclusive for CWE-93
+in `/audit`. These checks remain part of the PHP `/scan` pack.
+
 PHP weak-crypto checks use security-related names to limit noise. Password
 checks cover `md5`, `sha1` and `hash` with a literal MD5/SHA1 algorithm,
 including qualified and mixed-case built-in spellings. They recognize
