@@ -8,6 +8,8 @@ import tempfile
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.scratch as _storage_fault_consumer
+
 
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_decompilation_write_failure_removes_directory(tmp_path, monkeypatch, error):
@@ -52,7 +54,7 @@ def test_rule_write_failure_removes_partial_file(tmp_path, monkeypatch, kind, er
 
     rule = tmp_path / "input.txt"
     rule.write_text("languages: [c]")
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", Broken)
+    patch_module_attribute(monkeypatch, _storage_fault_consumer, 'tempfile', 'NamedTemporaryFile', Broken)
 
     def generate():
         if kind == "pattern":

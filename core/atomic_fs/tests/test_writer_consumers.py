@@ -3,7 +3,6 @@
 import errno
 import json
 import os
-import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -80,23 +79,16 @@ def writer(request, tmp_path, monkeypatch):
 
 
 def descriptors(monkeypatch):
-    """Track real allocations through either old mkstemp or the shared writer."""
+    """Track real allocations through the shared state writer."""
     opened = set()
     original_open = os.open
-    original_mkstemp = tempfile.mkstemp
 
     def tracked_open(*args, **kwargs):
         fd = original_open(*args, **kwargs)
         opened.add(fd)
         return fd
 
-    def tracked_mkstemp(*args, **kwargs):
-        fd, path = original_mkstemp(*args, **kwargs)
-        opened.add(fd)
-        return fd, path
-
     patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "open", tracked_open)
-    monkeypatch.setattr(tempfile, "mkstemp", tracked_mkstemp)
     return opened
 
 

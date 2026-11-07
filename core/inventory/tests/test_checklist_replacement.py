@@ -15,6 +15,8 @@ from core.testing.restricted_tree import restricted_tree
 import core.inventory as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
 
+import core.atomic_fs as _storage_fault_consumer
+
 
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
@@ -103,7 +105,7 @@ def test_failed_retirement_is_not_reported_as_success(cache, monkeypatch, big):
             return rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(inv, "rename_without_replace", fail)
-    monkeypatch.setattr(shutil, "rmtree", blocked)
+    patch_module_attribute(monkeypatch, _storage_fault_consumer, 'shutil', 'rmtree', blocked)
     with pytest.raises(OSError):
         inv.save_checklist(cache, document("new", big))
     assert inv.read_checklist(cache) == before
