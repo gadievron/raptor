@@ -136,7 +136,8 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
             if item.type == "binary_expression" and item != target and text(item.child_by_field_name("operator")) in {
                 "+", "-", "*", "/", "%", "<<", ">>",
             }:
-                return True  # arithmetic definedness/value flow is not encoded
+                if prefix.value_domain(item) is None:
+                    return True  # no complete definedness/value domain was established
             if item.type == "unary_expression" and text(item.child_by_field_name("operator")) in {"*", "-"}:
                 if source_integer_atom(item, data) is None:
                     return True

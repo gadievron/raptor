@@ -6,6 +6,7 @@ implementation-defined signed narrowing behavior.
 """
 
 from .arithmetic_operation import _unwrap
+from .arithmetic_prefix_obligations import PrefixProofBudget, binary_domain
 from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_types import integer_type, common_integer_type, has_builtin_integer_type
 from .integer_literals import source_integer_atom, integer_literal_value
@@ -22,6 +23,7 @@ class PrefixIntegerModel:
         self.language = language
         self.abi = abi
         self._domains = {}
+        self.proofs = PrefixProofBudget()
 
     def text(self, node):
         return self.data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -57,6 +59,11 @@ class PrefixIntegerModel:
         if record is None or record[0] is None:
             return None
         spelling, declaration = record
+        if read and declaration.type == "declaration" and declaration.start_byte <= node.start_byte < declaration.end_byte:
+            # Storage type alone does not establish that a local has been
+            # initialized. In particular, its own initializer may read it.
+            # Same-declaration value flow requires a separate model too.
+            return None
         if not self.plain_declaration(declaration, read=read):
             return None
         type_node = declaration.child_by_field_name("type")
@@ -151,6 +158,8 @@ class PrefixIntegerModel:
         elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) == "!":
             if self.value_domain(node.child_by_field_name("argument"), depth + 1) is not None:
                 result = (0, 1)
+        elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"/", "%", ">>"}:
+            result = binary_domain(self, node, depth)
         elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}:
             if all(self.value_domain(node.child_by_field_name(field), depth + 1) is not None for field in ("left", "right")):
                 result = (0, 1)
