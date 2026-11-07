@@ -17,7 +17,8 @@ encoder's responsibility.
   Wrapping both by name stops encoders from silently picking the wrong
   one for a given signedness.
 - **Definedness predicates** — ``division_undefined`` and
-  ``shift_count_invalid`` — expose invalid arithmetic cases that Z3
+  ``shift_count_invalid`` and strict ``left_shift_undefined`` — expose
+  invalid arithmetic cases that Z3
   otherwise assigns total bitvector results. They require explicit
   promoted operand types; they do not infer source-language semantics.
 - **``cast``** combines the above to simulate a C-style conversion
@@ -348,3 +349,33 @@ def shift_count_invalid(count: Any, value_width: int, *, signed: bool) -> Any:
     limit = z3.BitVecVal(value_width, compare_width, ctx=count.ctx)
     too_large = z3.UGE(extended, limit)
     return z3.Or(count < z3.BitVecVal(0, count.size(), ctx=count.ctx), too_large) if signed else too_large
+
+
+def left_shift_undefined(value: Any, count: Any, *, value_signed: bool, count_signed: bool) -> Any:
+    """Strict C99/C11 left-shift fault predicate for already-promoted types.
+
+    The operands can have different widths because integer promotions are
+    independent for shifts. Invalid counts are always excluded. Unsigned
+    values otherwise shift modulo their range; signed values must be
+    nonnegative and their mathematical shifted value must fit signed range.
+
+    Some C++ language versions permit additional signed cases. For those
+    languages, proving this predicate impossible is a sufficient safety
+    condition; SAT alone must not be reported as a C++ undefined operation.
+    This does not infer source types, promotions, or language version.
+    """
+    require_bool(value_signed, argument="value_signed")
+    require_bool(count_signed, argument="count_signed")
+    require_bv(value, argument="value")
+    require_bv(count, argument="count")
+    if value.ctx != count.ctx:
+        raise ValueError("shift operands must share the same Z3 context")
+    invalid_count = shift_count_invalid(count, value.size(), signed=count_signed)
+    if not value_signed:
+        return invalid_count
+    # Resize only after building the count obligation in its original type.
+    # A wide invalid count must not wrap into an apparently valid narrow one.
+    shift = truncate(count, value.size()) if count.size() > value.size() else zero_extend(count, value.size())
+    maximum = z3.BitVecVal((1 << (value.size() - 1)) - 1, value.size(), ctx=value.ctx)
+    zero = z3.BitVecVal(0, value.size(), ctx=value.ctx)
+    return z3.Or(invalid_count, value < zero, z3.UGT(value, z3.LShR(maximum, shift)))

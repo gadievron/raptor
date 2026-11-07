@@ -41,7 +41,7 @@ def test_safe_prefix_arithmetic_reaches_the_real_source_verifier(language, prefi
                                      source=source(prefix, extra), hypothesis='integer overflow in `Value + Step`',
                                      integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v15'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v16'
 
 
 @pytest.mark.parametrize('prefix,extra', [
@@ -53,7 +53,6 @@ def test_safe_prefix_arithmetic_reaches_the_real_source_verifier(language, prefi
     ('unsigned Ignored=Extra>>-1;', 'unsigned Extra'),
     ('unsigned Ignored=Extra>>Count;', 'unsigned Extra,unsigned char Count'),
     ('int Ignored=Extra>>1;', 'int Extra'),
-    ('unsigned Ignored=Extra<<1;', 'unsigned Extra'),
 ])
 def test_fault_or_missing_language_assumption_never_receives_source_credit(prefix, extra):
     result = sweep._run_smt_verb_inner(file_path='record.c', function_name='Read', verb='check-overflow',

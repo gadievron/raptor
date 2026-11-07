@@ -1,8 +1,8 @@
 """Source-bound bounds obligations for a deliberately small C/C++ frame.
 
 One local fixed-size builtin array, one read indexed by an immutable integer
-parameter, supported branch guards, and an explicit target ABI. Witnesses
-are conditional on the supplied source representing the active build and on
+parameter, supported branch guards, defined scalar prefixes, and an explicit
+target ABI. Witnesses are conditional on the supplied source representing the active build and on
 function-entry parameter domains; caller reachability is not established.
 """
 
@@ -217,15 +217,18 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
             return ArrayAccess("unavailable", "array initializer effects are unsupported")
 
     for node in body_nodes:
-        if node.type == "binary_expression" and text(node.child_by_field_name("operator")) not in {*_COMPARISONS, "&&", "||"}:
-            return ArrayAccess("unavailable", "arithmetic before the access requires another obligation")
         if (node.type == "unary_expression" and text(node.child_by_field_name("operator")) != "!"
                 and source_integer_atom(node, data) is None):
             return ArrayAccess("unavailable", "unary evaluation is unsupported")
         if node.type == "identifier" and text(node) == claim[0] and node not in (name, array):
             return ArrayAccess("unavailable", "the object has another use or escape")
         if node.type == "declaration" and node != declaration:
-            return ArrayAccess("unavailable", "additional local state requires value-flow modeling")
+            extras = node.children_by_field_name("declarator")
+            if not extras or any(extra.type != "init_declarator"
+                                 or extra.child_by_field_name("declarator") is None
+                                 or extra.child_by_field_name("declarator").type != "identifier"
+                                 or extra.child_by_field_name("value") is None for extra in extras):
+                return ArrayAccess("unavailable", "additional objects require value-flow modeling")
         if node.type == "return_statement" and node != statement:
             children = [child for child in node.named_children if child.type != "comment"]
             if len(children) != 1 or children[0].type != "number_literal" or text(children[0]) != "0":
@@ -234,7 +237,10 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
                                   language=language, integer_abi=abi)
     if guards.status == "unavailable":
         return ArrayAccess("unavailable", "reaching guards unavailable")
-    terms = sorted({text(node) for node in body_nodes if node.type == "identifier" and text(node) != claim[0]})
+    # Prefix definedness is checked over complete entry domains above. Only
+    # the index and reaching guards belong in this access's typed formula;
+    # unrelated scalar locals must not become unconstrained entry inputs.
+    terms = [claim[1]]
     model = model_for_integer_terms(target, data, terms, guards.premises, abi, language=language, result_operands=[claim[1]])
     if model.status != "bound" or any(declarations[name][1].type != "parameter_declaration" for name, _ in model.types):
         return ArrayAccess("unavailable", "immutable builtin parameter types required")
