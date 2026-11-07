@@ -15,6 +15,7 @@ from typing import Any
 
 from core.json import save_json
 
+from .evidence_trace import build_verification_trace
 from .evidence_grade import (
     LLM_CLAIM_PREFIX,
     Confidence,
@@ -513,6 +514,7 @@ def build_graded_finding(
         if entry_point:
             finding["context"]["entry_point"] = entry_point
 
+    finding["verification_trace"] = build_verification_trace(outcome, finding)
     return finding
 
 
@@ -820,6 +822,11 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
             ),
             model=entry.model or "",
             receipt_scope=receipt_scope,
+            trace_derivation="review-journal",
+            trace_hypotheses=entry.hypotheses,
+            function_qualified=entry.function_qualified,
+            tools_dispatched=entry.tools_dispatched,
+            tools_skipped=entry.tools_skipped,
         ))
     # out_dir deliberately NOT passed to export_findings: the
     # promotion-alarm sweep correlates orchestrator outcome objects

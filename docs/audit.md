@@ -384,6 +384,7 @@ concerns or incomplete coverage.
 |------|----------|
 | `audit-report.json` | Run summary, coverage, and costs |
 | `findings.json` | Findings for review and `/validate` |
+| `findings-graded.json` | Graded findings with a per-finding `verification_trace`: claim, scope, evidence markers, recorded tool states, scoped checks, assumptions, and evidence limitations |
 | `review-journal.jsonl` | Per-function decisions, hypotheses, tools, and costs |
 | `gaps.json` | Functions selected for review in this run |
 | `.audit-log.jsonl` | Detailed event trail; large logs may have numbered sibling files |
@@ -393,6 +394,12 @@ concerns or incomplete coverage.
 | `forecast.json` | Estimated cost band |
 | `llm-telemetry.jsonl` | Per-call LLM usage and costs |
 | `prep-profile.json` | Preparation timings and errors |
+
+In `verification_trace`, unknown tool states are `null`; dispatched tools are
+not automatically confirmations. Evidence markers identify recorded provenance,
+not complete proofs. Assumptions from a review remain unverified, and missing
+check details are reported as unavailable. Journal-derived exports identify
+their source and may retain less detail than the live audit.
 
 
 ## Integration
