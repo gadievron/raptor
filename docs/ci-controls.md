@@ -209,7 +209,7 @@ This page is split into:
 | [`refresh-public-suffix-list.yml`](../.github/workflows/refresh-public-suffix-list.yml) | Downloads and validates the bundled Public Suffix List (ICANN and PRIVATE rules), runs domain-boundary regression tests, and opens or updates a refresh PR; also tests facility changes on relevant PRs | Weekly (Tuesday 07:23 UTC, and on demand via dispatch) | Auto-PR against `core/domains/data/public_suffix_list.dat` and workflow logs |
 | [`refresh-sca-data.yml`](../.github/workflows/refresh-sca-data.yml) | Refreshes bundled popular-package data used by typosquat detection | Weekly | Auto-PR against `packages/sca/data/popular/` |
 | [`typosquat-reaudit.yml`](../.github/workflows/typosquat-reaudit.yml) | Re-checks previously reviewed-legit typosquat names against current registry state | Monthly | Issue comment or new issue when a contradiction appears |
-| [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) | Verifies the documented Python 3.12 floor still holds: installs the lockfile on 3.12, import-smokes floor-sensitive runtime modules, and runs a small fast test subset. Also fires on PRs that touch `pyproject.toml` / `uv.lock` | Weekly (and on dependency-surface PRs) | Workflow logs |
+| [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) | Verifies the documented Python 3.12 floor still holds: installs the lockfile on 3.12, import-smokes floor-sensitive runtime modules, and runs a small fast test subset. Also fires on PRs that touch dependency policy (`pyproject.toml`, `uv.lock`, `uv.toml`), its workflow, or its worker-count helper | Weekly (and on dependency/setup PRs) | Workflow logs |
 
 Baseline files (`.github/scripts/*_baseline.json`) are per-detector
 exception lists. Each entry requires a review note, and the target for
@@ -244,6 +244,10 @@ The first run after this key migration rebuilds the affected caches. Sync-mode
 callers retain `uv sync --locked` on misses; their environments cannot collide
 with export/install-mode caches.
 
+Every current shared-venv consumer saves a successful locked fallback rebuild.
+Jobs that need uv only for that rebuild leave its installation and download-cache
+restore to the helper on misses; standalone tool installers retain their own uv setup.
+
 | Cache family | Identity and validation |
 |---|---|
 | Virtualenvs | Host OS/release/image, architecture/libc, full interpreter build/ABI/base path, workspace, project/lock/uv config, install recipe/method and selected extras; producers and consumers share `ci_cache_key.py`, including PR preflight, the self-test nightly, Ubuntu 26 canary and weekly corpus; shuffled-fast uses the grammar sync profile; callers needing only the restored Python defer uv setup/download-cache restore to cache misses |
@@ -267,7 +271,7 @@ The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and th
 
 | Tool | Current state |
 |---|---|
-| `mypy` | Pinned in `pyproject.toml`, but there is no CI job running it yet |
+| `mypy` | Pinned in `pyproject.toml` and run daily by [`mypy-nightly.yml`](../.github/workflows/mypy-nightly.yml); type checking is not a PR gate |
 | Python 3.12 floor (runtime) | The README states Python 3.12+ (`requires-python` in `pyproject.toml`; the sandbox hard-requires `os.unshare`, 3.12+). Ruff's `target-version = "py312"` enforces the floor at the syntax level on every lint run, and the weekly [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) lane import-smokes and runs a small fast subset on 3.12 — but the full CI test suite still executes on a single recent interpreter, so 3.12-only API regressions outside that subset would not be caught by tests |
 | Ruff formatter | Ruff linting is enforced; `ruff format` is not |
 | Semgrep self-scan | RAPTOR ships and uses Semgrep for target analysis, but the repo does not currently have a dedicated Semgrep-against-RAPTOR CI workflow |

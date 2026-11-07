@@ -7,8 +7,8 @@ name: Python floor canary
 # lockfile on 3.12, import-smokes the floor-sensitive runtime modules
 # (typing.Self users, the os.unshare-dependent sandbox entry), and
 # runs a small fast test subset. Weekly plus any PR that touches the
-# dependency surface — deliberately NOT every PR: the floor moves when
-# the lockfile or pyproject moves, not when unrelated code does.
+# dependency surface or this lane's own setup — unrelated changes stay
+# on the weekly floor check rather than allocating another PR runner.
 
 on:
   schedule:
@@ -19,6 +19,9 @@ on:
     paths:
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'uv.toml'
+      - '.github/workflows/python-floor-canary.yml'
+      - '.github/scripts/pytest_workers.py'
   workflow_dispatch:
 
 concurrency:
@@ -62,8 +65,8 @@ jobs:
       - name: Create venv from the lockfile on the floor interpreter
         shell: bash
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
+          uv venv --python "$(command -v python3)" "$VENV_PATH"
+          source "$VENV_PATH/bin/activate"
           uv export --locked --no-hashes | uv pip install -r -
 
       # Floor-sensitive runtime modules: the direct typing.Self users
@@ -72,7 +75,7 @@ jobs:
       # pull in most of core/ and packages/.
       - name: Import smoke
         run: |
-          source $VENV_PATH/bin/activate
+          source "$VENV_PATH/bin/activate"
           python - <<'EOF'
           import importlib
 
@@ -98,5 +101,6 @@ jobs:
       # code paths on 3.12 without re-running the whole suite here.
       - name: Fast test subset
         run: |
-          source $VENV_PATH/bin/activate
-          python -m pytest core/inventory core/dataflow -q -n auto
+          source "$VENV_PATH/bin/activate"
+          workers="$(python .github/scripts/pytest_workers.py core/inventory core/dataflow)"
+          python -m pytest core/inventory core/dataflow -q -n "$workers" --dist loadfile

@@ -210,8 +210,27 @@ def test_every_explicit_uv_cache_key_covers_project_lock_and_config():
     import re
     files = list((ROOT / '.github/workflows').glob('*.y*ml')) + [ROOT / '.github/actions/setup-venv/action.yml']
     seen = 0
+    cached_setups = 0
     for file in files:
         text = file.read_text()
+        lines_by_step = text.splitlines()
+        for index, line in enumerate(lines_by_step):
+            if "uses: astral-sh/setup-uv@" not in line:
+                continue
+            indent = len(line) - len(line.lstrip())
+            block = []
+            for following in lines_by_step[index + 1:]:
+                following_indent = len(following) - len(following.lstrip())
+                if following.strip() and (following_indent < indent or (
+                    following_indent <= indent and following.lstrip().startswith("- ")
+                )):
+                    break
+                block.append(following)
+            enabled = next((entry.strip() for entry in block
+                            if entry.strip().startswith("enable-cache:")), None)
+            if enabled and not re.fullmatch(r"enable-cache: false(?:\s+#.*)?", enabled):
+                cached_setups += 1
+                assert any("cache-dependency-glob: |" in entry for entry in block), file
         for match in re.finditer(r'(?m)^( +)cache-dependency-glob: \|\n', text):
             indent = len(match[1])
             lines = []
@@ -222,7 +241,9 @@ def test_every_explicit_uv_cache_key_covers_project_lock_and_config():
             assert {'uv.lock', 'pyproject.toml', 'uv.toml'} <= set(lines), file
             seen += 1
         assert not re.search(r'cache-dependency-glob: ["\']?uv\.lock', text), file
-    assert seen >= 15
+    # Non-vacuousness follows actual cache owners; removing redundant setup
+    # steps must not require a stale minimum workflow/action count.
+    assert seen >= cached_setups > 0
 
 
 @pytest.mark.slow
