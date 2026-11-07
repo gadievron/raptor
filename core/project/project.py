@@ -1336,8 +1336,8 @@ class ProjectManager:
             msg = f"Project '{new_name}' already exists"
             raise ValueError(msg)
         first, second = sorted((old_name, new_name))
-        with self._mutation_lock(first), self._mutation_lock(second):
-            with self._output_dir_claim_lock(DEFAULT_OUTPUT_BASE / new_name):
+        with self._mutation_lock(first, required=True), self._mutation_lock(second, required=True):
+            with self._output_dir_claim_lock(DEFAULT_OUTPUT_BASE / new_name, required=True):
                 return self._rename_locked(old_name, new_name, force)
 
     def _rename_locked(self, old_name: str, new_name: str,
@@ -1405,7 +1405,7 @@ class ProjectManager:
                     len(live), old_output,
                 )
                 new_output = None
-            elif new_output.exists():
+            elif os.path.lexists(new_output):
                 msg = (
                     f"Cannot rename '{old_name}' → '{new_name}': the "
                     f"output directory {new_output} already exists. "
@@ -1423,73 +1423,14 @@ class ProjectManager:
                     )
                     raise ValueError(msg)
 
-        # Move the output dir BEFORE the registry rewrite: a move
-        # failure aborts the rename cleanly (registry untouched); a
-        # registry failure after the move rolls the move back below.
-        moved = False
+        # Prepare the new record before touching output, then publish both
+        # names with exclusive renames and receipt-based rollback.
         if new_output is not None:
-            if old_output.exists():
-                try:
-                    os.rename(old_output, new_output)
-                    moved = True
-                except OSError as e:
-                    msg = (
-                        f"Cannot rename '{old_name}': moving the output "
-                        f"directory {old_output} → {new_output} failed: "
-                        f"{e}"
-                    )
-                    raise ValueError(msg) from e
             project.output_dir = str(new_output)
-
-        # Update project
         project.name = new_name
-
-        # Save new, delete old — with EXPLICIT error reporting.
-        # Pre-fix the unlink used `missing_ok=True` which silently
-        # swallowed every OSError including PermissionError. If the
-        # save_json succeeded but the unlink failed, the project
-        # ended up existing under BOTH names with no signal to the
-        # operator — every subsequent list/load saw two entries
-        # for what was supposed to be one project. The new file is
-        # written first (it becomes the source of truth), then the
-        # old file is removed; FileNotFoundError is fine (already
-        # gone), any other OSError is logged loudly and re-raised so
-        # the operator knows the old file needs manual cleanup.
-        try:
-            save_json(new_file, project.to_dict())
-        except Exception:
-            # Registry write failed after the dir move: put the dir
-            # back so the (still old-named) registry entry keeps
-            # pointing at real data. Best-effort — a failed rollback
-            # is logged, never masks the original error.
-            if moved:
-                try:
-                    os.rename(new_output, old_output)  # type: ignore[arg-type]
-                except OSError:
-                    logger.error(
-                        "rename: registry write failed AND the output "
-                        "dir rollback failed — runs now live at %s "
-                        "while project '%s' records %s; move them back "
-                        "manually", new_output, old_name, old_output,
-                    )
-            raise
-        old_file = self.projects_dir / f"{old_name}.json"
-        try:
-            old_file.unlink()
-        except FileNotFoundError:
-            pass  # already gone — fine
-        except OSError as e:
-            # Don't roll back the new file: it has the renamed
-            # content and is the source of truth going forward.
-            # But surface the failure so the operator knows the
-            # old file is still on disk and they need to clean it
-            # up by hand.
-            logger.error(
-                "rename: wrote new project file %s but failed to remove "
-                "old %s: %s. Both files now exist; remove %s manually.",
-                new_file, old_file, e, old_file,
-            )
-            raise
+        from .rename_transaction import publish_rename
+        publish_rename(project, self.projects_dir / f"{old_name}.json", new_file,
+                       old_output, new_output)
 
         # Update .active symlink if it pointed to the old name
         active_link = self.projects_dir / ".active"
@@ -1603,9 +1544,9 @@ class ProjectManager:
             raise ValueError(msg)
         return project
 
-    def _mutation_lock(self, name: str):
+    def _mutation_lock(self, name: str, *, required: bool = False):
         """Project-JSON RMW lock for the mutators below."""
-        return project_file_lock(self.projects_dir / f"{name}.json")
+        return project_file_lock(self.projects_dir / f"{name}.json", required=required)
 
     def set_trust_marker(self, name: str, marker: str) -> str:
         """Set a trust marker on a project. Returns the timestamp.
@@ -1776,9 +1717,10 @@ class ProjectManager:
                 pass
             dest = dest_base / run_src.name
             _claimed_in_place = False
-            try:
-                dest.mkdir()
-            except FileExistsError:
+            if os.path.lexists(dest):
+                # A same-name outside source must never repair a bystander.
+                if run_src.resolve() != dest.resolve():
+                    return False
                 # Already in the project — but if its pin records a
                 # DIFFERENT project (a rename crashed between the
                 # registry move and the pin rewrite), re-point it:
@@ -1842,10 +1784,10 @@ class ProjectManager:
                 if not _claimed_in_place:
                     return False
             if not _claimed_in_place:
-                dest.rmdir()
+                from .relocate import move_directory
                 try:
-                    shutil.move(str(run_src), str(dest))
-                except (FileNotFoundError, shutil.Error) as e:
+                    move_directory(run_src, dest)
+                except (FileNotFoundError, FileExistsError, shutil.Error) as e:
                     # A concurrent adopt of the same source won the
                     # move — skip this run, keep the batch going.
                     logger.warning("adopt skipped for %s: %s",
@@ -2080,8 +2022,8 @@ class ProjectManager:
             raise ValueError(msg)
 
         dest = Path(to_path)
-        dest.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(run_dir), str(dest / run_name))
+        from .relocate import move_directory
+        move_directory(run_dir, dest / run_name)
         # The run left the project: clear its pin so consumers of the
         # moved dir don't keep writing into (or reading trust from)
         # a project it no longer belongs to.

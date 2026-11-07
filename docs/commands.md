@@ -1206,6 +1206,18 @@ session record demoting corroboration; re-run from a plain interactive
 shell to earn human grade.  LLM review outcomes are recorded in the
 review journal instead.
 
+Project run moves refuse an occupied destination instead of nesting inside
+it. Moves on the same filesystem rename the directory without copying its
+data. Across filesystems, RAPTOR stages a complete copy before publishing it,
+preserving symlinks and hardlinks within the run. Copy failures leave the source
+in place; if source cleanup fails after publication, RAPTOR warns with both
+paths for inspection. Keep runs idle while moving them: relocation does not
+snapshot concurrent file changes.
+
+Project rename prepares its registration before moving output and rolls back
+failures and cancellation where possible. A failed rollback reports the
+retained paths for recovery; inspect those before deleting any data.
+
 Project archive exports stream regular files and omit symlinks and special
 nodes. Exports enforce the import limits: 10,000 members, 10 GiB of expanded
 data, and 1 MiB for root project metadata. An unreadable source subtree fails
