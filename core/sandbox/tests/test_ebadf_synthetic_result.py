@@ -19,6 +19,8 @@ import sys
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="plain-lane dispatch under test is Linux",
 )
@@ -41,7 +43,7 @@ def test_ebadf_race_result_is_stamped_synthetic(monkeypatch):
             raise OSError(errno.EBADF, "Bad file descriptor")
         return real_run(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(context.subprocess, "run", selective)
+    patch_module_attribute(monkeypatch, context, "subprocess", "run", selective)
 
     res = context.run(["/bin/echo", mark], capture_output=True, text=True)
 

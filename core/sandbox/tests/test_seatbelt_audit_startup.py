@@ -34,9 +34,10 @@ def test_failed_startup_releases_process_and_pipe(setup_streamer, monkeypatch, s
     if stage == "warmup":
         monkeypatch.setattr(streamer, "_warm_up_until_attached", fail)
     elif stage == "construct":
-        monkeypatch.setattr(seatbelt_audit.threading, "Thread", fail)
+        patch_module_attribute(monkeypatch, seatbelt_audit, "threading", "Thread", fail)
     else:
-        monkeypatch.setattr(seatbelt_audit.threading.Thread, "start", fail)
+        local_thread = type("FaultThread", (seatbelt_audit.threading.Thread,), {"start": fail})
+        patch_module_attribute(monkeypatch, seatbelt_audit, "threading", "Thread", local_thread)
     with pytest.raises(failure_type) as raised:
         streamer.start()
     assert raised.value is failure
@@ -78,7 +79,7 @@ def test_reap_failure_preserves_original_startup_exception(setup_streamer, monke
 def test_duplicate_start_keeps_original_process(setup_streamer, monkeypatch):
     streamer, proc, launch = setup_streamer
     reader = Mock()
-    monkeypatch.setattr(seatbelt_audit.threading, "Thread", Mock(return_value=reader))
+    patch_module_attribute(monkeypatch, seatbelt_audit, "threading", "Thread", Mock(return_value=reader))
     streamer.start()
     with pytest.raises(RuntimeError, match="already been started"):
         streamer.start()
@@ -101,10 +102,8 @@ def test_thread_start_failure_reaps_a_real_producer(tmp_path, monkeypatch):
         patch_module_attribute(monkeypatch, seatbelt_audit, "subprocess", "Popen", Mock(return_value=proc))
         streamer = seatbelt_audit.LogStreamer(tmp_path)
         monkeypatch.setattr(streamer, "_warm_up_until_attached", lambda: True)
-        monkeypatch.setattr(
-            seatbelt_audit.threading.Thread, "start",
-            Mock(side_effect=RuntimeError("cannot start reader")),
-        )
+        local_thread = type("FaultThread", (seatbelt_audit.threading.Thread,), {"start": Mock(side_effect=RuntimeError("cannot start reader"))})
+        patch_module_attribute(monkeypatch, seatbelt_audit, "threading", "Thread", local_thread)
         with pytest.raises(RuntimeError, match="cannot start reader"):
             streamer.start()
         assert proc.returncode is not None
