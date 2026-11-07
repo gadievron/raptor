@@ -38,6 +38,16 @@ def _unwrap(node):
     return None
 
 
+def _compact_field_access(text):
+    """Trim member-operator whitespace without restarting a whitespace scan.
+
+    Splitting on the two literal operators and stripping each segment also
+    preserves whitespace inside operands. Joining reproduces the previous
+    substitution plus its final strip, including adjacent operators.
+    """
+    return "".join(part.strip() for part in re.split(r"(->|\.)", text))
+
+
 def source_mutations(source, variables=None):
     """Return (sites, unmodeled effects, refusal reason); no regex proof fallback.
 
@@ -71,9 +81,7 @@ def source_mutations(source, variables=None):
         )
 
     def expr(node):
-        return re.sub(
-            r"\s*(->|\.)\s*", r"\1", sanitized_view(text(node), language="c")
-        ).strip()
+        return _compact_field_access(sanitized_view(text(node), language="c"))
 
     def canonical(node, depth=0):
         node = _unwrap(node)

@@ -1707,6 +1707,42 @@ def _load_expected() -> dict:
         return json.load(fh)
 
 
+def _preserve_pin_review_notes(path: Path, rows: dict[str, dict]) -> None:
+    """Keep reviewed explanations tied to the same identity and disposition.
+
+    A changed or removed reviewed pin needs an explicit review-note update;
+    regeneration must not silently discard that record or attach it to a
+    different pattern. Collect notes before mutating the new rows so errors
+    leave both inputs intact.
+    """
+    import json
+
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    if not isinstance(previous, dict) or not isinstance(previous.get("members"), dict):
+        raise ValueError(f"invalid prior pin records in {path}")
+    notes = {}
+    for key, old in previous["members"].items():
+        if not isinstance(old, dict):
+            raise ValueError(f"invalid prior pin record {key!r}")
+        note = old.get("note")
+        if note is None:
+            continue
+        if not isinstance(note, str) or not note.strip():
+            raise ValueError(f"invalid review note for pin {key!r}")
+        new = rows.get(key)
+        if (new is None or set(old.get("digests", ())) != set(new["digests"])
+                or old.get("verdict") != new["verdict"]):
+            raise ValueError(
+                f"review note for pin {key!r} no longer matches; update or "
+                "retire the note after reviewing the changed/deleted pin")
+        notes[key] = note
+    for key, note in notes.items():
+        rows[key]["note"] = note
+
+
 def _min_probe_seconds(run: Callable[[], None],
                        budget_s: float) -> float:
     """CPU seconds for one ladder size: the min of
@@ -1980,6 +2016,7 @@ def _regen_expected(workers: int = 8) -> int:
         for failure in failures:
             print(" ", failure)
         return 1
+    _preserve_pin_review_notes(_EXPECTED_FILE, rows)
     _EXPECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "_comment": (
@@ -2096,6 +2133,11 @@ _SCAN_DEGENERATE_MEMBERS: frozenset[str] = frozenset({
     "core/analysis/reachability_gates.py :: _FENCED_CODE_RE",
     "core/analysis/taint_multi_lang.py :: assert_re",
     "core/analysis/taint_multi_lang.py :: named_re",
+    # The arithmetic tokenizer's symbol fallback accepts every nonspace
+    # character when the quoted/identifier/number alternatives do not match.
+    # Its proposed failing pump therefore matches (DEGEN), not a measured
+    # linear failure. Keep that limitation explicit and identity-pinned.
+    "core/audit/arithmetic_claim.py :: _TOKEN",
     "core/audit/corpus/rule_eval.py :: _CWE_RE",
     "core/audit/discovery.py :: ```(?:json)?[ \\t]*\\n(.+?)```",
     "core/audit/negative_space.py :: assign_re",
@@ -2684,6 +2726,7 @@ def _regen_scan_expected(workers: int = 8) -> int:
         for failure in failures:
             print(" ", failure)
         return 1
+    _preserve_pin_review_notes(_SCAN_EXPECTED_FILE, rows)
     _SCAN_EXPECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "_comment": (

@@ -143,6 +143,22 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/arithmetic_claim.py\u001f_TOKEN": {
+   "digests": [
+    "5678b6dcfb99"
+   ],
+   "exp": null,
+   "note": "The proposed scan lane terminates as DEGEN because its candidate matches a token. This is an explicit noattack disposition, not a measured linear claim; retain digest and nightly disposition checks.",
+   "verdict": "noattack"
+  },
+  "core/audit/array_bounds.py\u001f_ACCESS": {
+   "digests": [
+    "7f454bd068f1"
+   ],
+   "exp": 1.0,
+   "note": "The negative left guard prevents restarting inside a base identifier or member access. The current identifier, bracket and spacing lane measured linear.",
+   "verdict": "linear"
+  },
   "core/audit/asn1_template_mismatch.py\u001f_ANY_ACCESS_RE": {
    "digests": [
     "dcc2846bb41a"
@@ -216,13 +232,6 @@
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
    "digests": [
     "0028d3938560"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/caller_lock.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
-   "digests": [
-    "9338a1fce094"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -472,23 +481,9 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/condition_smt.py\u001f\\b(\\w+_lock)\\s*\\(": {
-   "digests": [
-    "f9c9230480c7"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/condition_smt.py\u001f\\b(security_\\w+)\\s*\\(": {
    "digests": [
     "c5ec51ab2cb7"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/condition_smt.py\u001f\\b\\w+\\s*\\(": {
-   "digests": [
-    "bde475aac65c"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -542,6 +537,22 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/condition_smt.py\u001f_SMT_CALL_SHAPE_RE": {
+   "digests": [
+    "bde475aac65c"
+   ],
+   "exp": 1.0,
+   "note": "Word boundary pins the call identifier start. All current scan lanes measured linear.",
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_SMT_LOCK_CALL_RE": {
+   "digests": [
+    "f9c9230480c7"
+   ],
+   "exp": 1.0,
+   "note": "Word boundary pins the call identifier start. All current scan lanes measured linear.",
+   "verdict": "linear"
+  },
   "core/audit/condition_smt.py\u001ffield_re": {
    "digests": [
     "b18eead13bd2",
@@ -588,13 +599,6 @@
   "core/audit/condition_smt.py\u001fout_param_re": {
    "digests": [
     "5263d3670f29"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/condition_smt.py\u001fparts": {
-   "digests": [
-    "17166ef01b2c"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -894,25 +898,27 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/lock_region.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
-   "digests": [
-    "9338a1fce094"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/lock_region.py\u001f\\b\\w+_lock\\s*\\(": {
-   "digests": [
-    "1b7363b44eb1"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/lock_region.py\u001f_INDIRECT_CALL_RE": {
    "digests": [
     "69636de8133f"
    ],
    "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001f_REGION_CALL_NAME_RE": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "note": "Word boundary pins the call identifier start. All current scan lanes measured linear.",
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001f_REGION_LOCK_CALL_RE": {
+   "digests": [
+    "1b7363b44eb1"
+   ],
+   "exp": 1.0,
+   "note": "Word boundary pins the call identifier start. All current scan lanes measured linear.",
    "verdict": "linear"
   },
   "core/audit/lock_region.py\u001fassign_re": {
@@ -1015,23 +1021,26 @@
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
    "digests": [
-    "6d1c6597e91a"
+    "1f863d81f14a"
    ],
    "exp": 1.0,
+   "note": "The keyword boundary pins starts and the optional parenthesis gates its whitespace. All three current scan lanes measured linear after the predicate-suffix change.",
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fnonneg_patterns": {
    "digests": [
-    "e7ece6b29027"
+    "d2e08b967930"
    ],
    "exp": 1.0,
+   "note": "The identifier boundary pins starts; the new terminal token guard does not add restart positions. The current scan lane measured linear.",
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fnull_patterns": {
    "digests": [
-    "0cc2eef4ed68"
+    "efda20e4da99"
    ],
    "exp": 1.0,
+   "note": "The identifier boundary pins starts; the new terminal token guard does not add restart positions. The current scan lane measured linear.",
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
@@ -1111,6 +1120,14 @@
    "exp": 1.01,
    "verdict": "linear"
   },
+  "core/audit/prefilter.py\u001f\\b(?:while|for)\\b.{0,200}\\b(\\w+)\\s*<\\s*(": {
+   "digests": [
+    "16c2333dcc01"
+   ],
+   "exp": 1.0,
+   "note": "The loop keyword boundary, 200-character gap bound and identifier boundary bound repeated prefix attempts. Both current scan lanes measured linear.",
+   "verdict": "linear"
+  },
   "core/audit/prefilter.py\u001f\\b(\\w+)\\s*\\[(\\w+)\\]": {
    "digests": [
     "efecf4556579"
@@ -1130,6 +1147,14 @@
     "3e5aafdc5cb9"
    ],
    "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f\\b\\w+\\s*\\[\\s*X\\s*\\]\\s*=(?!=)": {
+   "digests": [
+    "7d94daaaf5fe"
+   ],
+   "exp": 1.0,
+   "note": "The base identifier boundary pins starts and the escaped index is fixed at this site. The current assignment scan lane measured linear.",
    "verdict": "linear"
   },
   "core/audit/prefilter.py\u001f\\bopen\\s*(?:\\(\\s*)?\\w+\\s*,\\s*[\"\\$]": {
@@ -1209,20 +1234,6 @@
    "exp": null,
    "verdict": "noattack"
   },
-  "core/audit/prefilter.py\u001floop_re": {
-   "digests": [
-    "16c2333dcc01"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/prefilter.py\u001fwrite_re": {
-   "digests": [
-    "8f6a4617ad02"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/preprocessor_view.py\u001f_MACRO_COMMENT_RE": {
    "digests": [
     "d72e0a44b2a8"
@@ -1265,11 +1276,12 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/protocol_state.py\u001fassign_re": {
+  "core/audit/protocol_state.py\u001f_LOCAL_CALL_ASSIGN_RE": {
    "digests": [
     "75f27ac0e379"
    ],
    "exp": 1.0,
+   "note": "Word boundary pins the assignment identifier start. The current call-assignment scan lane measured linear.",
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f\\b(X|\\w{1,256}?_(?:free|destroy|release|": {
@@ -1328,11 +1340,12 @@
    "exp": 1.03,
    "verdict": "linear"
   },
-  "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
+  "core/audit/release_order.py\u001f_RELEASE_HEADER_PARAM_RE": {
    "digests": [
     "2697160eb642"
    ],
    "exp": 1.0,
+   "note": "A single preceding separator and identifier boundary prevent restarting inside the parameter identifier. The current scan lane measured linear.",
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001fassign_re": {
@@ -1554,10 +1567,10 @@
   },
   "core/audit/sweep.py\u001fm": {
    "digests": [
-    "1e29e75c2a18",
     "a3ebffff4ae0"
    ],
    "exp": 1.0,
+   "note": "The removed variant is no longer live. The sole remaining variant was independently remeasured linear.",
    "verdict": "linear"
   },
   "core/audit/sweep.py\u001frelational": {
@@ -2241,18 +2254,20 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/smt_solver/canonicalise.py\u001f(?<=\\S)\\s+is\\s+null\\b": {
+  "core/smt_solver/canonicalise.py\u001f(?<=\\S)[ \\t]+is[ \\t]+null\\b": {
    "digests": [
-    "d3f3a0a03200"
+    "f42fc27a178e"
    ],
    "exp": 1.0,
+   "note": "The nonspace lookbehind permits only the first whitespace position after a token, preventing retries within that whitespace run. The current horizontal-spacing lane measured linear.",
    "verdict": "linear"
   },
-  "core/smt_solver/canonicalise.py\u001f(?<=\\S)\\s+is\\s+zero\\b": {
+  "core/smt_solver/canonicalise.py\u001f(?<=\\S)[ \\t]+is[ \\t]+zero\\b": {
    "digests": [
-    "e7cdae2bf300"
+    "1e89fe679c95"
    ],
    "exp": 1.0,
+   "note": "The nonspace lookbehind permits only the first whitespace position after a token, preventing retries within that whitespace run. The current horizontal-spacing lane measured linear.",
    "verdict": "linear"
   },
   "core/startup/init.py\u001fm": {
