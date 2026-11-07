@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -19,6 +18,8 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -49,6 +50,14 @@ _WUR_HEADER = (
 
 
 def _prep_for(tmp_path_factory, *, wur: bool):
+    # Module setup precedes the per-test key fixture. Own the signing domain
+    # for both the child inventory writer and its in-process prep reader.
+    keys = tmp_path_factory.mktemp("consistency_keys")
+    with patch.dict(os.environ, {"XDG_DATA_HOME": str(keys)}):
+        return _prep_for_with_owned_keys(tmp_path_factory, wur=wur)
+
+
+def _prep_for_with_owned_keys(tmp_path_factory, *, wur: bool):
     target = tmp_path_factory.mktemp("consistency_target")
     (target / "callers.c").write_text(_callers_c())
     if wur:
@@ -71,9 +80,9 @@ def _prep_for(tmp_path_factory, *, wur: bool):
         _RAPTOR_TRUSTED="1",
         PYTHONPATH=str(_RAPTOR_DIR),
     )
-    r = subprocess.run(
+    r = run_standalone_cli(
         [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-        env=env,
+        env=env, data_home=os.environ["XDG_DATA_HOME"],
         capture_output=True,
         text=True,
         check=False,
