@@ -376,6 +376,18 @@ own divisor cannot borrow a later test of the new value. Each use is reviewed
 separately. Matches remain candidates: check caller ranges, aliases,
 expression side effects and more complex control flow before reporting a bug.
 
+The stdio lifetime checks follow local stream names, direct fields, pointer
+slots and array elements with constant or direct variable indices. Writes,
+address-taking, index updates and receiver
+changes end a tracked path; an observation or another stdio operation does
+not hide later uses. Closed-stream status queries such as `feof`, `ferror`,
+`clearerr` and `fileno` are included. The `popen` close check also covers an
+immediate `fclose(popen(...))` call. These findings remain review candidates:
+check stream ownership, aliases, helper side effects and the target libc.
+The patterns do not establish a zombie process or a reachable heap exploit.
+Calculated indices and nested/computed receivers are outside this local
+identity model and need separate review.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
