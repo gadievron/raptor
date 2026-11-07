@@ -241,8 +241,11 @@ values and indirect flag definitions need source review.
 The directory-ownership check detects closing both an `fdopendir` stream and
 its underlying descriptor in either order. It stops following an ownership
 chain when the relevant pointer or descriptor is replaced or passed by address,
-and excludes explicit descriptor rebinding between releases. It follows direct
-uses rather than aliases.
+and excludes explicit descriptor rebinding between releases. Arithmetic and
+bitwise assignments end tracking too. Direct self-duplication, such as
+`dup2(fd, fd)`, does not repair a closed descriptor or suppress the report.
+Only the destination argument of `dup2`/`dup3` counts as rebinding. The check
+follows direct uses rather than aliases.
 
 The mapping-release check covers `mmap`, `mmap64` and `mremap`. It reports
 `free` on a mapping-derived pointer, including through C-style pointer casts

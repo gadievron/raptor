@@ -12,40 +12,67 @@
 // the relation. Explicit descriptor rebinding after close also stops tracking.
 // @role: verification
 
+// A local descriptor duplicated onto itself is not rebound. Keep the
+// ownership warning even if that no-op or failed call appears between closes.
+// dup2/dup3 modify only their destination (second) descriptor argument.
+// https://man7.org/linux/man-pages/man2/dup.2.html
+@fd_self_dup@
+identifier FD;
+expression flags;
+position p;
+@@
+
+(
+  dup2@p(FD, FD)
+|
+  dup2@p((FD), FD)
+|
+  dup2@p(FD, (FD))
+|
+  dup2@p((FD), (FD))
+|
+  dup3@p(FD, FD, flags)
+|
+  dup3@p((FD), FD, flags)
+|
+  dup3@p(FD, (FD), flags)
+|
+  dup3@p((FD), (FD), flags)
+)
+
 @fdopendir_double@
 expression FD;
 expression DIR;
+assignment operator op_fd, op_dir;
+expression source_fd, flags;
+position rebind != fd_self_dup.p;
 position p;
 @@
 
   DIR = fdopendir(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
   closedir(DIR);
-  ... when != FD = ...
+  ... when != FD op_fd ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
-      when != dup2(..., FD)
-      when != dup3(..., FD, ...)
+      when != dup2@rebind(source_fd, FD)
+      when != dup2@rebind(source_fd, (FD))
+      when != dup3@rebind(source_fd, FD, flags)
+      when != dup3@rebind(source_fd, (FD), flags)
 * close(FD)@p;
 
 @script:python report_fdopendir depends on fdopendir_double@
@@ -65,37 +92,36 @@ print("COCCIRESULT:" + json.dumps(msg))
 expression FD;
 type T;
 identifier DIR;
+assignment operator op_fd, op_dir;
+expression source_fd, flags;
+position rebind != fd_self_dup.p;
 position p;
 @@
 
   T DIR = fdopendir(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
   closedir(DIR);
-  ... when != FD = ...
+  ... when != FD op_fd ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
-      when != dup2(..., FD)
-      when != dup3(..., FD, ...)
+      when != dup2@rebind(source_fd, FD)
+      when != dup2@rebind(source_fd, (FD))
+      when != dup3@rebind(source_fd, FD, flags)
+      when != dup3@rebind(source_fd, (FD), flags)
 * close(FD)@p;
 
 @script:python report_fdopendir_decl depends on fdopendir_double_decl@
@@ -113,45 +139,42 @@ print("COCCIRESULT:" + json.dumps(msg))
 
 @fdopendir_close_first@
 expression FD, DIR;
+assignment operator op_fd, op_dir;
+expression source_fd, flags;
+position rebind != fd_self_dup.p;
 position p;
 @@
 
   DIR = fdopendir(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
   close(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
-      when != dup2(..., FD)
-      when != dup3(..., FD, ...)
+      when != dup2@rebind(source_fd, FD)
+      when != dup2@rebind(source_fd, (FD))
+      when != dup3@rebind(source_fd, FD, flags)
+      when != dup3@rebind(source_fd, (FD), flags)
 * closedir(DIR)@p;
 
 @script:python report_fdopendir_close_first depends on fdopendir_close_first@
@@ -171,45 +194,42 @@ print("COCCIRESULT:" + json.dumps(msg))
 expression FD;
 type T;
 identifier DIR;
+assignment operator op_fd, op_dir;
+expression source_fd, flags;
+position rebind != fd_self_dup.p;
 position p;
 @@
 
   T DIR = fdopendir(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
   close(FD);
-  ... when != FD = ...
-      when != DIR = ...
+  ... when != FD op_fd ...
+      when != DIR op_dir ...
       when != &FD
       when != FD++
       when != ++FD
       when != FD--
       when != --FD
-      when != FD += ...
-      when != FD -= ...
       when != &DIR
       when != DIR++
       when != ++DIR
       when != DIR--
       when != --DIR
-      when != DIR += ...
-      when != DIR -= ...
-      when != dup2(..., FD)
-      when != dup3(..., FD, ...)
+      when != dup2@rebind(source_fd, FD)
+      when != dup2@rebind(source_fd, (FD))
+      when != dup3@rebind(source_fd, FD, flags)
+      when != dup3@rebind(source_fd, (FD), flags)
 * closedir(DIR)@p;
 
 @script:python report_fdopendir_close_first_decl depends on fdopendir_close_first_decl@
