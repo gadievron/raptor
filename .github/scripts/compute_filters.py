@@ -29,6 +29,7 @@ FILTERS: dict[str, list[str]] = {
         "uv.lock",
         ".github/workflows/codeql.yml",
         ".github/codeql/**",
+        ".github/scripts/ci_push_base.py",
     ],
     "codeql_cpp": [
         "**/*.c",
@@ -39,6 +40,7 @@ FILTERS: dict[str, list[str]] = {
         "**/*.hh",
         ".github/workflows/codeql.yml",
         ".github/codeql/**",
+        ".github/scripts/ci_push_base.py",
     ],
     "codeql_actions": [
         ".github/workflows/**",
@@ -46,6 +48,7 @@ FILTERS: dict[str, list[str]] = {
         "action.yml",
         "action.yaml",
         ".github/codeql/**",
+        ".github/scripts/ci_push_base.py",
     ],
 }
 

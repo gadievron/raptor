@@ -333,6 +333,31 @@ The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and th
 
 If one of these becomes a real gate, we should move it into the proper table above in the same change that wires the workflow in. Otherwise it is just theatre.
 
+Main pushes in Test Suite, sandbox-wrapper acceptance, CodeQL and lint compare
+against their own last successful cumulative-scope checkpoint. The resolver
+[`ci_push_base.py`](../.github/scripts/ci_push_base.py) checks the repository,
+workflow, branch, commit and latest scope-job attempt, plus the successful
+`Record verified push scope v1` step. The entire workflow must have succeeded.
+An older green run without that marker cannot establish coverage of changes
+from cancelled predecessors. The first run under this policy therefore uses
+full coverage. Unavailable metadata, incomplete job lists and non-ancestor
+checkpoints also retain full coverage. Test Suite and CodeQL reuse the verified
+compare response and retain their 300-file truncation backstop.
+
+Main pushes no longer cancel active runs; GitHub may replace intermediate
+pending runs with a newer pending run. The surviving run includes all net changes since its
+verified checkpoint, including changes from replaced or failed runs. A newer
+push may therefore wait for an active run instead of cancelling its work.
+PR runs still cancel superseded PR runs and scope the complete PR diff;
+merge-queue, scheduled and manual runs retain their existing concurrency and
+coverage policies.
+Only completed green push runs advance the checkpoint; a successful scope job
+inside an otherwise failed or cancelled workflow does not advance it.
+Targeted retries, including macOS allocation recovery, may retain a successful
+scope job from an earlier attempt of the same run and commit. The resolver
+accepts that retained result only when the whole run is green and no newer
+scope-job execution supersedes it.
+
 Wrapper acceptance selection runs the full registration census before choosing
 per-platform contract selectors and native families. Its independent full-tree
 pytest assertion runs in the nightly slow tier instead of repeating the census

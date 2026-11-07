@@ -52,7 +52,7 @@ def test_all_default_python_file_types_are_selected(repo, name):
 @pytest.mark.parametrize('name', ['pyproject.toml', 'nested/pyproject.toml', 'ruff.toml', 'nested/.ruff.toml',
                                  '.gitignore', 'nested/.ignore', '.gitmodules', '.gitattributes', 'nested/.gitattributes', 'uv.lock', 'uv.toml',
                                  '.github/workflows/lint.yml', '.github/scripts/ruff_scope.py',
-                                 '.github/scripts/ci_change_scope.py'])
+                                 '.github/scripts/ci_change_scope.py', '.github/scripts/ci_push_base.py'])
 def test_config_and_harness_edits_require_full_tree(repo, name):
     assert scope.plan(repo, [name], ['pyproject.toml'])['files'] == ['.']
 

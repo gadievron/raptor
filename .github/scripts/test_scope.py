@@ -295,6 +295,7 @@ ROOT_HARNESS_FILES = frozenset({
     ".github/scripts/codeql_scope.py",
     ".github/scripts/preflight_scope.py",
     ".github/scripts/ci_cache_key.py",
+    ".github/scripts/ci_push_base.py",
     ".github/actions/setup-venv/action.yml",
 })
 

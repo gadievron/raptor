@@ -37,8 +37,8 @@ on:
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR. Pushes to main are NOT
-# cancelled — every main commit must be fully analysed for the
-# baseline. The conditional handles both correctly.
+# cancelled. Pending pushes coalesce, and the next run scopes from
+# its last verified checkpoint, including changes from replaced pushes.
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -59,6 +59,7 @@ jobs:
     timeout-minutes: 2
     permissions:
       contents: read
+      actions: read
     outputs:
       codeql_python: ${{ steps.filter.outputs.codeql_python }}
       codeql_cpp: ${{ steps.filter.outputs.codeql_cpp }}
@@ -68,6 +69,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve verified push base
+        id: push_base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci_push_base.py --workflow codeql.yml --compare-out "$RUNNER_TEMP/verified-push-compare.json"
+
       - id: force
         env:
           EVENT: ${{ github.event_name }}
@@ -85,8 +93,9 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
+          BEFORE: ${{ steps.push_base.outputs.base }}
           AFTER: ${{ github.event.after }}
+          VERIFIED_COMPARE: ${{ steps.push_base.outputs.compare }}
         run: |
           set -euo pipefail
           out=/tmp/changed_files.txt
@@ -101,7 +110,7 @@ jobs:
                 --jq '(. // [])[]?.filename' >> "$out"
               ;;
             push)
-              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+              if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
                 rm -f "$out"
               else
                 # The compare API caps ``files`` at 300 entries and
@@ -110,9 +119,11 @@ jobs:
                 # path never fires on truncation and a truncated list
                 # could drop the only file matching a language filter.
                 # At the cap, discard the list → full scan.
-                resp=/tmp/compare_response.json
-                gh api --paginate \
-                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                resp=${VERIFIED_COMPARE:-/tmp/compare_response.json}
+                if [[ -z "${VERIFIED_COMPARE:-}" ]]; then
+                  gh api --paginate \
+                    "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                fi
                 # No previous_filename companion here (tests.yml emits
                 # it): deliberate asymmetry — these lists feed
                 # glob-shaped LANGUAGE filters, and a rename's old
@@ -138,6 +149,10 @@ jobs:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
         run: |
           python3 .github/scripts/compute_filters.py
+
+      - name: Record verified push scope v1
+        if: github.event_name == 'push'
+        run: echo 'Cumulative push scope completed.'
 
   # Run analyses in parallel; SARIF stashed as artifacts. No upload
   # happens here — the barrier job below collects all three and
