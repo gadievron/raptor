@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.processes import reap_on_exit, run_in_process_group
+from core.testing.standalone_cli import standalone_cli_env
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"
@@ -35,8 +36,17 @@ class _Result:
     stderr: str
 
 
-def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
-         setsid=False):
+def _run(*args, env=None, input_text=None, tty=(), stdin_path=None, setsid=False, data_home=None):
+    """Own launch state while retaining the requested TTY and session shape."""
+    with standalone_cli_env(data_home=data_home) as owned_env:
+        return _run_with_env(
+            *args, env=env, input_text=input_text, tty=tty, stdin_path=stdin_path,
+            setsid=setsid, owned_env=owned_env,
+        )
+
+
+def _run_with_env(*args, env=None, input_text=None, tty=(), stdin_path=None,
+                  setsid=False, owned_env):
     """Run the CLI with --base resolved by caller in args.
 
     ``tty``: names among ``stdin``/``stdout``/``stderr`` to attach to
@@ -50,7 +60,7 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
     the recorded ``envm`` stamp doesn't depend on where the suite
     runs; tests exercising the marker pass it back via ``env=``.
     """
-    real_env = dict(os.environ)
+    real_env = dict(owned_env)
     real_env.pop("CLAUDECODE", None)
     real_env["_RAPTOR_TRUSTED"] = "1"
     if env:
@@ -637,6 +647,14 @@ class TestBaseResolution:
 
 
 class TestIrisPromotionOnAdd:
+    @pytest.fixture(autouse=True)
+    def _owned_signing_keys(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "signing-data"))
+
+    def _run(self, *args, **kwargs):
+        # Parent store writes and child promotions must share an owned key.
+        return _run(*args, data_home=os.environ["XDG_DATA_HOME"], **kwargs)
+
     def _write_store(self, project_dir):
         from core.evidence import EvidenceTier
         from core.iris.specs import TaintSpec
@@ -662,7 +680,7 @@ class TestIrisPromotionOnAdd:
         self._write_store(tmp_path)
 
         # Interactive stdin → source defaults to human, human-grade.
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "sink",
                  "-m", "confirmed sink wrapper",
                  tty=("stdin",))
@@ -681,7 +699,7 @@ class TestIrisPromotionOnAdd:
         base.mkdir()
         self._write_store(tmp_path)
 
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "clean",
                  "-m", "reviewed, fine")
         assert r.returncode == 0, r.stderr
@@ -698,7 +716,7 @@ class TestIrisPromotionOnAdd:
         base.mkdir()
         self._write_store(tmp_path)
 
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "sink",
                  "--source", "llm", "-m", "scripted add")
         assert r.returncode == 0, r.stderr
@@ -717,7 +735,7 @@ class TestIrisPromotionOnAdd:
         self._write_store(tmp_path)
 
         # All fds piped → source defaults to agent.
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "sink",
                  "-m", "agent-driven add")
         assert r.returncode == 0, r.stderr
@@ -738,7 +756,7 @@ class TestIrisPromotionOnAdd:
 
         # Explicit --source human with zero TTYs: the laundering
         # shape. Never reaches xref_backed.
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "sink",
                  "--source", "human", "-m", "claimed manual")
         assert r.returncode == 0, r.stderr
@@ -751,7 +769,7 @@ class TestIrisPromotionOnAdd:
     def test_missing_store_never_fails_add(self, tmp_path):
         base = tmp_path / "annotations"
         base.mkdir()
-        r = _run("add", "src/io.c", "write_out",
+        r = self._run("add", "src/io.c", "write_out",
                  "--base", str(base), "--status", "sink",
                  "-m", "no IRIS store present")
         assert r.returncode == 0, r.stderr
@@ -917,7 +935,11 @@ class TestPtyLaunderingCorroboration:
         from core.annotations import is_human_grade
         assert not is_human_grade(meta)
 
-    def test_genuine_interactive_add_stays_gradeable(self, tmp_path):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_genuine_interactive_add_stays_gradeable(self, tmp_path, monkeypatch, stale_launch):
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-parent-authorization")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-parent-scratch"))
         # Shell-launched interactive add: inherited session, no agent
         # marker, shell-first parent chain -> human grade holds.
         r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
@@ -930,7 +952,11 @@ class TestPtyLaunderingCorroboration:
         from core.annotations import is_human_grade
         assert is_human_grade(meta)
 
-    def test_corroboration_facts_always_recorded(self, tmp_path):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_corroboration_facts_always_recorded(self, tmp_path, monkeypatch, stale_launch):
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-parent-authorization")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-parent-scratch"))
         # Non-interactive adds record the same facts — the audit
         # trail is unconditional, not interactive-only.
         r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
