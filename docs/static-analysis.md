@@ -440,6 +440,11 @@ and deduplicated by resolved absolute path.
 
 ## Coccinelle Rules
 
+The closed-stream rule checks stdio operations after either `fclose()` or
+`pclose()`, including character I/O, formatted input, positioning and buffered
+reads and writes. Assigning a new stream before reuse suppresses the report.
+The rule follows direct uses of the same pointer; it does not trace aliases.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
