@@ -21,6 +21,7 @@ This page is split into:
 **On this page:**
 
 - [What Actually Blocks A PR](#what-actually-blocks-a-pr)
+- [Reviewing invariant findings](#reviewing-invariant-findings)
 - [Stuff That Runs On A Timer](#stuff-that-runs-on-a-timer)
 - [Workflow Hardening Bits](#workflow-hardening-bits)
 - [Runner Sizing](#runner-sizing)
@@ -180,6 +181,57 @@ This page is split into:
 
 - **Nightly integration retries** — a full first pass records every result. Only ordinary test failures with a matching isolated pytest cache qualify for one failed-case retry; collection and session-level failures return immediately. The effective `integration.xml` retains first-pass successes and skips, replacing only failed cases. Missing, extra or skipped retry cases fail validation. Both raw attempts are retained for diagnosis, and skip budgeting uses the complete effective report.
 
+### Reviewing invariant findings
+
+Baselines under `.github/scripts/*_baseline.json` are reviewed exception
+lists. Prefer fixing findings; record a deliberate exception only with a
+note explaining its scope and why it is accepted. Retire exceptions as their
+underlying findings are fixed. Review entries affected
+by a refactor according to the [developer guidance](developers.md#refactors-and-audit-records).
+
+- **Miswiring** detects signature/import mismatches, dead definitions,
+  unread artifacts, swallowed errors, and unused configuration. Textual
+  references in documentation and command files also count, so a doc line
+  can keep a symbol apparently live.
+- **Vocabulary lists** flag new literal identifier lists or regex alternations
+  longer than nine names outside the vocabulary seams. Domain names belong
+  in a data pack (`core/audit/data/vocab_packs/`,
+  `core/function_taxonomy/data/packs/`, or
+  `engine/coccinelle/source_intel/crypto/packs/`), the study-learned domain
+  model, or the central taxonomy. Fixed event, report, and persistence field
+  schemas can trigger the same census. For a reviewed schema exception,
+  record the exact key, kind, count, and producer/consumer rationale in
+  `.github/scripts/vocab_baseline.json`; include the review with the schema
+  change and rerun `python3 .github/scripts/check_vocab_lists.py`.
+- **Canonical JSON** protects frozen MAC/hash byte forms. Use
+  `core.json.dumps_canonical` for hash lanes and the appropriate display or
+  artifact serializer elsewhere. A deliberate byte-form exception requires
+  a review note; preserve compatibility when moving an existing hash lane.
+- **Optional dependencies** need guarded test imports where applicable.
+  CI-filter tests must still run their required assertions in the pytest-only
+  lane; see [companion checks](developers.md#companion-checks-for-test-changes).
+
+#### Deliberate keep-blocks (REVISIT)
+
+The miswiring baseline carries two blocks of dead-code entries that
+were deliberately KEPT by operator decision (2026-08-16) rather than
+deleted — each entry's `note` says why:
+
+- `kept: public API surface … — revisit` —
+  `packages/exploit_feasibility` names kept as library surface with
+  zero in-repo consumers.
+- `kept: pending work — autonomous fuzzing loop feature seed …` —
+  `packages/autonomous` seeds for the planned autonomous fuzzing loop,
+  unwired since introduction.
+
+The convention is grep, not automation (deliberate — these are
+judgement calls, not mechanically decidable): when you touch one of
+those modules, grep the baseline for its keep-block phrasing
+(`grep 'kept:' .github/scripts/miswiring_baseline.json`) and re-ask
+whether the block still deserves keeping — wire the entries you are
+adopting, or delete the ones your change obsoletes and drain their
+baseline entries in the same commit.
+
 ## Stuff That Runs On A Timer
 
 | Workflow | Purpose | Cadence | Output / evidence |
@@ -210,11 +262,6 @@ This page is split into:
 | [`refresh-sca-data.yml`](../.github/workflows/refresh-sca-data.yml) | Refreshes bundled popular-package data used by typosquat detection | Weekly | Auto-PR against `packages/sca/data/popular/` |
 | [`typosquat-reaudit.yml`](../.github/workflows/typosquat-reaudit.yml) | Re-checks previously reviewed-legit typosquat names against current registry state | Monthly | Issue comment or new issue when a contradiction appears |
 | [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) | Verifies the documented Python 3.12 floor still holds: installs the lockfile on 3.12, import-smokes floor-sensitive runtime modules, and runs a small fast test subset. Also fires on PRs that touch dependency policy (`pyproject.toml`, `uv.lock`, `uv.toml`), its workflow, or its worker-count helper | Weekly (and on dependency/setup PRs) | Workflow logs |
-
-Baseline files (`.github/scripts/*_baseline.json`) are per-detector
-exception lists. Each entry requires a review note, and the target for
-all baselines is empty: fix the finding or document the variable, do
-not baseline.
 
 ## Workflow Hardening Bits
 
