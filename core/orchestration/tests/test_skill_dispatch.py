@@ -7,6 +7,10 @@ contract: gate order, StageError abort, output validation, truncation
 policy, and the settled-lifecycle pattern.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 import sys
 import unittest
@@ -141,7 +145,7 @@ def _run(tmp, run_dir, *, sandbox=None, probe_result="fake-model", **overrides):
         "claude_bin": "/fake/claude",
     }
     kwargs.update(overrides)
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=dispatcher), \
          patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                side_effect=sandbox or dispatcher), \
@@ -261,7 +265,7 @@ class DispatchFlowTests(unittest.TestCase):
             def _stage(d):
                 raise StageError("staging exploded")
 
-            with patch("core.orchestration.skill_dispatch.subprocess.run",
+            with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked", side_effect=dispatcher), \
@@ -452,7 +456,7 @@ class DispatchFlowTests(unittest.TestCase):
             def _sandbox(cmd, *args, **kwargs):
                 raise KeyboardInterrupt()
 
-            with patch("core.orchestration.skill_dispatch.subprocess.run",
+            with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked", side_effect=_sandbox), \
@@ -1675,7 +1679,7 @@ class StartLifecycleFailureDetailTests(unittest.TestCase):
 
     def _start(self, dispatcher):
         from core.orchestration.skill_dispatch import start_lifecycle
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    side_effect=dispatcher), \
              patch("core.run.pin._process_project", None), \
              patch("core.run.pin._process_project_set", False), \
@@ -1718,7 +1722,7 @@ class StartLifecycleFailureDetailTests(unittest.TestCase):
 
     def test_success_has_no_error(self) -> None:
         from core.orchestration.skill_dispatch import start_lifecycle
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    side_effect=lambda *a, **k: _ok(
                        stdout="OUTPUT_DIR=/nonexistent-run\n")), \
              patch("core.run.pin._process_project", None), \
@@ -1743,8 +1747,8 @@ class StartLifecycleFailureDetailTests(unittest.TestCase):
                 return _ok(returncode=1,
                            stderr="ERROR: target /t is outside "
                                   "project p (/pt)\n")
-            with patch(
-                    "core.orchestration.skill_dispatch.subprocess.run",
+            with mock_module_attribute(
+                    _mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                     side_effect=dispatcher), \
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked",

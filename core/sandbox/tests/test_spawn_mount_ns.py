@@ -13,6 +13,10 @@ developer manually flips the sysctl.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import sys as _sys
 import pytest as _pytest
 
@@ -607,7 +611,7 @@ class TestGidmapAllowProbe(unittest.TestCase):
             with (
                 patch("core.sandbox._spawn._find_sandbox_binary",
                       return_value="/usr/sbin/getcap"),
-                patch("core.sandbox._spawn.subprocess.run", mock_run),
+                mock_module_attribute(_mock_owner('core.sandbox._spawn'), 'subprocess', 'run', mock_run),
             ):
                 self.assertIsNone(_gidmap_allow_available())
 
@@ -625,7 +629,7 @@ class TestGidmapAllowProbe(unittest.TestCase):
             with (
                 patch("core.sandbox._spawn._find_sandbox_binary",
                       return_value="/usr/sbin/getcap"),
-                patch("core.sandbox._spawn.subprocess.run", mock_run),
+                mock_module_attribute(_mock_owner('core.sandbox._spawn'), 'subprocess', 'run', mock_run),
             ):
                 result = _gidmap_allow_available()
                 self.assertEqual(result, "/path/to/raptor-gidmap-allow")

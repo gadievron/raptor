@@ -2,6 +2,10 @@
 resolution, engine override, corpus convention, witness recording, and
 the verified-outcomes join."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import shutil
 import tempfile
@@ -68,7 +72,7 @@ def _plan(case: unittest.TestCase, target: Path, **kwargs):
     (no subprocess in unit tests)."""
     with patch("packages.fuzzing.orchestrator.probe_capabilities",
                return_value=_caps()), \
-         patch("packages.fuzzing.target_detector.shutil.which",
+         mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                side_effect=_which_with_jvm), \
          patch("packages.fuzzing.jazzer_runner.build_tool_executable",
                return_value="/usr/bin/mvn"):
@@ -154,7 +158,7 @@ class TestJazzerPlanning(unittest.TestCase):
         project = _java_project(tmp)
         with patch("packages.fuzzing.orchestrator.probe_capabilities",
                    return_value=_caps()), \
-             patch("packages.fuzzing.target_detector.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                    return_value=None):
             orch = FuzzingOrchestrator()
             plan = orch.plan(project)
@@ -173,7 +177,7 @@ class TestJazzerPlanning(unittest.TestCase):
         project = _java_project(tmp)
         with patch("packages.fuzzing.orchestrator.probe_capabilities",
                    return_value=_caps()), \
-             patch("packages.fuzzing.target_detector.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                    side_effect=_which_with_jvm), \
              patch("packages.fuzzing.jazzer_runner"
                    ".build_tool_executable", return_value=None):

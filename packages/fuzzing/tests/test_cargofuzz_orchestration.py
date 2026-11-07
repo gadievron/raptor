@@ -2,6 +2,10 @@
 resolution, engine override, corpus convention, witness recording, and
 the verified-outcomes join."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import shutil
 import tempfile
@@ -63,7 +67,7 @@ def _plan(case: unittest.TestCase, target: Path, **kwargs):
     and the nightly probe faked (no subprocess in unit tests)."""
     with patch("packages.fuzzing.orchestrator.probe_capabilities",
                return_value=_caps()), \
-         patch("packages.fuzzing.target_detector.shutil.which",
+         mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                side_effect=_which_with_rust), \
          patch("packages.fuzzing.cargofuzz_runner.nightly_toolchain_arg",
                return_value="+nightly"):
@@ -121,7 +125,7 @@ class TestCargoFuzzPlanning(unittest.TestCase):
         crate = _rust_crate(tmp)
         with patch("packages.fuzzing.orchestrator.probe_capabilities",
                    return_value=_caps()), \
-             patch("packages.fuzzing.target_detector.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                    return_value=None):
             orch = FuzzingOrchestrator()
             plan = orch.plan(crate)
@@ -136,7 +140,7 @@ class TestCargoFuzzPlanning(unittest.TestCase):
         crate = _rust_crate(tmp)
         with patch("packages.fuzzing.orchestrator.probe_capabilities",
                    return_value=_caps()), \
-             patch("packages.fuzzing.target_detector.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                    side_effect=_which_with_rust), \
              patch("packages.fuzzing.cargofuzz_runner.nightly_toolchain_arg",
                    return_value=None):

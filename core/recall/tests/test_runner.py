@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -23,22 +26,8 @@ from core.recall.runner import (
     verify_pinned_clone,
 )
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_run_patches(monkeypatch):
-    """Keep subprocess run mocks on consumer-owned module bindings."""
-    import core.recall.runner as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
-    import core.recall.pinned_clone as consumer_1
-
-    patch_module_attribute(
-        monkeypatch, consumer_1, "subprocess", "run", consumer_1.subprocess.run,
-    )
 
 
 _PROV = Provenance(kind="benchmark", suite="s", case="c")
@@ -180,7 +169,7 @@ class TestRunPipeline:
         out = tmp_path / "run_out"
         out.mkdir()
         log = tmp_path / "pipeline.log"
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"noise\nOUTPUT_DIR={out}\n")):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == out
@@ -196,14 +185,14 @@ class TestRunPipeline:
         final.mkdir()
         log = tmp_path / "pipeline.log"
         stdout = f"OUTPUT_DIR={early}\nprogress\nOUTPUT_DIR={final}\n"
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(stdout)):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == final
 
     def test_missing_sentinel_errors(self, tmp_path):
         log = tmp_path / "pipeline.log"
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc("no sentinel here", rc=3)), \
              pytest.raises(RunnerError, match="OUTPUT_DIR"):
             run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
@@ -220,7 +209,7 @@ class TestRunPipeline:
                                                encoding="utf-8")
         elsewhere = tmp_path / "project_dir"
         elsewhere.mkdir()
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"OUTPUT_DIR={elsewhere}\n")):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == pinned
@@ -229,7 +218,7 @@ class TestRunPipeline:
     def test_nonzero_exit_with_dir_still_scores(self, tmp_path, caplog):
         out = tmp_path / "run_out"
         out.mkdir()
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"OUTPUT_DIR={out}\n", rc=1)):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path,
                                tmp_path / "l.log")
@@ -238,7 +227,7 @@ class TestRunPipeline:
     def test_llm_profile_warns(self, tmp_path, caplog):
         out = tmp_path / "run_out"
         out.mkdir()
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"OUTPUT_DIR={out}\n")), \
              caplog.at_level("WARNING"):
             run_pipeline(_manifest("agentic"), tmp_path / "t", tmp_path,
@@ -255,7 +244,7 @@ class TestVerifyPinnedClone:
     def test_wrong_sha_refused(self, tmp_path):
         clone = tmp_path / "out" / "f"
         clone.mkdir(parents=True)
-        with patch("core.recall.pinned_clone.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run',
                    return_value=SimpleNamespace(
                        stdout="0000000000000000000000000000000000000000\n",
                        stderr="", returncode=0)), \
@@ -265,7 +254,7 @@ class TestVerifyPinnedClone:
     def test_pinned_sha_accepted(self, tmp_path):
         clone = tmp_path / "out" / "f"
         clone.mkdir(parents=True)
-        with patch("core.recall.pinned_clone.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run',
                    return_value=SimpleNamespace(
                        stdout="b06d6efaebd577a327514364951916e7df3290b4\n",
                        stderr="", returncode=0)):
@@ -278,7 +267,7 @@ class TestVerifyPinnedClone:
         clone.mkdir(parents=True)
         m = _manifest()
         m.pinned_sha = "b06d6efaebd5"
-        with patch("core.recall.pinned_clone.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run',
                    return_value=SimpleNamespace(
                        stdout="b06d6efaebd577a327514364951916e7df3290b4\n",
                        stderr="", returncode=0)):
@@ -329,7 +318,7 @@ class TestStreamedPipelineOutput:
             kw["stderr"].write(b"warn: something\n")
             return SimpleNamespace(returncode=0)
 
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=_run):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path,
                                log)
@@ -367,7 +356,7 @@ class TestStreamedPipelineOutput:
             stderr_tmp.symlink_to(victim)
             return SimpleNamespace(returncode=0)
 
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=_run), \
                 pytest.raises(RunnerError, match="hardened reopen"):
             run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
@@ -397,7 +386,7 @@ class TestStreamedPipelineOutput:
         # fail-closed verdict and must ride the runner's clean error
         # channel (the CLI prints ``error:`` for RunnerError; a bare
         # OSError surfaces as a traceback).
-        with patch("core.recall.runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=_run), \
                 pytest.raises(RunnerError, match="hardened reopen"):
             run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)

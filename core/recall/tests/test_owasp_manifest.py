@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -17,17 +20,8 @@ from core.recall.owasp_manifest import (
     main as om_main,
 )
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_run_patches(monkeypatch):
-    """Keep subprocess run mocks on consumer-owned module bindings."""
-    import core.recall.pinned_clone as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
 
 
 _CSV = """\
@@ -54,7 +48,7 @@ def _pinned(*_a, **_k):
 
 class TestGenerateManifest:
     def test_tp_expected_fp_clean(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone)
         assert {e["id"] for e in m["expected"]} == {
             "BenchmarkTest00001", "BenchmarkTest00003",
@@ -68,19 +62,19 @@ class TestGenerateManifest:
         assert e["provenance"]["kind"] == "benchmark"
 
     def test_output_passes_manifest_validation(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone)
         parsed = parse_manifest(m)
         assert parsed.language == "java"
         assert parsed.profile == "scan-codeql"
 
     def test_cwe_filter(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, cwes=[89])
         assert [e["id"] for e in m["expected"]] == ["BenchmarkTest00003"]
 
     def test_limit_deterministic(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             a = generate_manifest(clone, limit=1)
             b = generate_manifest(clone, limit=1)
         assert a["expected"] == b["expected"]
@@ -92,7 +86,7 @@ class TestGenerateManifest:
     def test_wrong_sha_refused(self, clone):
         wrong = SimpleNamespace(stdout="0" * 40 + "\n", stderr="",
                                 returncode=0)
-        with patch("core.recall.pinned_clone.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run',
                    return_value=wrong), \
              pytest.raises(OwaspManifestError, match="pinned"):
             generate_manifest(clone)
@@ -109,7 +103,7 @@ _CSV_FP_ONLY_CWE = _CSV + "BenchmarkTest00005,ldapi,false,90\n"
 
 class TestPerCwe:
     def test_split_partitions_by_cwe(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             per = generate_per_cwe_manifests(clone)
         assert sorted(per) == [78, 79, 89]
         m78 = per[78]
@@ -120,7 +114,7 @@ class TestPerCwe:
         assert per[89]["clean_regions"] == []
 
     def test_each_manifest_validates(self, clone):
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             per = generate_per_cwe_manifests(clone)
         for m in per.values():
             parsed = parse_manifest(m)
@@ -129,7 +123,7 @@ class TestPerCwe:
     def test_entries_carried_verbatim(self, clone):
         """Split entries are the combined manifest's dicts, never
         rebuilt — keys a future label shape adds must pass through."""
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             combined = generate_manifest(clone)
             per = generate_per_cwe_manifests(clone)
         split = [e for m in per.values() for e in m["expected"]]
@@ -142,7 +136,7 @@ class TestPerCwe:
         d.mkdir()
         (d / "expectedresults-1.2.csv").write_text(
             _CSV_FP_ONLY_CWE, encoding="utf-8")
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             per = generate_per_cwe_manifests(d)
         m90 = per[90]
         assert m90["corpus_kind"] == "fp-only"
@@ -154,7 +148,7 @@ class TestPerCwe:
     def test_cli_per_cwe_writes_one_file_per_class(self, clone,
                                                    tmp_path, capsys):
         out_dir = tmp_path / "per-cwe"
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             rc = om_main(["--clone-dir", str(clone), "--per-cwe",
                           "--out-dir", str(out_dir)])
         assert rc == 0

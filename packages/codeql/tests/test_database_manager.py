@@ -1,5 +1,9 @@
 """Tests for CodeQL database manager build command handling."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import logging
 import os
@@ -1119,7 +1123,7 @@ class TestDetectCodeqlCli:
             monkeypatch.delenv("CODEQL_CLI", raising=False)
         else:
             monkeypatch.setenv("CODEQL_CLI", env_value)
-        with patch("packages.codeql.database_manager.shutil.which",
+        with mock_module_attribute(_mock_owner('packages.codeql.database_manager'), 'shutil', 'which',
                    return_value=which):
             return db_manager._detect_codeql_cli()
 
@@ -1558,7 +1562,7 @@ class TestForceEvictionFailure:
                           return_value='abc'), \
              patch.object(db_manager, 'get_database_dir',
                           return_value=canonical), \
-             patch('packages.codeql.database_manager.os.rename',
+             mock_module_attribute(_mock_owner('packages.codeql.database_manager'), 'os', 'rename',
                    side_effect=flaky_rename):
             result = db_manager.create_database(
                 tmp_path, "python", None, force=True,

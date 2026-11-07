@@ -6,6 +6,10 @@ is a thin wrapper over packages/codeql/smt_path_validator and exercising
 the real path catches integration issues mocks would mask.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import logging
 import sys
@@ -61,31 +65,31 @@ class TestCodeQLAdapterBasics:
         assert "dataflow" in text.lower() or "data flow" in text.lower()
 
     def test_unavailable_when_no_database(self):
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value="/usr/bin/codeql"):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value="/usr/bin/codeql"):
             a = CodeQLAdapter()
             assert not a.is_available()
 
     def test_unavailable_when_no_binary(self, tmp_path):
         db = tmp_path / "db"
         db.mkdir()
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value=None):
             a = CodeQLAdapter(database_path=db)
             assert not a.is_available()
 
     def test_unavailable_when_database_missing(self, tmp_path):
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value="/usr/bin/codeql"):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value="/usr/bin/codeql"):
             a = CodeQLAdapter(database_path=tmp_path / "nonexistent")
             assert not a.is_available()
 
     def test_available_when_db_and_binary_present(self, tmp_path):
         db = tmp_path / "db"
         db.mkdir()
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value="/usr/bin/codeql"):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value="/usr/bin/codeql"):
             a = CodeQLAdapter(database_path=db)
             assert a.is_available()
 
     def test_set_database_updates_availability(self, tmp_path):
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value="/usr/bin/codeql"):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value="/usr/bin/codeql"):
             a = CodeQLAdapter()
             assert not a.is_available()
             db = tmp_path / "db"
@@ -107,7 +111,7 @@ class TestCodeQLAdapterRun:
     def test_run_no_binary(self, tmp_path):
         db = tmp_path / "db"
         db.mkdir()
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value=None):
             a = CodeQLAdapter(database_path=db, sandbox=False)
         ev = a.run("import cpp\nselect 1\n", tmp_path)
         assert not ev.success
@@ -159,7 +163,7 @@ class TestCodeQLAdapterRun:
                     Path(arg.split("=", 1)[1]).write_text(sarif)
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=fake_run):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', side_effect=fake_run):
             ev = a.run("import cpp\nselect 1\n", tmp_path)
         assert ev.success
         assert len(ev.matches) == 1
@@ -178,7 +182,7 @@ class TestCodeQLAdapterRun:
                     Path(arg.split("=", 1)[1]).write_text("{corrupt")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=fake_run):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', side_effect=fake_run):
             ev = a.run("import cpp\nselect 1\n", tmp_path)
         assert not ev.success
         assert "unreadable" in ev.error
@@ -195,7 +199,7 @@ class TestCodeQLAdapterRun:
                     )
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=fake_run):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', side_effect=fake_run):
             ev = a.run("import cpp\nselect 1\n", tmp_path)
         assert ev.success
         assert ev.matches == []
@@ -203,7 +207,7 @@ class TestCodeQLAdapterRun:
 
     def test_run_subprocess_error(self, tmp_path):
         a, db = self._adapter(tmp_path)
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', return_value=MagicMock(
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', return_value=MagicMock(
             returncode=1, stdout="", stderr="syntax error in query",
         )):
             ev = a.run("not valid ql", tmp_path)
@@ -212,7 +216,7 @@ class TestCodeQLAdapterRun:
 
     def test_run_subprocess_timeout(self, tmp_path):
         a, db = self._adapter(tmp_path)
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=__import__("subprocess").TimeoutExpired("codeql", 60)):
             ev = a.run("import cpp\nselect 1\n", tmp_path, timeout=60)
         assert not ev.success
@@ -220,7 +224,7 @@ class TestCodeQLAdapterRun:
 
     def test_run_subprocess_oserror(self, tmp_path):
         a, db = self._adapter(tmp_path)
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', side_effect=OSError("boom")):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', side_effect=OSError("boom")):
             ev = a.run("import cpp\nselect 1\n", tmp_path)
         assert not ev.success
         assert "boom" in ev.error
@@ -228,7 +232,7 @@ class TestCodeQLAdapterRun:
     def test_run_no_sarif_produced(self, tmp_path):
         a, db = self._adapter(tmp_path)
         # subprocess returns 0 but no SARIF written
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run', return_value=MagicMock(
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run', return_value=MagicMock(
             returncode=0, stdout="", stderr="",
         )):
             ev = a.run("import cpp\nselect 1\n", tmp_path)
@@ -243,7 +247,7 @@ class TestCodeQLBatchPreconditionMessages:
     def test_no_cli_message_matches_siblings(self, tmp_path):
         db = tmp_path / "db"
         db.mkdir()
-        with patch('packages.hypothesis_validation.adapters.codeql.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'shutil', 'which', return_value=None):
             a = CodeQLAdapter(database_path=db)
         results = a.run_prebuilt_queries_batch([Path("/pack/q.ql")])
         assert set(results) == {"/pack/q.ql"}
@@ -568,7 +572,7 @@ class TestPrebuiltSarifParseFailure:
     def test_prebuilt_corrupt_sarif_is_tool_failure(self, tmp_path):
         a, db = self._adapter(tmp_path)
         q = self._query(tmp_path)
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing("{corrupt")):
             ev = a.run_prebuilt_query(q, tmp_path)
         assert not ev.success
@@ -579,7 +583,7 @@ class TestPrebuiltSarifParseFailure:
         a, db = self._adapter(tmp_path)
         q = self._query(tmp_path)
         sarif = json.dumps({"runs": [{"results": []}]})
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing(sarif)):
             ev = a.run_prebuilt_query(q, tmp_path)
         assert ev.success
@@ -589,7 +593,7 @@ class TestPrebuiltSarifParseFailure:
         a, db = self._adapter(tmp_path)
         q1 = self._query(tmp_path, "a/q1.ql")
         q2 = self._query(tmp_path, "b/q2.ql")
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing("{corrupt")):
             results = a.run_prebuilt_queries_batch([q1, q2])
         assert set(results) == {str(q1), str(q2)}
@@ -653,7 +657,7 @@ class TestBatchAttribution:
         q1 = self._query(tmp_path, "a/first.ql", qid="raptor/first")
         q2 = self._query(tmp_path, "b/second.ql", qid="raptor/second")
         sarif = self._sarif_with(["raptor/first", "vendor/unknown-rule"])
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing(sarif)):
             results = a.run_prebuilt_queries_batch([q1, q2])
         # The attributable match reaches its query.
@@ -671,7 +675,7 @@ class TestBatchAttribution:
         q1 = self._query(tmp_path, "a/first.ql", qid="raptor/first")
         q2 = self._query(tmp_path, "b/second.ql", qid="raptor/second")
         sarif = self._sarif_with(["raptor/first"])
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing(sarif)):
             results = a.run_prebuilt_queries_batch([q1, q2])
         assert results[str(q1)].success
@@ -689,7 +693,7 @@ class TestBatchAttribution:
         q1 = self._query(tmp_path, "a/q.ql")
         q2 = self._query(tmp_path, "b/q.ql")
         sarif = self._sarif_with(["q"])
-        with patch('packages.hypothesis_validation.adapters.codeql.subprocess.run',
+        with mock_module_attribute(_mock_owner('packages.hypothesis_validation.adapters.codeql'), 'subprocess', 'run',
                    side_effect=self._fake_run_writing(sarif)):
             results = a.run_prebuilt_queries_batch([q1, q2])
         assert results[str(q1)].matches == []

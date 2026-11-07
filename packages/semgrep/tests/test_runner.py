@@ -1,5 +1,9 @@
 """Tests for the Semgrep runner."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import shutil
 import sys
@@ -140,16 +144,16 @@ def _make_json_output(scanned=None, errors=None, version="1.79.0",
 
 class TestAvailability:
     def test_is_available_found(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value="/usr/bin/semgrep"):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/usr/bin/semgrep"):
             assert is_available()
 
     def test_is_available_missing(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value=None):
             assert not is_available()
 
     def test_version_returns_string(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value="/usr/bin/semgrep"), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/usr/bin/semgrep"), \
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.79.0\n",
                 stderr="",
@@ -158,35 +162,35 @@ class TestAvailability:
             assert version() == "1.79.0"
 
     def test_version_unavailable(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value=None):
             assert version() is None
 
     def test_version_handles_timeout(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value="/usr/bin/semgrep"), \
-             patch('packages.semgrep.runner.subprocess.run', side_effect=__import__("subprocess").TimeoutExpired("semgrep", 10)):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/usr/bin/semgrep"), \
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run', side_effect=__import__("subprocess").TimeoutExpired("semgrep", 10)):
             assert version() is None
 
 
 class TestScopeIsolationAvailable:
     def test_true_at_floor(self):
         ver = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
-        with patch('packages.semgrep.runner.shutil.which', return_value="/usr/bin/semgrep"), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/usr/bin/semgrep"), \
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout=f"{ver}\n", stderr="", returncode=0,
             )
             assert scope_isolation_available()
 
     def test_false_below_floor(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value="/usr/bin/semgrep"), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/usr/bin/semgrep"), \
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.79.0\n", stderr="", returncode=0,
             )
             assert not scope_isolation_available()
 
     def test_false_when_missing(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value=None):
             assert not scope_isolation_available()
 
 
@@ -330,7 +334,7 @@ class TestBuildCmd:
         assert cmd[-1] == "/src/foo"
 
     def test_uses_path_lookup_when_bin_not_specified(self):
-        with patch('packages.semgrep.runner.shutil.which', return_value="/opt/bin/semgrep"):
+        with mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'shutil', 'which', return_value="/opt/bin/semgrep"):
             cmd = build_cmd(Path("/src"), "p/x")
             assert cmd[0] == "/opt/bin/semgrep"
 
@@ -364,7 +368,7 @@ class TestRunRuleMocked:
              patch.object(semgrep_runner, "scope_isolation_available", return_value=False), \
              patch.object(semgrep_runner, "version", return_value="1.79.0"), \
              patch.object(semgrep_runner, "logger", capture_logger), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 assert "--x-ignore-semgrepignore-files" not in cmd
                 if "--json-output" in cmd:
@@ -400,7 +404,7 @@ class TestRunRuleMocked:
         # the json content into whatever path subprocess "received". Easier to just
         # let it use a tempfile we pre-write.
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 # Find --json-output path argument and write content there
                 if "--json-output" in cmd:
@@ -435,7 +439,7 @@ class TestRunRuleMocked:
             ],
         )
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 idx = cmd.index("--json-output")
                 Path(cmd[idx + 1]).write_text(json_output)
@@ -468,7 +472,7 @@ class TestRunRuleMocked:
                      "message": "unrecognised annotation"}],
         )
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 Path(cmd[cmd.index("--json-output") + 1]).write_text(payload)
                 return MagicMock(stdout=_make_sarif(file=source), stderr="", returncode=0)
@@ -492,7 +496,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 idx = cmd.index("--json-output")
                 Path(cmd[idx + 1]).write_text(_make_json_output(scanned=["a.py"]))
@@ -508,7 +512,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run', side_effect=__import__("subprocess").TimeoutExpired("semgrep", 5)):
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run', side_effect=__import__("subprocess").TimeoutExpired("semgrep", 5)):
             result = run_rule(target, "p/x", timeout=5, unsandboxed=True)
         assert result.returncode == -1
         assert any("Timeout" in e for e in result.errors)
@@ -517,7 +521,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run', side_effect=OSError("permission denied")):
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run', side_effect=OSError("permission denied")):
             result = run_rule(target, "p/x", unsandboxed=True)
         assert result.returncode == -1
         assert "permission denied" in result.errors[0]
@@ -530,7 +534,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="", stderr="fatal: invalid rule schema", returncode=2,
             )
@@ -545,7 +549,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="", stderr="", returncode=-11,
             )
@@ -557,7 +561,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             result = run_rule(target, "p/x", unsandboxed=True)
         assert result.findings == []
@@ -570,7 +574,7 @@ class TestRunRuleMocked:
         target.mkdir()
         json_path = tmp_path / "out.json"
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 idx = cmd.index("--json-output")
                 Path(cmd[idx + 1]).write_text(_make_json_output(scanned=["a.py"]))
@@ -587,7 +591,7 @@ class TestRunRuleMocked:
         target.mkdir()
         custom_env = {"PATH": "/safe/path", "MY_VAR": "set"}
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             run_rule(target, "p/x", env=custom_env, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
@@ -597,7 +601,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             run_rule(target, "p/x", timeout=42, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
@@ -607,7 +611,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             result = run_rule(target, "p/security-audit", unsandboxed=True)
         assert result.name == "p/security-audit"
@@ -616,7 +620,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             result = run_rule(target, "/abs/path/to/crypto", unsandboxed=True)
         assert result.name == "crypto"
@@ -625,7 +629,7 @@ class TestRunRuleMocked:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             result = run_rule(target, "/abs/path", name="my_run", unsandboxed=True)
         assert result.name == "my_run"
@@ -648,7 +652,7 @@ class TestSandboxDefaultPolicy:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("packages.semgrep.runner._default_sandbox_runner",
                    return_value=fake_sandbox_runner) as mk, \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             result = run_rule(target, "p/x")
         mk.assert_called_once()
         assert "cmd" in calls, "default sandbox runner was not used"
@@ -661,7 +665,7 @@ class TestSandboxDefaultPolicy:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("packages.semgrep.runner._default_sandbox_runner",
                    return_value=None), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             result = run_rule(target, "p/x")
         mock_run.assert_not_called()
         assert result.returncode == -1
@@ -671,7 +675,7 @@ class TestSandboxDefaultPolicy:
         target = tmp_path / "src"
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="", stderr="", returncode=0)
             run_rule(target, "p/x", unsandboxed=True)
@@ -733,7 +737,7 @@ class TestRunRules:
         target.mkdir()
         configs = [("a", "p/aaa"), ("b", "p/bbb"), ("c", "p/ccc")]
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             results = run_rules(target, configs, unsandboxed=True)
         assert len(results) == 3
@@ -1036,7 +1040,7 @@ class TestOutputBudget:
             runner_mod, "_MAX_TOOL_OUTPUT_BYTES", len(payload) - 1,
         )
         with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             def side_effect(cmd, **kwargs):
                 idx = cmd.index("--json-output")
                 Path(cmd[idx + 1]).write_text(payload)
@@ -1065,7 +1069,7 @@ class TestOutputBudget:
         def _run(sarif_text: str) -> SemgrepResult:
             with patch("packages.semgrep.runner.is_available",
                        return_value=True), \
-                 patch('packages.semgrep.runner.subprocess.run') as mock_run:
+                 mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
                 def execute(command, **kwargs):
                     sidecar = Path(command[command.index("--json-output") + 1])
                     sidecar.write_text("{}")
@@ -1110,7 +1114,7 @@ class TestBudgetMeasuresBytes:
         monkeypatch.setattr(runner_mod, "_MAX_TOOL_OUTPUT_BYTES", 150)
         with patch("packages.semgrep.runner.is_available",
                    return_value=True), \
-             patch('packages.semgrep.runner.subprocess.run') as mock_run:
+             mock_module_attribute(_mock_owner('packages.semgrep.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout=payload, stderr="", returncode=0,
             )

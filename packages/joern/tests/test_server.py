@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import base64
 import gc
 import subprocess
@@ -489,7 +493,7 @@ class TestJoernServerZGCFlags:
         # The mocked Popen carries a fake pid — stop() must never reach the
         # real os.killpg, or it signals whatever live process group owns
         # that pgid (this killed operator screen sessions).
-        with patch("packages.joern.server.os.killpg",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                    side_effect=ProcessLookupError):
             srv.stop()
 
@@ -517,9 +521,9 @@ class TestJoernServerZGCFlags:
             # under a mocked subprocess).
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.os.killpg",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                   side_effect=ProcessLookupError),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready", return_value=True),
             patch.object(srv, "_warmup_imports"),
@@ -566,9 +570,9 @@ class TestJoernServerZGCFlags:
                   return_value=True),
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.os.killpg",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                   side_effect=ProcessLookupError),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready", return_value=True),
             patch.object(srv, "_warmup_imports"),
@@ -621,9 +625,9 @@ class TestJoernServerZGCFlags:
             # under a mocked subprocess).
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.os.killpg",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                   side_effect=ProcessLookupError),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready",
                          side_effect=lambda: next(ready_results)),
@@ -924,7 +928,7 @@ class TestJoernServerIsolatedWorkspace:
             # under a mocked subprocess).
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready", return_value=True),
             patch.object(srv, "_warmup_imports"),
@@ -937,7 +941,7 @@ class TestJoernServerIsolatedWorkspace:
         assert _os.path.isdir(workdir)
         assert _os.path.basename(workdir).startswith("raptor-joern-ws-")
 
-        with patch("packages.joern.server.os.killpg",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                    side_effect=ProcessLookupError):
             srv.stop()
         assert not _os.path.isdir(workdir), "stop() must clean the workdir"
@@ -956,7 +960,7 @@ class TestServerAuthSupportProbe:
             {"side_effect": error} if error else {"return_value": proc}
         )
         try:
-            with patch("packages.joern.server.subprocess.run", **kwargs):
+            with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run', **kwargs):
                 return _server_auth_supported(binary)
         finally:
             server_mod._AUTH_SUPPORT_CACHE.pop(binary, None)
@@ -1020,7 +1024,7 @@ class TestJoernServerAuth:
             # under a mocked subprocess).
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready", return_value=True),
             patch.object(srv, "_warmup_imports"),
@@ -1030,7 +1034,7 @@ class TestJoernServerAuth:
 
     @staticmethod
     def _safe_stop(srv):
-        with patch("packages.joern.server.os.killpg",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                    side_effect=ProcessLookupError):
             srv.stop()
 
@@ -1073,7 +1077,7 @@ class TestJoernServerAuth:
         with (
             patch("packages.joern.server._server_auth_supported",
                   return_value=False),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=AssertionError("must not spawn a server")),
             pytest.raises(RuntimeError, match="server-auth"),
         ):

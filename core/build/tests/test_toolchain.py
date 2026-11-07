@@ -8,6 +8,10 @@ installed.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -44,13 +48,13 @@ class TestResolveFromWhich(unittest.TestCase):
     """`_resolve_from_which` locates binary, resolves symlink, strips suffix."""
 
     def test_returns_none_when_not_on_path(self):
-        with patch('core.build.toolchain.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None):
             self.assertIsNone(toolchain._resolve_from_which("java", "bin/java"))
 
     def test_strips_suffix_when_real_path_matches(self):
         # `which java` -> /usr/bin/java, realpath -> /opt/jdk-17/bin/java.
         # Suffix "bin/java" strips to "/opt/jdk-17".
-        with patch('core.build.toolchain.shutil.which', return_value="/usr/bin/java"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
              patch('core.build.toolchain.os.path.realpath', return_value="/opt/jdk-17/bin/java"):
             self.assertEqual(
                 toolchain._resolve_from_which("java", "bin/java"),
@@ -61,14 +65,14 @@ class TestResolveFromWhich(unittest.TestCase):
         # A wrapper script at `/usr/local/bin/java` that isn't actually
         # under a JDK layout — real path `/opt/wrapper-script.sh`.
         # We refuse to synthesise a bogus home.
-        with patch('core.build.toolchain.shutil.which', return_value="/usr/local/bin/java"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/bin/java"), \
              patch('core.build.toolchain.os.path.realpath', return_value="/opt/wrapper-script.sh"):
             self.assertIsNone(
                 toolchain._resolve_from_which("java", "bin/java"),
             )
 
     def test_os_error_returns_none(self):
-        with patch('core.build.toolchain.shutil.which', return_value="/usr/bin/java"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
              patch('core.build.toolchain.os.path.realpath', side_effect=OSError("stat failed")):
             self.assertIsNone(
                 toolchain._resolve_from_which("java", "bin/java"),
@@ -88,7 +92,7 @@ class TestDetectJavaHome(unittest.TestCase):
     def test_fallback_to_which_java(self):
         # default-java doesn't exist; fall back to readlink of `which java`.
         with patch('core.build.toolchain.os.path.isdir', lambda p: p.startswith("/opt/jdk-17")), \
-             patch('core.build.toolchain.shutil.which', return_value="/usr/bin/java"), \
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
              patch('core.build.toolchain.os.path.realpath', return_value="/opt/jdk-17/bin/java"):
             self.assertEqual(
                 toolchain.detect_JAVA_HOME(),
@@ -97,7 +101,7 @@ class TestDetectJavaHome(unittest.TestCase):
 
     def test_returns_none_when_nothing_found(self):
         with patch('core.build.toolchain.os.path.isdir', return_value=False), \
-             patch('core.build.toolchain.shutil.which', return_value=None), \
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
              patch('core.build.toolchain.os.path.isfile', return_value=False):
             self.assertIsNone(toolchain.detect_JAVA_HOME())
 
@@ -105,18 +109,18 @@ class TestDetectJavaHome(unittest.TestCase):
 class TestDetectGoroot(unittest.TestCase):
     def test_from_which_go(self):
         with patch('core.build.toolchain.os.path.isdir', lambda p: p == "/usr/local/go"), \
-             patch('core.build.toolchain.shutil.which', return_value="/usr/local/go/bin/go"), \
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/go/bin/go"), \
              patch('core.build.toolchain.os.path.realpath', return_value="/usr/local/go/bin/go"):
             self.assertEqual(toolchain.detect_GOROOT(), "/usr/local/go")
 
     def test_returns_none_when_go_not_on_path(self):
-        with patch('core.build.toolchain.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None):
             self.assertIsNone(toolchain.detect_GOROOT())
 
 
 class TestDetectDotnetRoot(unittest.TestCase):
     def test_dirname_of_dotnet_binary(self):
-        with patch('core.build.toolchain.shutil.which', return_value="/usr/share/dotnet/dotnet"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/share/dotnet/dotnet"), \
              patch('core.build.toolchain.os.path.realpath', return_value="/usr/share/dotnet/dotnet"), \
              patch('core.build.toolchain.os.path.isdir', lambda p: p == "/usr/share/dotnet"):
             self.assertEqual(
@@ -125,7 +129,7 @@ class TestDetectDotnetRoot(unittest.TestCase):
             )
 
     def test_returns_none_when_not_on_path(self):
-        with patch('core.build.toolchain.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None):
             self.assertIsNone(toolchain.detect_DOTNET_ROOT())
 
 
@@ -137,7 +141,7 @@ class TestDetectRustupHome(unittest.TestCase):
             stdout="/home/user/.rustup\n",
             stderr="",
         )
-        with patch('core.build.toolchain.shutil.which', return_value="/usr/local/bin/rustup"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/bin/rustup"), \
              patch("core.sandbox.run_trusted", return_value=stub), \
              patch('core.build.toolchain.os.path.isdir', lambda p: p == "/home/user/.rustup"):
             self.assertEqual(
@@ -152,7 +156,7 @@ class TestDetectRustupHome(unittest.TestCase):
         # Env-var fallback only fires when pwd lookup fails.
         from collections import namedtuple
         FakePw = namedtuple("FakePw", ["pw_dir"])
-        with patch('core.build.toolchain.shutil.which', return_value=None), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
              patch("pwd.getpwuid", return_value=FakePw(pw_dir="/home/alice")), \
              patch('core.build.toolchain.os.path.isdir', lambda p: p == "/home/alice/.rustup"):
             self.assertEqual(
@@ -161,7 +165,7 @@ class TestDetectRustupHome(unittest.TestCase):
             )
 
     def test_returns_none_when_no_rustup_and_no_home_dir(self):
-        with patch('core.build.toolchain.shutil.which', return_value=None), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
              patch('core.build.toolchain.os.path.isdir', return_value=False):
             # Even with HOME set, if ~/.rustup isn't a real dir, None.
             self.assertIsNone(toolchain.detect_RUSTUP_HOME())
@@ -180,7 +184,7 @@ class TestDetectorsRegistry(unittest.TestCase):
         # Each registered detector must be a zero-arg callable
         # returning Optional[str]. Exercise with everything mocked to
         # None — verifies the function signatures at minimum.
-        with patch('core.build.toolchain.shutil.which', return_value=None), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
              patch('core.build.toolchain.os.path.isdir', return_value=False), \
              patch('core.build.toolchain.os.path.isfile', return_value=False):
             for name, fn in toolchain.DETECTORS.items():

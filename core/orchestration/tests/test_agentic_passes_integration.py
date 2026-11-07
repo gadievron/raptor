@@ -7,6 +7,10 @@ satisfy the bridge's tier-2 sibling discovery — the actual claim the
 lifecycle-proper rewrite makes.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import os
 import unittest
@@ -162,7 +166,7 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.skill_dispatch.subprocess.run",
+                 mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp), \
@@ -235,7 +239,7 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.skill_dispatch.subprocess.run",
+                 mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp), \
@@ -301,7 +305,7 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.skill_dispatch.subprocess.run",
+                 mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp), \
@@ -361,7 +365,7 @@ class PostpassIntegrationTests(unittest.TestCase):
                 claude_writes={"context-map.json": ctx_map_payload},
             )
             with env_patch, \
-                 patch("core.orchestration.skill_dispatch.subprocess.run",
+                 mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=sub_disp1), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp1), \
@@ -383,7 +387,7 @@ class PostpassIntegrationTests(unittest.TestCase):
                 claude_writes={"validation-report.md": "# Validation\n"},
             )
             with env_patch, \
-                 patch("core.orchestration.skill_dispatch.subprocess.run",
+                 mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=sub_disp2), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp2), \

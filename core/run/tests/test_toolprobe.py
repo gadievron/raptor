@@ -8,6 +8,10 @@ and run under the sanitised env from ``RaptorConfig.get_safe_env()``
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -48,7 +52,7 @@ def _clean_cache():
 
 class TestProbe:
     def test_missing_tool_returns_none(self):
-        with patch('core.run.toolprobe.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value=None):
             assert probe("no-such-tool-xyz") is None
 
     @pytest.mark.parametrize('failure', [subprocess.TimeoutExpired('fixture', 10), OSError('fixture')])
@@ -61,7 +65,7 @@ class TestProbe:
             captured.append(Path(kwargs['env']['HOME']))
             assert captured[-1].is_dir()
             raise failure
-        with patch('core.run.toolprobe.shutil.which', return_value='/fixture/tool'), patch('core.run.toolprobe.subprocess.run', side_effect=fail):
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value='/fixture/tool'), mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run', side_effect=fail):
             info = probe('fixture', isolated_home=True)
         assert info.returncode is None
         assert len(captured) == 1 and captured[0] != home
@@ -69,7 +73,7 @@ class TestProbe:
         assert list(home.iterdir()) == []
 
     def test_cache_separates_isolated_and_operator_home(self):
-        with patch('core.run.toolprobe.shutil.which', return_value='/fixture/tool'), patch('core.run.toolprobe.subprocess.run') as run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value='/fixture/tool'), mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as run:
             run.return_value = MagicMock(stdout='1.2.3\n', stderr='', returncode=0)
             regular = probe('fixture', use_cache=True)
             isolated = probe('fixture', use_cache=True, isolated_home=True)
@@ -81,8 +85,8 @@ class TestProbe:
         # Drift fix pin: the semgrep copy which()-checked then exec'd
         # the BARE name, re-resolving PATH at exec time (TOCTOU). The
         # shared probe must exec the resolved absolute path.
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.2.3\n", stderr="", returncode=0)
             info = probe("sometool")
@@ -95,8 +99,8 @@ class TestProbe:
         # Drift fix pin: hand-rolled probes inherited the full caller
         # env; the shared probe passes RaptorConfig.get_safe_env().
         from core.config import RaptorConfig
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run, \
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run, \
                 patch.object(
                     RaptorConfig, "get_safe_env",
                     return_value={"PATH": "/sanitised"},
@@ -116,8 +120,8 @@ class TestProbe:
         import sys as _sys
         monkeypatch.setenv("SUPER_SECRET_API_KEY", "hunter2")
         monkeypatch.setitem(_sys.modules, "core.config", None)
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="", stderr="", returncode=0)
             probe("sometool")
@@ -127,9 +131,9 @@ class TestProbe:
             assert "PATH" in env
 
     def test_probe_failure_yields_toolinfo_not_raise(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch(
-                    'core.run.toolprobe.subprocess.run',
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(
+                    _mock_owner('core.run.toolprobe'), 'subprocess', 'run',
                     side_effect=subprocess.TimeoutExpired("sometool", 10),
                 ):
             info = probe("sometool")
@@ -139,8 +143,8 @@ class TestProbe:
         assert "TimeoutExpired" in info.error
 
     def test_custom_args_and_timeout(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/java"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/java"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="", stderr='openjdk version "21.0.1"\n',
                 returncode=0)
@@ -177,21 +181,21 @@ class TestToolInfoParsing:
 
 class TestCache:
     def test_cache_memoises_positive_and_negative(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.0\n", stderr="", returncode=0)
             probe("sometool", use_cache=True)
             probe("sometool", use_cache=True)
             assert mock_run.call_count == 1
-        with patch('core.run.toolprobe.shutil.which', return_value=None) as mock_which:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value=None) as mock_which:
             assert probe("gone-tool", use_cache=True) is None
             assert probe("gone-tool", use_cache=True) is None
             assert mock_which.call_count == 1
 
     def test_uncached_by_default(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.0\n", stderr="", returncode=0)
             probe("sometool")
@@ -199,8 +203,8 @@ class TestCache:
             assert mock_run.call_count == 2
 
     def test_reset_probe_cache(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.0\n", stderr="", returncode=0)
             probe("sometool", use_cache=True)
@@ -209,8 +213,8 @@ class TestCache:
             assert mock_run.call_count == 2
 
     def test_cache_key_includes_args(self):
-        with patch('core.run.toolprobe.shutil.which', return_value="/opt/bin/sometool"), \
-                patch('core.run.toolprobe.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('core.run.toolprobe'), 'shutil', 'which', return_value="/opt/bin/sometool"), \
+                mock_module_attribute(_mock_owner('core.run.toolprobe'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1.0\n", stderr="", returncode=0)
             probe("sometool", use_cache=True)

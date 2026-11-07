@@ -9,6 +9,10 @@ skipped the /understand pre-pass. start_lifecycle now asserts the marker.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -44,7 +48,7 @@ def test_lifecycle_env_carries_trust_marker_when_parent_lacks_it():
 
     # Parent env WITHOUT the marker (the direct python3 raptor.py case) and a
     # get_safe_env that returns a bare dict (no marker copied in).
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=_fake_run), \
          patch("core.config.RaptorConfig.get_safe_env",
                return_value={"PATH": "/usr/bin"}), \
@@ -63,7 +67,7 @@ def test_lifecycle_does_not_fabricate_claudecode():
         recorded["env"] = kwargs.get("env")
         return _fake_completed()
 
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=_fake_run), \
          patch("core.config.RaptorConfig.get_safe_env",
                return_value={"PATH": "/usr/bin"}), \
@@ -81,7 +85,7 @@ def test_lifecycle_preserves_existing_marker_value():
         recorded["env"] = kwargs.get("env")
         return _fake_completed()
 
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=_fake_run), \
          patch("core.config.RaptorConfig.get_safe_env",
                return_value={"PATH": "/usr/bin", "_RAPTOR_TRUSTED": "preset"}):

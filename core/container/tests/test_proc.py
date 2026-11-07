@@ -7,6 +7,10 @@ surface directly so the substrate stays covered if the shim ever goes.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import subprocess
 from unittest.mock import patch
@@ -18,18 +22,8 @@ from core.container.proc import (
     run_cli,
 )
 
-import pytest
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_container_run_patches(monkeypatch):
-    """Keep the container runner's subprocess mocks local to its binding."""
-    import core.container.proc as container_proc
-
-    patch_module_attribute(
-        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
-    )
 
 
 def test_fast_command_returns_outcome() -> None:
@@ -196,7 +190,7 @@ def test_mocked_run_never_reads_as_truncated() -> None:
     big = "x" * 8192
     fake = subprocess.CompletedProcess(["docker", "ps"], 0,
                                        stdout=big, stderr="")
-    with patch("core.container.proc.subprocess.run", return_value=fake):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', return_value=fake):
         outcome = run_cli(["docker", "ps"], timeout=5.0,
                           max_output_bytes=4096)
     assert outcome.stdout == big

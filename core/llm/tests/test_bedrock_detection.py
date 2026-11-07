@@ -10,6 +10,10 @@ The shipped detection gates on the EXPLICIT opt-in signal
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 from unittest.mock import patch
 
 import pytest
@@ -63,7 +67,7 @@ def test_bare_aws_region_is_not_bedrock_intent(monkeypatch):
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    with patch("core.llm.detection.shutil.which", return_value=None), \
+    with mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection._config_has_keyed_models",
@@ -85,7 +89,7 @@ def test_bedrock_bearer_with_dispatcher_marks_external_llm(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    with patch("core.llm.detection.shutil.which", return_value=None), \
+    with mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]):
         from core.llm.detection import detect_llm_availability
@@ -104,7 +108,7 @@ def test_bedrock_bearer_with_botocore_marks_external_llm(monkeypatch):
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
     with patch("core.llm.detection.BOTOCORE_SDK_AVAILABLE", True), \
-         patch("core.llm.detection.shutil.which", return_value=None), \
+         mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection._config_has_keyed_models",
@@ -127,7 +131,7 @@ def test_bedrock_bearer_without_path_does_not_mark_external_llm(
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
     with patch("core.llm.detection.BOTOCORE_SDK_AVAILABLE", False), \
-         patch("core.llm.detection.shutil.which", return_value=None), \
+         mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection._config_has_keyed_models",
@@ -614,7 +618,7 @@ def test_ambient_profile_alone_is_not_selection_signal(
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    with patch("core.llm.detection.shutil.which", return_value=None), \
+    with mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection._config_has_keyed_models",
@@ -635,7 +639,7 @@ def test_raptor_bedrock_profile_marks_external_llm(monkeypatch):
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    with patch("core.llm.detection.shutil.which", return_value=None), \
+    with mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection.BOTOCORE_SDK_AVAILABLE", True):
@@ -655,7 +659,7 @@ def test_raptor_bedrock_model_without_path_not_detected(monkeypatch):
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    with patch("core.llm.detection.shutil.which", return_value=None), \
+    with mock_module_attribute(_mock_owner('core.llm.detection'), 'shutil', 'which', return_value=None), \
          patch("core.llm.detection._get_available_ollama_models",
                return_value=[]), \
          patch("core.llm.detection._config_has_keyed_models",

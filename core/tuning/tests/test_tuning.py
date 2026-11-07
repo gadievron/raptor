@@ -1,5 +1,9 @@
 """Tests for core.tuning — loader, auto-detection, validation."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import unittest
 from pathlib import Path
@@ -19,18 +23,8 @@ from core.tuning import (
     _detect_threads,
 )
 
-import pytest
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_os_patch_targets(monkeypatch):
-    """Keep OS patch decorators and contexts on consumer-owned views."""
-    import core.tuning as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "os", "getpid", consumer_0.os.getpid,
-    )
 
 
 class TestLoadTuning(unittest.TestCase):
@@ -86,7 +80,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=16):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 8)
 
@@ -94,7 +88,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 2)
 
@@ -102,7 +96,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_codeql_workers": "auto"}))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=12), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=12), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
                 t = load_tuning(p)
             self.assertEqual(t.max_codeql_workers, 6)
 
@@ -110,7 +104,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_fuzz_parallel": "auto"}))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=12):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=12):
                 t = load_tuning(p)
             self.assertEqual(t.max_fuzz_parallel, 6)
 
@@ -125,7 +119,7 @@ class TestLoadTuning(unittest.TestCase):
             # Mock RAM too: max_codeql_workers is RAM-capped (it's memory-
             # heavy), so without this the test is non-hermetic and resolves
             # to 3 on a low-RAM CI runner (~7 GB) instead of the cpu-bound 4.
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=8), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=8), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 4)
             self.assertEqual(t.max_codeql_workers, 4)
@@ -138,7 +132,7 @@ class TestLoadTuning(unittest.TestCase):
                 "max_codeql_workers": "auto",
                 "max_fuzz_parallel": "auto",
             }))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
+            with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
                 t = load_tuning(p)
             self.assertEqual(t.max_codeql_workers, 2)
             self.assertEqual(t.max_fuzz_parallel, 2)
@@ -312,21 +306,21 @@ class TestLoadTuning(unittest.TestCase):
 class TestAutoDetection(unittest.TestCase):
 
     def test_ram_clamps_low(self):
-        with patch("core.tuning.os.sysconf", side_effect=lambda k: {
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sysconf', side_effect=lambda k: {
             "SC_PHYS_PAGES": 1024 * 1024,
             "SC_PAGE_SIZE": 4096,
         }[k]):
             self.assertEqual(_detect_ram_mb(), 2048)
 
     def test_ram_clamps_high(self):
-        with patch("core.tuning.os.sysconf", side_effect=lambda k: {
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sysconf', side_effect=lambda k: {
             "SC_PHYS_PAGES": 128 * 1024 * 1024,
             "SC_PAGE_SIZE": 4096,
         }[k]):
             self.assertEqual(_detect_ram_mb(), 16384)
 
     def test_ram_fallback_on_error(self):
-        with patch("core.tuning.os.sysconf", side_effect=OSError):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sysconf', side_effect=OSError):
             self.assertEqual(_detect_ram_mb(), 8192)
 
     def test_threads_returns_zero(self):
@@ -340,9 +334,9 @@ class TestAutoDetection(unittest.TestCase):
                 return "250000 100000"
             raise OSError
 
-        with patch("core.tuning.Path.read_text", fake_read_text), patch(
-            "core.tuning.os.sched_getaffinity", return_value=set(range(64)), create=True
-        ), patch("core.tuning.os.cpu_count", return_value=64):
+        with patch("core.tuning.Path.read_text", fake_read_text), mock_module_attribute(
+            _mock_owner('core.tuning'), 'os', 'sched_getaffinity', return_value=set(range(64)), create=True
+        ), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=64):
             self.assertEqual(_detect_cgroup_cpu_quota(), 3)
             self.assertEqual(_detect_available_cpus(), 3)
 
@@ -357,56 +351,56 @@ class TestAutoDetection(unittest.TestCase):
                 return "100000"
             raise OSError
 
-        with patch("core.tuning.Path.read_text", fake_read_text), patch(
-            "core.tuning.os.sched_getaffinity", return_value=set(range(64)), create=True
-        ), patch("core.tuning.os.cpu_count", return_value=64):
+        with patch("core.tuning.Path.read_text", fake_read_text), mock_module_attribute(
+            _mock_owner('core.tuning'), 'os', 'sched_getaffinity', return_value=set(range(64)), create=True
+        ), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=64):
             self.assertEqual(_detect_cgroup_cpu_quota(), 2)
             self.assertEqual(_detect_available_cpus(), 2)
 
     def test_available_cpus_falls_back_when_cpu_unknown(self):
-        with patch("core.tuning.Path.read_text", side_effect=OSError), patch(
-            "core.tuning.os.sched_getaffinity", None, create=True
-        ), patch("core.tuning.os.cpu_count", return_value=None):
+        with patch("core.tuning.Path.read_text", side_effect=OSError), mock_module_attribute(
+            _mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True
+        ), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
             self.assertEqual(_detect_available_cpus(), 4)
 
     def test_semgrep_workers_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=10):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=10):
             self.assertEqual(_detect_semgrep_workers(), 5)
 
     def test_semgrep_workers_respects_affinity_before_host_cpu_count(self):
-        with patch("core.tuning.os.sched_getaffinity", return_value=set(range(8)), create=True), patch("core.tuning.os.cpu_count", return_value=64):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', return_value=set(range(8)), create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=64):
             self.assertEqual(_detect_semgrep_workers(), 4)
 
     def test_semgrep_workers_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=1):
             self.assertEqual(_detect_semgrep_workers(), 1)
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
             self.assertEqual(_detect_semgrep_workers(), 2)
 
     def test_codeql_workers_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=16), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
             self.assertEqual(_detect_codeql_workers(), 8)
 
     def test_codeql_workers_has_memory_and_hard_ceiling(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=256), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=256), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
             self.assertEqual(_detect_codeql_workers(), 8)
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=64), patch("core.tuning._detect_total_ram_mb", return_value=32768), patch("core.tuning._detect_ram_mb", return_value=16384):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=64), patch("core.tuning._detect_total_ram_mb", return_value=32768), patch("core.tuning._detect_ram_mb", return_value=16384):
             self.assertEqual(_detect_codeql_workers(), 2)
 
     def test_codeql_workers_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=1):
             self.assertEqual(_detect_codeql_workers(), 1)
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
             self.assertEqual(_detect_codeql_workers(), 2)
 
     def test_fuzz_parallel_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=16):
             self.assertEqual(_detect_fuzz_parallel(), 8)
 
     def test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=1):
             self.assertEqual(_detect_fuzz_parallel(), 1)
-        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
+        with mock_module_attribute(_mock_owner('core.tuning'), 'os', 'sched_getaffinity', None, create=True), mock_module_attribute(_mock_owner('core.tuning'), 'os', 'cpu_count', return_value=None):
             self.assertEqual(_detect_fuzz_parallel(), 2)
 
 

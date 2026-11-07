@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -17,17 +20,8 @@ from core.recall.nodegoat_manifest import (
     main as ng_main,
 )
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_run_patches(monkeypatch):
-    """Keep subprocess run mocks on consumer-owned module bindings."""
-    import core.recall.pinned_clone as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
 
 
 @pytest.fixture
@@ -65,7 +59,7 @@ _ENTRY = {
 class TestGenerate:
     def test_overlay_wraps_into_valid_manifest(self, clone, tmp_path):
         overlay = _overlay(tmp_path, {"expected": [dict(_ENTRY)]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         parsed = parse_manifest(m)
         assert parsed.name == "owasp-nodegoat"
@@ -76,14 +70,14 @@ class TestGenerate:
     def test_entry_extra_keys_carried_verbatim(self, clone, tmp_path):
         entry = dict(_ENTRY, custom_key="kept")
         overlay = _overlay(tmp_path, {"expected": [entry]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert m["expected"][0]["custom_key"] == "kept"
 
     def test_default_provenance_only_when_absent(self, clone, tmp_path):
         entry = {k: v for k, v in _ENTRY.items() if k != "provenance"}
         overlay = _overlay(tmp_path, {"expected": [entry]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         prov = m["expected"][0]["provenance"]
         assert prov == {"kind": "benchmark", "suite": "owasp-nodegoat",
@@ -95,14 +89,14 @@ class TestGenerate:
             "kind": "cve", "cve_id": "CVE-2020-99999",
             "fix_commit": "0" * 40})
         overlay = _overlay(tmp_path, {"expected": [entry]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert m["expected"][0]["provenance"]["kind"] == "cve"
 
     def test_invalid_overlay_refused_via_schema(self, clone, tmp_path):
         entry = dict(_ENTRY, cwe="not-a-cwe")
         overlay = _overlay(tmp_path, {"expected": [entry]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned), \
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned), \
                 pytest.raises(NodegoatManifestError, match="CWE"):
             generate_manifest(clone, overlay)
 
@@ -115,7 +109,7 @@ class TestGenerate:
         overlay = _overlay(tmp_path, {"expected": [dict(_ENTRY)]})
         wrong = SimpleNamespace(stdout="0" * 40 + "\n", stderr="",
                                 returncode=0)
-        with patch("core.recall.pinned_clone.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run',
                    return_value=wrong), \
                 pytest.raises(NodegoatManifestError, match="pinned"):
             generate_manifest(clone, overlay)
@@ -125,7 +119,7 @@ class TestGenerate:
             "corpus_kind": "fp-only",
             "clean_regions": [dict(_ENTRY)],
         })
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert parse_manifest(m).corpus_kind == "fp-only"
 
@@ -137,7 +131,7 @@ class TestLabelKindContract:
             "label_kind": "some_future_kind",
             "expected": [dict(_ENTRY)],
         })
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert m["label_kind"] == "some_future_kind"
         # kind-less entry inherits the overlay kind
@@ -148,14 +142,14 @@ class TestLabelKindContract:
             "label_kind": "kind_a",
             "expected": [dict(_ENTRY, label_kind="kind_b")],
         })
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned), \
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned), \
                 pytest.raises(NodegoatManifestError,
                               match="contradicts"):
             generate_manifest(clone, overlay)
 
     def test_absent_kind_never_defaulted(self, clone, tmp_path):
         overlay = _overlay(tmp_path, {"expected": [dict(_ENTRY)]})
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert "label_kind" not in m
         assert "label_kind" not in m["expected"][0]
@@ -164,7 +158,7 @@ class TestLabelKindContract:
         overlay = _overlay(tmp_path, {
             "expected": [dict(_ENTRY, label_kind="kind_a")],
         })
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             m = generate_manifest(clone, overlay)
         assert "label_kind" not in m
         assert m["expected"][0]["label_kind"] == "kind_a"
@@ -185,7 +179,7 @@ class TestCli:
     def test_end_to_end(self, clone, tmp_path, capsys):
         overlay = _overlay(tmp_path, {"expected": [dict(_ENTRY)]})
         out = tmp_path / "nodegoat.json"
-        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
+        with mock_module_attribute(_mock_owner('core.recall.pinned_clone'), 'subprocess', 'run', _pinned):
             rc = ng_main(["--clone-dir", str(clone),
                           "--labels-overlay", str(overlay),
                           "--out", str(out)])

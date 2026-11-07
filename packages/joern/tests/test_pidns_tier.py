@@ -21,6 +21,10 @@ The load-bearing directions:
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import logging
 import os
 import subprocess
@@ -93,9 +97,9 @@ def _run_start(
               return_value=True),
         patch("packages.joern.server._repl_bridge_path",
               return_value="/opt/joern/repl-bridge"),
-        patch("packages.joern.server.subprocess.Popen",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
               side_effect=fake_popen),
-        patch("packages.joern.server.os.killpg",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
               side_effect=ProcessLookupError),
         patch.object(srv, "_wait_for_ready", side_effect=wait_ready),
         patch.object(srv, "_warmup_imports"),
@@ -105,7 +109,7 @@ def _run_start(
 
 
 def _safe_stop(srv: JoernServer) -> None:
-    with patch("packages.joern.server.os.killpg",
+    with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                side_effect=ProcessLookupError):
         srv.stop()
 
@@ -169,7 +173,7 @@ class TestPidnsProbeCache:
             proc.stderr = ""
             return proc
 
-        with patch("packages.joern.server.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run',
                    side_effect=fake_run):
             assert server_mod._pidns_supervision_available() is True
             assert server_mod._pidns_supervision_available() is True
@@ -186,7 +190,7 @@ class TestPidnsProbeCache:
             proc.stderr = "pidns self-probe failed: refused"
             return proc
 
-        with patch("packages.joern.server.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run',
                    side_effect=fake_run):
             assert server_mod._pidns_supervision_available() is False
         assert server_mod._PIDNS_PROBE_CACHE is False
@@ -195,7 +199,7 @@ class TestPidnsProbeCache:
         # A probe that could not RUN is not a kernel verdict: fall
         # back for this boot, leave the cache open for the next one.
         monkeypatch.setattr(server_mod, "_PIDNS_PROBE_CACHE", None)
-        with patch("packages.joern.server.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run',
                    side_effect=OSError("spawn refused")):
             assert server_mod._pidns_supervision_available() is False
         assert server_mod._PIDNS_PROBE_CACHE is None
@@ -205,7 +209,7 @@ class TestPidnsProbeCache:
         server_mod._invalidate_pidns_probe()
         assert server_mod._PIDNS_PROBE_CACHE is False
         # And the flipped verdict is served without re-probing.
-        with patch("packages.joern.server.subprocess.run") as run:
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run') as run:
             assert server_mod._pidns_supervision_available() is False
         run.assert_not_called()
 
@@ -400,7 +404,7 @@ class TestStopLadderDemotion:
         with (
             patch("packages.joern.server._ensure_group_dead",
                   return_value=True) as ensure,
-            patch("packages.joern.server.os.killpg",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                   side_effect=ProcessLookupError),
         ):
             srv.stop()
@@ -413,7 +417,7 @@ class TestStopLadderDemotion:
         proc.returncode = 0
         with (
             patch("packages.joern.server._ensure_group_dead") as ensure,
-            patch("packages.joern.server.os.killpg") as killpg,
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg') as killpg,
         ):
             srv.stop()
         # The forwarder's reap IS the namespace-empty proof: no group

@@ -10,6 +10,10 @@ it as terminal (no fallback walk).
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -77,14 +81,14 @@ class TestGovernorUnit:
         # _run_start is None until the first governor check (lazy-init).
         assert client._run_start is None
         # First check lazy-inits the start time.
-        with patch("core.llm.client.time.monotonic", return_value=100.0):
+        with mock_module_attribute(_mock_owner('core.llm.client'), 'time', 'monotonic', return_value=100.0):
             client._check_governor()
         assert client._run_start == 100.0
         # Just under the deadline — ok.
-        with patch("core.llm.client.time.monotonic", return_value=109.0):
+        with mock_module_attribute(_mock_owner('core.llm.client'), 'time', 'monotonic', return_value=109.0):
             client._check_governor()
         # At/over the deadline — fires.
-        with patch("core.llm.client.time.monotonic", return_value=110.0):
+        with mock_module_attribute(_mock_owner('core.llm.client'), 'time', 'monotonic', return_value=110.0):
             with pytest.raises(LLMGovernorExceededError):
                 client._check_governor()
 

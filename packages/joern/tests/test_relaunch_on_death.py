@@ -18,6 +18,10 @@ All tests are hermetic — no real Joern process is started.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -98,7 +102,7 @@ class TestEnsureAlive:
         srv = JoernServer()
         srv._proc = _dead_proc()
         clock = {"now": 1000.0}
-        with patch("packages.joern.server.time.monotonic",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'time', 'monotonic',
                    side_effect=lambda: clock["now"]), \
                 patch.object(srv, "restart", return_value=False) as restart:
             assert srv.ensure_alive() is False
@@ -119,7 +123,7 @@ class TestEnsureAlive:
         # exactly the window CI runners live in.
         srv = JoernServer()
         srv._proc = _dead_proc()
-        with patch("packages.joern.server.time.monotonic",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'time', 'monotonic',
                    return_value=42.0), \
                 patch.object(srv, "restart", return_value=True) as restart:
             assert srv.ensure_alive() is True

@@ -6,6 +6,10 @@ the CLI version (flag first shipped in 2.15.3); `run_suite` appends one
 mocked throughout — no test invokes a real CLI.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import sys
 from pathlib import Path
@@ -126,7 +130,7 @@ class TestVersionProbe:
         runner.codeql_cli = str(binary)
         proc = MagicMock(returncode=0,
                          stdout="CodeQL command-line toolchain release 2.20.1.", stderr="")
-        with patch("packages.codeql.query_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.codeql.query_runner'), 'subprocess', 'run',
                    return_value=proc):
             assert runner._codeql_version() == "2.20.1"
 
@@ -136,7 +140,7 @@ class TestVersionProbe:
         binary.write_text("#!/bin/sh\nexit 0\n")
         binary.chmod(0o755)
         runner.codeql_cli = str(binary)
-        with patch("packages.codeql.query_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.codeql.query_runner'), 'subprocess', 'run',
                    side_effect=OSError("no codeql")) as mock_run:
             assert runner._codeql_version() is None
             assert runner._codeql_version() is None

@@ -10,6 +10,10 @@ owners and group/other-readable modes; refusal never uses the key,
 never replaces it, warns loudly once, and demotes to hint-only.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import logging
 import os
 import tempfile
@@ -158,7 +162,7 @@ class TestWrongOwner(_KeyDirCase):
             values[4] = st.st_uid + 1  # st_uid slot
             return os.stat_result(values)
 
-        with patch("core.sage.rowmac.os.fstat", side_effect=_foreign):
+        with mock_module_attribute(_mock_owner('core.sage.rowmac'), 'os', 'fstat', side_effect=_foreign):
             with self.assertRaises(RuntimeError):
                 rowmac.mint(_FIELDS)
             self.assertFalse(rowmac.verify(_FIELDS, "0" * 64))
@@ -176,8 +180,8 @@ class TestShortReadDelivery(_KeyDirCase):
         wrong-length refusal (which demotes every row to hint-only)."""
         data = self._make_key(0o600)
         real_read = os.read
-        with patch(
-            "core.sage.rowmac.os.read",
+        with mock_module_attribute(
+            _mock_owner('core.sage.rowmac'), 'os', 'read',
             side_effect=lambda fd, n: real_read(fd, min(n, 5)),
         ):
             self.assertEqual(
@@ -191,8 +195,8 @@ class TestShortReadDelivery(_KeyDirCase):
         self.key_path.write_bytes(os.urandom(10))
         self.key_path.chmod(0o600)
         real_read = os.read
-        with patch(
-            "core.sage.rowmac.os.read",
+        with mock_module_attribute(
+            _mock_owner('core.sage.rowmac'), 'os', 'read',
             side_effect=lambda fd, n: real_read(fd, min(n, 5)),
         ):
             got = rowmac._read_existing_key(self.key_path)

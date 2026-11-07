@@ -6,6 +6,10 @@ routes by argv[0] program name — lifecycle helpers go through
 subprocess.run, claude calls through sandbox_run.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import pytest
 import contextlib
 import json
@@ -97,7 +101,7 @@ def _patch_passes(dispatcher):
         combined(cmd, *args, **kwargs)
         return result
 
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=_subprocess_side_effect), \
          patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                side_effect=_sandbox_side_effect), \
@@ -400,7 +404,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 sandbox_calls.append(kwargs)
                 return dispatcher(cmd, *args, **kwargs)
 
-            with patch("core.orchestration.skill_dispatch.subprocess.run",
+            with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=dispatcher), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=_sandbox_capture), \
@@ -667,7 +671,7 @@ class ValidatePostpassTests(unittest.TestCase):
                 sandbox_calls.append(kwargs)
                 return dispatcher(cmd, *args, **kwargs)
 
-            with patch("core.orchestration.skill_dispatch.subprocess.run",
+            with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                        side_effect=dispatcher), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=_sandbox_capture), \
@@ -1112,7 +1116,7 @@ class AdversarialBugsTests(unittest.TestCase):
         # If the helper failed internally (e.g. couldn't write metadata),
         # we'd never know — the run dir stays in "running" state.
         from core.orchestration.skill_dispatch import complete_lifecycle
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    return_value=_ok(returncode=1, stderr="permission denied")):
             with self.assertLogs(
                 "core.orchestration.skill_dispatch", level="WARNING"
@@ -1134,7 +1138,7 @@ class LifecycleHelperResilienceTests(unittest.TestCase):
         # succeeded, we should still return a successful PrepassResult —
         # the analytical work is done, the housekeeping just didn't tick.
         from core.orchestration.skill_dispatch import complete_lifecycle
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    side_effect=OSError("disk full")):
             # Should swallow the OSError, not raise.
             complete_lifecycle(Path("scratch"))
@@ -1147,7 +1151,7 @@ class LifecycleHelperResilienceTests(unittest.TestCase):
 
     def test_fail_lifecycle_swallows_subprocess_errors(self):
         from core.orchestration.skill_dispatch import fail_lifecycle
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    side_effect=OSError("no such file")):
             fail_lifecycle(Path("scratch"), "test")  # must not raise
 

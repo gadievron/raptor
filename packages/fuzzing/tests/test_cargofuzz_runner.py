@@ -8,6 +8,10 @@ live end-to-end lives in ``test_cargofuzz_live_e2e.py`` behind the
 toolchain gate.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import os
 import shutil
@@ -701,7 +705,7 @@ class TestNightlyProbe(unittest.TestCase):
         return Completed()
 
     def test_nightly_default_cargo_needs_no_prefix(self):
-        with patch("packages.fuzzing.cargofuzz_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'subprocess', 'run',
                    return_value=self._completed(
                        "cargo 1.99.0-nightly (abc 2026-01-01)")):
             self.assertEqual(nightly_toolchain_arg("/usr/bin/cargo"), "")
@@ -714,22 +718,22 @@ class TestNightlyProbe(unittest.TestCase):
                 "stable-x86_64-unknown-linux-gnu (default)\n"
                 "nightly-x86_64-unknown-linux-gnu\n")
 
-        with patch("packages.fuzzing.cargofuzz_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'subprocess', 'run',
                    side_effect=fake_run), \
-             patch("packages.fuzzing.cargofuzz_runner.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'shutil', 'which',
                    return_value="/usr/bin/rustup"):
             self.assertEqual(nightly_toolchain_arg("/usr/bin/cargo"),
                              "+nightly")
 
     def test_no_rustup_no_nightly(self):
-        with patch("packages.fuzzing.cargofuzz_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'subprocess', 'run',
                    return_value=self._completed("cargo 1.93.1 (stable)")), \
-             patch("packages.fuzzing.cargofuzz_runner.shutil.which",
+             mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'shutil', 'which',
                    return_value=None):
             self.assertIsNone(nightly_toolchain_arg("/usr/bin/cargo"))
 
     def test_probe_failure_reads_as_no_nightly(self):
-        with patch("packages.fuzzing.cargofuzz_runner.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.fuzzing.cargofuzz_runner'), 'subprocess', 'run',
                    side_effect=OSError("boom")):
             self.assertIsNone(nightly_toolchain_arg("/usr/bin/cargo"))
 

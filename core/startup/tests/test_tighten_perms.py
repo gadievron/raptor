@@ -1,10 +1,13 @@
 """Tests for _tighten_config_perms() — auto-chmod of ~/.config/raptor/models.json."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from core.startup.init import _tighten_config_perms
 
@@ -69,7 +72,7 @@ class TestTightenConfigPerms(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = self._make_file(Path(d), 0o664)
             fake_uid = p.stat().st_uid + 1
-            with patch('core.startup.init.os.getuid', return_value=fake_uid):
+            with mock_module_attribute(_mock_owner('core.startup.init'), 'os', 'getuid', return_value=fake_uid):
                 notice = _tighten_config_perms(p)
             self.assertIsNotNone(notice)
             self.assertTrue(notice.startswith("\u26a0"))
@@ -96,7 +99,7 @@ class TestTightenConfigPerms(unittest.TestCase):
         # + fchmod to close the swap-symlink-mid-call race.
         with TemporaryDirectory() as d:
             p = self._make_file(Path(d), 0o644)
-            with patch('core.startup.init.os.fchmod', side_effect=PermissionError("denied")):
+            with mock_module_attribute(_mock_owner('core.startup.init'), 'os', 'fchmod', side_effect=PermissionError("denied")):
                 notice = _tighten_config_perms(p)
             self.assertTrue(notice.startswith("\u26a0"))
             self.assertIn("chmod failed", notice)
