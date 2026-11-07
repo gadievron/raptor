@@ -228,9 +228,13 @@ def test_floor_canary_owns_its_inputs_and_keeps_fresh_install_and_same_test_subs
     events = source.split('\nconcurrency:', 1)[0]
     assert set(re.findall(r"^      - '([^']+)'$", events, re.M)) == {
         'pyproject.toml', 'uv.lock', 'uv.toml', '.github/workflows/python-floor-canary.yml',
-        '.github/scripts/pytest_workers.py',
+        '.github/scripts/pytest_workers.py', '.github/actions/enable-userns/action.yml',
     }
     body = job('python-floor-canary.yml', 'floor-canary')
+    assert body.count('uses: ./.github/actions/enable-userns') == 1
+    assert body.index('uses: actions/checkout@') < body.index('uses: ./.github/actions/enable-userns')
+    assert body.index('uses: ./.github/actions/enable-userns') < body.index('- name: Import smoke')
+    assert 'RAPTOR_ALLOW_DEGRADED_UNTRUSTED' not in body
     install = named_step(body, 'Create venv from the lockfile on the floor interpreter')
     assert '        shell: bash\n' in install
     assert 'uv export --locked --no-hashes | uv pip install -r -' in script(install)
