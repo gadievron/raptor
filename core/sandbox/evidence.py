@@ -56,7 +56,7 @@ import contextlib
 import errno
 from core.json import dumps_artifact
 from core.security.capped_read import path_may_exist
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 import logging
 import os
 import stat as _stat
@@ -331,7 +331,7 @@ class EvidenceFile:
                 "evidence append failed for %s: %s: %s",
                 sanitise_for_terminal(str(self.path)),
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
             return False
 
@@ -343,7 +343,7 @@ class EvidenceFile:
             logger.warning(
                 "evidence record not serialisable: %s: %s",
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
             return False
         return self.write_line(line)
@@ -398,7 +398,7 @@ class EvidenceFile:
                 "held evidence descriptor for %s: %s: %s",
                 sanitise_for_terminal(str(self.path)),
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
             return False
         # Validate both snapshots: a safe pathname stat cannot overrule
@@ -451,7 +451,7 @@ class EvidenceFile:
                         "evidence close failed for %s: %s: %s",
                         sanitise_for_terminal(str(self.path)),
                         sanitise_for_terminal(type(exc).__name__, max_len=64),
-                        sanitise_for_terminal(str(exc)),
+                        sanitise_exception_message(exc),
                     )
                 else:
                     self._close_result = verification_result
