@@ -5,6 +5,10 @@ welcome — whether you're writing code by hand, with an AI, or a mix of
 both. The conventions below keep the codebase consistent regardless of how
 the code was written.
 
+When using an AI coding agent, ask it to read this document and the
+[developer guide](docs/developers.md) before editing code, and to run the
+relevant checks described there.
+
 This page covers the contribution workflow: setup, change requirements,
 test-writing conventions, style, and security rules. The
 [developer reference](docs/developers.md) explains architecture, package
@@ -151,6 +155,11 @@ are most likely to hit:
   domain model, or the central taxonomy — not hardcoded in logic. New
   findings fail against `.github/scripts/vocab_baseline.json`; route the
   names through one of those seams, or baseline the entry with a note.
+  Fixed event, report, and persistence field schemas can also trigger the
+  census. Review those separately from learned domain vocabularies; a schema
+  baseline note must identify the format and its producer/consumer contract.
+  Run `python3 .github/scripts/check_vocab_lists.py` after changing a large
+  literal mapping or name set, before submitting or merging the change.
 
 
 ### Deliberate keep-blocks (REVISIT)
