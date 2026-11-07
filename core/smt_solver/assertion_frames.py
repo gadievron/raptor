@@ -57,6 +57,8 @@ class TrackedFrames:
         explicit assumptions are the immutable markers owned by this frame.
         Failed/unknown/sat checks clear earlier proof data. Reading ownership adds no
         queries and never reads a potentially stale native core.
+        Optimize can also return unsat for an exhausted Pareto frontier;
+        accept its negative verdict only with a frame-owned contradiction core.
         """
         object.__setattr__(self, "_core", None)
         if not self._matches(self._solver):
@@ -75,8 +77,10 @@ class TrackedFrames:
                 ):
                     object.__setattr__(self, "_core", tuple(positions[marker.get_id()] for marker in markers))
             except (z3.Z3Exception, AttributeError):
-                # An UNSAT verdict remains valid; only ownership is missing.
                 get_logger().debug("SMT native core ownership unavailable", exc_info=True)
+        if result == z3.unsat and isinstance(self._solver, z3.Optimize) and self._core is None:
+            get_logger().debug("SMT optimizer negative result lacks an owned contradiction core")
+            return z3.unknown
         return result
 
     def core_indices(self, solver: Any) -> tuple[int, ...] | None:
