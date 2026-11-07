@@ -21,7 +21,6 @@ import signal
 import subprocess
 import sys
 import time
-import types
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -241,14 +240,8 @@ class TestRunSandboxedSweepWiring:
     LIVE_SENTINEL = [(FAKE_SHIM_PID, 1, FAKE_SHIM_PID)]
 
     def _invoke(self, monkeypatch, behaviour):
-        fake_subprocess = types.SimpleNamespace(
-            Popen=_FakePopen,
-            TimeoutExpired=subprocess.TimeoutExpired,
-            CompletedProcess=subprocess.CompletedProcess,
-            PIPE=subprocess.PIPE,
-        )
         monkeypatch.setattr(_FakePopen, "behaviour", behaviour)
-        monkeypatch.setattr(_macos_spawn, "subprocess", fake_subprocess)
+        patch_module_attribute(monkeypatch, _macos_spawn, "subprocess", "Popen", _FakePopen)
         monkeypatch.setattr(
             _macos_spawn, "_ps_snapshot", lambda: list(self.LIVE_SENTINEL))
         killpgs = []
@@ -681,13 +674,7 @@ class TestParentBackstopGroupReport:
                 os.write(fd, b"G%d\n" % reported_group)
                 os.write(fd, b"K")
 
-        fake_subprocess = types.SimpleNamespace(
-            Popen=_ReportingPopen,
-            TimeoutExpired=subprocess.TimeoutExpired,
-            CompletedProcess=subprocess.CompletedProcess,
-            PIPE=subprocess.PIPE,
-        )
-        monkeypatch.setattr(_macos_spawn, "subprocess", fake_subprocess)
+        patch_module_attribute(monkeypatch, _macos_spawn, "subprocess", "Popen", _ReportingPopen)
         monkeypatch.setattr(_macos_spawn, "_ps_snapshot", lambda: [])
         sweeps = []
 

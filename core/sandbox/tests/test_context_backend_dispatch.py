@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 
 from core.sandbox import context, state
+from core.testing.module_bindings import mock_module_attribute
 from core.sandbox.tests.capability import requires_userns
 
 
@@ -145,7 +146,7 @@ def test_use_seatbelt_false_when_seatbelt_unavailable(reset_caches):
         # dispatch, not the network gate.
         from core.sandbox.context import sandbox
         with sandbox(block_network=False) as run, \
-                mock.patch("subprocess.run") as sub_run:
+                mock_module_attribute(context, "subprocess", "run") as sub_run:
             sub_run.return_value = mock.MagicMock(
                 returncode=0, stderr=b"", stdout=b"",
                 sandbox_info={},

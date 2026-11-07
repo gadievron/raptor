@@ -20,6 +20,7 @@ import pytest
 
 from core.sandbox import evidence as evidence_mod
 from core.sandbox import seatbelt_audit
+from core.testing.module_bindings import patch_module_attribute
 
 ROOT = 5_000_001  # fake workload root (the shim pid)
 
@@ -380,13 +381,13 @@ def test_fail_closed_refusal_survives_stdio_fd_invalidation(
             super().__init__(*args, **kwargs)
             spawned.append(self)
 
-    monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
+    patch_module_attribute(monkeypatch, _macos_spawn, "subprocess", "Popen", _RecordingPopen)
 
     invalidated: list[int] = []
 
     def _sweep_and_invalidate(root_pid: int, **kwargs: object) -> set[int]:
         # The shim's Popen is the one whose argv carries the seatbelt
-        # shim script (teardown's own ps probes are recorded too).
+        # shim script.
         shim = next(p for p in spawned
                     if any("raptor-seatbelt-shim" in str(a)
                            for a in p.args))
