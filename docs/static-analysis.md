@@ -25,6 +25,7 @@ For LLM-powered analysis of scan results, use `/agentic` or
 - [Semgrep Rules](#semgrep-rules)
 - [Coccinelle Rules](#coccinelle-rules)
 - [Inline Suppression](#inline-suppression)
+- [Compiler analysis](#compiler-analysis)
 - [Output](#output)
 - [Error Handling](#error-handling)
 
@@ -46,110 +47,29 @@ Semgrep pass (`--expanded-semgrep`).
 
 ### CLI Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--repo <path>` | required | Repository path or Git URL |
-| `--policy-version <ver>` | `v1` | Policy version identifier |
-| `--policy-groups <list>` | `all` | Comma-separated rule group names (see [Policy Groups](#policy-groups)) |
-| `--codeql` | off | Run [CodeQL](codeql.md) concurrently with Semgrep (sequential with `--sequential`) |
-| `--no-codeql` | -- | Explicitly disable CodeQL |
-| `--no-cocci` | off | Disable Coccinelle stage |
-| `--languages <list>` | auto | CodeQL language list (only relevant with `--codeql`) |
-| `--build-command <cmd>` | auto | CodeQL build command override (only relevant with `--codeql`; implies a traced build) |
-| `--traced-build` | off | Opt into traced-build C/C++ CodeQL extraction — executes the repo's build system (asserts trust). Default is buildless: no repo code runs during database creation |
-| `--no-traced-build` | -- | Force buildless extraction for this run, overriding `--traced-build` and the project's `build` trust marker |
-| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes). TUs whose analyzer silence is repo-steerable are reported as a coverage limitation, never as a finding — see [Compiler-scan coverage limitations](#compiler-scan-coverage-limitations) |
-| `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
-| `--compiler-scan-max-seconds <seconds>` | 300 | Shared compiler analysis budget, also available in `/agentic`. Completed findings are retained; unfinished coverage is reported. Discovery and cleanup add overhead. |
-| `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
-| `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
-| `--no-sanitizer-cut-postpass` | on by default | Disable the sanitizer-cut post-pass over scan findings (see [Sanitizer-cut post-pass](#sanitizer-cut-post-pass)) |
-| `--no-sanitizer-cut-enforce` | enforcement on | Record sanitizer-cut verdicts but keep suppressed findings in `combined.sarif` |
-| `--no-config-resolved` | on by default | Disable the Java config-resolved weak-algorithm stage (additive findings when a `getInstance(...)` argument resolves to a weak algorithm through configuration) |
-| `--no-source-wrappers` | on by default | Disable the Java taint-source wrapper projection stage (project source-wrapper summaries into taint rules) |
-| `--no-graduated-rules` / `--graduated-rules-dir <dir>` | on by default | Disable (or point elsewhere) the project's graduated synthesized-rules stage — proven rules from checker synthesis run as a standard scan stage |
-| `--keep` | off | Keep temporary working directory after completion |
-| `--sequential` | off | Fully serial run: packs one at a time and stages in order (no Semgrep/CodeQL overlap) |
-| `--out <dir>` | auto | Output directory override |
-| `--exclude-dir <glob>` | none | Drop results from matching paths (repeatable, OR semantics) |
-| `--extra-config <path>` | none | Additional Semgrep rule source path (repeatable) |
-| `--show-suppressed` | off | Include `nosemgrep`-suppressed findings in output summary |
-| `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
-| `--no-sandbox` | off | Alias for `--sandbox none` (consent-gated — see [Sandbox](sandbox.md#disabling-the-sandbox)) |
-| `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
-| `--audit-verbose` | off | Log every traced syscall (requires `--audit`) |
-| `--audit-budget <n>` | 10000 | Override audit-record cap |
+Use command help for all options and their current defaults:
 
+```bash
+python3 raptor.py scan --help
+```
+
+Enable deeper analysis with `--codeql`, compiler checks with `--compiler-scan`,
+or macro-expanded scanning with `--expanded-semgrep`. Use `--extra-config` for
+additional Semgrep rules, `--exclude-dir` to filter reported paths, and `--out`
+to choose the report directory. Examples and limitations appear below.
 
 ## Rule version requirements
 
-CodeQL query runners reuse only successful version probes of the selected CLI
-launcher. Changing that launcher invalidates the cached answer; temporary
-probe failures can recover on a later check. Concurrent checks share an
-in-flight probe. Supported CLI flags are checked against the current version
-answer, so a prior failed probe does not permanently suppress them. Query
-compatibility and database metadata share a version reader that distinguishes
-CodeQL banners from dependency messages. The diagnostic version API also uses
-that reader without triggering first-use installation.
+The startup banner shows installed tool versions and compatibility warnings.
+Rules that require a newer version are skipped individually; compatible rules
+can still run. Unknown versions also skip rules with declared requirements.
+These skips reduce coverage and do not establish a clean result.
 
-Coccinelle checks declared rule requirements against a successful, unambiguous
-version probe of the pinned executable. Unknown versions refuse only rules
-that declare a minimum; rules without a declaration still run. A rule sweep
-can reuse a successful probe while that executable remains unchanged. Failed
-probes are retried when needed, and a later sweep probes afresh.
+Check reported skipped rules and upgrade the affected tool when necessary.
+For custom rule authoring, start with the
+[developer guidance](developers.md#engine-authoring-detection-rules) and the
+selected tool's rule syntax.
 
-The startup banner shows installed Semgrep, Coccinelle and CodeQL versions.
-It warns about known compatibility limitations without disabling an entire
-backend. Tool-wide capability requirements and individual rule requirements
-are separate: a version that cannot run one rule may still run others.
-
-An older tool can still run compatible rules. Rules with a declared minimum
-are skipped individually when the tool is too old; their absence is a coverage
-limitation, not a clean result. Upgrade the affected tool to restore coverage.
-An unknown tool version also skips rules that declare a requirement. Rules
-without a declaration keep their existing behavior; this does not prove they
-are compatible with every version.
-
-Semgrep rules use the native [`min-version` field](https://docs.semgrep.dev/writing-rules/rule-syntax#min-version-and-max-version),
-which Semgrep supports from version 1.38.0:
-
-```yaml
-rules:
-  - id: example
-    min-version: "1.38.0"
-    languages: [python]
-    pattern: dangerous_call(...)
-    message: Review this call
-    severity: WARNING
-```
-
-For a custom Coccinelle rule or CodeQL query, put this declaration in its
-leading `//` comment header, before the rule or query documentation:
-
-```c
-// raptor-min-version: 1.3.0
-```
-
-Use the actual minimum required by that rule, written as `major.minor.patch`.
-The example is a spatch version; a CodeQL query must declare a CodeQL CLI
-version instead. A declaration applies to one `.cocci` or `.ql` file, not the
-whole backend. CodeQL library compatibility must also be satisfied by the
-query pack's dependencies. Imported `.qll` files do not inherit their own
-runtime gates; the executable query must declare its requirements.
-
-Skipped Coccinelle rules appear in their per-rule error records. Semgrep keeps
-native incompatibility notices in its JSON output and exposes them as
-`skipped_rules` in its package results. `/scan` counts incompatible-rule notices
-in `semgrep_skipped_rules` and reports partial execution even when a notice has
-no source filename. Compatible rules and their findings remain available.
-Custom CodeQL results include
-`skipped_rules`, also retained in the workflow report. Other compatible rules
-continue to produce findings. If every selected CodeQL query is incompatible,
-the query result is unsuccessful rather than an empty successful scan.
-
-A minimum requirement and a tested version mean different things. Declare a
-minimum when a required construct or API establishes it; do not assign the
-current CI version to every rule just because that version passes the tests.
 
 ## Bundled rule coverage
 
@@ -180,15 +100,10 @@ Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`,
 
 ## Semgrep Rules
 
-Python JWT checks flag single-entry literal `verify_signature: False` options on both
-`jwt.decode` and `jwt.decode_complete`. An `algorithms=["none"]` allow-list
-alone does not establish that PyJWT accepts an unverified token. Legacy
-`verify=False` calls are reported separately at medium severity because they
-disable verification in PyJWT 1.x but are ignored in 2.x. Check the target
-application's dependency version when reviewing those notices. Decoded claims
-become a security issue when trusted without verification. Options stored in
-variables, merged dictionaries, duplicate keys and multi-option dictionaries
-are outside this narrow check; absence of a finding does not establish verification.
+JWT warnings need the target's PyJWT version for interpretation. Legacy
+`verify=False` disables verification in PyJWT 1.x but is ignored in 2.x.
+An `algorithms=["none"]` allowlist alone does not establish that an unverified
+token is accepted. Review how decoded claims are trusted.
 
 ### Rule Categories
 
@@ -214,163 +129,29 @@ organised by category:
 | `web` | Prototype pollution |
 | `xml` | XXE |
 
-The PHP request-taint rules also follow raw `filter_input` reads from
-`INPUT_GET`, `INPUT_POST` and `INPUT_COOKIE`, including calls with an
-explicit `FILTER_DEFAULT` or `FILTER_UNSAFE_RAW`. Both unqualified and
-fully qualified built-in spellings are covered. These sources taint the
-returned value, not the arguments passed to the reader.
+PHP rules cover request-driven injection, unsafe deserialization, and HTML
+attribute encoding. Custom wrappers, dynamic dispatch, complex templates, and
+application-specific guards can need separate review.
 
-Calls that select other filters or supply filter options are outside this
-source check. That does not establish that those filters make the value
-safe for a particular sink. Direct same-namespace function and constant
-shadows are excluded; this check does not resolve arbitrary PHP imports
-or dynamic reader/filter selection.
+Allowlist and map checks are recognized conservatively. A recognized guard is
+not proof that its data or key domain is trustworthy. For deserialization,
+a depth limit does not restrict allowed object types; review the application's
+class policy and prefer JSON for untrusted data.
 
-For PHP include, redirect and reflection checks, calling `in_array` does
-not by itself make a request value safe. The recognized allowlist form
-uses `true` for strict comparison and an inline list of plain string
-literals. A negative check must immediately return or exit with a literal
-value, or replace the rejected value with a literal string. Ignored checks,
-blocklists and request-controlled allowlists continue to report.
-
-More complex guards, escaped/interpolated allowlist strings and dynamic
-allowlists are outside this narrow contract; safe code using those forms
-can still report. In scopes containing function imports, use the explicit
-`\in_array` built-in spelling for this guard recognition; an unqualified
-name may refer to an imported application function.
-
-The map checks `array_key_exists` and `isset` likewise require a negative
-check with an immediate rejecting return/exit or literal fallback before
-participating in taint suppression. Ignoring their results or rejecting
-matching keys does not validate the request value. Function-import scopes
-require the explicit `\array_key_exists` spelling; `isset` is a language
-construct.
-
-This guarded-map handling remains a heuristic: it does not prove that the
-map or its key domain is trustworthy. In particular, a rejecting check
-against an attacker-controlled map is not a safety proof. Taint carried by
-map values continues to propagate. Unknown array-like objects, aliases and
-map mutations require further analysis; absence of a finding does not
-establish safe validation. Index-taint propagation remains enabled, so an
-unchecked lookup into a fixed literal map can still report.
-
-The PHP object-deserialization check follows the serialized input to
-`unserialize`, including empty options and depth-only options: omitting
-`allowed_classes` still allows classes. Setting `max_depth` does not
-restrict object types. For flat literal arrays containing boolean class
-policies and depth settings, repeated policy keys use the last value.
-Taint confined to options does not flag a fixed serialized input.
-
-This options model supports decimal depth limits and simple variable or
-index reads. Class lists, computed keys, unpacked arrays, unknown option
-keys and other expressions require separate review. Function resolution
-is syntactic; imported aliases and application helpers may need review
-as well. A silent result is not a safety verdict. Prefer JSON for
-untrusted data; class restrictions alone do not make untrusted
-`unserialize` safe. See the [PHP unserialize manual](https://www.php.net/manual/en/function.unserialize.php).
-
-For raw PHP attribute-XSS checks, literal continuations must keep the
-attribute open: a safe attribute value does not borrow request taint from
-body text after a closing-attribute literal. Request values after fixed
-prefixes inside the same attribute still report. Nested calls, spaced array
-reads, earlier balanced attributes and common escapes in PHP double-quoted
-opener literals are supported. Numeric casts/results and URL-encoded results
-are modeled as safe values; ignored conversions do not sanitize the original
-variable.
-
-These concatenation checks operate on expressions, so the result need not
-be echoed. Complex templates, opener literals spanning lines and comments
-at the opener/dot/value boundary need separate review. Interpolation remains
-a narrower, string-level check for single-quoted attributes in `echo` or
-`print`: a safe attribute interpolation with request data elsewhere in the
-same string can still report. A no-match remains inconclusive in `/audit`.
-
-PHP command-string checks inspect the first argument of `exec`, `system`,
-`passthru`, `shell_exec`, `popen` and `proc_open`, including qualified and
-mixed-case built-in spellings. Request data in output/status variables,
-mode, descriptors, working directory or environment does not by itself
-establish argument injection in the command string. Literal `proc_open`
-argument arrays are excluded; indirect array construction needs review.
-Function matching is syntactic; runtime-selected functions, application
-shadows and imported aliases need separate review.
-
-Per-argument quoting and modeled numeric results clear only the returned
-value. Ignored conversions do not sanitize the original variable, and
-`escapeshellcmd` does not establish per-argument quoting. Program-specific
-option parsing is a separate question: even a quoted word may be treated as
-an option. A no-match remains inconclusive for CWE-88 in `/audit`.
-
-PHP socket CRLF checks inspect the second argument of `fwrite`, `fputs`,
-`socket_write` and `socket_send`. Request-derived handles, byte counts and
-flags do not by themselves establish CRLF in a fixed payload. Stream writes
-retain the same-function network-opener check, now covering qualified and
-mixed-case `fsockopen` and `stream_socket_client` calls. Handle aliases and
-later reassignment are not fully resolved. Header/mail channels and unknown
-stream origins need separate review; a no-match is inconclusive for CWE-93
-in `/audit`. These checks remain part of the PHP `/scan` pack.
-
-PHP weak-crypto checks use security-related names to limit noise. Password
-checks cover `md5`, `sha1` and `hash` with a literal MD5/SHA1 algorithm,
-including qualified and mixed-case built-in spellings. They recognize
-password-named data within expressions and direct digest stores into named
-variables, instance/static fields and literal or statically resolved array
-keys. Receiver names, helper names and ordinary string contents do not
-establish password data.
-
-For simple local reads and stores, adjacent literal assignments to algorithm
-and key variables are recognized even on older engines without PHP constant
-propagation. These forms exclude intervening statements and side-effecting
-arguments. More complex aliases need separate review.
-
-Predictable-generator checks recognize security-named stores, including
-qualified and mixed-case calls wrapped in hashes. Unresolved selectors do
-not establish a storage context. Literal keys may use separators such as
-underscores, hyphens and dots. Bare sampling/jitter calls, direct strong-random
-results and unrelated namespaces or methods stay outside these checks.
-Additional entropy mixed into a value needs separate review.
-
-Names remain a heuristic: semantically unrelated security-shaped names can
-report, while neutral aliases, arbitrary algorithms and application function
-shadows/import aliases need separate review. The rules run in the PHP
-`/scan` pack and the existing CWE-327/CWE-338 `/audit` routes. A no-match is
-inconclusive in `/audit`; it does not establish cryptographic safety. Prefer
-PHP's [password hashing API](https://www.php.net/manual/en/function.password-hash.php)
-and [cryptographic randomness](https://www.php.net/manual/en/function.random-bytes.php)
-for those respective purposes.
-
-PHP quoted-attribute encoding checks cover both `htmlspecialchars` and
-`htmlentities`. They check whether explicit flags protect the surrounding
-quote, including document/error flags that do not enable quoting, supported
-OR combinations of standard constants, and canonical nonnegative decimal
-masks up to nine digits. `ENT_QUOTES` protects both quote characters;
-`ENT_COMPAT` protects only double quotes. See the [PHP encoding flags](https://www.php.net/manual/en/function.htmlspecialchars.php).
-
-These checks require an immediate encoder call after a bounded HTML-tag
-literal with a quoted attribute opener. Plain configuration strings, body
-text, completed attributes and method-name lookalikes do not match.
-Indirect values, complex templates, dynamic flags and other flag expressions
-need separate review. Calls that omit flags are not diagnosed because the
-defaults vary by PHP version. The checks flag potentially insufficient
-encoding; they do not prove attacker control or account for prior encoding.
-In `/audit`, a no-match remains
-inconclusive for CWE-116 rather than refuting the whole encoding class.
-
-PHP unquoted-attribute checks follow request data through `htmlspecialchars`
-or `htmlentities`, including local aliases. Even `ENT_QUOTES` does not encode
-whitespace: quote the attribute value as well as encoding its contents. The
-check requires encoded request data; fixed values, tainted flags alone and
-ignored encoder results do not qualify. Modeled numeric casts/converters and
-URL-encoded final values are excluded.
-
-This additional check requires Semgrep 1.47.0 or newer; older installations
-can still run the quoted-attribute checks. Supported contexts are bounded
-HTML-tag literals followed by a flat encoder call or a simple local-variable
-read, using either PHP quote style. Complex templates, object fields,
-application validators and later decoding or character reconstruction need
-separate review. `/scan` includes the check in the PHP pack; `/audit` uses it
-for PHP CWE-116, with no-match remaining inconclusive.
+For HTML attributes, check both the surrounding quotes and the encoder flags.
+`ENT_QUOTES` protects quote characters but does not make an unquoted attribute
+safe. Quote the value as well as encoding it. Defaults vary by PHP version;
+review omitted or dynamic flags against the target's runtime. The additional
+unquoted-attribute check requires Semgrep 1.47.0 or newer; older installations
+can still run the quoted-attribute checks.
 
 Run `ls engine/semgrep/rules/` for the current file list.
+
+PHP command quoting does not establish that a program will treat an argument
+as data rather than an option. Review option parsing separately. CRLF checks
+also need a network-output context; unknown stream origins and aliases can
+require review. Weak-crypto checks use naming heuristics, so confirm whether
+the value is used for passwords or security tokens before accepting a warning.
 
 ### Upstream Registry Packs
 
@@ -440,13 +221,9 @@ and deduplicated by resolved absolute path.
 
 ## Coccinelle Rules
 
-The closed-stream rule checks stdio operations after either `fclose()` or
-`pclose()`, including character I/O, formatted input, positioning and buffered
-reads and writes, plus `getc`, `putc`, `vfprintf` and `vfscanf`. The
-double-close rule also checks repeated stream closure through any combination
-of `fclose()` and `pclose()`. Assigning a new stream before reuse suppresses
-the report.
-The rule follows direct uses of the same pointer; it does not trace aliases.
+Stream-lifetime checks cover operations after `fclose()` or `pclose()` and
+repeated stream closure. They follow direct pointer uses rather than aliases;
+custom ownership transfers can require review.
 
 The missing-creation-mode check covers `open`, `openat` and their `64`
 variants. It reports omitted mode arguments when exact `O_CREAT` or `O_TMPFILE`
@@ -480,57 +257,30 @@ Run `ls engine/coccinelle/rules/` for the current file list.
 
 ### Non-base deallocation
 
-The pointer-arithmetic check covers `free`, `kfree`, `vfree`, `kvfree`,
-`kfree_sensitive` and `kzfree`. For builtin pointers, postfix increment passes
-the original value to the deallocator. Explicit integer zero offsets, including common
-suffixes, parentheses and builtin integer casts, are excluded along with
-recognized `offsetof` base-recovery expressions.
-
-Other arithmetic and prefix increments produce review candidates. Allocation
-origin and the effective offset are needed to distinguish an invalid free
-from a legitimate adjustment back to the owner. Typedef conversions, computed offsets and
-other recovery idioms and user-defined C++ operators require separate review.
-In `/audit`, this detection rule requires independent verification before
-promoting a finding.
+Pointer-arithmetic deallocation warnings require review of the allocation
+origin and effective offset. An adjustment can be legitimate base recovery;
+unsupported recovery idioms and C++ operators need independent verification.
 
 ### Uninitialised returns
 
-`uninitialized_return` distinguishes a loop initializer or mandatory first
-assignment from an assignment that may never execute. A zero-iteration loop,
-an early break before assignment, or an optional assignment can still leave
-the returned local uninitialised.
+`uninitialized_return` reports locals that may be returned without an
+assignment. Complex control flow, `goto`, and macro-defined initialization can
+require manual review; an empty result is not a proof of definite assignment.
 
-The rule handles these initialization patterns conservatively. Complex
-control flow, functions with `goto`, and macro-defined initialization can
-still require manual review; an empty result is not a general proof of definite assignment.
 
 ### Memory leaks on error paths
 
-`resource_leak_err` reports kernel allocations that may remain allocated
-when a function returns an error. It checks allocations made in assignments
-and variable declarations. Returning because allocation failed is not a leak;
-cleanup with `kfree_sensitive` is recognized.
+`resource_leak_err` reports kernel allocations that may remain allocated on an
+error return. Review ownership transfers and custom cleanup functions before
+accepting a warning; these can cause false alarms.
 
-In C files, the rule can recognize correct conditional cleanup for buffers
-that use either stack or heap storage. It may still warn about these patterns
-in C++ files and headers.
-
-Review a warning against every path to the reported return. If another
-function takes ownership of the allocation, or a custom cleanup function
-releases it, the warning may be a false alarm.
 
 ### Double-free checks
 
-`double_free` looks for two free sites connected by a path without an
-intervening pointer assignment. This includes a free inside a branch
-followed by another free after the branch. A pointer assignment ends that
-comparison; resetting it to null or replacing an allocation avoids the
-common cleanup-loop false alarm.
+`double_free` looks for connected free sites without an intervening pointer
+assignment. It does not fully track aliases or repeated execution of one free
+site in a loop. An empty result does not establish freedom from double frees.
 
-The rule does not track alias identity across assignments or different
-pointer expressions. It can also miss repeated executions of a single free
-site inside a loop. An empty
-result does not establish that a function is free of double-free bugs.
 
 ### Prerequisites
 
@@ -541,65 +291,26 @@ and will produce per-rule degradation.
 
 ### Auto-Skip Logic
 
-The Coccinelle stage skips automatically (with a debug-level log) when
-any of these conditions hold:
-
-1. `spatch` is not on `PATH`.
-2. The repository contains no C/C++ source files (checked by walking
-   up to 200 files looking for `.c`, `.h`, `.cc`, `.cpp`, `.cxx`,
-   `.hpp`, `.hh` extensions).
-3. The shipped rules directory (`engine/coccinelle/rules/`) is missing.
-
-To explicitly disable the stage regardless, pass `--no-cocci`.
+Coccinelle is skipped when `spatch` is unavailable, no C/C++ sources are found,
+or the bundled rules are missing. Check startup diagnostics when expected
+Coccinelle coverage is absent. Use `--no-cocci` to disable it explicitly.
 
 
 ## Inline Suppression
 
 ### Semgrep
 
-A Semgrep parser error can leave a file only partially analysed. Findings
-recovered from that file remain useful, but an empty result does not establish
-that the file is clean. Check the reported exclusions and analysis errors when
-assessing scan coverage, especially for C code with compiler extensions.
-The final JSON and `scan_metrics.json` record execution as `ok`, `partial`
-or `error`. Known pack failures, unavailable registry packs, merge failures,
-recorded analysis gaps, and requested CodeQL runs without a report prevent
-an `ok` status. Recovered findings remain available. Partial scans retain the existing exit-code policy; check the
-execution status when automation requires all requested analysis to finish.
-SARIF invocation failures, error notifications and declared coverage
-limitations also make execution partial, including Coccinelle rule failures
-and compiler limitations. Their counts appear under
-`tool_execution_failures`, `tool_coverage_limitations` and `sarif_input_errors`
-in the saved metrics. Informational compiler review candidates are not
-coverage failures. Expanded-source, graduated-rule and source-wrapper stages
-retain failed or partial invocations in SARIF even when they find nothing;
-those diagnostics also reach the saved execution status. An `ok` execution
-status does not establish full coverage or safe code.
-
-A successful tool exit alone does not establish a successful scan: missing
-or malformed SARIF output is reported as a failure. If part of a report is
-damaged, the package runner retains readable findings and records the damage.
-Expanded-source scans warn when files or rules were skipped while retaining
-usable findings. An enriched SARIF export that drops malformed finding rows
-marks its invocation unsuccessful and includes error notifications; surviving
-findings remain in the report.
-
-Semgrep is invoked with `--disable-nosem` so that all findings reach
-SARIF regardless of inline comments. After scanning, RAPTOR's own
-post-processor (`packages/semgrep/nosemgrep.py`) reads source files
-and annotates each result whose location line (or the line above)
-contains a suppression comment:
+Inline suppression comments annotate findings; they do not remove them from
+SARIF. Suppressed findings are hidden from the console summary unless
+`--show-suppressed` is set.
 
 ```python
 x = eval(user_input)  # nosemgrep: eval-taint
 ```
 
-Accepted forms: `# nosemgrep: <rule-id>`, `// nosemgrep`,
-`/* nosemgrep */`. Suppression is annotation-only -- the finding
-remains in the SARIF file with
-`result.properties.nosemgrep.suppressed = true`. Use
-`--show-suppressed` to include suppressed findings in the output
-summary.
+Accepted comment forms include `# nosemgrep: <rule-id>`, `// nosemgrep`, and
+`/* nosemgrep */`, on the finding's line or the line above it. The SARIF result
+records the suppression for later review.
 
 ### Coccinelle
 
@@ -607,58 +318,26 @@ Coccinelle rules have no inline suppression mechanism. Unwanted
 findings can be excluded via `--exclude-dir` globs.
 
 
+## Compiler analysis
+
 ### Overlapping memory copies
 
-With `--compiler-scan`, C files containing direct or macro-wrapped `memcpy`
-calls also receive an overlap check when a GCC analyzer supporting
-`-Wanalyzer-overlapping-buffers` (GCC 14 or newer) are available. Candidate
-matches select files; only compiler overlap warnings become findings. Candidate
-discovery scans only the capped C files whose ordinary compiler analysis
-succeeded, rather than scanning the entire project. A bounded source scan
-checks up to 1,048,576 characters per file within a shared 30-second budget.
-Semgrep is not required for this check. For files not selected from source,
-the compiler expands macros and RAPTOR checks for live `memcpy` identifiers
-at original source locations, including lowercase wrappers and header-defined
-aliases. Neither candidate path needs a language parser. Comments, quoted text
-and identifiers originating only in expanded header
-bodies are excluded. An identifier selects a file for analysis; it is not itself
-a finding. Declarations and function-pointer references can also select files;
-only the compiler's overlap diagnostic can produce a finding.
+With `--compiler-scan`, RAPTOR checks selected C files for overlapping memory
+copies. A finding requires corroborating compiler analysis. Missing tools or
+failed supplemental checks are reported as coverage limitations while existing
+findings are retained. This additional check does not cover C++ files or
+unresolved compiler paths.
 
-The fallback expands at most 50 files and processes at most 32 MiB of expanded
-text, keeping one view at a time. It shares an overall 60-second candidate
-deadline; unavailable or unfinished views produce coverage limitations.
-
-The fallback adds one preprocessor invocation per attempted expansion. Selected
-files receive at most one supplemental analyzer invocation each, plus one
-capability probe per scan. It shares the TU cap and worker limit and
-runs only after the ordinary compiler analysis succeeds. Its compiler settings
-preserve copy calls for analysis; the ordinary pass also runs to retain other
-warnings. C++ files and unresolved compiler paths are
-outside this additional check's coverage.
-
-Unavailable tools, failed candidate scans and failed supplemental compiles are
-reported as coverage limitations. Existing compiler findings are retained.
-No overlap warning means no finding from this check; it does not establish that
-the file is safe.
 
 ### Returning stack addresses
 
-With `--compiler-scan`, GCC warnings about returning a local address select C
-files for a targeted Clang analysis. A finding requires Clang's path-sensitive
-stack-return diagnostic at the same original source location. A frontend warning
-alone is not enough: it can also fire in an unreachable branch.
+With `--compiler-scan`, RAPTOR checks selected C files for returns of local
+addresses. A frontend warning alone is insufficient; the finding requires
+path-sensitive corroboration under the same preprocessing context.
 
-Clang analyzes a source view preprocessed by GCC, preserving the original macro
-decisions. This avoids treating a different compiler-specific branch as proof.
-Corroborated findings use `raptor.compiler.stack-return`, carry CWE-562 and record
-both compilers and the GCC preprocessing context in their SARIF properties.
-Existing compiler findings remain.
+Missing tools, incompatible source views, or analysis limits reduce this
+additional coverage and are reported without discarding other findings.
 
-Only candidate files get the additional preprocessing and analysis, with at most
-50 candidate translation units and 256 candidate locations per unit, with the
-existing worker and tool timeout limits. Missing Clang or an incompatible source view limits this additional check
-and is reported as a coverage warning; it does not disable the compiler scan.
 
 ### Compiler analysis time budget
 
@@ -682,166 +361,48 @@ hard wall-clock limit for the entire command.
 
 ### Compiler-scan coverage limitations
 
-`--compiler-scan` treats analyzer silence on a TU as evidence only
-when nothing in the TU or its repo headers can steer the analyzer.
-TUs where the source carries a steering construct — `[[clang::suppress]]`
-(any spelling or position in the attribute list), `_Pragma(`,
-`#ifndef __clang_analyzer__`, diagnostic-ignore pragmas, system-header
-line markers — are listed as coverage limitations in the summary and as
-SARIF `toolExecutionNotification` entries, never as findings.  TUs whose
-include closure cannot be fully vetted (unresolvable `#line` names,
-missing or truncated `-E` output, resolution limits) are listed
-separately as "not vetted".  Findings that clang still reports on a
-flagged TU are always kept — the annotation is additive.
+The compiler summary and SARIF diagnostics identify files that could not be
+fully analyzed, including source constructs that can suppress analyzer output,
+unresolved includes, malformed diagnostics, and analysis limits. Findings from
+partially analyzed files remain available. Analyzer silence on those files
+does not establish safety.
 
-When `/audit` checks a hypothesis with a compiler analyzer, a warning from
-a recognized checker whose wording cannot be classified remains inconclusive.
-It is not treated as analyzer silence or as confirmation of the hypothesis.
+For compiler-backed hypotheses in `/audit`, quote a variable name when you need
+attribution to that identifier, for example ``use-after-free of `buffer` ``.
+Warnings with uncertain classification or location remain inconclusive rather
+than proving or refuting the claim.
 
-Missing or malformed GCC diagnostic output is reported as an analysis error
-or scan coverage limitation. It cannot establish a clean result, and `/audit`
-retries the analyzer if a later hypothesis needs the same translation unit.
-
-For compiler-backed hypothesis checks in `/audit`, quote variable names
-(for example, ``use-after-free of `buffer` ``) to request attribution to that
-identifier. Common names such as `buffer`, `size` and `index` are preserved
-when quoted, so they are checked as identifiers rather than interpreted as
-generic prose.
-
-When GCC explicitly names a simple identifier as the subject of a warning,
-`/audit` uses that name for attribution. Mentioning another variable on the
-same source line does not make that warning evidence about the other variable.
-
-For compiler-backed hypothesis checks, `/audit` resolves relative diagnostic
-paths from the translation unit’s directory, as `/scan` does. A warning in
-`include/unit.c` is not attributed to `unit.c` merely because the basenames
-match.
-
-Compiler SARIF locations use the actual source filename after URI decoding,
-including spaces and literal percent sequences. Non-local or invalid location
-URIs are reported as analysis errors rather than treated as clean results.
-
-Compiler warnings need a usable filename and positive integer line number
-to become findings. An unlocatable warning for the checked family leaves
-`/audit` inconclusive; `/scan` reports a coverage limitation. Other valid
-findings from the same analyzer run are retained.
 
 ## Output
 
 ### SARIF Files
 
-Scan status and CodeQL summaries include both tool-execution and tool-configuration
-diagnostics recorded in SARIF. Configuration errors make execution partial even
-when the process exits successfully and reports no findings. Multiple errors
-from one invocation count as one failed invocation. Ordinary warnings remain
-informational unless the tool explicitly reports a coverage limitation.
+Each Semgrep pack produces its own SARIF report. Coccinelle produces a separate
+report, and `--codeql` adds per-language CodeQL reports. `combined.sarif` merges
+usable findings from the current scan and applies exclusions and enforced
+suppression decisions. Per-tool reports remain available for inspection.
 
-CodeQL summaries retain usable findings when neighboring result or dataflow
-metadata is malformed, and warn when some metadata could not be counted.
-When a finding omits severity, its own query's default is used. Query
-inventory counts include extension packs and count reported rules rather
-than proving each query executed.
+Use the **current scan** summary for this invocation's coverage. Older artifacts
+in a reused output directory do not count as work performed by the new scan.
+Project coverage reports separately show accumulated history.
 
-Coccinelle output is handled one match at a time. Invalid optional coordinates
-remain unknown without discarding a match with a usable source path, and
-malformed rows do not discard neighboring findings. Unusable result rows
-produce execution diagnostics rather than implying a clean scan. Exact
-duplicates collapse; findings with different end positions remain distinct.
-Execution errors do not credit untouched source files as successfully examined.
+### Scan completeness
 
-Coccinelle and generated Semgrep-stage findings preserve known source spans.
-Unknown start lines remain unlocated; invalid or backwards optional spans
-are omitted rather than turned into a line-one finding. Coccinelle report
-formatting normalizes source paths without reopening or resolving each source
-file, while retaining explicit paths outside the selected target.
+The final JSON and `scan_metrics.json` record execution as `ok`, `partial`, or
+`error`. Check that status and the reported coverage warnings when automation
+requires every requested analysis to finish. A successful tool process or zero
+findings alone does not establish complete coverage or safe code.
 
-The file-level section at the end of `/scan` is labeled **current scan** and
-uses this invocation's coverage facts. It does not import an older checklist
-or persistent coverage store from a reused output directory. Project coverage
-reports continue to show accumulated history. File and rule previews are
-limited to 20 entries per tool; full details remain in coverage records.
+Pack failures, unavailable tools, parse errors, malformed reports, and skipped
+analysis can leave execution partial. Usable findings are retained where
+possible, and the reports identify the missing coverage. Informational compiler
+review candidates are separate from confirmed findings and coverage failures.
 
-When reusing an output directory, the scan's file total and tool-execution
-summary describe the current invocation. Earlier coverage files remain on disk
-but do not make a disabled or skipped tool appear to have run again. Saved
-scan metrics retain the current tool-summary counts for later display.
-
-The scan coverage summary shows how many distinct paths have tool warnings or
-errors, alongside rule counts and findings. Multiple diagnostics for one path
-count once. Consult the tool's coverage record for the affected paths and
-reasons; a zero-finding count does not mean those paths were analyzed fully.
-
-For multi-language CodeQL scans, coverage combines the files, query packs and
-rule inventories from every report produced by the current scan. Extraction
-warnings retain every affected file. Artifact references honor URI bases and
-indexes; remote references and paths outside the selected target do not count
-as local coverage. URI escapes are decoded once, and equivalent absolute and
-relative source paths count as one file across scanners.
-
-Semgrep coverage totals include the union of files examined by every pack;
-packs for different languages can examine different files. Missing or malformed
-JSON metadata makes execution partial, recorded as `semgrep_metadata_errors`,
-while valid findings and coverage from other packs remain available. Files
-with parsing or analysis errors are counted in `semgrep_partial_files`; their
-recovered findings remain available.
-
-Expanded-source scans retain distinct matches within a macro expansion even
-when they share one original source line. Exact repeats from multiple packs
-still collapse. Expanded coordinates identify preprocessed occurrences;
-they are not presented as columns in the original source.
-
-Semgrep findings resolve artifact and rule references within their own SARIF
-run, including URI bases. Direct-source generated-rule reports retain line
-and column spans, so separate matches on the same line survive merging.
-Expanded-source reports retain original line attribution; preprocessor
-columns are not treated as columns in the original source.
-
-Imported SARIF findings and scan metrics inherit missing severity from each
-report’s referenced rule, including indexed and extension rules. CWE labels
-come from that same descriptor unless the result supplies its own CWE.
-Ambiguous or conflicting references cannot borrow another rule’s metadata. Rule IDs
-omitted from a result are recovered from its validated rule reference, so
-different indexed rules at the same location remain separate findings.
-When combining findings for analysis, evidence from different tools and
-validated rule namespaces remains separate. If they reuse a finding ID,
-only the colliding IDs are qualified; `source_finding_id` retains the original
-for correlation. A tool reusing one ID across different files, line spans or
-rules also receives distinct analysis IDs, preventing artifact overwrites.
-Rule provenance uses component and descriptor identities, so moving rules
-within their tables does not change it. Ordinary IDs remain
-unchanged.
-
-Per-rule scan counts use these same recovered IDs; unresolved IDs are counted as `unknown`.
-
-Each Semgrep pack (local + registry + extra-config) produces its own
-SARIF file. The Coccinelle stage produces one SARIF file. When CodeQL
-is enabled via `--codeql`, per-language CodeQL SARIF files are added.
-
-All per-tool SARIFs are merged via `core.sarif.parser.merge_sarif()`
-into a single `combined.sarif`:
-
-- ID-only runs without URI-base tables are grouped by tool name. Their
-  reports deduplicate by `(ruleId, uri, startLine, endLine, startColumn,
-  fingerprint)`, with the latest occurrence winning. Their driver rules
-  are unioned across the tool.
-- Reports with indexed or component-qualified rules, URI-base tables, or
-  artifact-table references retain their owning run metadata. Runs with identical metadata can
-  combine exact duplicates without changing rule-table positions or paths.
-
-Generated finding IDs use the resolved primary file URI. The same relative
-path under different URI bases remains distinct; equivalent direct and
-based references to one file share an identity. Tool-supplied fingerprints
-remain unchanged. Primary locations that provide only an artifact index
-are resolved through their owning run’s artifact table, including URI bases
-on the table entry. Explicit URI fields retain precedence. Invalid or
-unresolvable indexes leave the finding unlocated instead of borrowing a
-file from another run.
 
 ### Filtering
 
-`--exclude-dir` globs are applied post-merge using `fnmatch`. Per-tool
-SARIFs remain unfiltered as a forensic record; only `combined.sarif`
-and downstream metrics reflect the exclusion.
+`--exclude-dir` filters matching paths from `combined.sarif` and downstream
+metrics. Per-tool SARIF reports retain the original findings for inspection.
 
 ### Sanitizer-cut post-pass
 
@@ -855,148 +416,85 @@ is the default: suppress-verdict findings are removed from
 
 ### Sanitizer-recognition contract
 
-Across the rule engines, multi-step sanitizer chains are recognized
-only within a single expression. A sanitization sequence written as
-one chained expression (`value.replace('\r', '').replace('\n', '')`)
-is recognized; the identical sequence split across statements
-(`v = v.replace('\r', ''); v = v.replace('\n', '')`) is not — the
-finding is still reported. This is deliberate:
+Some multi-step sanitizer chains are recognized only within a single
+expression. The same operations split across statements can still produce a
+finding. Review the complete sanitizer behavior and sink context before
+suppressing such a result.
 
-- Every miss in this class is FP-direction: the code is still
-  flagged and downstream validation adjudicates. Nothing is ever
-  silently suppressed by the contract.
-- Recognitions that carry SUPPRESSION authority must be either
-  single-call sanitizers (one call is complete — most rules) or
-  proof-gated (the SMT barrier validator only claims a barrier when
-  a solver proof backs it).
 
 ### Metrics
 
-`scan_metrics.json` reports finding totals by tool, rule and severity,
-`nosemgrep_suppressed_count`, and coverage information. After a successful
-merge, finding counts follow `combined.sarif`, including deduplication,
-exclusions and enforced suppression drops. If merging fails, counts use
-the retained per-tool reports. File counts come from coverage records
-when available, with the original reports’ artifact tables as a fallback. The
-`nosemgrep_suppressed_count` includes only annotated findings still present
-in the counted report; findings removed by sanitizer enforcement are not
-subtracted again from the active finding total.
+`scan_metrics.json` reports finding totals by tool, rule, and severity,
+suppressed findings, execution status, and coverage limitations. Counts follow
+the merged report when merging succeeds; otherwise they use retained per-tool
+reports. Inspect the coverage diagnostics alongside finding counts.
 
 
 ## Error Handling
 
 ### Per-Pack Isolation
 
-Each Semgrep pack runs in its own [sandbox](sandbox.md) invocation.
-If a pack fails (bad rule syntax, timeout, runtime error), the scanner:
+A failed Semgrep pack is reported without stopping the remaining packs. Check
+the final execution status and diagnostics to see which analyses completed;
+a partial result still contains findings from successful packs.
 
-1. Writes an empty SARIF (`{"runs": []}`) for the failed pack.
-2. Logs the error.
-3. Continues with the remaining packs.
-
-A single bad rule or unreachable registry pack does not crash the
-batch.
 
 ### Timeouts
 
-| Scope | Default | Notes |
-|-------|---------|-------|
-| Overall scan | 30 min | `DEFAULT_TIMEOUT` |
-| Per Semgrep pack (local rules) | 15 min | `SEMGREP_TIMEOUT` |
-| Per Semgrep pack (registry) | 5 min | `SEMGREP_PACK_TIMEOUT` -- capped lower to limit registry latency |
-| Per Semgrep rule | 2 min | `SEMGREP_RULE_TIMEOUT` |
-| Per Coccinelle rule | 5 min | Partial output captured on timeout |
+| Scope | Default |
+|-------|---------|
+| Overall scan | 30 min |
+| Local Semgrep pack | 15 min |
+| Registry Semgrep pack | 5 min |
+| Semgrep rule | 2 min |
+| Coccinelle rule | 5 min |
+
+Timeouts reduce coverage. Consult execution diagnostics before treating an
+empty report as a completed scan.
+
 
 ### Sandbox Failures
 
-`SandboxSetupError` is not caught per-pack -- it propagates
-immediately and aborts the scan, because a sandbox setup failure
-affects every pack identically.
+A sandbox setup failure aborts the scan rather than continuing without the
+requested isolation. See [sandbox troubleshooting](sandbox.md#troubleshooting).
 
-When every dispatched Semgrep pack fails, the scan exits with code 4
-(distinct from the sandbox-engagement-failure exit code 3) to prevent
-a false-pass "0 findings" result.
+If every dispatched Semgrep pack fails, the command exits with code 4. Sandbox
+engagement failure uses exit code 3. Other incomplete scans can retain the
+existing exit-code behavior; check the saved execution status as well.
+
 
 ### Parallel Execution
 
-By default, packs run in parallel (`max_semgrep_workers` in
-`tuning.json`, default `auto` = half the available CPUs). Concurrent
-packs share the cores instead of each claiming every one, and a
-post-completion check adds any pack whose SARIF never landed on disk
-to the `failed_scans` list.
+Semgrep packs run in parallel by default. With `--codeql`, CodeQL also runs
+concurrently with Semgrep; its console messages are tagged `[codeql]`.
 
-With `--codeql`, the CodeQL stage (database build + analyze) runs
-concurrently with the Semgrep packs; its console lines are tagged
-`[codeql]` and a stage-completion line reports its duration. Multi-
-language builds also divide `-j` between concurrent per-language
-invocations when `codeql_threads` is `auto`.
+Use `--sequential` to run packs and stages one at a time. Worker limits are
+configurable through `max_semgrep_workers` in `tuning.json`.
 
-Pass `--sequential` for a fully serial run: packs one at a time AND
-stages in order (no Semgrep/CodeQL overlap).
 
 ### Compiler review candidates
 
-Strict-aliasing warnings can also describe safe pointer conversions or unreachable
-code. Compiler scanning preserves these warnings in
-`scan/compiler-review-candidates.json` with status `needs_review`. They require
-independent corroboration and are excluded from normal findings and automatic
-finding analysis. The scan summary reports their count. In `/audit`, these
-warnings alone produce an inconclusive result, even when they match the hypothesis.
-A clean run does not refute an aliasing hypothesis.
+Strict-aliasing warnings can describe safe casts or unreachable code. Warnings
+without sufficient corroboration are saved in
+`scan/compiler-review-candidates.json` with status `needs_review`, separately
+from normal findings and automatic finding analysis.
 
-When GCC and Clang are available, compiler scanning also checks a limited class
-of C aliasing candidates against Clang's parsed types. Direct loads, stores,
-and local pointer aliases can become findings when they access a known local
-scalar through an incompatible builtin scalar type on a straight-line path.
-It follows local pointer reassignments when both object origins are known.
-Supported scalar literals, numeric conversions, unary `+`, `-`, `~`, `!`, and
-assignments to initialized scalar locals preserve this tracking.
-Scalar locals declared without an initializer are supported after a direct
-assignment or a compatible store through a known local pointer. Reads before
-initialization remain outside this check; incompatible stores can qualify
-without reading the object's previous value.
-Bitwise operations, numeric comparisons and unsigned `+`, `-`, `*` arithmetic
-also preserve this tracking. Standalone `&=`, `|=` and `^=` updates require an
-initialized scalar object.
-The report identifies the object and both types under Raptor's strict-aliasing
-compiler model; project build flags are not inferred. Harmless casts alone do
-not qualify. `/audit` uses the same check for matching CWE-843 hypotheses.
+For a limited set of C cases, additional type analysis can corroborate an
+incompatible scalar access. The report states the compiler model used; project
+build flags are not inferred. Unsupported cases, missing tools, and analysis
+limits leave candidates available for review. Silence does not prove them safe.
 
-Calls, conditional or short-circuit paths, signed binary arithmetic, division,
-shifts, nested updates, unknown pointer origins, typedefs, compiler-specific
-aliasing exceptions, and C++ remain outside this check. Their warnings stay in
-the review report. Missing tools, unsupported Clang output, timeouts, and
-analysis limits also preserve the candidates; silence never proves them safe.
-The extra parsing runs once per candidate-bearing C translation unit, up to
-25 units per scan, within the shared compiler analysis budget.
 
 ### Compiler diagnostic paths
 
-When GCC reports the calls and branches leading to a warning, compiler scan
-retains those paths in its SARIF output and supplies them as context during
-finding review. `/audit` also retains them in compiler sweep receipts.
-Distinct paths to the same reported location are kept with that finding.
+Compiler findings can include the calls and branches leading to a warning.
+These paths help review the compiler's assumptions; they do not prove that the
+path is feasible in the application. Missing or truncated path context does
+not discard an otherwise usable warning.
 
-These are the compiler's control-flow assumptions, not taint traces or proof
-that a path is feasible in the application. Caller contracts still need
-review. Paths are limited to the target tree and bounded in count, size and
-retained memory. If a path is malformed, outside scope or over a limit, the
-warning remains and its metadata records why path context was omitted.
 
 ### Compiler weakness classification
 
-Compiler finding CWE tags use the compiler's own diagnostic classification when
-it supplies one. For shared Clang checkers, Raptor uses the diagnostic message
-to distinguish supported cases such as leaks, double-free and use-after-free.
-Compiler verification includes leaks from C++ `new` allocations as well as
-C allocation leaks.
-A checker name alone does not establish a specific weakness.
-
-If the subtype remains ambiguous, the finding is retained with a broad family
-or no CWE tag. Findings merged at one location with conflicting classifications
-keep the observed CWE values in their metadata without selecting one by order.
-Inconsistent or unresolved indexed taxonomy references cannot override the
-diagnostic family classification. The warning remains available even when its reported
-CWE metadata cannot be verified.
-Per-result tags take precedence over rule-level defaults during SARIF import.
-These tags describe the reported mechanism; they do not prove path feasibility.
+CWE tags describe the diagnostic's reported mechanism, not application
+reachability. Ambiguous warnings may retain a broad family or no CWE tag;
+review the diagnostic and source rather than relying on the tag alone.
