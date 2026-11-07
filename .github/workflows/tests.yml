@@ -475,10 +475,18 @@ jobs:
           # its file-per-worker grouping is what bounds module/class
           # fixture instantiation under the seeded shuffle.
           set -f  # word-split $TEST_FILES without glob expansion
+          rc=0
           python -m pytest -p core.testing.llm_tripwire \
             --llm-tripwire-dir "$RUNNER_TEMP/llm-tripwire" \
             --llm-tripwire-host-dir "$RUNNER_TEMP/llm-hosts" \
-            -n auto --dist worksteal $TEST_FILES
+            -n auto --dist worksteal $TEST_FILES || rc=$?
+          # Affected files may contain only slow/integration cases, owned by
+          # their separate tiers. Preserve every other pytest failure status.
+          if [ "$rc" -eq 5 ]; then
+            echo "No default-tier cases in this affected-file batch."
+            exit 0
+          fi
+          exit "$rc"
 
       - name: Stop LLM hostname tripwire and check connections
         if: always()
