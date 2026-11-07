@@ -45,6 +45,10 @@ def lifecycle_workers(monkeypatch):
     with ExitStack() as resources:
         started = []
         def start(jail):
+            # get_parser_jail calls start on every lookup. Like the real
+            # implementation, reuse a live worker instead of orphaning it.
+            if jail._proc is not None and jail._proc.poll() is None:
+                return jail
             started.append(jail)
             left, right = socket.socketpair()
             resources.callback(left.close)
@@ -103,6 +107,8 @@ def test_proxy_fixture_preserves_live_borrowed_owners(case, finish, lifecycle_wo
             owned_jail = owned._parser_jail
             owned_child = owned_jail._proc
             direct = proxy.EgressProxy(allowed_hosts=set())
+            assert direct._parser_jail is owned_jail
+            assert direct._parser_jail._proc is owned_child
             if generator is not None:
                 if finish == "normal":
                     generator.close()
