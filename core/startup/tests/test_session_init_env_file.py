@@ -621,14 +621,19 @@ def test_claude_host_with_inherited_codex_marker_keeps_native_env_file(session_i
     assert 'RAPTOR_SESSION_PID=' not in text
 
 
-@pytest.mark.parametrize('session_id', ['', 'not-a-session', 'A' * 36])
+@pytest.mark.parametrize('session_id', ['', 'bad/session', '.', '..', 'bad session',
+                                             'bad\nsession', 'é', 'A' * 129])
 def test_explicit_codex_bootstrap_rejects_invalid_session(monkeypatch, session_id):
     import runpy
+    from core.project.session_scope import validate_id
+    with pytest.raises(ValueError):
+        validate_id(session_id)
     monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
     monkeypatch.setenv('CODEX_THREAD_ID', session_id)
     monkeypatch.setattr(sys, 'argv', [str(SCRIPT), '--codex-bootstrap'])
-    with pytest.raises(SystemExit, match='valid CODEX_THREAD_ID'):
-        runpy.run_path(str(SCRIPT))
+    with patch.object(sys, 'path', sys.path.copy()):
+        with pytest.raises(SystemExit, match='valid CODEX_THREAD_ID'):
+            runpy.run_path(str(SCRIPT))
 
 
 def test_native_codex_startup_still_reads_hook_stdin(session_init, monkeypatch):
@@ -638,16 +643,22 @@ def test_native_codex_startup_still_reads_hook_stdin(session_init, monkeypatch):
     assert session_init.read_codex_start_payload()['session_id'] == 'from-native-hook'
 
 
-def test_explicit_codex_bootstrap_does_not_read_stdin(monkeypatch):
+@pytest.mark.parametrize('sid', [
+    '11111111-1111-1111-1111-111111111111', 'not-a-session', 'native_child-01',
+    'A' * 36, 'A' * 128, 'x',
+])
+def test_explicit_codex_bootstrap_does_not_read_stdin(monkeypatch, sid):
     import runpy
+    from core.startup.codex_environment import _session_id
+    assert _session_id(sid) == sid
     monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
-    sid = '11111111-1111-1111-1111-111111111111'
     monkeypatch.setenv('CODEX_THREAD_ID', sid)
     monkeypatch.setenv('RAPTOR_DIR', str(REPO_ROOT))
     monkeypatch.setenv('CODEX', '')
     monkeypatch.setenv('RAPTOR_CODEX_HOOK', '')
     monkeypatch.setattr(sys, 'argv', [str(SCRIPT), '--codex-bootstrap'])
-    module = runpy.run_path(str(SCRIPT))
+    with patch.object(sys, 'path', sys.path.copy()):
+        module = runpy.run_path(str(SCRIPT))
     assert module['_is_codex_host']()
     assert module['read_codex_start_payload']() == {
         'hook_event_name': 'SessionStart', 'session_id': sid}
@@ -667,3 +678,27 @@ def test_launcher_context_formatting_needs_no_codex_startup(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {'caller_dir': caller, 'launch_target': target}
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installation protection requires Linux")
+def test_bootstrap_checks_protection_before_importing_session_scope(tmp_path):
+    import os
+    program = r"""
+import importlib.abc, runpy, sys
+class NoProjectImport(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'core.project' or fullname.startswith('core.project.'):
+            raise AssertionError('session scope imported before protection check')
+sys.meta_path.insert(0, NoProjectImport())
+sys.argv = [sys.argv[1], '--codex-bootstrap']
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(tmp_path),
+           '_RAPTOR_TRUSTED': '1', 'RAPTOR_INSTALL_PROTECTED': '1',
+           'CODEX_THREAD_ID': 'native_child-01'}
+    result = subprocess.run([sys.executable, '-I', '-c', program, str(SCRIPT)],
+                            env=env, cwd=tmp_path, capture_output=True,
+                            text=True, timeout=20)
+    assert result.returncode != 0
+    assert 'protected Python import paths could not be established' in result.stderr
+    assert 'session scope imported before protection check' not in result.stderr
