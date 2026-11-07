@@ -1,5 +1,6 @@
 """Exercise native runner-patch fixtures without running their I/O bodies."""
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from functools import lru_cache
 import importlib
@@ -14,8 +15,7 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
-_SPECS = [('core/container/tests/test_proc.py', 'core.container.proc'),
- ('packages/cve_env/tests/unit/test_bench_replay_verify.py', 'core.container.proc'),
+_SPECS = [('packages/cve_env/tests/unit/test_bench_replay_verify.py', 'core.container.proc'),
  ('packages/cve_env/tests/unit/test_docker_build.py', 'core.container.proc'),
  ('packages/cve_env/tests/unit/test_migration_resilience.py', 'core.container.proc'),
  ('packages/cve_env/tests/unit/test_prompt_schemas.py', 'core.container.proc'),
@@ -32,6 +32,7 @@ def _tree(file):
 def _patches(file):
     calls = []
     for node in ast.walk(_tree(file)):
+        node = as_patch_call(node)
         if not isinstance(node, ast.Call) or not node.args:
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")

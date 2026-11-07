@@ -8,9 +8,12 @@ contract is load-bearing.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -90,7 +93,7 @@ def test_temp_file_cleaned_up_on_failure(tmp_path: Path) -> None:
         # destination locked on Windows.
         raise OSError("simulated rename failure")
 
-    with patch("core.atomic_fs.os.replace", _boom):
+    with mock_module_attribute(_mock_owner('core.atomic_fs'), 'os', 'replace', _boom):
         with pytest.raises(OSError, match="simulated rename failure"):
             atomic_write_text(p, "x\n")
 
@@ -110,7 +113,7 @@ def test_keyboard_interrupt_during_write_cleans_up(tmp_path: Path) -> None:
     def _interrupt(*a, **kw):
         raise KeyboardInterrupt()
 
-    with patch("core.atomic_fs.os.fsync", _interrupt):
+    with mock_module_attribute(_mock_owner('core.atomic_fs'), 'os', 'fsync', _interrupt):
         with pytest.raises(KeyboardInterrupt):
             atomic_write_text(p, "x\n")
 
@@ -127,7 +130,7 @@ def test_failure_does_not_corrupt_existing(tmp_path: Path) -> None:
     def _boom(src, dst, *a, **kw):
         raise OSError("simulated")
 
-    with patch("core.atomic_fs.os.replace", _boom):
+    with mock_module_attribute(_mock_owner('core.atomic_fs'), 'os', 'replace', _boom):
         with pytest.raises(OSError):
             atomic_write_text(p, "NEW CONTENT\n")
 

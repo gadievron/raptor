@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 from typing import Any
 from unittest.mock import patch
 
@@ -188,7 +192,7 @@ def test_provision_launch_failure_surfaces_class(tmp_path) -> None:
         return _docker_ok(cmd, **_kw)
 
     with patch("core.container.containers.run_cli", side_effect=refused), \
-         patch("core.container.containers.time.sleep"):
+         mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep'):
         out = pv.provision(_image_spec(), workdir=tmp_path)
     assert not out.ok and out.reason == "launch_failed"
     assert out.reason_class == "manifest_unknown"

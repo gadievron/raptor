@@ -1,5 +1,9 @@
 """Tests for capability detection."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 import unittest
 from pathlib import Path
@@ -118,7 +122,7 @@ class TestProbe(unittest.TestCase):
             stderr="[-] SYSTEM ERROR : shmget() failed, try running afl-system-config",
         )
         with patch.object(Path, "exists", return_value=True), \
-             patch("packages.fuzzing.capability.subprocess.run",
+             mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'subprocess', 'run',
                    return_value=completed):
             self.assertFalse(_check_macos_afl_shmem("/x/afl-fuzz"))
 
@@ -130,7 +134,7 @@ class TestProbe(unittest.TestCase):
             stderr="",
         )
         with patch.object(Path, "exists", return_value=True), \
-             patch("packages.fuzzing.capability.subprocess.run",
+             mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'subprocess', 'run',
                    return_value=completed):
             self.assertTrue(_check_macos_afl_shmem("/x/afl-fuzz"))
 
@@ -143,11 +147,11 @@ def _probe_on(system: str, machine: str):
     every sanitiser probe reports supported, so has_memory_sanitizer
     starts True and only the platform-policy downgrade can clear it.
     """
-    with patch("packages.fuzzing.capability.platform.system",
+    with mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'platform', 'system',
                return_value=system), \
-         patch("packages.fuzzing.capability.platform.machine",
+         mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'platform', 'machine',
                return_value=machine), \
-         patch("packages.fuzzing.capability.shutil.which",
+         mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'shutil', 'which',
                side_effect=lambda name: "/x/clang" if name == "clang" else None), \
          patch("packages.fuzzing.capability._probe_clang_sanitiser",
                return_value=True), \

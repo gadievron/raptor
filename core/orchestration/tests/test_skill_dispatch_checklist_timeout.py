@@ -16,8 +16,11 @@ refusal).
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -69,7 +72,7 @@ def _spawn_timeout(target: Path, out_dir: Path) -> object:
             stderr = ""
         return _CP()
 
-    with patch("core.orchestration.skill_dispatch.subprocess.run",
+    with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                side_effect=fake_run):
         assert build_checklist(target, out_dir) is True
     return captured["timeout"]

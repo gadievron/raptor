@@ -1,0 +1,4528 @@
+[
+  {
+    "file": "core/audit/tests/test_validate.py",
+    "anchor": [
+      "TestDispatchGates",
+      "test_launch_oserror_reported_as_launch_failure"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_returns_none_when_not_on_path"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_strips_suffix_when_real_path_matches"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_rejects_when_real_path_does_not_end_with_suffix"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_os_error_returns_none"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_fallback_to_which_java"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_returns_none_when_nothing_found"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectGoroot",
+      "test_from_which_go"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectGoroot",
+      "test_returns_none_when_go_not_on_path"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectDotnetRoot",
+      "test_dirname_of_dotnet_binary"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectDotnetRoot",
+      "test_returns_none_when_not_on_path"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_asks_rustup_show_home"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_fallback_to_home_rustup_when_rustup_not_on_path"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_returns_none_when_no_rustup_and_no_home_dir"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectorsRegistry",
+      "test_all_detectors_return_optional_str"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/container/tests/test_proc.py",
+    "anchor": [
+      "test_mocked_run_never_reads_as_truncated"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/env/tests/test_provision.py",
+    "anchor": [
+      "test_provision_launch_failure_surfaces_class"
+    ],
+    "owner": "core.container.containers",
+    "binding": "time",
+    "attribute": "sleep",
+    "ordinal": 0
+  },
+  {
+    "file": "core/json/tests/test_utils.py",
+    "anchor": [
+      "TestLoadJsonMaxBytes",
+      "test_file_grown_past_budget_after_fstat_refused"
+    ],
+    "owner": "core.json.utils",
+    "binding": "os",
+    "attribute": "fstat",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_bare_aws_region_is_not_bedrock_intent"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_bedrock_bearer_with_dispatcher_marks_external_llm"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_bedrock_bearer_with_botocore_marks_external_llm"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_bedrock_bearer_without_path_does_not_mark_external_llm"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_ambient_profile_alone_is_not_selection_signal"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_raptor_bedrock_profile_marks_external_llm"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_detection.py",
+    "anchor": [
+      "test_raptor_bedrock_model_without_path_not_detected"
+    ],
+    "owner": "core.llm.detection",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_resource_governor.py",
+    "anchor": [
+      "TestGovernorUnit",
+      "test_wall_clock_cap"
+    ],
+    "owner": "core.llm.client",
+    "binding": "time",
+    "attribute": "monotonic",
+    "ordinal": 0
+  },
+  {
+    "file": "core/llm/tests/test_resource_governor.py",
+    "anchor": [
+      "TestGovernorUnit",
+      "test_wall_clock_cap"
+    ],
+    "owner": "core.llm.client",
+    "binding": "time",
+    "attribute": "monotonic",
+    "ordinal": 1
+  },
+  {
+    "file": "core/llm/tests/test_resource_governor.py",
+    "anchor": [
+      "TestGovernorUnit",
+      "test_wall_clock_cap"
+    ],
+    "owner": "core.llm.client",
+    "binding": "time",
+    "attribute": "monotonic",
+    "ordinal": 2
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "_patch_passes"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "UnderstandPrepassTests",
+      "test_claude_dispatch_uses_sandbox_with_egress_proxy"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "ValidatePostpassTests",
+      "test_validate_dispatch_uses_sandbox_with_egress_proxy"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "AdversarialBugsTests",
+      "test_complete_lifecycle_subprocess_nonzero_return_is_logged"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "LifecycleHelperResilienceTests",
+      "test_complete_lifecycle_failure_does_not_raise"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "LifecycleHelperResilienceTests",
+      "test_fail_lifecycle_swallows_subprocess_errors"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes_integration.py",
+    "anchor": [
+      "PrepassIntegrationTests",
+      "test_creates_proper_understand_run_discoverable_by_bridge"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes_integration.py",
+    "anchor": [
+      "PrepassIntegrationTests",
+      "test_bridge_round_trip_populates_attack_surface_from_understand"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes_integration.py",
+    "anchor": [
+      "PrepassIntegrationTests",
+      "test_2prime_enrichment_actually_marks_priority_in_real_checklist"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes_integration.py",
+    "anchor": [
+      "PostpassIntegrationTests",
+      "test_creates_proper_validate_run_as_sibling_of_understand"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes_integration.py",
+    "anchor": [
+      "PostpassIntegrationTests",
+      "test_creates_proper_validate_run_as_sibling_of_understand"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 1
+  },
+  {
+    "file": "core/orchestration/tests/test_lifecycle_trust_marker.py",
+    "anchor": [
+      "test_lifecycle_env_carries_trust_marker_when_parent_lacks_it"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_lifecycle_trust_marker.py",
+    "anchor": [
+      "test_lifecycle_does_not_fabricate_claudecode"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_lifecycle_trust_marker.py",
+    "anchor": [
+      "test_lifecycle_preserves_existing_marker_value"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "_run"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "DispatchFlowTests",
+      "test_stage_error_fails_lifecycle_with_reason"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "DispatchFlowTests",
+      "test_keyboard_interrupt_marks_lifecycle_failed"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "StartLifecycleFailureDetailTests",
+      "_start"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "StartLifecycleFailureDetailTests",
+      "test_success_has_no_error"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch.py",
+    "anchor": [
+      "StartLifecycleFailureDetailTests",
+      "test_dispatch_skip_reason_carries_the_detail"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/orchestration/tests/test_skill_dispatch_checklist_timeout.py",
+    "anchor": [
+      "_spawn_timeout"
+    ],
+    "owner": "core.orchestration.skill_dispatch",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/project/tests/test_oplock.py",
+    "anchor": [
+      "VerifyAfterLockTest",
+      "test_purged_lock_mid_hold_reminted"
+    ],
+    "owner": "core.project.oplock",
+    "binding": "os",
+    "attribute": "stat",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_overlay_wraps_into_valid_manifest"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_entry_extra_keys_carried_verbatim"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_default_provenance_only_when_absent"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_declared_provenance_never_overwritten"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_invalid_overlay_refused_via_schema"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_wrong_sha_refused"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestGenerate",
+      "test_fp_only_overlay"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestLabelKindContract",
+      "test_overlay_kind_carried_verbatim_and_inherited"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestLabelKindContract",
+      "test_entry_kind_mismatch_refused"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestLabelKindContract",
+      "test_absent_kind_never_defaulted"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestLabelKindContract",
+      "test_entry_kind_without_meta_carried"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_nodegoat_manifest.py",
+    "anchor": [
+      "TestCli",
+      "test_end_to_end"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestGenerateManifest",
+      "test_tp_expected_fp_clean"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestGenerateManifest",
+      "test_output_passes_manifest_validation"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestGenerateManifest",
+      "test_cwe_filter"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestGenerateManifest",
+      "test_limit_deterministic"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestGenerateManifest",
+      "test_wrong_sha_refused"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestPerCwe",
+      "test_split_partitions_by_cwe"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestPerCwe",
+      "test_each_manifest_validates"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestPerCwe",
+      "test_entries_carried_verbatim"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestPerCwe",
+      "test_all_clean_cwe_becomes_fp_only"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_owasp_manifest.py",
+    "anchor": [
+      "TestPerCwe",
+      "test_cli_per_cwe_writes_one_file_per_class"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_sentinel_parsed_and_log_written"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_last_sentinel_occurrence_wins"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_missing_sentinel_errors"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_pinned_dir_with_sarifs_beats_divergent_sentinel"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_nonzero_exit_with_dir_still_scores"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestRunPipeline",
+      "test_llm_profile_warns"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestVerifyPinnedClone",
+      "test_wrong_sha_refused"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestVerifyPinnedClone",
+      "test_pinned_sha_accepted"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestVerifyPinnedClone",
+      "test_short_pin_accepted_as_prefix"
+    ],
+    "owner": "core.recall.pinned_clone",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestStreamedPipelineOutput",
+      "test_run_called_with_file_streams"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestStreamedPipelineOutput",
+      "test_symlink_swapped_stderr_tmp_refused"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/recall/tests/test_runner.py",
+    "anchor": [
+      "TestStreamedPipelineOutput",
+      "test_symlink_swapped_log_refused_before_sentinel_binding"
+    ],
+    "owner": "core.recall.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestGetOutputDir",
+      "test_concurrent_same_second_invocations_get_distinct_dirs"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestGetOutputDir",
+      "test_concurrent_same_second_invocations_get_distinct_dirs"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 1
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_underscore_separator"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_hyphen_separator"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_default_separator_is_underscore"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_uses_correct_strftime_format_for_separator"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_two_pids_produce_distinct_suffixes"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_output.py",
+    "anchor": [
+      "TestUniqueRunSuffix",
+      "test_two_pids_produce_distinct_suffixes"
+    ],
+    "owner": "core.run.output",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 1
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_missing_tool_returns_none"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_isolated_home_is_cleaned_after_failure"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_isolated_home_is_cleaned_after_failure"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_cache_separates_isolated_and_operator_home"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_cache_separates_isolated_and_operator_home"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_runs_resolved_path_not_bare_name"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_runs_resolved_path_not_bare_name"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_uses_safe_env"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_uses_safe_env"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_env_fails_closed_without_core_config"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_env_fails_closed_without_core_config"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_failure_yields_toolinfo_not_raise"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_probe_failure_yields_toolinfo_not_raise"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_custom_args_and_timeout"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestProbe",
+      "test_custom_args_and_timeout"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_cache_memoises_positive_and_negative"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_cache_memoises_positive_and_negative"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_cache_memoises_positive_and_negative"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 1
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_uncached_by_default"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_uncached_by_default"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_reset_probe_cache"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_reset_probe_cache"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_cache_key_includes_args"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_toolprobe.py",
+    "anchor": [
+      "TestCache",
+      "test_cache_key_includes_args"
+    ],
+    "owner": "core.run.toolprobe",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_session_bound_start_records_parent_with_starttime"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_detached_start_records_own_pid_not_init"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_detached_start_records_no_session_pid"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_unreadable_starttime_records_bare_pid"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_sessionless_interactive_start_records_no_worker"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_container_init_orchestrator_records_nothing"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_container_init_orchestrator_records_nothing"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getpid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/run/tests/test_worker_liveness.py",
+    "anchor": [
+      "TestWorkerStampRecorder",
+      "test_sessionless_resume_refreshes_worker_and_drops_session"
+    ],
+    "owner": "core.run.metadata",
+    "binding": "os",
+    "attribute": "getppid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sage/tests/test_rowmac.py",
+    "anchor": [
+      "TestShortOrEmptyKeyRefused",
+      "test_empty_key_refused_immediately_without_retry_stall"
+    ],
+    "owner": "core.security.mac_key",
+    "binding": "time",
+    "attribute": "sleep",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sage/tests/test_rowmac_key_guard.py",
+    "anchor": [
+      "TestWrongOwner",
+      "test_foreign_owner_refused"
+    ],
+    "owner": "core.sage.rowmac",
+    "binding": "os",
+    "attribute": "fstat",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sage/tests/test_rowmac_key_guard.py",
+    "anchor": [
+      "TestShortReadDelivery",
+      "test_chunked_read_loads_full_key"
+    ],
+    "owner": "core.sage.rowmac",
+    "binding": "os",
+    "attribute": "read",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sage/tests/test_rowmac_key_guard.py",
+    "anchor": [
+      "TestShortReadDelivery",
+      "test_truncated_key_reads_exact_length"
+    ],
+    "owner": "core.sage.rowmac",
+    "binding": "os",
+    "attribute": "read",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_pidns_proc_mount.py",
+    "anchor": [
+      "TestProbeCaching",
+      "test_probe_runs_once_per_process_and_caches"
+    ],
+    "owner": "core.sandbox.probes",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_pidns_proc_mount.py",
+    "anchor": [
+      "TestProbeCaching",
+      "test_mount_specific_refusal_is_detected_when_namespaces_engage"
+    ],
+    "owner": "core.sandbox.probes",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_pidns_proc_mount.py",
+    "anchor": [
+      "TestProbeCaching",
+      "test_namespace_layer_refusal_does_not_claim_proc_mount_unavailable"
+    ],
+    "owner": "core.sandbox.probes",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_pidns_proc_mount.py",
+    "anchor": [
+      "TestProbeCaching",
+      "test_probe_infrastructure_failure_is_not_cached"
+    ],
+    "owner": "core.sandbox.probes",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_spawn_mount_ns.py",
+    "anchor": [
+      "TestGidmapAllowProbe",
+      "test_returns_none_when_no_cap_setgid"
+    ],
+    "owner": "core.sandbox._spawn",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/sandbox/tests/test_spawn_mount_ns.py",
+    "anchor": [
+      "TestGidmapAllowProbe",
+      "test_returns_path_when_cap_present"
+    ],
+    "owner": "core.sandbox._spawn",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "core/startup/tests/test_check_tools.py",
+    "anchor": [
+      "_run_check_tools"
+    ],
+    "owner": "core.startup.init",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "core/startup/tests/test_tighten_perms.py",
+    "anchor": [
+      "TestTightenConfigPerms",
+      "test_not_owned_warns_no_chmod"
+    ],
+    "owner": "core.startup.init",
+    "binding": "os",
+    "attribute": "getuid",
+    "ordinal": 0
+  },
+  {
+    "file": "core/startup/tests/test_tighten_perms.py",
+    "anchor": [
+      "TestTightenConfigPerms",
+      "test_chmod_failure_falls_back_to_warning"
+    ],
+    "owner": "core.startup.init",
+    "binding": "os",
+    "attribute": "fchmod",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_semgrep_workers"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_semgrep_workers"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_semgrep_workers_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_semgrep_workers_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_codeql_workers"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_codeql_workers"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_fuzz_parallel"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_fuzz_parallel"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_all_cpu_backed_worker_limits_together"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_resolves_all_cpu_backed_worker_limits_together"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_worker_limits_fallback_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestLoadTuning",
+      "test_auto_worker_limits_fallback_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_ram_clamps_low"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sysconf",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_ram_clamps_high"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sysconf",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_ram_fallback_on_error"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sysconf",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_respects_cgroup_v2_quota"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_respects_cgroup_v2_quota"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_respects_cgroup_v1_quota"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_respects_cgroup_v1_quota"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_falls_back_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_available_cpus_falls_back_when_cpu_unknown"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_respects_affinity_before_host_cpu_count"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_respects_affinity_before_host_cpu_count"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_semgrep_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_memory_and_hard_ceiling"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_memory_and_hard_ceiling"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_memory_and_hard_ceiling"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_memory_and_hard_ceiling"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_codeql_workers_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_uses_half_detected_cpus"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 0
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "sched_getaffinity",
+    "ordinal": 1
+  },
+  {
+    "file": "core/tuning/tests/test_tuning.py",
+    "anchor": [
+      "TestAutoDetection",
+      "test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback"
+    ],
+    "owner": "core.tuning",
+    "binding": "os",
+    "attribute": "cpu_count",
+    "ordinal": 1
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_is_available_found"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_is_available_missing"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_returns_string"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_returns_string"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_unavailable"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_tuple_parses_major_minor"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_tuple_parses_major_minor"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_tuple_handles_three_component"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_tuple_handles_three_component"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/coccinelle/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_tuple_none_when_unavailable"
+    ],
+    "owner": "packages.coccinelle.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/codeql/tests/test_buildless_mode.py",
+    "anchor": [
+      "TestBuildModeCacheContract",
+      "test_explicit_build_replaces_source_only_cache"
+    ],
+    "owner": "packages.codeql.database_manager",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/codeql/tests/test_database_manager.py",
+    "anchor": [
+      "TestDetectCodeqlCli",
+      "_detect"
+    ],
+    "owner": "packages.codeql.database_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/codeql/tests/test_database_manager.py",
+    "anchor": [
+      "TestForceEvictionFailure",
+      "test_failed_force_eviction_does_not_serve_the_forced_away_db"
+    ],
+    "owner": "packages.codeql.database_manager",
+    "binding": "os",
+    "attribute": "rename",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/codeql/tests/test_threat_models.py",
+    "anchor": [
+      "TestVersionProbe",
+      "test_probe_parses_dotted_version"
+    ],
+    "owner": "packages.codeql.query_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/codeql/tests/test_threat_models.py",
+    "anchor": [
+      "TestVersionProbe",
+      "test_probe_failure_remains_retryable"
+    ],
+    "owner": "packages.codeql.query_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_inspect_state_returns_error_on_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_inspect_state_returns_error_on_missing_binary"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_inspect_state_returns_error_on_oserror"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_container_logs_tail_returns_empty_on_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_container_logs_tail_returns_empty_on_missing_binary"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_check_logs_returns_failed_on_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_manifest_inspect_returns_none_on_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_manifest_inspect_returns_none_on_missing_binary"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_docker_stop_swallows_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_docker_stop_swallows_missing_binary"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_docker_stop_swallows_oserror"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_service_health_token_returns_empty_on_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_service_health_token_returns_empty_on_missing_binary"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_compose_invocation_falls_back_when_probe_times_out"
+    ],
+    "owner": "core.container.compose",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_migration_resilience.py",
+    "anchor": [
+      "test_compose_invocation_falls_back_when_probe_times_out"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_with_commit_sha_clone_failure_returns_clean_error"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_with_commit_sha_checkout_failure"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_with_commit_sha_clone_timeout"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_with_commit_sha_skips_tag_listing"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_shallow_clone_succeeds_tag_matches"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_no_tag_matches_returns_error"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_clone_failure_triggers_archive_fallback"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_source_build_handler_fuses_docker_build_when_dockerfile_present"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_source_build_handler_no_fuse_when_no_dockerfile"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_phase61_tarball_filter_blocks_absolute_symlink"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_phase61_tarball_filter_blocks_relative_escape_symlink"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_build_product_cannot_rmtree_outside_workdir"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_source_build.py",
+    "anchor": [
+      "test_checkout_refuses_dash_leading_ref_and_terminates_options"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/cve_env/tests/unit/test_utils_run.py",
+    "anchor": [
+      "test_run_with_timeout_catches_oserror_during_spawn"
+    ],
+    "owner": "core.container.proc",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_apt_detected"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_dnf_detected"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_pacman_detected"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_brew_detected"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_first_wins_when_multiple_pms_present"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestDetectPackageManager",
+      "test_no_pm_returns_none"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_apt_hint"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_dnf_hint"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_yum_hint_uses_yum"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pacman_hint"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_zypper_hint"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_apk_hint"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_brew_hint_omits_sudo"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_multi_package_install"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_no_pm_generic_fallback"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_mac_caveat_appended_on_darwin"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_mac_caveat_suppressed_on_linux"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_afl_fuzz_mac_caveat_for_apple_silicon"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_in_active_venv_uses_pip"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_in_active_conda_env_uses_conda"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_with_uv_present_uses_uv"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_present_uses_pipx"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_missing_chains_bootstrap_for_apt"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_missing_chains_bootstrap_for_brew"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_missing_pacman_uses_python_pipx_package_name"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_pipx_no_pm_no_env_points_to_pipx_docs"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_venv_wins_over_conda"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_tool_without_mac_caveat_renders_normally_on_mac"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_hint_passes_package_names_through"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_package_manager.py",
+    "anchor": [
+      "TestFormatInstallHint",
+      "test_hint_passes_package_names_through"
+    ],
+    "owner": "packages.describe.package_manager",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 1
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCodeql",
+      "test_missing_binary_defers_to_doctor"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCodeql",
+      "test_present_binary_with_all_build_deps_returns_ok"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCodeql",
+      "test_present_binary_missing_autoreconf_warns"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestBuildDepUniverse",
+      "test_gomod_missing_go_warns_not_ok"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestBuildDepUniverse",
+      "test_unknown_build_system_reports_no_data_not_ok"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestBuildDepUniverse",
+      "test_no_detected_build_system_is_honest"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCoccinelle",
+      "test_missing_binary_defers_to_doctor"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCoccinelle",
+      "test_c_target_returns_ok"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCoccinelle",
+      "test_no_detected_language_warns_not_ok"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckCoccinelle",
+      "test_python_target_warns_about_zero_fire"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestNoLlmCheckByDesign",
+      "test_top_level_checks_exclude_llm"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckToolReadiness",
+      "test_returns_list_of_tool_checks"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/describe/tests/test_tool_readiness.py",
+    "anchor": [
+      "TestCheckToolReadiness",
+      "test_python_target_omits_binary_oracle"
+    ],
+    "owner": "packages.describe.tool_readiness",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/exploit_feasibility/tests/test_mitigation_facts.py",
+    "anchor": [
+      "TestExploitationPathsCellShape",
+      "test_one_gadget_info_exposed_in_both_shapes"
+    ],
+    "owner": "packages.exploit_feasibility.api",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_invokes_libexec_and_returns_run_dir"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_returns_none_on_nonzero_exit"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_returns_none_on_timeout"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_passes_out_dir_when_provided"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_forged_stdout_sentinel_never_selects_evidence_dir"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObserveTarget",
+      "test_enforces_minimum_duration"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObservePaired",
+      "test_sends_correct_protocol_to_coordinator"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObservePaired",
+      "test_truncates_long_target_name"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObservePaired",
+      "test_returns_none_on_coordinator_error"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestObservePaired",
+      "test_returns_none_on_timeout"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestAutoObserve",
+      "test_observes_when_evidence_is_stale"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestAutoObserve",
+      "test_observes_when_no_evidence"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestAutoObserve",
+      "test_skips_evidence_for_different_target"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/frida/tests/test_active.py",
+    "anchor": [
+      "TestAutoObserve",
+      "test_negative_age_triggers_reobservation"
+    ],
+    "owner": "packages.frida.active",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_capability.py",
+    "anchor": [
+      "TestProbe",
+      "test_macos_afl_shmem_probe_detects_runtime_failure"
+    ],
+    "owner": "packages.fuzzing.capability",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_capability.py",
+    "anchor": [
+      "TestProbe",
+      "test_macos_afl_shmem_probe_allows_clean_startup"
+    ],
+    "owner": "packages.fuzzing.capability",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_capability.py",
+    "anchor": [
+      "_probe_on"
+    ],
+    "owner": "packages.fuzzing.capability",
+    "binding": "platform",
+    "attribute": "system",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_capability.py",
+    "anchor": [
+      "_probe_on"
+    ],
+    "owner": "packages.fuzzing.capability",
+    "binding": "platform",
+    "attribute": "machine",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_capability.py",
+    "anchor": [
+      "_probe_on"
+    ],
+    "owner": "packages.fuzzing.capability",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_orchestration.py",
+    "anchor": [
+      "_plan"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_orchestration.py",
+    "anchor": [
+      "TestCargoFuzzPlanning",
+      "test_missing_toolchain_still_reports_target"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_orchestration.py",
+    "anchor": [
+      "TestCargoFuzzPlanning",
+      "test_no_nightly_surfaces_sanitizer_hint"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_nightly_default_cargo_needs_no_prefix"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_rustup_nightly_selects_plus_nightly"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_rustup_nightly_selects_plus_nightly"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_no_rustup_no_nightly"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_no_rustup_no_nightly"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_cargofuzz_runner.py",
+    "anchor": [
+      "TestNightlyProbe",
+      "test_probe_failure_reads_as_no_nightly"
+    ],
+    "owner": "packages.fuzzing.cargofuzz_runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_env_build.py",
+    "anchor": [
+      "TestCandidacy",
+      "test_no_docker_declines_with_hint"
+    ],
+    "owner": "packages.fuzzing.env_build",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_env_build.py",
+    "anchor": [
+      "TestCandidacy",
+      "test_gate_denied_names_the_marker"
+    ],
+    "owner": "packages.fuzzing.env_build",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_env_build.py",
+    "anchor": [
+      "TestCandidacy",
+      "test_no_command_declines_with_hint"
+    ],
+    "owner": "packages.fuzzing.env_build",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_env_build.py",
+    "anchor": [
+      "TestCandidacy",
+      "test_authorised_with_command_is_candidate"
+    ],
+    "owner": "packages.fuzzing.env_build",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_env_build.py",
+    "anchor": [
+      "TestCandidacy",
+      "test_explicit_flag_reaches_the_gate"
+    ],
+    "owner": "packages.fuzzing.env_build",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_jazzer_orchestration.py",
+    "anchor": [
+      "_plan"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_jazzer_orchestration.py",
+    "anchor": [
+      "TestJazzerPlanning",
+      "test_missing_toolchain_still_reports_target"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_jazzer_orchestration.py",
+    "anchor": [
+      "TestJazzerPlanning",
+      "test_missing_build_tool_blocks_at_plan_time"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestDetect",
+      "test_macho_non_executable_on_darwin_gets_chmod_blocker"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "platform",
+    "attribute": "system",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestDetect",
+      "test_macho_executable_on_darwin_has_no_blockers"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "platform",
+    "attribute": "system",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestRecommendedFuzzerPopulation",
+      "test_rust_crate_nulls_fuzzer_when_toolchain_missing"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestRecommendedFuzzerPopulation",
+      "test_rust_crate_recommends_when_toolchain_present"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestCargoFuzzLayout",
+      "test_rust_crate_hint_names_targets"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestCargoFuzzLayout",
+      "test_rust_crate_hint_without_layout_names_scaffold"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestJazzerLayout",
+      "test_java_project_hint_names_targets"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestJazzerLayout",
+      "test_java_project_without_targets_names_the_harness_shape"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestJazzerLayout",
+      "test_missing_toolchain_blocks_with_install_hints"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "anchor": [
+      "TestJazzerLayout",
+      "test_bare_java_tree_detects_after_c_family"
+    ],
+    "owner": "packages.fuzzing.target_detector",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterBasics",
+      "test_unavailable_when_no_database"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterBasics",
+      "test_unavailable_when_no_binary"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterBasics",
+      "test_unavailable_when_database_missing"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterBasics",
+      "test_available_when_db_and_binary_present"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterBasics",
+      "test_set_database_updates_availability"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_no_binary"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_subprocess_success"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_corrupt_sarif_is_tool_failure"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_subprocess_no_matches"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_subprocess_error"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_subprocess_timeout"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_subprocess_oserror"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLAdapterRun",
+      "test_run_no_sarif_produced"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestCodeQLBatchPreconditionMessages",
+      "test_no_cli_message_matches_siblings"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestPrebuiltSarifParseFailure",
+      "test_prebuilt_corrupt_sarif_is_tool_failure"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestPrebuiltSarifParseFailure",
+      "test_prebuilt_valid_sarif_still_succeeds"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestPrebuiltSarifParseFailure",
+      "test_batch_corrupt_sarif_is_tool_failure_for_every_query"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestBatchAttribution",
+      "test_unattributed_results_degrade_zero_match_queries"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestBatchAttribution",
+      "test_fully_attributed_batch_keeps_clean_no_matches"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_adapters_codeql_smt.py",
+    "anchor": [
+      "TestBatchAttribution",
+      "test_stem_collision_not_credited_to_first_query"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "anchor": [
+      "TestSafeEnvDefaults",
+      "test_codeql_defaults_to_safe_env"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "anchor": [
+      "TestCodeQLTimeoutDefault",
+      "test_explicit_timeout_passes_through"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "anchor": [
+      "TestCodeQLSandboxGrantsCacheWriteAccess",
+      "test_run_passes_output_for_cache_write"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "anchor": [
+      "TestCodeQLSandboxGrantsCacheWriteAccess",
+      "test_codeql_sites_disable_fake_home_but_grant_pack_cache"
+    ],
+    "owner": "packages.hypothesis_validation.adapters.codeql",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_heap_ledger.py",
+    "anchor": [
+      "TestServerHeapAdmission",
+      "_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_heap_ledger.py",
+    "anchor": [
+      "TestServerHeapAdmission",
+      "_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_heap_ledger.py",
+    "anchor": [
+      "TestServerHeapAdmission",
+      "_safe_stop"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_stop_pidns_first_wait_is_bounded"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_pidns_requires_netns_tier"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_pidns_requires_netns_tier"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_parent_ready_write_end_closed_after_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_parent_ready_write_end_closed_after_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "close",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_contract.py",
+    "anchor": [
+      "test_parent_ready_write_end_closed_after_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "_run_start"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "_run_start"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "_safe_stop"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestPidnsProbeCache",
+      "test_probe_result_cached"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestPidnsProbeCache",
+      "test_probe_failure_means_group_and_is_cached"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestPidnsProbeCache",
+      "test_infra_failure_falls_back_without_caching"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestPidnsProbeCache",
+      "test_invalidate_flips_a_positive_verdict"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestStopLadderDemotion",
+      "test_group_tier_keeps_the_full_ladder"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_pidns_tier.py",
+    "anchor": [
+      "TestStopLadderDemotion",
+      "test_pidns_tier_skips_the_ladder_on_a_clean_reap"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_relaunch_on_death.py",
+    "anchor": [
+      "TestEnsureAlive",
+      "test_cooldown_bounds_attempts"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "time",
+    "attribute": "monotonic",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_relaunch_on_death.py",
+    "anchor": [
+      "TestEnsureAlive",
+      "test_first_attempt_allowed_on_freshly_booted_host"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "time",
+    "attribute": "monotonic",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "_safe_stop"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "_start_and_capture"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "_start_and_capture"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "test_spawn_env_confines_jvm_tmpdir_to_workspace"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "test_spawn_env_confines_jvm_tmpdir_to_workspace"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "test_boot_retries_without_gc_flags_when_jvm_dies"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerZGCFlags",
+      "test_boot_retries_without_gc_flags_when_jvm_dies"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerIsolatedWorkspace",
+      "test_start_uses_fresh_temp_cwd"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerIsolatedWorkspace",
+      "test_start_uses_fresh_temp_cwd"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestServerAuthSupportProbe",
+      "_probe"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerAuth",
+      "_start_and_capture"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerAuth",
+      "_safe_stop"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server.py",
+    "anchor": [
+      "TestJoernServerAuth",
+      "test_auth_unsupported_refuses_unauthenticated_server"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server_uds.py",
+    "anchor": [
+      "TestTierSelection",
+      "_boot"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "Popen",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server_uds.py",
+    "anchor": [
+      "TestTierSelection",
+      "_safe_stop"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "os",
+    "attribute": "killpg",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server_uds.py",
+    "anchor": [
+      "TestNetnsProbeCache",
+      "test_probe_result_cached"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/joern/tests/test_server_uds.py",
+    "anchor": [
+      "TestNetnsProbeCache",
+      "test_probe_failure_means_fallback"
+    ],
+    "owner": "packages.joern.server",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/sca/tests/test_atomic.py",
+    "anchor": [
+      "test_temp_file_cleaned_up_on_failure"
+    ],
+    "owner": "core.atomic_fs",
+    "binding": "os",
+    "attribute": "replace",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/sca/tests/test_atomic.py",
+    "anchor": [
+      "test_keyboard_interrupt_during_write_cleans_up"
+    ],
+    "owner": "core.atomic_fs",
+    "binding": "os",
+    "attribute": "fsync",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/sca/tests/test_atomic.py",
+    "anchor": [
+      "test_failure_does_not_corrupt_existing"
+    ],
+    "owner": "core.atomic_fs",
+    "binding": "os",
+    "attribute": "replace",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_is_available_found"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_is_available_missing"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_returns_string"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_returns_string"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_unavailable"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_handles_timeout"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestAvailability",
+      "test_version_handles_timeout"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestScopeIsolationAvailable",
+      "test_true_at_floor"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestScopeIsolationAvailable",
+      "test_true_at_floor"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestScopeIsolationAvailable",
+      "test_false_below_floor"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestScopeIsolationAvailable",
+      "test_false_below_floor"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestScopeIsolationAvailable",
+      "test_false_when_missing"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestBuildCmd",
+      "test_uses_path_lookup_when_bin_not_specified"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "shutil",
+    "attribute": "which",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_below_floor_warns_and_omits_scope_flag"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_basic"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_surfaces_skipped_summary"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_partial_parse_retains_findings_and_coverage_failure"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_no_skips_no_summary_no_log"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_handles_timeout"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_handles_oserror"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_completed_process_bad_exit_populates_errors"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_signal_kill_populates_errors"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_with_empty_sarif"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_with_provided_json_output_path"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_passes_env"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_passes_timeout"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_friendly_name_from_pack"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_friendly_name_from_dir"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRuleMocked",
+      "test_run_explicit_name"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestSandboxDefaultPolicy",
+      "test_default_engages_sandbox_runner"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestSandboxDefaultPolicy",
+      "test_refuses_when_sandbox_unavailable"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestSandboxDefaultPolicy",
+      "test_explicit_optout_uses_subprocess_run"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestRunRules",
+      "test_runs_each_config"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestOutputBudget",
+      "test_oversize_json_output_is_an_error"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestOutputBudget",
+      "test_oversize_sarif_stdout_is_a_failed_scan_not_clean",
+      "_run"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/semgrep/tests/test_runner.py",
+    "anchor": [
+      "TestBudgetMeasuresBytes",
+      "test_non_ascii_payload_over_byte_budget_is_refused"
+    ],
+    "owner": "packages.semgrep.runner",
+    "binding": "subprocess",
+    "attribute": "run",
+    "ordinal": 0
+  },
+  {
+    "file": "packages/web/tests/test_oob_expectations.py",
+    "anchor": [
+      "TestExpectationRegistry",
+      "test_window_is_immune_to_wall_clock_steps"
+    ],
+    "owner": "packages.web.oob",
+    "binding": "time",
+    "attribute": "time",
+    "ordinal": 0
+  }
+]

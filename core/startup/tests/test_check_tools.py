@@ -11,6 +11,9 @@ All probes are stubbed — no real subprocesses, no PATH dependence.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+
+
 
 import json
 from unittest import mock
@@ -126,8 +129,8 @@ def _run_check_tools(*, on_path, versions=None, module_present=False):
     """Run check_tools with which()/find_spec/_tool_version stubbed."""
     versions = versions or {}
     deps_patch, groups_patch = _patched_deps()
-    with deps_patch, groups_patch, mock.patch(
-        "core.startup.init.shutil.which",
+    with deps_patch, groups_patch, mock_module_attribute(
+        _mock_owner('core.startup.init'), 'shutil', 'which',
         side_effect=lambda b: f"/usr/bin/{b}" if b in on_path else None,
     ), mock.patch(
         "core.startup.init.importlib.util.find_spec",

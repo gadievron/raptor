@@ -8,6 +8,10 @@ namespaces, and is skipped elsewhere.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import logging
 import os
@@ -251,7 +255,7 @@ class TestTierSelection:
                   return_value=True),
             patch("packages.joern.server._repl_bridge_path",
                   return_value="/opt/joern/repl-bridge"),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=fake_popen),
             patch.object(srv, "_wait_for_ready", return_value=True),
             patch.object(srv, "_warmup_imports"),
@@ -261,7 +265,7 @@ class TestTierSelection:
 
     @staticmethod
     def _safe_stop(srv: JoernServer) -> None:
-        with patch("packages.joern.server.os.killpg",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                    side_effect=ProcessLookupError):
             srv.stop()
 
@@ -473,7 +477,7 @@ class TestNetnsProbeCache:
             proc.stderr = ""
             return proc
 
-        with patch("packages.joern.server.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run',
                    side_effect=fake_run):
             assert server_mod._netns_isolation_available() is True
             assert server_mod._netns_isolation_available() is True
@@ -492,7 +496,7 @@ class TestNetnsProbeCache:
             proc.stderr = "netns self-probe failed: refused"
             return proc
 
-        with patch("packages.joern.server.subprocess.run",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'run',
                    side_effect=fake_run):
             assert server_mod._netns_isolation_available() is False
         monkeypatch.setattr(server_mod, "_NETNS_PROBE_CACHE", None)

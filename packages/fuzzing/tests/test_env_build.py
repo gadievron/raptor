@@ -10,6 +10,10 @@ covered by the S5.5 smoke (real image build + rootfs afl-fuzz run).
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -69,13 +73,13 @@ class TestCandidacy:
         assert (ok, why) == (False, "")
 
     def test_no_docker_declines_with_hint(self, tmp_path):
-        with patch('packages.fuzzing.env_build.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.fuzzing.env_build'), 'shutil', 'which', return_value=None):
             ok, why = env_build_candidate(_repo(tmp_path))
         assert not ok
         assert "docker" in why
 
     def test_gate_denied_names_the_marker(self, tmp_path):
-        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
+        with mock_module_attribute(_mock_owner('packages.fuzzing.env_build'), 'shutil', 'which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=False):
             ok, why = env_build_candidate(_repo(tmp_path))
@@ -84,7 +88,7 @@ class TestCandidacy:
         assert "--env-build" in why
 
     def test_no_command_declines_with_hint(self, tmp_path):
-        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
+        with mock_module_attribute(_mock_owner('packages.fuzzing.env_build'), 'shutil', 'which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
@@ -94,7 +98,7 @@ class TestCandidacy:
         assert "build-command" in why
 
     def test_authorised_with_command_is_candidate(self, tmp_path):
-        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
+        with mock_module_attribute(_mock_owner('packages.fuzzing.env_build'), 'shutil', 'which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
@@ -109,7 +113,7 @@ class TestCandidacy:
             seen["explicit"] = explicit
             return bool(explicit)
 
-        with patch('packages.fuzzing.env_build.shutil.which', return_value="/usr/bin/docker"), \
+        with mock_module_attribute(_mock_owner('packages.fuzzing.env_build'), 'shutil', 'which', return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution", gate), \
              patch("core.build.resolve.resolve_build_command",
                    return_value=("make", "detected:make", "")):

@@ -1,5 +1,6 @@
 """Exercise native shutil-patch fixtures without running their I/O bodies."""
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from functools import lru_cache
 import importlib
@@ -43,6 +44,7 @@ def _tree(file):
 def _patches(file):
     calls = []
     for node in ast.walk(_tree(file)):
+        node = as_patch_call(node)
         if not isinstance(node, ast.Call) or not node.args:
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")

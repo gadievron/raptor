@@ -15,6 +15,10 @@ authorship note in ``test_pidns_forwarder.py``).
 """
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import select
 import signal
@@ -574,7 +578,7 @@ def test_stop_pidns_first_wait_is_bounded():
     from unittest.mock import patch
     srv, proc = _pidns_server_with_proc()
     with patch("packages.joern.server._ensure_group_dead"), \
-         patch("packages.joern.server.os.killpg",
+         mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                side_effect=ProcessLookupError):
         srv.stop()
     (_args, kwargs) = proc.wait.call_args_list[0]
@@ -624,9 +628,9 @@ def test_pidns_requires_netns_tier(monkeypatch):
               return_value=True),
         patch("packages.joern.server._repl_bridge_path",
               return_value="/opt/joern/repl-bridge"),
-        patch("packages.joern.server.subprocess.Popen",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
               side_effect=fake_popen),
-        patch("packages.joern.server.os.killpg",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
               side_effect=ProcessLookupError),
         patch("packages.joern.server._invalidate_pidns_probe")
             as invalidate,
@@ -716,11 +720,11 @@ def test_parent_ready_write_end_closed_after_boot():
               return_value=True),
         patch("packages.joern.server._repl_bridge_path",
               return_value="/opt/joern/repl-bridge"),
-        patch("packages.joern.server.subprocess.Popen",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
               side_effect=fake_popen),
-        patch("packages.joern.server.os.close",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'close',
               side_effect=recording_close),
-        patch("packages.joern.server.os.killpg",
+        mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
               side_effect=ProcessLookupError),
         patch.object(srv, "_wait_for_ready", return_value=True),
         patch.object(srv, "_warmup_imports"),

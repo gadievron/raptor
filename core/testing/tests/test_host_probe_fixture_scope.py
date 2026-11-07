@@ -1,5 +1,6 @@
 """Exercise actual host-probe fixtures without starting their tool bodies."""
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from contextlib import contextmanager
 from functools import lru_cache
@@ -18,8 +19,6 @@ from core.testing.module_bindings import patch_module_attribute
 _REPO = Path(__file__).resolve().parents[3]
 _SPECS = {'core/build/tests/test_toolchain.py': {'attributes': {'shutil': ['which']},
                                         'module': 'core.build.toolchain'},
- 'packages/describe/tests/test_package_manager.py': {'attributes': {'shutil': ['which']},
-                                                     'module': 'packages.describe.package_manager'},
  'packages/describe/tests/test_tool_readiness.py': {'attributes': {'shutil': ['which']},
                                                     'delegate': 'packages.describe.package_manager',
                                                     'module': 'packages.describe.tool_readiness'},
@@ -45,7 +44,8 @@ def _patches(file):
     spec = _SPECS[file]
     targets = {binding + "." + attribute for binding, attributes in spec["attributes"].items() for attribute in attributes}
     targets |= {spec["module"] + "." + target for target in targets}
-    return sorted((n for n in ast.walk(_tree(file))
+    return sorted((n for original in ast.walk(_tree(file))
+                   for n in [as_patch_call(original)]
                    if isinstance(n, ast.Call) and n.args
                    and (getattr(n.func, "id", "") == "patch" or getattr(n.func, "attr", "") == "patch")
                    and isinstance(n.args[0], ast.Constant) and n.args[0].value in targets),
@@ -61,7 +61,7 @@ def _cases():
         for name in spec.get("incidental_tests", []):
             fn = next(n for n in ast.walk(_tree(file)) if isinstance(n, ast.FunctionDef) and n.name == name)
             expected = spec["module"] + ".subprocess.run"
-            found = any(isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == expected for n in ast.walk(fn))
+            found = any(isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == expected for original in ast.walk(fn) for n in [as_patch_call(original)])
             if not found:
                 cases.append(pytest.param(file, "subprocess", "run", None, id="missing-incidental-" + name))
     return cases
@@ -170,11 +170,8 @@ def test_delegated_package_lookup_uses_owned_mock(file, binding, attribute, targ
     _exercise(file, binding, attribute, target, borrowed, exit_mode, delegated=True)
 
 
-_CONTROLS = [
-    ("packages/describe/tests/test_package_manager.py", "shutil", "which"),
-    ("packages/hypothesis_validation/tests/test_adapters_codeql_smt.py", "subprocess", "run"),
-    ("packages/frida/tests/test_active.py", "subprocess", "Popen"),
-]
+_CONTROLS = [('packages/hypothesis_validation/tests/test_adapters_codeql_smt.py', 'subprocess', 'run'),
+ ('packages/frida/tests/test_active.py', 'subprocess', 'Popen')]
 
 
 @pytest.mark.parametrize("file,binding,attribute", _CONTROLS)

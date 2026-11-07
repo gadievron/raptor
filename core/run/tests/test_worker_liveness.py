@@ -16,6 +16,10 @@ writer and the verifiers all call) — the repo-wide idiom for
 starttime-dependent tests.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import os
 import subprocess
@@ -103,7 +107,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
         live_parent = self._distinct_live_parent()
         table = {live_parent: "424242"}
         with TemporaryDirectory() as d, \
-                mock.patch('core.run.metadata.os.getppid', return_value=live_parent), \
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
                 mock.patch("core.run.metadata._get_session_pid",
                            return_value=11111), \
                 mock.patch.object(sessions, "proc_starttime",
@@ -120,7 +124,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # never pid 1 (always alive → guards would refuse forever).
         table = {os.getpid(): "10101"}
         with TemporaryDirectory() as d, \
-                mock.patch('core.run.metadata.os.getppid', return_value=1), \
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=1), \
                 mock.patch.object(sessions, "proc_starttime",
                                   _fake_starttime(table)):
             out = Path(d) / "run"
@@ -133,7 +137,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # The CLAUDECODE getppid() fallback must not mint session_pid=1
         # for a reparented-to-init process — PID 1 is not a session.
         with TemporaryDirectory() as d, \
-                mock.patch('core.run.metadata.os.getppid', return_value=1), \
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=1), \
                 mock.patch.dict(os.environ, {"CLAUDECODE": "1"}):
             out = Path(d) / "run"
             start_run(out, "audit")
@@ -147,7 +151,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # (a harness that is itself init-parented would otherwise land
         # in the detached arm).
         live_parent = self._distinct_live_parent()
-        with mock.patch('core.run.metadata.os.getppid', return_value=live_parent), \
+        with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
                 mock.patch.object(sessions, "proc_starttime",
                                   lambda pid: None):
             stamp = _worker_stamp(session_bound=True)
@@ -163,7 +167,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # (a harness that is itself init-parented would otherwise land
         # in the detached arm, which DOES record a worker).
         with TemporaryDirectory() as d, \
-                mock.patch('core.run.metadata.os.getppid',
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid',
                            return_value=self._distinct_live_parent()), \
                 mock.patch("core.run.metadata._get_session_pid",
                            return_value=None):
@@ -178,8 +182,8 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # An orchestrator running AS pid 1 (container init) has no
         # recordable worker: legacy pid-less posture, never a poisoned
         # pid<=1 credential.
-        with mock.patch('core.run.metadata.os.getppid', return_value=0), \
-                mock.patch('core.run.metadata.os.getpid', return_value=1):
+        with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=0), \
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getpid', return_value=1):
             self.assertEqual(_worker_stamp(session_bound=False), {})
 
     def test_sessionless_resume_refreshes_worker_and_drops_session(self):
@@ -202,7 +206,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
             save_json(meta_path, meta)
             with mock.patch("core.run.metadata._get_session_pid",
                             return_value=None), \
-                    mock.patch('core.run.metadata.os.getppid', return_value=1), \
+                    mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=1), \
                     mock.patch.object(sessions, "proc_starttime",
                                       _fake_starttime(table)):
                 resume_run(out)

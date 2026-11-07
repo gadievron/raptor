@@ -9,6 +9,10 @@ register but are never reduced; dead owners' rows self-evict.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import os
 import subprocess
@@ -332,9 +336,9 @@ class TestServerHeapAdmission:
                   return_value=True),
             patch("packages.joern.server._netns_isolation_available",
                   return_value=False),
-            patch("packages.joern.server.os.killpg",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                   side_effect=ProcessLookupError),
-            patch("packages.joern.server.subprocess.Popen",
+            mock_module_attribute(_mock_owner('packages.joern.server'), 'subprocess', 'Popen',
                   side_effect=self._fake_popen_factory(captured_cmd)),
             patch.object(srv, "_wait_for_ready", return_value=ready),
             patch.object(srv, "_warmup_imports"),
@@ -343,9 +347,8 @@ class TestServerHeapAdmission:
 
     @staticmethod
     def _safe_stop(srv):
-        from unittest.mock import patch
 
-        with patch("packages.joern.server.os.killpg",
+        with mock_module_attribute(_mock_owner('packages.joern.server'), 'os', 'killpg',
                    side_effect=ProcessLookupError):
             srv.stop()
 

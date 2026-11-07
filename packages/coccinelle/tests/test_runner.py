@@ -1,5 +1,8 @@
 """Tests for Coccinelle runner."""
 
+from pkgutil import resolve_name as _mock_owner
+
+
 
 import json
 import os
@@ -90,16 +93,16 @@ def _nonced_prefix_from_cmd(cmd) -> str:
 
 class TestAvailability:
     def test_is_available_found(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value="/usr/bin/spatch"):
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value="/usr/bin/spatch"):
             assert is_available()
 
     def test_is_available_missing(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value=None):
             assert not is_available()
 
     def test_version_returns_string(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value="/usr/bin/spatch"), \
-             patch('packages.coccinelle.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value="/usr/bin/spatch"), \
+             mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="spatch version 1.3 compiled with OCaml\n",
                 returncode=0,
@@ -109,12 +112,12 @@ class TestAvailability:
             assert "1.3" in v
 
     def test_version_unavailable(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value=None):
             assert version() is None
 
     def test_version_tuple_parses_major_minor(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value="/usr/bin/spatch"), \
-             patch('packages.coccinelle.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value="/usr/bin/spatch"), \
+             mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="spatch version 1.3 compiled with OCaml version 5.4.0\n",
                 returncode=0,
@@ -122,8 +125,8 @@ class TestAvailability:
             assert version_tuple() == (1, 3)
 
     def test_version_tuple_handles_three_component(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value="/usr/bin/spatch"), \
-             patch('packages.coccinelle.runner.subprocess.run') as mock_run:
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value="/usr/bin/spatch"), \
+             mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'subprocess', 'run') as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="spatch version 1.1.1 compiled with OCaml version 4.14.1\n",
                 returncode=0,
@@ -132,7 +135,7 @@ class TestAvailability:
             assert version_tuple() == (1, 1)
 
     def test_version_tuple_none_when_unavailable(self):
-        with patch('packages.coccinelle.runner.shutil.which', return_value=None):
+        with mock_module_attribute(_mock_owner('packages.coccinelle.runner'), 'shutil', 'which', return_value=None):
             assert version_tuple() is None
 
     def test_meets_min_version_true_at_floor(self):

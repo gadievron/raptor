@@ -11,7 +11,10 @@ spawn failures) for two probe-style sites that previously caught it
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 
 from cve_env.utils.run import RunOutcome, run_with_timeout
 
@@ -152,7 +155,7 @@ def test_run_with_timeout_catches_oserror_during_spawn() -> None:
     failures (EAGAIN, EMFILE, broken pipe). The helper catches OSError too so
     those callers can drop their try/except wrappers without losing tolerance."""
     fake_oserror = OSError(24, "Too many open files")
-    with patch("core.container.proc.subprocess.run", side_effect=fake_oserror):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_oserror):
         outcome = run_with_timeout(["echo", "hello"], timeout=2.0)
     assert isinstance(outcome, RunOutcome)
     assert outcome.timed_out is False

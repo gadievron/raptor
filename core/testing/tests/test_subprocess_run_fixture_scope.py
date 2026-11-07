@@ -1,5 +1,6 @@
 """Exercise native runner-patch fixtures without running their I/O bodies."""
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from functools import lru_cache
 import importlib
@@ -14,23 +15,15 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
-_SPECS = [('core/recall/tests/test_runner.py', 'core.recall.runner'),
- ('core/recall/tests/test_runner.py', 'core.recall.pinned_clone'),
- ('core/recall/tests/test_owasp_manifest.py', 'core.recall.pinned_clone'),
- ('core/recall/tests/test_nodegoat_manifest.py', 'core.recall.pinned_clone'),
- ('core/audit/tests/test_validate.py', 'core.orchestration.skill_dispatch'),
+_SPECS = [('core/audit/tests/test_validate.py', 'core.orchestration.skill_dispatch'),
  ('core/orchestration/tests/test_skill_dispatch_checklist_timeout.py',
   'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_skill_dispatch.py',
-  'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_lifecycle_trust_marker.py',
-  'core.orchestration.skill_dispatch'),
+ ('core/orchestration/tests/test_skill_dispatch.py', 'core.orchestration.skill_dispatch'),
+ ('core/orchestration/tests/test_lifecycle_trust_marker.py', 'core.orchestration.skill_dispatch'),
  ('core/orchestration/tests/test_agentic_passes_integration.py',
   'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_agentic_passes.py',
-  'core.orchestration.skill_dispatch'),
- ('packages/fuzzing/tests/test_cargofuzz_runner.py',
-  'packages.fuzzing.cargofuzz_runner'),
+ ('core/orchestration/tests/test_agentic_passes.py', 'core.orchestration.skill_dispatch'),
+ ('packages/fuzzing/tests/test_cargofuzz_runner.py', 'packages.fuzzing.cargofuzz_runner'),
  ('packages/fuzzing/tests/test_capability.py', 'packages.fuzzing.capability')]
 
 
@@ -42,6 +35,7 @@ def _tree(file):
 def _patches(file, module):
     calls = []
     for node in ast.walk(_tree(file)):
+        node = as_patch_call(node)
         if not isinstance(node, ast.Call) or not node.args:
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")

@@ -15,10 +15,13 @@ regressions trivially traceable.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import subprocess
 import pytest
 
-from unittest.mock import patch
 
 from core.testing.module_bindings import patch_module_attribute
 
@@ -76,8 +79,8 @@ def test_inspect_state_returns_error_on_timeout() -> None:
     post-migration it returns a structured error dict so verify continues."""
     from cve_env.tools.verify import _inspect_state
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = _inspect_state("c123")
@@ -88,8 +91,8 @@ def test_inspect_state_returns_error_on_timeout() -> None:
 def test_inspect_state_returns_error_on_missing_binary() -> None:
     from cve_env.tools.verify import _inspect_state
 
-    with patch(
-        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=FileNotFoundError("docker")
     ):
         result = _inspect_state("c123")
     assert "_error" in result
@@ -98,8 +101,8 @@ def test_inspect_state_returns_error_on_missing_binary() -> None:
 def test_inspect_state_returns_error_on_oserror() -> None:
     from cve_env.tools.verify import _inspect_state
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=OSError(24, "Too many open files"),
     ):
         result = _inspect_state("c123")
@@ -114,8 +117,8 @@ def test_inspect_state_returns_error_on_oserror() -> None:
 def test_container_logs_tail_returns_empty_on_timeout() -> None:
     from cve_env.tools.verify import _container_logs_tail
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=10),
     ):
         result = _container_logs_tail("c123")
@@ -125,8 +128,8 @@ def test_container_logs_tail_returns_empty_on_timeout() -> None:
 def test_container_logs_tail_returns_empty_on_missing_binary() -> None:
     from cve_env.tools.verify import _container_logs_tail
 
-    with patch(
-        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=FileNotFoundError("docker")
     ):
         result = _container_logs_tail("c123")
     assert result == ""
@@ -143,8 +146,8 @@ def test_check_logs_returns_failed_on_timeout() -> None:
     passed=False so the verify plan continues to other checks."""
     from cve_env.tools.verify import check_logs
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = check_logs(
@@ -171,8 +174,8 @@ def test_manifest_inspect_returns_none_on_timeout() -> None:
     (private registry, nonexistent image, docker-cli unavailable)."""
     from cve_env.tools.arch import _manifest_inspect
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = _manifest_inspect("alpine:3.19")
@@ -182,8 +185,8 @@ def test_manifest_inspect_returns_none_on_timeout() -> None:
 def test_manifest_inspect_returns_none_on_missing_binary() -> None:
     from cve_env.tools.arch import _manifest_inspect
 
-    with patch(
-        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=FileNotFoundError("docker")
     ):
         result = _manifest_inspect("alpine:3.19")
     assert result is None
@@ -200,8 +203,8 @@ def test_docker_stop_swallows_timeout() -> None:
     the helper catches it so the contract holds."""
     from cve_env.tools.docker_run import docker_stop
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         # Must NOT raise.
@@ -211,8 +214,8 @@ def test_docker_stop_swallows_timeout() -> None:
 def test_docker_stop_swallows_missing_binary() -> None:
     from cve_env.tools.docker_run import docker_stop
 
-    with patch(
-        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=FileNotFoundError("docker")
     ):
         # Must NOT raise.
         docker_stop("c123")
@@ -221,8 +224,8 @@ def test_docker_stop_swallows_missing_binary() -> None:
 def test_docker_stop_swallows_oserror() -> None:
     from cve_env.tools.docker_run import docker_stop
 
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=OSError(24, "Too many open files"),
     ):
         # Must NOT raise.
@@ -239,8 +242,8 @@ def test_service_health_token_returns_empty_on_timeout(monkeypatch) -> None:  # 
     from cve_env.infra import service_health
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with patch(
-        "core.container.proc.subprocess.run",
+    with mock_module_attribute(
+        _mock_owner('core.container.proc'), 'subprocess', 'run',
         side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=2),
     ):
         result = service_health._resolve_github_token_for_probe()
@@ -251,7 +254,7 @@ def test_service_health_token_returns_empty_on_missing_binary(monkeypatch) -> No
     from cve_env.infra import service_health
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with patch("core.container.proc.subprocess.run", side_effect=FileNotFoundError("gh")):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=FileNotFoundError("gh")):
         result = service_health._resolve_github_token_for_probe()
     assert result == ""
 
@@ -277,15 +280,15 @@ def test_compose_invocation_falls_back_when_probe_times_out() -> None:
     docker_compose_up._compose_invocation.cache_clear()
 
     with (
-        patch(
+        mock_module_attribute(
             # _compose_invocation lives in core.container.compose —
             # patch shutil where IT looks it up (the tool module no
             # longer imports shutil itself).
-            "core.container.compose.shutil.which",
+            _mock_owner('core.container.compose'), 'shutil', 'which',
             side_effect=lambda b: f"/usr/bin/{b}",
         ),
-        patch(
-            "core.container.proc.subprocess.run",
+        mock_module_attribute(
+            _mock_owner('core.container.proc'), 'subprocess', 'run',
             side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=10),
         ),
     ):

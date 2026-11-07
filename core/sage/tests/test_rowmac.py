@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Robustness tests for core/sage/rowmac.py (row MAC mint/verify/stamp/strip)."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import secrets
 import stat
@@ -313,8 +317,8 @@ class TestShortOrEmptyKeyRefused(RowMacKeyTmpDirCase):
         only remedy is removing the file."""
         self._torn_key(b"")
         sleeps = []
-        with patch(
-            "core.security.mac_key.time.sleep", side_effect=sleeps.append,
+        with mock_module_attribute(
+            _mock_owner('core.security.mac_key'), 'time', 'sleep', side_effect=sleeps.append,
         ):
             with self.assertLogs("raptor.core.sage.rowmac",
                                  level="WARNING") as cm:

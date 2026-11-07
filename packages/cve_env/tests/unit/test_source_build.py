@@ -8,6 +8,10 @@ build-config discovery.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import io
 import json
 import subprocess
@@ -442,7 +446,7 @@ def test_build_with_commit_sha_clone_failure_returns_clean_error(
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -466,7 +470,7 @@ def test_build_with_commit_sha_checkout_failure(tmp_path: Path) -> None:
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -487,7 +491,7 @@ def test_build_with_commit_sha_clone_timeout(tmp_path: Path) -> None:
         msg = f"unexpected git args after timeout: {args}"
         raise AssertionError(msg)
 
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -517,7 +521,7 @@ def test_build_with_commit_sha_skips_tag_listing(tmp_path: Path) -> None:
         msg = f"unexpected git args during SHA path: {args}"
         raise AssertionError(msg)
 
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/wp-plugins/foo",
@@ -558,7 +562,7 @@ def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar",
@@ -588,7 +592,7 @@ def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
         raise AssertionError(msg)
 
     with (
-        patch("core.container.proc.subprocess.run", side_effect=fake_run),
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run),
         # Disable archive fallback for this test to isolate the clone path.
         patch.object(SourceBuilder, "_archive_fallback", lambda *a, **k: None),
         # Disable adaptive depth probe so we don't hit urllib.
@@ -629,7 +633,7 @@ def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
         raise AssertionError(msg)
 
     with (
-        patch("core.container.proc.subprocess.run", side_effect=fake_run),
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run),
         patch(
             "cve_env.tools.source_build._core_get",
             side_effect=fake_core_get,
@@ -792,8 +796,8 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
         patch(
             "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
         ),
-        patch(
-            "core.container.proc.subprocess.run",
+        mock_module_attribute(
+            _mock_owner('core.container.proc'), 'subprocess', 'run',
             return_value=MagicMock(
                 returncode=0, stdout="Successfully built abc123\n", stderr=""
             ),
@@ -838,8 +842,8 @@ def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None
         patch(
             "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
         ),
-        patch(
-            "core.container.proc.subprocess.run", return_value=MagicMock(returncode=0)
+        mock_module_attribute(
+            _mock_owner('core.container.proc'), 'subprocess', 'run', return_value=MagicMock(returncode=0)
         ) as mock_run,
     ):
         env = tools.source_build(
@@ -992,7 +996,7 @@ def test_phase61_tarball_filter_blocks_absolute_symlink(tmp_path: Path) -> None:
         raise AssertionError(msg)
 
     with (
-        patch("core.container.proc.subprocess.run", side_effect=fake_run),
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run),
         patch(
             "cve_env.tools.source_build._core_get",
             side_effect=fake_core_get,
@@ -1038,7 +1042,7 @@ def test_phase61_tarball_filter_blocks_relative_escape_symlink(
         raise AssertionError(msg)
 
     with (
-        patch("core.container.proc.subprocess.run", side_effect=fake_run),
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run),
         patch(
             "cve_env.tools.source_build._core_get",
             side_effect=fake_core_get,
@@ -1124,8 +1128,8 @@ def test_build_product_cannot_rmtree_outside_workdir(tmp_path: Path) -> None:
     with (
         patch("cve_env.tools.source_build._core_get",
               side_effect=lambda url, **_: None),
-        patch(
-            "core.container.proc.subprocess.run",
+        mock_module_attribute(
+            _mock_owner('core.container.proc'), 'subprocess', 'run',
             side_effect=lambda *a, **k: _fake_completed(128, stderr="clone disabled"),
         ),
     ):
@@ -1809,7 +1813,7 @@ def test_checkout_refuses_dash_leading_ref_and_terminates_options(
         return _fake_completed(0)
 
     builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
-    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
+    with mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', side_effect=fake_run):
         # Hostile ref shape: refused before any git invocation.
         assert builder._checkout(tmp_path, "--force-9.9.9") is False
         assert builder._checkout(tmp_path, "") is False

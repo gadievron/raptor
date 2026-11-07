@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 from pathlib import Path
 
@@ -636,7 +640,7 @@ class TestDispatchGates:
         def _sandbox(cmd, *args, **kwargs):
             raise OSError("exec format error")
 
-        with patch("core.orchestration.skill_dispatch.subprocess.run",
+        with mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run',
                    side_effect=_lifecycle), \
              patch("core.orchestration.skill_dispatch."
                    "run_untrusted_networked", side_effect=_sandbox), \

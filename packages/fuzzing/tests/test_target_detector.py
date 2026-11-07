@@ -1,5 +1,9 @@
 """Tests for target detection."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import platform
 import struct
@@ -166,7 +170,7 @@ class TestDetect(unittest.TestCase):
             tmp = Path(f.name)
         try:
             tmp.chmod(0o644)
-            with patch("packages.fuzzing.target_detector.platform.system",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'platform', 'system',
                        return_value="Darwin"):
                 info = detect(tmp)
             self.assertEqual(info.kind, "macho")
@@ -185,7 +189,7 @@ class TestDetect(unittest.TestCase):
             tmp = Path(f.name)
         try:
             tmp.chmod(0o755)
-            with patch("packages.fuzzing.target_detector.platform.system",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'platform', 'system',
                        return_value="Darwin"):
                 info = detect(tmp)
             self.assertTrue(info.can_fuzz_here)
@@ -386,7 +390,7 @@ class TestRecommendedFuzzerPopulation(unittest.TestCase):
         # be fuzzed on this host.
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "Cargo.toml").write_text("[package]\n")
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value=None):
                 info = detect(Path(tmp))
         self.assertEqual(info.kind, "rust-crate")
@@ -396,7 +400,7 @@ class TestRecommendedFuzzerPopulation(unittest.TestCase):
     def test_rust_crate_recommends_when_toolchain_present(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "Cargo.toml").write_text("[package]\n")
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(Path(tmp))
         self.assertTrue(info.can_fuzz_here)
@@ -667,7 +671,7 @@ class TestCargoFuzzLayout(unittest.TestCase):
     def test_rust_crate_hint_names_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             crate = self._crate(tmp, ["fuzz_a"])
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(crate)
         self.assertEqual(info.kind, "rust-crate")
@@ -678,7 +682,7 @@ class TestCargoFuzzLayout(unittest.TestCase):
             crate = Path(tmp) / "crate"
             crate.mkdir()
             (crate / "Cargo.toml").write_text("[package]\n")
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(crate)
         self.assertTrue(
@@ -849,7 +853,7 @@ class TestJazzerLayout(unittest.TestCase):
     def test_java_project_hint_names_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(tmp)
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(project)
         self.assertEqual(info.kind, "java-project")
@@ -864,7 +868,7 @@ class TestJazzerLayout(unittest.TestCase):
             (project / "src").mkdir(parents=True)
             (project / "pom.xml").write_text("<project/>\n")
             (project / "src" / "Plain.java").write_text("class Plain {}\n")
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(project)
         self.assertEqual(info.kind, "java-project")
@@ -874,7 +878,7 @@ class TestJazzerLayout(unittest.TestCase):
     def test_missing_toolchain_blocks_with_install_hints(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(tmp)
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value=None):
                 info = detect(project)
         self.assertEqual(info.kind, "java-project")
@@ -888,7 +892,7 @@ class TestJazzerLayout(unittest.TestCase):
         # C+Java tree keeps its pre-existing source-c detection.
         with tempfile.TemporaryDirectory() as tmp:
             pure = self._project(tmp, marker=None)
-            with patch("packages.fuzzing.target_detector.shutil.which",
+            with mock_module_attribute(_mock_owner('packages.fuzzing.target_detector'), 'shutil', 'which',
                        return_value="/x/tool"):
                 info = detect(pure)
             self.assertEqual(info.kind, "java-project")

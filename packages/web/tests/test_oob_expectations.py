@@ -4,6 +4,10 @@ corroboration findings, the browser render oracle)."""
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import tempfile
 import time
 import unittest
@@ -86,7 +90,7 @@ class TestExpectationRegistry(unittest.TestCase):
             window_s=300.0,
         )
         real_time = time.time
-        with patch("packages.web.oob.time.time",
+        with mock_module_attribute(_mock_owner('packages.web.oob'), 'time', 'time',
                    lambda: real_time() + 10_000):
             _fetch(f"{self.listener.callback_base}/inside-window")
         self.assertEqual(len(self.listener.correlated_expectations()), 1)

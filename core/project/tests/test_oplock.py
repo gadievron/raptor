@@ -10,6 +10,10 @@ would silently succeed.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import contextlib
 import io
 import json
@@ -404,7 +408,7 @@ class VerifyAfterLockTest(unittest.TestCase):
                     return _St()
                 return st
 
-            with patch("core.project.oplock.os.stat", swapping_stat):
+            with mock_module_attribute(_mock_owner('core.project.oplock'), 'os', 'stat', swapping_stat):
                 with project_op_lock(pdir, "merge"):
                     pass
             self.assertTrue(first["done"])

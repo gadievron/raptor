@@ -1,5 +1,9 @@
 """Tests for core.json utilities."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import json
 import os
 import signal
@@ -656,7 +660,6 @@ class TestLoadJsonMaxBytes(unittest.TestCase):
         # Simulated by making fstat report a tiny (gate-passing) size
         # while the file on disk is over budget.
         import types
-        from unittest import mock
 
         with TemporaryDirectory() as d:
             p = Path(d) / "grow.json"
@@ -668,7 +671,7 @@ class TestLoadJsonMaxBytes(unittest.TestCase):
                 return types.SimpleNamespace(
                     st_mode=st.st_mode, st_size=min(st.st_size, 10))
 
-            with mock.patch("core.json.utils.os.fstat", tiny_fstat):
+            with mock_module_attribute(_mock_owner('core.json.utils'), 'os', 'fstat', tiny_fstat):
                 self.assertIsNone(load_json(p, max_bytes=100))
                 with self.assertRaises(ValueError):
                     load_json(p, strict=True, max_bytes=100)

@@ -8,10 +8,15 @@ network — while cache-contract tests keep the real filesystem and
 metadata paths. Version-probe tests only need the probe seam.
 """
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import logging
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -66,12 +71,14 @@ from packages.codeql.database_manager import (
 @pytest.fixture
 def db_manager(tmp_path):
     """DatabaseManager with a fake codeql binary (no __init__ probing)."""
-    with patch.object(DatabaseManager, '__init__', lambda self: None):
-        mgr = DatabaseManager()
-        mgr.codeql_cli = "/usr/bin/codeql"
-        mgr.db_root = tmp_path.parent / (tmp_path.name + "-cache")
-        mgr.db_root.mkdir()
-        return mgr
+    # Stay outside the scanned target, with a lifetime independent of pytest's
+    # reusable tmp_path names and retention policy.
+    with TemporaryDirectory(prefix="codeql-test-cache-", dir=tmp_path.parent) as cache:
+        with patch.object(DatabaseManager, '__init__', lambda self: None):
+            mgr = DatabaseManager()
+            mgr.codeql_cli = "/usr/bin/codeql"
+            mgr.db_root = Path(cache)
+        yield mgr
 
 
 def _build_system(tmp_path, command="make -j"):
@@ -957,8 +964,8 @@ class TestBuildModeCacheContract:
         )
 
         with patch('core.sandbox.run', side_effect=fake_codeql_create), \
-             patch(
-                 'packages.codeql.database_manager.subprocess.run',
+             mock_module_attribute(
+                 _mock_owner('packages.codeql.database_manager'), 'subprocess', 'run',
                  side_effect=fake_codeql_version,
              ):
             default_result = db_manager.create_database(

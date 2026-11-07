@@ -1,5 +1,8 @@
 """Tests for output directory resolution."""
 
+from pkgutil import resolve_name as _mock_owner
+
+
 import os
 import unittest
 from contextlib import contextmanager
@@ -82,9 +85,9 @@ class TestGetOutputDir(unittest.TestCase):
                 # Pin the timestamp string so both calls see the same second
                 with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427-120000'):
                     # Simulate sibling process via patched os.getpid
-                    with patch('core.run.output.os.getpid', return_value=11111):
+                    with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=11111):
                         a = get_output_dir("scan")
-                    with patch('core.run.output.os.getpid', return_value=22222):
+                    with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=22222):
                         b = get_output_dir("scan")
                     self.assertNotEqual(a, b,
                         "same-second invocations from different processes "
@@ -236,7 +239,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
     # the tests survive future tail-format adjustments.
     def test_underscore_separator(self):
         with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
-            with patch('core.run.output.os.getpid', return_value=12345):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=12345):
                 suffix = unique_run_suffix("_")
                 self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
                 tail = suffix.rsplit("_", 1)[-1]
@@ -245,7 +248,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
 
     def test_hyphen_separator(self):
         with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427-120000'):
-            with patch('core.run.output.os.getpid', return_value=12345):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=12345):
                 suffix = unique_run_suffix("-")
                 self.assertTrue(suffix.startswith("20260427-120000-pid12345-"))
                 tail = suffix.rsplit("-", 1)[-1]
@@ -255,7 +258,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
     def test_default_separator_is_underscore(self):
         # Standalone mode is the more common shape, so default to '_'.
         with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
-            with patch('core.run.output.os.getpid', return_value=12345):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=12345):
                 suffix = unique_run_suffix()
                 self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
 
@@ -268,7 +271,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
             captured["fmt"] = fmt
             return "20260427-120000"
         with mock_module_attribute(_clock_consumer, 'time', 'strftime', side_effect=capture):
-            with patch('core.run.output.os.getpid', return_value=99):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=99):
                 unique_run_suffix("-")
         self.assertEqual(captured["fmt"], "%Y%m%d-%H%M%S")
 
@@ -287,9 +290,9 @@ class TestUniqueRunSuffix(unittest.TestCase):
         # PIDs and therefore different suffixes even at the same wall-clock
         # second.
         with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
-            with patch('core.run.output.os.getpid', return_value=11111):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=11111):
                 a = unique_run_suffix("_")
-            with patch('core.run.output.os.getpid', return_value=22222):
+            with mock_module_attribute(_mock_owner('core.run.output'), 'os', 'getpid', return_value=22222):
                 b = unique_run_suffix("_")
             self.assertNotEqual(a, b)
 

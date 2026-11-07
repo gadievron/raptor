@@ -21,6 +21,10 @@ Contract under test:
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
+
 import sys as _sys
 
 import pytest as _pytest
@@ -190,8 +194,8 @@ class TestProbeCaching(unittest.TestCase):
         with mock.patch(
             "core.sandbox.probes._find_sandbox_binary",
             return_value="/usr/bin/unshare",
-        ), mock.patch(
-            "core.sandbox.probes.subprocess.run",
+        ), mock_module_attribute(
+            _mock_owner('core.sandbox.probes'), 'subprocess', 'run',
             return_value=self._completed(0),
         ) as run_mock:
             self.assertTrue(self._check())
@@ -211,8 +215,8 @@ class TestProbeCaching(unittest.TestCase):
         with mock.patch(
             "core.sandbox.probes._find_sandbox_binary",
             return_value="/usr/bin/unshare",
-        ), mock.patch(
-            "core.sandbox.probes.subprocess.run",
+        ), mock_module_attribute(
+            _mock_owner('core.sandbox.probes'), 'subprocess', 'run',
             side_effect=fake_run,
         ):
             self.assertFalse(self._check())
@@ -227,8 +231,8 @@ class TestProbeCaching(unittest.TestCase):
         with mock.patch(
             "core.sandbox.probes._find_sandbox_binary",
             return_value="/usr/bin/unshare",
-        ), mock.patch(
-            "core.sandbox.probes.subprocess.run",
+        ), mock_module_attribute(
+            _mock_owner('core.sandbox.probes'), 'subprocess', 'run',
             return_value=self._completed(1),
         ):
             self.assertTrue(self._check())
@@ -238,8 +242,8 @@ class TestProbeCaching(unittest.TestCase):
         with mock.patch(
             "core.sandbox.probes._find_sandbox_binary",
             return_value="/usr/bin/unshare",
-        ), mock.patch(
-            "core.sandbox.probes.subprocess.run",
+        ), mock_module_attribute(
+            _mock_owner('core.sandbox.probes'), 'subprocess', 'run',
             side_effect=subprocess.TimeoutExpired(["unshare"], 5),
         ):
             self.assertTrue(
