@@ -247,6 +247,11 @@ with export/install-mode caches.
 Every current shared-venv consumer saves a successful locked fallback rebuild.
 Jobs that need uv only for that rebuild leave its installation and download-cache
 restore to the helper on misses; standalone tool installers retain their own uv setup.
+The SCA PR gate, compromise corpus and typosquat re-audit share a separate
+`venv-runtime` profile with `--no-dev`; subsequent steps use that environment
+through `GITHUB_PATH`, and test/dev environments cannot satisfy its cache key.
+The compromise workflow also owns exact dependency and provisioning inputs in
+its PR path filters; the monthly re-audit remains scheduled or manually dispatched.
 
 | Cache family | Identity and validation |
 |---|---|

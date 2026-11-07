@@ -26,7 +26,9 @@ def test_comment_uses_bot_author_and_all_pages(tmp_path, bot_comment, fail_api):
     # Keep the test's files isolated while exercising the actual workflow body.
     body_file = tmp_path / 'diff.md'
     body_file.write_text('SCA results')
-    script = script.replace('/tmp/sca-diff.md', str(body_file))
+    script = script.replace('/tmp/sca-diff.md', '"$GH_REPORT"')
+    runner_temp = tmp_path / 'runner temporary files'
+    runner_temp.mkdir()
     marker = '<!-- raptor-sca-pr-gate -->'
     pages = [[{'id': 1, 'user': {'login': 'contributor'}, 'body': marker}]]
     pages.append([{'id': 42, 'user': {'login': 'github-actions[bot]' if bot_comment else 'reviewer'}, 'body': marker}])
@@ -54,8 +56,9 @@ if '--paginate' in args:
     result = subprocess.run(['bash', '-c', script], env=dict(
         os.environ, PATH=f'{tmp_path}{os.pathsep}{os.environ["PATH"]}',
         REPO='owner/repo', PR='12', GITHUB_OUTPUT=str(output),
+        RUNNER_TEMP=str(runner_temp), GH_REPORT=str(body_file),
         CALLS=str(calls), PAGES=str(fixture), FAIL_API=str(int(fail_api)),
-    ), capture_output=True, text=True)
+    ), capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     actions = [json.loads(line) for line in calls.read_text().splitlines()]
     if fail_api:
