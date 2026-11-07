@@ -10,6 +10,12 @@ contribution workflow, [initial setup](../CONTRIBUTING.md#getting-started),
 rules. Start there when preparing a change; use this page for implementation
 and testing details.
 
+When using an AI coding agent, ask it to read this guide and
+[CONTRIBUTING.md](../CONTRIBUTING.md) before editing code. Have it follow the
+relevant test and companion-check requirements, and revisit the affected
+sections when the task changes. Changes written by an agent have the same
+review and validation requirements as other contributions.
+
 Keep this reference focused on orientation and practical developer workflows.
 The tree, docstrings, and `--help` output own API and CLI details;
 [CI controls](ci-controls.md) owns the full check inventory.
@@ -551,8 +557,16 @@ contributors, one line each:
   operator-facing variable fails, and so does a stale entry in
   [environment.md](environment.md).
 - **vocab-lists** (PR gate + daily sweep, `.github/scripts/check_vocab_lists.py`) —
-  literal function-name lists longer than nine names outside the
-  data-pack seams fail; route the names through a pack.
+  literal identifier lists longer than nine names outside the data-pack
+  seams fail. Learned domain names belong in the vocabulary seams. Fixed
+  serialization schemas (event/report/persistence field names) can trigger
+  the same census: review the fields and their producer/consumer contract,
+  then record the exact key, kind, count, and rationale in
+  `.github/scripts/vocab_baseline.json`. This is a reviewed exception for
+  that schema, not a blanket exemption for dictionaries. Run
+  `python3 .github/scripts/check_vocab_lists.py` before submitting or merging
+  additions or changes to large literal mappings or name sets; include the
+  reviewed baseline change with the schema change.
 - **miswiring** (PR gate + daily sweep, `.github/scripts/check_miswiring.py`) — dead
   definitions, kwarg/signature mismatches, swallowed exceptions,
   parsed-but-never-read flags. Note it counts textual mentions in
