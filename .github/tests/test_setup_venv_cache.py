@@ -150,9 +150,10 @@ def test_rebuild_does_not_add_a_second_owner_for_an_existing_uv_cache(existing, 
     assert _expression(_field(step, 'enable-cache', indent=8), {'env.UV_CACHE_DIR': existing}) is expected
 
 
+@pytest.mark.parametrize('extras,expected_extras', [('--extra grammars', ['--extra', 'grammars']), ('--no-dev', ['--no-dev'])])
 @pytest.mark.parametrize('method', ['export', 'sync'])
 @pytest.mark.parametrize('status', [0, 23])
-def test_native_rebuild_keeps_method_extras_active_env_and_failure_status(tmp_path, method, status):
+def test_native_rebuild_keeps_method_extras_active_env_and_failure_status(tmp_path, method, status, extras, expected_extras):
     import json
     import os
     import subprocess
@@ -188,7 +189,7 @@ else:
     venv = tmp_path / 'project environment'
     record = tmp_path / 'uv-record.jsonl'
     env = dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin', VENV_PATH=str(venv),
-               VENV_CACHE_INSTALL_METHOD=method, UV_EXPORT_EXTRA_ARGS='--extra grammars',
+               VENV_CACHE_INSTALL_METHOD=method, UV_EXPORT_EXTRA_ARGS=extras,
                UV_RECORD=str(record), INSTALL_EXIT=str(status))
     env.pop('VIRTUAL_ENV', None)
     result = subprocess.run(
@@ -202,11 +203,11 @@ else:
     assert all(call['active'] == str(venv) for call in calls[1:])
     if method == 'sync':
         assert [call['args'] for call in calls[1:]] == [
-            ['sync', '--locked', '--active', '--extra', 'grammars'],
+            ['sync', '--locked', '--active', *expected_extras],
         ]
     else:
         assert sorted(call['args'] for call in calls[1:]) == sorted([
-            ['export', '--locked', '--no-hashes', '--extra', 'grammars'],
+            ['export', '--locked', '--no-hashes', *expected_extras],
             ['pip', 'install', '-r', '-'],
         ])
 

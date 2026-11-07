@@ -39,6 +39,13 @@ on:
       - 'packages/sca/supply_chain/**'
       - 'packages/sca/findings.py'
       - 'packages/sca/thresholds.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'uv.toml'
+      - '.github/workflows/sca-compromise-check.yml'
+      - '.github/actions/setup-venv/action.yml'
+      - '.github/actions/enable-userns/action.yml'
+      - '.github/scripts/ci_cache_key.py'
 
 permissions:
   contents: read
@@ -48,6 +55,9 @@ permissions:
 concurrency:
   group: sca-compromise-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  VENV_PATH: .venv
 
 jobs:
   compromise-check:
@@ -75,12 +85,23 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - name: Restore or rebuild runtime venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-runtime
+          uv-export-extra-args: --no-dev
+          save-on-rebuild: 'true'
 
-      - name: Install runtime deps
+      - name: Expose runtime interpreter to subsequent steps
         shell: bash
-        run: uv export --locked --no-hashes --no-dev | uv pip install --system -r -
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(str(Path(os.environ["VENV_PATH"]).resolve() / "bin") + "\n")
+          PYTHON
 
       - name: Run compromise-detection harness
         # Trust marker required by ``libexec/*`` scripts. CI is the

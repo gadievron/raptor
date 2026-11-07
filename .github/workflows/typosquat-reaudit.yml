@@ -24,6 +24,9 @@ concurrency:
   group: typosquat-reaudit
   cancel-in-progress: false
 
+env:
+  VENV_PATH: .venv
+
 jobs:
   reaudit:
     # Canonical-repo guard (the refresh-sca-data.yml idiom): a
@@ -46,15 +49,23 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - name: Restore or rebuild runtime venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-runtime
+          uv-export-extra-args: --no-dev
+          save-on-rebuild: 'true'
 
-      - name: Install deps
+      - name: Expose runtime interpreter to subsequent steps
         shell: bash
         run: |
-          # The re-audit hits registries + OSV through the SCA egress client,
-          # so it needs the runtime deps (not the dev set).
-          uv export --locked --no-hashes --no-dev | uv pip install --system -r -
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(str(Path(os.environ["VENV_PATH"]).resolve() / "bin") + "\n")
+          PYTHON
 
       - name: Re-audit reviewed-legit (mechanical, no LLM)
         # Writes a markdown report to RUNNER_TEMP (never the repo); empty when

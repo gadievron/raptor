@@ -60,6 +60,8 @@ on:
       - '.gitlab-ci.yml'
       - '.gitlab-ci.yaml'
       - '.github/workflows/sca-pr-gate.yml'
+      - 'uv.toml'
+      - '.github/scripts/ci_cache_key.py'
 
 permissions:
   contents: read
@@ -68,6 +70,9 @@ permissions:
 concurrency:
   group: sca-pr-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+
+env:
+  VENV_PATH: .venv
 
 jobs:
   diff:
@@ -104,12 +109,23 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - name: Restore or rebuild runtime venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-runtime
+          uv-export-extra-args: --no-dev
+          save-on-rebuild: 'true'
 
-      - name: Install dependencies
+      - name: Expose runtime interpreter to subsequent steps
         shell: bash
-        run: uv export --locked --no-hashes --no-dev | uv pip install --system -r -
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(str(Path(os.environ["VENV_PATH"]).resolve() / "bin") + "\n")
+          PYTHON
 
       - name: Scan PR merge result
         run: bin/raptor-sca . --out /tmp/sca-pr --no-image-scanning

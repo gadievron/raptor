@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import venv
 from unittest.mock import patch
 
 import pytest
@@ -292,3 +293,80 @@ def test_mypy_remains_a_full_tree_type_check_after_restore():
     run = script(named_step(source, 'Run mypy'))
     assert 'mypy --config-file pyproject.toml core/ packages/' in run
     assert source.index('uses: ./.github/actions/setup-venv') < source.index('name: Run mypy')
+
+
+RUNTIME_CONSUMERS = [
+    ('sca-pr-gate.yml', 'diff'), ('sca-compromise-check.yml', 'compromise-check'),
+    ('typosquat-reaudit.yml', 'reaudit'),
+]
+
+
+@pytest.mark.parametrize('file,name', RUNTIME_CONSUMERS)
+def test_sca_consumers_share_only_the_runtime_profile(file, name):
+    source = job(file, name)
+    restore = named_step(source, 'Restore or rebuild runtime venv')
+    assert 'uses: ./.github/actions/setup-venv' in restore
+    assert '          cache-key-prefix: venv-runtime\n' in restore
+    assert '          uv-export-extra-args: --no-dev\n' in restore
+    assert "          save-on-rebuild: 'true'\n" in restore
+    assert 'install-method:' not in restore  # Preserve locked export/install.
+    assert 'astral-sh/setup-uv@' not in source
+    assert 'uv pip install' not in source
+    text = (ROOT / '.github/workflows' / file).read_text()
+    assert '\nenv:\n  VENV_PATH: .venv\n' in text
+    expose = named_step(source, 'Expose runtime interpreter to subsequent steps')
+    assert source.index('actions/setup-python@') < source.index(restore)
+    assert source.index(restore) < source.index(expose)
+    assert 'shell: bash' in expose
+    if file != 'typosquat-reaudit.yml':
+        paths = set(re.findall(r"^      - '([^']+)'$", text, re.M))
+        assert {'uv.toml', '.github/scripts/ci_cache_key.py'} <= paths
+        if file == 'sca-compromise-check.yml':
+            assert {'pyproject.toml', 'uv.lock', '.github/workflows/sca-compromise-check.yml',
+                    '.github/actions/setup-venv/action.yml',
+                    '.github/actions/enable-userns/action.yml'} <= paths
+    else:
+        assert 'pull_request:' not in text
+
+
+@pytest.mark.parametrize('file,name', RUNTIME_CONSUMERS)
+@pytest.mark.parametrize('absolute', [False, True])
+def test_sca_path_handoff_selects_the_restored_interpreter(tmp_path, file, name, absolute):
+    source = job(file, name)
+    command = script(named_step(source, 'Expose runtime interpreter to subsequent steps'))
+    checkout = tmp_path / 'checkout with spaces'
+    checkout.mkdir()
+    environment = checkout / 'runtime environment'
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+    paths = tmp_path / 'github-path'
+    paths.write_text('/earlier/tool/location\n')
+    env = dict(os.environ, GITHUB_PATH=str(paths),
+               VENV_PATH=str(environment) if absolute else environment.name)
+    result = subprocess.run(
+        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', command],
+        cwd=checkout, env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert paths.read_text().splitlines() == ['/earlier/tool/location', str(environment / 'bin')]
+    # Model the runner applying GITHUB_PATH before the next step. Execute
+    # both names used by the workflows and env-python script shebangs.
+    for executable in ('python', 'python3'):
+        child = subprocess.run(
+            [executable, '-I', '-c', 'import sys; print(sys.prefix)'],
+            cwd=checkout, env=dict(env, PATH=str(environment / 'bin') + os.pathsep + env['PATH']),
+            capture_output=True, text=True, timeout=10,
+        )
+        assert child.returncode == 0, child.stdout + child.stderr
+        assert Path(child.stdout.strip()) == environment
+
+
+def test_runtime_cache_does_not_replace_the_compromise_or_reaudit_checks():
+    compromise = job('sca-compromise-check.yml', 'compromise-check')
+    run = script(named_step(compromise, 'Run compromise-detection harness'))
+    assert 'packages/sca/scripts/raptor-sca-compromise-check' in run
+    assert 'test/data/sca-e2e/compromise-corpus' in run and '--no-offline' in run
+    assert "_RAPTOR_TRUSTED: '1'" in compromise
+    reaudit = job('typosquat-reaudit.yml', 'reaudit')
+    run = script(named_step(reaudit, 'Re-audit reviewed-legit (mechanical, no LLM)'))
+    assert 'python -m packages.sca.supply_chain.typosquat_audit --reaudit' in run
+    assert 'name: Open / update issue when entries are flagged' in reaudit
