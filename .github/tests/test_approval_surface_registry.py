@@ -681,11 +681,13 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        # The bash lane's own detector doubles as its prescreen — the
-        # line scan is cheap; only the Python parse is not.
-        bash_hit = any(
-            _bash_read_has_prompt(ln) for ln in text.splitlines())
-        if not full and not bash_hit and not _may_carry_python_prompt(text):
+        # Valid Python never uses the bash fallback. Defer its line scan
+        # until the smoke prescreen needs it or Python parsing fails.
+        bash_hit = None
+        if not full and not _may_carry_python_prompt(text):
+            bash_hit = any(
+                _bash_read_has_prompt(ln) for ln in text.splitlines())
+        if bash_hit is False:
             # Neither lane can match: no prompting read line exists,
             # and an honest input()/confirm() call site would have hit
             # the identifier prescreen (see _may_carry_python_prompt
@@ -696,6 +698,9 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
                 found.add(rel)
         except SyntaxError:
             # Not Python — bash/other script: any read-with-prompt line.
+            if bash_hit is None:
+                bash_hit = any(
+                    _bash_read_has_prompt(ln) for ln in text.splitlines())
             if bash_hit:
                 found.add(rel)
     return found
@@ -1046,3 +1051,40 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("source,found", [
+    ('input("Approve?")\n', True),
+    ('click.confirm("Approve?")\n', True),
+    ('𝗂𝗇𝗉𝗎𝗍("Approve?")\n', True),
+    ('v = input \\\n("Approve?")\n', True),
+    ('print("not a prompt")\n', False),
+    ('text = "read -rp Approve? answer"\n', False),
+])
+def test_full_python_enumeration_never_needs_bash_scan(tmp_path, monkeypatch, source, found):
+    (tmp_path / "probe.py").write_text(source, encoding="utf-8")
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(globals(), "_git_files", lambda: ["probe.py"])
+
+    def unexpected_scan(line):
+        pytest.fail("valid Python reached the bash fallback")
+
+    monkeypatch.setitem(globals(), "_bash_read_has_prompt", unexpected_scan)
+    assert enumerate_surfaces(full=True) == ({"probe.py"} if found else set())
+
+
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("source,found", [
+    ('#!/bin/bash\nread -rp "Approve?" answer\n', True),
+    ('#!/bin/bash\nIFS= read -r -t 5 -p "Approve?" answer\n', True),
+    ('#!/bin/bash\nread -dp answer\n', False),
+    ('#!/bin/bash\ninput() { :; }\nread -rp "Approve?" answer\n', True),
+    ('#!/bin/bash\ninput() { :; }\nread -dp answer\n', False),
+])
+def test_python_parse_failure_retains_bash_fallback(tmp_path, monkeypatch, full, source, found):
+    (tmp_path / "probe").write_text(source, encoding="utf-8")
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(globals(), "_git_files", lambda: ["libexec/probe"])
+    (tmp_path / "libexec").mkdir()
+    (tmp_path / "probe").rename(tmp_path / "libexec/probe")
+    assert enumerate_surfaces(full=full) == ({"libexec/probe"} if found else set())
