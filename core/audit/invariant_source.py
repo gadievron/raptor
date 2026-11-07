@@ -244,7 +244,7 @@ def source_mutations(source, variables=None):
                 watched.update(
                     canonical(item)
                     for item in descendants(condition)
-                    if canonical(item) is not None
+                    if item.type != "field_identifier" and canonical(item) is not None
                 )
                 guard_start = min(guard_start, condition.end_byte)
             elif parent.type == "compound_statement":
@@ -284,7 +284,12 @@ def source_mutations(source, variables=None):
                             else item.child_by_field_name("argument")
                         )
                         name = canonical(left)
-                        if name is None or name in watched:
+                        target = _unwrap(left)
+                        if (
+                            name is None
+                            or name in watched
+                            or (target is not None and target.type == "field_expression")
+                        ):
                             return (
                                 (),
                                 "mutation invalidates the reaching guard snapshot",
