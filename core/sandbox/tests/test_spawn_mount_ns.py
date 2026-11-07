@@ -24,6 +24,9 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
+from core.testing.module_state import isolated_module_state
+
+
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_launch_patches(monkeypatch):
     """Keep launch mocks on consumer-owned subprocess module bindings."""
@@ -66,9 +69,16 @@ def _mount_ns_usable() -> bool:
 class TestMountNSAvailableProbe(unittest.TestCase):
     """mount_ns_available() — correctness of the runtime probe."""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
         from core.sandbox import state
-        state._mount_ns_available_cache = None
+        with isolated_module_state(state, {'_mount_ns_available_cache': None, '_newuidmap_path_cache': None, '_newgidmap_path_cache': None}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
+
 
     def test_returns_bool(self):
         from core.sandbox._spawn import mount_ns_available
@@ -585,13 +595,17 @@ class TestEtcOverlayKeyValidation(unittest.TestCase):
 class TestGidmapAllowProbe(unittest.TestCase):
     """_gidmap_allow_available() — detection of the raptor-gidmap-allow helper."""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
         from core.sandbox import state
-        state._gidmap_allow_cache = None
+        with isolated_module_state(state, {'_gidmap_allow_cache': None, '_gidmap_allow_warned_missing': False}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
 
-    def tearDown(self):
-        from core.sandbox import state
-        state._gidmap_allow_cache = None
+
+
 
     def test_returns_none_when_binary_missing(self):
         """When the helper binary doesn't exist, returns None."""

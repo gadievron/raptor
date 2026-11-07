@@ -167,7 +167,7 @@ class TestAuditPreflightDecision:
         from core.sandbox import seccomp, state
 
         # Force probe negative.
-        state._ptrace_available_cache = False
+        monkeypatch.setattr(state, "_ptrace_available_cache", False)
 
         captured_audit_mode = []
         original = seccomp._make_seccomp_preexec
