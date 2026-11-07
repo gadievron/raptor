@@ -135,8 +135,20 @@ def _payload(index: AccessIndex, unit: StudySlice, functions: list[str], limits:
         remaining -= len(body)
     # Producer/consumer bodies take precedence over supplemental declarations.
     # A large struct must not consume the producer's source allowance.
-    wanted = {a.type_id for a in index.accesses if a.function in functions}
-    wanted |= {a.binding for a in index.accesses if a.function in functions and a.binding.startswith("global:")}
+    requested = set(functions)
+    wanted = set()
+    selected = []
+    site_count = 0
+    for access in index.accesses:
+        if access.function not in requested:
+            continue
+        wanted.add(access.type_id)
+        if access.binding.startswith("global:"):
+            wanted.add(access.binding)
+        if access.function in included:
+            site_count += 1
+            if len(selected) < 16:
+                selected.append(access)
     declaration_budget = min(remaining,6000)
     for key in sorted(wanted):
         declaration = index.declarations.get(key)
@@ -163,13 +175,17 @@ def _payload(index: AccessIndex, unit: StudySlice, functions: list[str], limits:
             if fragment["function"] != unit.consumer:
                 fragment_functions.add(fragment["function"])
             fragment_count += 1
-    sites = [a for a in index.accesses if a.function in included]
-    selected = sites[:16]
     access_metadata = []
     for access in selected:
         access_metadata.append({k:(v[:512] if isinstance(v,str) and k not in {"id","function"} else v)
                                for k,v in asdict(access).items() if k not in {"expression","rhs"}})
-    calls = [c for c in index.calls if c.caller in included]
+    calls = []
+    call_count = 0
+    for call in index.calls:
+        if call.caller in included:
+            call_count += 1
+            if len(calls) < 24:
+                calls.append(call)
     dispatch_targets = {r["target"] for r in unit.dispatch_candidates}
     unexamined = sorted(dispatch_targets-included-fragment_functions)
     dispatch_metadata = []
@@ -184,7 +200,7 @@ def _payload(index: AccessIndex, unit: StudySlice, functions: list[str], limits:
         "reasons":unit.reasons,"unresolved":unit.unresolved[:16],"truncated":unit.truncated[:16],
         "omitted_truncation_details":max(0,len(unit.truncated)-16),
         "omitted_unresolved_edges":max(0,len(unit.unresolved)-16),
-        "omitted_bodies":omitted,"omitted_accesses":max(0,len(sites)-len(selected)),
+        "omitted_bodies":omitted,"omitted_accesses":max(0,site_count-len(selected)),
         "metadata_string_cap":512,"accesses":access_metadata,
         "full_body_functions":sorted(included),"fragment_only_functions":sorted(fragment_functions-included),
         "dispatch_candidates":dispatch_metadata,
@@ -193,12 +209,13 @@ def _payload(index: AccessIndex, unit: StudySlice, functions: list[str], limits:
         "callback_excerpt_count":fragment_count,"omitted_callback_fragments":omitted_fragments,
         "unexamined_dispatch_targets":unexamined[:16],"unexamined_dispatch_count":len(unexamined),
         "calls":[{"caller":c.caller,"name":c.name,"line":c.line,"targets":c.targets,
-                  "arguments":[a[:512] for a in c.arguments[:8]]} for c in calls[:24]],
-        "omitted_calls":max(0,len(calls)-24)}
+                  "arguments":[a[:512] for a in c.arguments[:8]]} for c in calls],
+        "omitted_calls":max(0,call_count-len(calls))}
+    source_text = "\n\n".join(bodies)
     def render():
         return ("Use exact function IDs for sequence entries and supplied EVIDENCE/DECLARATION_ID/FUNCTION_ID values for evidence_ids.\n"
                 + wrap_untrusted(json.dumps(metadata,ensure_ascii=True),kind="cross-entry-metadata",origin="access-index")
-                + "\n" + wrap_untrusted("\n\n".join(bodies),kind="cross-entry-source",origin="audited-repository"))
+                + "\n" + wrap_untrusted(source_text,kind="cross-entry-source",origin="audited-repository"))
     # Shed redundant metadata before source, leaving room for a refutation's
     # witness. Every elision remains counted; no omitted evidence ID is allowed.
     from core.llm.prompt_budget import estimate_tokens
