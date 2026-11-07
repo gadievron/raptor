@@ -2929,7 +2929,7 @@ def _run_smt_verb_on_source(
                 return SweepResult(
                     tool="smt", file_path=file_path, function_name=function_name,
                     outcome="inconclusive", rule_id=f"smt:{verb}",
-                    details={"arithmetic_guard_status": "unavailable"},
+                    details={"arithmetic_guard_status": "unavailable", "arithmetic_type_status": operation.type_status},
                 )
             if operation.type_status != "bound":
                 return SweepResult(

@@ -8,6 +8,10 @@ from dataclasses import dataclass
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
 from .integer_literals import source_integer_atom
+from .integer_abi import resolve_integer_abi
+from .arithmetic_types import integer_type
+from .arithmetic_evaluation import unevaluated_context
+from .arithmetic_prefix import PrefixIntegerModel
 
 _MAX_PREMISES = 8
 _MAX_CONDITION_NODES = 128
@@ -28,7 +32,7 @@ def _nodes(node):
         stack.extend(reversed(item.named_children))
 
 
-def guards_for_operation(body, target, data, operands):
+def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None):
     """Collect conjunctions with known branch polarity and unchanged names."""
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -38,6 +42,18 @@ def guards_for_operation(body, target, data, operands):
 
     def names(node):
         return {text(item) for item in _nodes(node) if item.type == "identifier"}
+
+    abi = resolve_integer_abi(integer_abi)
+
+    def runtime_nodes(node):
+        stack = [node]
+        while stack:
+            item = stack.pop()
+            yield item
+            if not unevaluated_context(item, data, language):
+                stack.extend(reversed(item.named_children))
+
+    prefix = PrefixIntegerModel(data, language, abi)
 
     condition_work = 0
 
@@ -88,7 +104,31 @@ def guards_for_operation(body, target, data, operands):
     def effects(node, watched):
         if node is None:
             return True
-        for item in _nodes(node):
+        for item in runtime_nodes(node):
+            if target.start_byte <= item.start_byte < target.end_byte:
+                continue  # the selected atomic operation/access is bound separately
+            if unevaluated_context(item, data, language):
+                continue
+            if item.type in {"lambda_expression", "co_await_expression", "co_yield_expression",
+                             "typeid_expression", "compound_literal_expression", "conditional_expression",
+                             "comma_expression", "user_defined_literal"}:
+                return True
+            if item.type == "cast_expression":
+                if not contains(item.child_by_field_name("value")):
+                    if prefix.value_domain(item) is None and not prefix.discarded_integer_cast(item):
+                        return True  # do not guess a preceding conversion's behavior
+                type_node = item.child_by_field_name("type")
+                if type_node is None or any(child.type in {"array_declarator", "abstract_array_declarator"}
+                                            for child in _nodes(type_node)):
+                    return True
+            if item.type == "identifier":
+                parent = item.parent
+                if parent is None or parent.child_by_field_name("declarator") != item:
+                    if prefix.value_domain(item) is None:
+                        return True  # includes implicit C++ conversions/operators and indeterminate pointers
+            if item.type == "binary_expression" and item != target:
+                if text(item.child_by_field_name("operator")) not in {"+", "-", "*", "/", "%", "<<", ">>"} and prefix.value_domain(item) is None:
+                    return True
             if item.type == "call_expression":
                 return True  # aliases and globals are not summarized here
             if item != target and item.type in {"subscript_expression", "pointer_expression", "field_expression"}:
@@ -103,6 +143,8 @@ def guards_for_operation(body, target, data, operands):
             if item.type in {"assignment_expression", "update_expression", "new_expression", "delete_expression"}:
                 return True  # no alias/evaluation-order model, including C++ references
             if item.type == "declaration":
+                if not prefix.plain_declaration(item):
+                    return True
                 type_node = item.child_by_field_name("type")
                 if type_node is None or type_node.type not in {"primitive_type", "sized_type_specifier"}:
                     return True  # an implicit C++ constructor may throw or mutate state
@@ -110,7 +152,15 @@ def guards_for_operation(body, target, data, operands):
                     if decl.type == "identifier":
                         return True  # later indeterminate reads have no value-flow model
                     if decl.type == "init_declarator":
-                        decl = decl.child_by_field_name("declarator")
+                        value = decl.child_by_field_name("value")
+                        declarator = decl.child_by_field_name("declarator")
+                        if value is not None and not contains(value):
+                            pointer_literal = (declarator is not None and declarator.type == "pointer_declarator"
+                                               and (value.type in {"string_literal", "concatenated_string"}
+                                                    or source_integer_atom(value, data) == "0"))
+                            if not pointer_literal and not prefix.initialization_defined(value, integer_type(text(type_node), abi)):
+                                return True
+                        decl = declarator
                     if decl is not None and names(decl) & watched:
                         return True  # includes shadowing and reference declarators
             if item.type == "array_declarator":
