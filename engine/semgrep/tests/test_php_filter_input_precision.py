@@ -19,6 +19,7 @@ _FAMILIES = (
     ('open-redirect', 'header-location', "header('Location: ' . $v);"),
     ('unsafe-reflection', 'tainted-callable', '$v();'),
     ('unserialize-taint', 'request-data', 'unserialize($v);'),
+    ('attr-encoding', 'unquoted-encoded-request', 'echo "<a title=" . htmlspecialchars($v) . ">";'),
 )
 pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     shutil.which('semgrep') is None, reason='semgrep not installed')]

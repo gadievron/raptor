@@ -41,10 +41,9 @@ rules:
   # boundary shape.
   #
   # Division of labour: ANY htmlspecialchars/htmlentities call
-  # (qualified or not) clears taint here — the encoded-but-wrong-flags
-  # residual (ENT_COMPAT / ENT_NOQUOTES into a quoted attribute) is
-  # php/attr-encoding.yaml's (CWE-116) job, so the two rules never
-  # double-claim one shape.
+  # (qualified or not) clears taint here. php/attr-encoding.yaml
+  # (CWE-116) checks insufficient quote flags in quoted attributes and
+  # encoded request values in unquoted attributes.
   #
   # Known FP modes:
   #   - The concatenation sinks are expression-level, not echo-bound:

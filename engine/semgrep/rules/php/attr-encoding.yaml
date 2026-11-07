@@ -1,5 +1,5 @@
 # raptor: confirm-only
-# This rule covers immediate quoted-attribute encoding mistakes only.
+# These rules cover partial PHP attribute-encoding shapes only.
 # A zero-match cannot refute the wider CWE-116 class.
 rules:
   # Quote bits are independent: bit 0 protects apostrophes; bit 1
@@ -102,5 +102,198 @@ rules:
             ((?:[^<>'\\\n]|\\[\\']))
             ((?:[^"<>'\\\n]|\\[\\']))
           )
+    metadata:
+      cwe: ["CWE-116"]
+  # HTML encoding leaves raw whitespace in values. It does not replace
+  # quoting an attribute, regardless of the selected quote flags.
+  - id: raptor.php.attr-encoding.unquoted-encoded-request
+    mode: taint
+    min-version: 1.47.0
+    languages: [php]
+    severity: MEDIUM
+    message: >
+      HTML-encoded request data reaches an unquoted attribute. HTML entity
+      encoding leaves whitespace that can separate attacker-chosen
+      attributes. Quote the attribute value and encode it for that context.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+        exact: true
+        label: REQUEST
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
+          - metavariable-regex:
+              metavariable: $INPUT
+              constant-propagation: false
+              regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $INPUT = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $INPUT = $VALUE;
+                ...
+              }
+        exact: true
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
+        label: REQUEST
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME, $FILTER)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME, $FILTER)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
+          - metavariable-regex:
+              metavariable: $INPUT
+              constant-propagation: false
+              regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $INPUT = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $INPUT = $VALUE;
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $FILTER
+              constant-propagation: false
+              regex: '^\\?(?:FILTER_DEFAULT|FILTER_UNSAFE_RAW)$'
+          - pattern-not-inside: |
+              namespace $N;
+              ...
+              const $FILTER = $VALUE;
+              ...
+          - pattern-not-inside: |
+              namespace $N {
+                ...
+                const $FILTER = $VALUE;
+                ...
+              }
+        exact: true
+        label: REQUEST
+      # Label only the encoded value's input read, not its flags or the
+      # original variable's later uses. Opaque-call propagation carries this
+      # label to the returned value and its local aliases.
+      - patterns:
+          - pattern: $ENCODER($DATA, ...)
+          - metavariable-regex:
+              metavariable: $ENCODER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:htmlspecialchars|htmlentities)$'
+          - focus-metavariable: $DATA
+        requires: REQUEST
+        label: HTML_ENCODED
+        exact: true
+    pattern-sanitizers:
+      - patterns:
+          - pattern: $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:urlencode|rawurlencode|intval|floatval|count|sizeof|strlen)$'
+        exact: true
+      - pattern: (int) $X
+        exact: true
+      - pattern: (float) $X
+        exact: true
+      # Preserve return-only sanitization on engines requiring assignment specs.
+      - patterns:
+          - pattern: $SAFE = $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:urlencode|rawurlencode|intval|floatval|count|sizeof|strlen)$'
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = (int) $X
+              - pattern: $SAFE = (float) $X
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
+    pattern-sinks:
+      - pattern-regex: |-
+          (?x)
+          "(?1){0,512}<[A-Za-z](?4){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+"
+          \s*+\.\s*+\K
+          (?:
+            \\?(?i:htmlspecialchars|htmlentities)\s*+\([^();]{1,512}\)
+            |\$[A-Za-z_][A-Za-z_0-9]*\b(?!\s*+(?:->|\?->|::|\[|\())
+          )
+          (?(DEFINE)
+            ((?:[^"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+            ((?:[^'"\\\n]|\\[\\"$nrtvef]))
+            ((?:[^"\\\n]|\\[\\$nrtvef]))
+            ((?:[^<>"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+          )
+        requires: HTML_ENCODED
+      - pattern-regex: |-
+          (?x)
+          '(?1){0,512}<[A-Za-z](?4){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+'
+          \s*+\.\s*+\K
+          (?:
+            \\?(?i:htmlspecialchars|htmlentities)\s*+\([^();]{1,512}\)
+            |\$[A-Za-z_][A-Za-z_0-9]*\b(?!\s*+(?:->|\?->|::|\[|\())
+          )
+          (?(DEFINE)
+            ((?:[^"'\\\n]|\\\\|"(?2){0,512}"|\\'(?3){0,512}\\'))
+            ((?:[^"'\\\n]|\\[\\']))
+            ((?:[^'\\\n]|\\\\))
+            ((?:[^<>"'\\\n]|\\\\|"(?2){0,512}"|\\'(?3){0,512}\\'))
+          )
+        requires: HTML_ENCODED
     metadata:
       cwe: ["CWE-116"]

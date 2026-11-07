@@ -352,6 +352,27 @@ class TestLiveAdjudication:
         assert not result.matches
         assert "confirm-only" in (result.details or {}).get("reason", "")
 
+    @pytest.mark.parametrize("body", [
+        'echo "<input value=" . htmlspecialchars($_GET["x"], ENT_QUOTES) . ">";',
+        '$value = htmlentities($_POST["x"]); echo "<input value=" . $value . ">";',
+    ], ids=["direct", "alias"])
+    def test_encoded_request_in_unquoted_attribute_confirms(self, body: str, tmp_path: Path):
+        from core.analysis.rule_versions import version_tuple
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+        from packages.semgrep.runner import version
+
+        installed = version_tuple(version())
+        if installed is not None and installed < (1, 47, 0):
+            pytest.skip("unquoted conditional-taint rule requires Semgrep >= 1.47.0")
+        (tmp_path / "app.php").write_text('<?php\nfunction f() {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe("CWE-116", "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == "confirmed", result.errors
+        assert result.matches
+
     def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
         """Live pin of the engine's ACTUAL selection for language:php
         rules: .phtml is scanned, .php5/.php4/.php3 are not — the
