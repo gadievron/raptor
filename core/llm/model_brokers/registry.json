@@ -39,6 +39,12 @@
       "api_path": "/v1"
     },
     {
+      "name": "cloudgpu",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://cloudgpu.app",
+      "api_path": "/v1"
+    },
+    {
       "name": "deepinfra",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://api.deepinfra.com",
