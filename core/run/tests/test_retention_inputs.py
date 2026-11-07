@@ -12,13 +12,30 @@ from core.run import tmp_reaper, tmp_ownership, scratch
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.tmp_reaper as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.tmp_reaper as consumer_0
+    import core.run.tmp_ownership as consumer_1
+    import core.run.scratch as consumer_2
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setattr(consumer_1, "tempfile", private)
+    monkeypatch.setattr(consumer_2, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 INVALID = ["nan", "NaN", "inf", "-inf", "Infinity", "1e309", "1e308"]
 
 
 @pytest.fixture(autouse=True)
-def private_roots(tmp_path, monkeypatch):
-    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+def private_roots(tmp_path, monkeypatch, _owned_tempfile_namespace):
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
     monkeypatch.setattr(tmp_reaper, "_SYSTEM_TMP_ROOTS", ())
     monkeypatch.setattr(tmp_reaper, "_lane_fallback_bases", lambda: ())
     monkeypatch.setattr(tmp_reaper, "_live_cwds", lambda: set())

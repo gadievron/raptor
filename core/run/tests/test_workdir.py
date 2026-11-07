@@ -30,12 +30,25 @@ from core.run import workdir
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.workdir as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.workdir as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 _REAL_FAMILY_NAME = workdir._family_name
 
 
 @pytest.fixture(autouse=True)
-def _fresh(monkeypatch, tmp_path):
+def _fresh(monkeypatch, tmp_path, _owned_tempfile_namespace):
     """Reset the process cache and point the temp root at a private dir.
 
     The family name is patched to a test-private one: this suite may
@@ -58,9 +71,9 @@ def _fresh(monkeypatch, tmp_path):
     )
     tmp_root = tmp_path / "tmproot"
     tmp_root.mkdir()
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_root))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_root))
     yield tmp_root
-    tempfile.tempdir = None
+    _tempfile_owner.tempfile.tempdir = None
 
 
 def _family(base: Path) -> Path:
@@ -80,7 +93,7 @@ class TestLauncherNoOp:
     ):
         session = _family(tmp_path) / "session-1-2"
         session.mkdir(parents=True)
-        monkeypatch.setattr(tempfile, "tempdir", str(session))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(session))
         assert workdir.exec_workdir() is None
 
     def test_returns_none_anywhere_inside_the_family(
@@ -88,7 +101,7 @@ class TestLauncherNoOp:
     ):
         nested = _family(tmp_path) / "session-1-2" / "deeper"
         nested.mkdir(parents=True)
-        monkeypatch.setattr(tempfile, "tempdir", str(nested))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(nested))
         assert workdir.exec_workdir() is None
 
     def test_tempfile_paths_unchanged_under_launcher(
@@ -98,7 +111,7 @@ class TestLauncherNoOp:
         producing the same parent dir as an unwired call."""
         session = _family(tmp_path) / "session-1-2"
         session.mkdir(parents=True)
-        monkeypatch.setattr(tempfile, "tempdir", str(session))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(session))
         with tempfile.TemporaryDirectory(
             prefix="raptor_dyn_", dir=workdir.exec_workdir(),
         ) as d:
@@ -247,7 +260,7 @@ class TestTempRootInteropAdvisory:
         monkeypatch.setattr(wsl, "fs_is_drvfs_or_9p", lambda path: True)
         fam = _fresh / workdir._family_name() / "session-1-1"
         fam.mkdir(parents=True)
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fam))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(fam))
         assert workdir.exec_workdir() is None
         assert "temp root (TMPDIR/RAPTOR_WORK_DIR)" in capsys.readouterr().err
 

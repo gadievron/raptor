@@ -7,7 +7,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,13 +20,27 @@ from core.run.tmp_ownership import (
     write_owner_marker,
 )
 
+import core.run.tmp_ownership as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.tmp_ownership as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
+
 PREFIX = "raptor-test-owned-"
 
 
 @pytest.fixture
-def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _owned_tempfile_namespace) -> Path:
     """Point :func:`tempfile.gettempdir` at a per-test dir."""
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
     return tmp_path
 
 
@@ -141,9 +154,7 @@ class TestSweep:
 
     def test_never_raises_on_bad_tempdir(self, tmp_path: Path,
                                          monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(
-            tempfile, "tempdir", str(tmp_path / "gone"),
-        )
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path / 'gone'))
         assert sweep_dead_owner_dirs(PREFIX) == []
 
 

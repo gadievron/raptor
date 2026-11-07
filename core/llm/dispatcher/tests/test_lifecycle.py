@@ -24,6 +24,19 @@ from core.llm.dispatcher.lifecycle import (
     llm_dispatcher_in_run,
 )
 
+import core.llm.dispatcher.server as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.llm.dispatcher.server as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 @pytest.fixture
 def fake_creds():
@@ -435,7 +448,6 @@ class TestSocketPathBudget:
         dispatcher init. The fallback must land the socket somewhere
         bindable."""
         import os
-        import tempfile as _tempfile
 
         from core.llm.dispatcher.auth import CredentialStore
         from core.llm.dispatcher.server import LLMDispatcher
@@ -448,7 +460,7 @@ class TestSocketPathBudget:
             deep = deep / f"layer-{i:02d}"
         deep.mkdir(parents=True)
         monkeypatch.setenv("TMPDIR", str(deep))
-        _tempfile.tempdir = None  # re-derive gettempdir from env
+        _tempfile_owner.tempfile.tempdir = None  # re-derive gettempdir from env
         try:
             if sys.platform != "linux":
                 with pytest.raises(OSError, match="shorter temporary base"):
@@ -467,7 +479,7 @@ class TestSocketPathBudget:
             finally:
                 d.shutdown()
         finally:
-            _tempfile.tempdir = None
+            _tempfile_owner.tempfile.tempdir = None
 
     @pytest.mark.usefixtures("raw_byte_filenames")
     def test_surrogate_tmpdir_falls_back_instead_of_crashing(
@@ -480,7 +492,6 @@ class TestSocketPathBudget:
         UnicodeEncodeError at construction — before the /tmp fallback
         this check exists to trigger could rescue the path."""
         import os
-        import tempfile as _tempfile
 
         from core.llm.dispatcher.auth import CredentialStore
         from core.llm.dispatcher.server import LLMDispatcher
@@ -495,7 +506,7 @@ class TestSocketPathBudget:
         bad_str = os.fsdecode(bad)
         assert "\udcff" in bad_str  # the hazard is live on this fs
         monkeypatch.setenv("TMPDIR", bad_str)
-        monkeypatch.setattr(_tempfile, "tempdir", None)
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', None)
 
         if sys.platform != "linux":
             with pytest.raises(OSError, match="shorter temporary base"):
@@ -543,7 +554,7 @@ class TestSocketPathBudget:
             bad_str = os.fsdecode(bad)
             assert "\udcff" in bad_str
             monkeypatch.setenv("TMPDIR", bad_str)
-            monkeypatch.setattr(_tempfile, "tempdir", None)
+            monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', None)
 
             d = LLMDispatcher(
                 run_id="srg",

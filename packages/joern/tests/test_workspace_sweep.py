@@ -12,7 +12,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -25,10 +24,29 @@ from packages.joern.server import (
     sweep_stale_workspaces,
 )
 
+import packages.joern.server as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import packages.joern.server as consumer_0
+    import core.run.tmp_ownership as consumer_1
+    import packages.joern.client as consumer_2
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setattr(consumer_1, "tempfile", private)
+    monkeypatch.setattr(consumer_2, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+    # These tests model a bare caller selecting its current temporary root.
+    monkeypatch.setattr(consumer_2, "_INITIAL_BASE", None)
+
 
 @pytest.fixture
-def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _owned_tempfile_namespace) -> Path:
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
     return tmp_path
 
 
