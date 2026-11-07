@@ -662,6 +662,44 @@ class TestImport:
 
 
 class TestStability:
+    def test_duplicate_headers_do_not_make_independent_repeats(self):
+        runs = [_run_rec("reused", tree="t" * 40), _run_rec("reused", tree="t" * 40)]
+        labels = {"reused": [_label_rec("a.c:f", "clean", run_id="reused"),
+                             _label_rec("a.c:f", "finding", run_id="reused")]}
+        assert history.stability_groups(runs, labels) == []
+        assert "distinct recorded run IDs" in history.format_stability([])
+
+    @pytest.mark.parametrize("field, changed", [
+        ("pipeline_tree_sha", "u" * 40), ("pipeline_tree_sha", ""),
+        ("profile", "cold"), ("label_set_hash", "c" * 64),
+        ("label_files_sha256", "c" * 64), ("config", {"mode": "quality"}),
+    ], ids=["tree", "missing-tree", "profile", "label-set", "definitions", "config"])
+    def test_stale_header_cannot_establish_matching_context(self, field, changed):
+        old = _run_rec("reused", tree="t" * 40, profile="deployed",
+                       label_set_hash="a" * 64, label_files_sha256="b" * 64)
+        other = {**old, "run_id": "other"}
+        latest = {**old, field: changed}
+        labels = {"reused": [_label_rec("a.c:f", "finding", run_id="reused")],
+                  "other": [_label_rec("a.c:f", "clean", run_id="other")]}
+        assert history.stability_groups([old, other, latest], labels) == []
+
+    def test_cli_discloses_reused_ids_and_uses_latest_header_order(self, tmp_path, capsys):
+        store = tmp_path / "store.jsonl"
+        history.append_records(store, [
+            _run_rec("reused", tree="u" * 40), _label_rec("a.c:f", "clean", run_id="reused"),
+            _run_rec("other", tree="t" * 40), _label_rec("a.c:f", "clean", run_id="other"),
+            _run_rec("reused", tree="t" * 40), _label_rec("a.c:f", "finding", run_id="reused"),
+        ])
+        runs, labels = history.load_store(store)
+        groups = history.stability_groups(runs, labels)
+        assert len(groups) == 1
+        assert groups[0]["run_ids"] == ["other", "reused"]
+        assert groups[0]["reused_run_ids"] == ["reused"]
+        assert history.main(["--store", str(store), "stability"]) == 0
+        output = capsys.readouterr().out
+        assert "latest header and merged label history" in output
+        assert "1/1 comparable label(s) unstable" in output
+
     @pytest.mark.parametrize("field", ["label_set_hash", "label_files_sha256"])
     def test_different_recorded_label_fingerprints_split_groups(self, field):
         runs, labels = self._store()
