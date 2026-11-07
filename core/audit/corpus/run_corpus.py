@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -81,6 +82,77 @@ GROUP_BUDGET_CAP_USD = 240.0
 # entire point of a corpus run — a hungry prep phase must never
 # starve them.
 GROUP_REVIEW_RESERVE_FRACTION = 0.35
+
+
+class CorpusBudget:
+    """Whole-invocation cooperative deadline and authoritative LLM spend cap.
+
+    Provider reservations are estimates; an in-flight request may exceed a
+    dispatch cap. External supervision is needed for a hard process deadline.
+    """
+    def __init__(self, max_cost=None, max_seconds=None, *, started=None, group_cap=None):
+        self.max_cost = max_cost
+        self.max_seconds = max_seconds
+        self.group_cap = group_cap
+        self.deadline = ((time.monotonic() if started is None else started) + max_seconds
+                         if max_seconds is not None else None)
+        self.run_dirs = []
+        self.spent = 0.0
+        self.accounted = True
+        self.group_stop_reason = ""
+
+    def group_cost_limit(self, labels):
+        limits = [_group_max_cost(labels)]
+        if self.group_cap is not None:
+            limits.append(self.group_cap)
+        if self.max_cost is not None:
+            limits.append(self.remaining_cost())
+        return min(limits)
+
+    def observe(self, directory):
+        if directory is not None and Path(directory) not in self.run_dirs:
+            self.run_dirs.append(Path(directory))
+        if self.max_cost is not None:
+            spend = _aggregate_spend(self.run_dirs)
+            if spend is None or not math.isfinite(spend["total_usd"]) or spend["total_usd"] < 0:
+                self.accounted = False
+            else:
+                self.spent = spend["total_usd"]
+
+    def remaining_seconds(self):
+        return None if self.deadline is None else max(0.0, self.deadline - time.monotonic())
+
+    def remaining_cost(self):
+        return None if self.max_cost is None else max(0.0, self.max_cost - self.spent)
+
+    def stop_reason(self):
+        if self.deadline is not None and self.remaining_seconds() <= 0:
+            return "wall_budget_exhausted"
+        if not self.accounted:
+            return "spend_ledger_unavailable"
+        if self.max_cost is not None and self.remaining_cost() <= 0:
+            return "cost_budget_exhausted"
+        return ""
+
+
+def _budget_error_rows(labels, reason, *, model="", mode=None):
+    return [{
+        "function_id": label.function_id, "bug_class": label.bug_class,
+        "repo": label.source.repo, "expected": label.expected_status,
+        "expected_mechanism": label.expected_mechanism,
+        "expected_mode_results": dict(label.expected_mode_results),
+        "actual": "error", "match": False, "skipped": False,
+        "mode": mode or "security", "model": model,
+        "error_reason": f"not_reviewed:{reason}",
+        "hypothesis": "", "evidence_tool": "", "cost_usd": 0.0, "duration_s": 0.0,
+    } for label in labels]
+
+
+def _positive_limit(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("limit must be positive and finite")
+    return number
 
 
 def _group_max_cost(n_labels: int) -> float:
@@ -943,6 +1015,8 @@ def _run_audit(
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
     attributed_start: float = 0.0,
+    run_budget: CorpusBudget | None = None,
+    static_only: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
     """Run /audit's orchestrator against labeled functions.
 
@@ -1022,6 +1096,12 @@ def _run_audit(
         "prefilter": prefilter,
         "integer_abi": integer_abi,
     }
+    stamp["static_only"] = static_only
+    stamp["open_discovery"] = open_discovery
+    if run_budget is not None:
+        stamp["max_cost"] = run_budget.max_cost
+        stamp["max_time"] = run_budget.max_seconds
+        stamp["max_group_cost"] = run_budget.group_cap
     if checkpoint_stamp:
         stamp.update(checkpoint_stamp)
     ckpt_groups: dict[str, list[dict[str, Any]]] = {}
@@ -1095,7 +1175,15 @@ def _run_audit(
                 resumed_out = out_dir / repo_key if out_dir else None
                 if resumed_out is not None and resumed_out.is_dir():
                     run_dirs.append(resumed_out)
+                    if run_budget is not None:
+                        run_budget.observe(resumed_out)
                 continue
+            if run_budget is not None and (reason := run_budget.stop_reason()):
+                results.extend(_budget_error_rows(repo_labels, reason, model=model, mode=mode))
+                print(f"  Budget stop: {reason} ({len(repo_labels)} unreviewed labels)", flush=True)
+                continue
+            if run_budget is not None:
+                run_budget.group_stop_reason = ""
             src_dir = source_dirs.get(repo_key)
             if src_dir is None or not src_dir.is_dir():
                 results.extend({
@@ -1135,9 +1223,13 @@ def _run_audit(
                 open_discovery=open_discovery,
                 immediate_verify=immediate_verify,
                 integer_abi=integer_abi,
+                **({"run_budget": run_budget} if run_budget is not None else {}),
+                **({"static_only": True} if static_only else {}),
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
+            if run_budget is not None:
+                run_budget.observe(audit_dir)
 
             inventoried = _load_inventoried_functions(audit_dir)
 
@@ -1181,7 +1273,11 @@ def _run_audit(
                     hypothesis = ""
                     cost = 0.0
                     dur = 0.0
-                    if in_inventory and triage:
+                    if run_budget is not None and (budget_reason := run_budget.stop_reason() or run_budget.group_stop_reason):
+                        actual = "error"
+                        evidence_tool = ""
+                        error_reason = f"not_reviewed:{budget_reason}"
+                    elif in_inventory and triage:
                         # Legacy fallback (--triage on only): an
                         # inventoried-but-unreviewed label is presumed
                         # triage-skipped clean. With triage off this
@@ -1452,6 +1548,8 @@ def _run_audit_on_target(
     open_discovery: bool = False,
     immediate_verify: bool = True,
     integer_abi: Any = None,
+    run_budget: CorpusBudget | None = None,
+    static_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1462,6 +1560,8 @@ def _run_audit_on_target(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     _build_checklist(target_dir, out_dir)
+    if run_budget is not None and run_budget.stop_reason():
+        return {}, {}, out_dir
 
     # A repo-root label (a top-level ``index.js`` / ``main.c``) has parent
     # ``"."`` — that scopes the WHOLE tree, so pass no scope at all:
@@ -1561,7 +1661,9 @@ def _run_audit_on_target(
             # Group budget scales with label weight (see the
             # GROUP_BUDGET_* constants); a slice is reserved for the
             # review loop so prep can never starve the labels.
-            max_cost_usd=_group_max_cost(len(labels)),
+            max_cost_usd=(run_budget.group_cost_limit(len(labels)) if run_budget is not None
+                          else _group_max_cost(len(labels))),
+            max_seconds=run_budget.remaining_seconds() if run_budget is not None else None,
             review_reserve_fraction=GROUP_REVIEW_RESERVE_FRACTION,
             no_binary_oracle=True,
             joern_server=joern_server,
@@ -1577,9 +1679,18 @@ def _run_audit_on_target(
             # operator running the corpus IS asserting repo trust, and
             # trust-gated witnesses (goconc) must behave here exactly
             # as they do on a trusted project target.
-            repo_trusted=True,
+            repo_trusted=not static_only,
+            dynamic_validation=False if static_only else None,
+            automatic_witnesses=not static_only,
+            # Prep's isolated semantic-seeding client cannot share this run's
+            # reservation ledger. Keep paid study on the governed parent client.
+            study_concept_seeding=(run_budget is None or (run_budget.max_cost is None and run_budget.group_cap is None)),
         )
-        run_audit_pipeline(pipeline_opts)
+        pipeline_result = run_audit_pipeline(pipeline_opts)
+        if run_budget is not None:
+            terminated = getattr(pipeline_result, "terminated_by", "complete")
+            if terminated in {"llm_budget_exceeded", "max_cost_usd", "max_seconds", "shutdown"}:
+                run_budget.group_stop_reason = str(terminated)
         rc = 0
     except Exception:
         logger.exception("Audit pipeline failed")
@@ -2709,6 +2820,7 @@ def _clear_resume_state(out_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    invocation_started = time.monotonic()
     parser = argparse.ArgumentParser(
         description="Run /audit calibration corpus",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2897,7 +3009,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Target C integer ABI override (default: measured host C layout, "
              "recorded as an analysis assumption; unknown disables ABI-dependent checks)",
     )
+    parser.add_argument("--max-cost", type=_positive_limit, default=None,
+                        help="Whole-run LLM USD dispatch cap across groups, including preparation/discovery (default: existing group caps). In-flight requests may overshoot estimates.")
+    parser.add_argument("--max-group-cost", type=_positive_limit, default=None,
+                        help="Additional per-repository LLM USD dispatch cap, useful for balanced slices (default: existing label-weighted cap)")
+    parser.add_argument("--max-time", type=_positive_limit, default=None,
+                        help="Whole-run cooperative wall-clock limit in seconds, including preparation (default: unlimited). Use external supervision for a hard process deadline.")
+    parser.add_argument("--max-workers", type=int, default=0,
+                        help="Concurrent review workers (0: transport default; 1: serial)")
+    parser.add_argument("--static-only", action="store_true",
+                        help="Disable dynamic validation and automatic native witnesses for source-only calibration (default: normal audit behavior)")
     args = parser.parse_args(argv)
+    if not 0 <= args.max_workers <= 32:
+        parser.error("--max-workers must be between 0 and 32")
+    if args.probe and any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost)):
+        parser.error("whole-run budget flags require audit mode, not --probe")
+    run_budget = (CorpusBudget(args.max_cost, args.max_time, started=invocation_started,
+                               group_cap=args.max_group_cost)
+                  if any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost)) else None)
     args.integer_abi = select_integer_abi(args.integer_abi)
 
     # Pin RAPTOR_DIR to THIS tree for the runner's OWN process, not
@@ -3190,6 +3319,8 @@ def main(argv: list[str] | None = None) -> int:
         # function's id) — the kind must fence wall segments too.
         "label_kind": run_kind,
     }
+    run_stamp.update(open_discovery=args.open_discovery, static_only=args.static_only,
+                     max_cost=args.max_cost, max_time=args.max_time, max_group_cost=args.max_group_cost)
     wall_path, wall_segments = _wall_segment_open(
         None if args.probe else args.out, run_stamp,
     )
@@ -3266,6 +3397,7 @@ def main(argv: list[str] | None = None) -> int:
                 "scope": args.scope,
                 "model_resolved": model_labels[0],
                 "label_kind": run_kind,
+                "max_time": args.max_time,
             }
 
             t0 = time.monotonic()
@@ -3274,6 +3406,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=model, out_dir=args.out,
                 full_source_dirs=source_dirs if excerpt_dirs else None,
                 mode=mode,
+                max_workers=args.max_workers,
                 triage=args.triage == "on",
                 prefilter=args.prefilter == "on",
                 profile=args.profile,
@@ -3286,6 +3419,8 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 checkpoint_stamp=ckpt_stamp_extra,
                 heartbeat=_heartbeat,
+                **({"run_budget": run_budget} if run_budget is not None else {}),
+                **({"static_only": True} if args.static_only else {}),
             )
             wall_s = time.monotonic() - t0
 
@@ -3416,6 +3551,14 @@ def main(argv: list[str] | None = None) -> int:
         # only when this is "on".
         "llm_cache": "off" if args.no_llm_cache else "on",
     }
+    meta["max_cost_usd"] = args.max_cost
+    meta["max_seconds"] = args.max_time
+    meta["max_group_cost_usd"] = args.max_group_cost
+    meta["static_only"] = args.static_only
+    meta["max_workers"] = args.max_workers
+    meta["study_concept_seeding"] = args.max_cost is None and args.max_group_cost is None
+    meta["open_discovery"] = args.open_discovery
+    meta["budget_stop_reason"] = run_budget.stop_reason() if run_budget is not None else ""
     if spend:
         meta["total_spend_usd"] = round(spend["total_usd"], 4)
         meta["infra_usd"] = round(
@@ -3475,6 +3618,11 @@ def main(argv: list[str] | None = None) -> int:
                 "splice": str(args.splice) if args.splice else None,
                 "llm_cache": meta["llm_cache"],
                 "integer_abi": meta["integer_abi"],
+                "max_cost_usd": args.max_cost,
+                "max_seconds": args.max_time,
+                "max_group_cost_usd": args.max_group_cost,
+                "static_only": args.static_only,
+                "open_discovery": args.open_discovery,
             },
             profile=args.profile,
             selection=selection,
