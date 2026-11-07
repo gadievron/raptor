@@ -20,13 +20,24 @@ from typing import Any, Optional
 from core.logging import get_logger
 
 from .detection import (
-    OPENAI_SDK_AVAILABLE,
+    _sdk_available,
     _get_available_ollama_models,
     _read_config_models,
     _validate_ollama_url,
     bedrock_sigv4_intent,
     detect_llm_availability,
 )
+
+
+def __getattr__(name):
+    if name == "OPENAI_SDK_AVAILABLE":
+        return _sdk_available(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | {"OPENAI_SDK_AVAILABLE"})
+
 
 # Re-export from submodules for backward compatibility
 from .model_data import (
@@ -331,7 +342,7 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
     # the resolver falls through to the next candidate (Ollama,
     # ClaudeCode) instead of detecting a usable API key, advertising
     # the model to the operator, then crashing the next LLM call.
-    if not OPENAI_SDK_AVAILABLE:
+    if not _sdk_available("OPENAI_SDK_AVAILABLE"):
         logger.debug(
             "Skipping %s config: %s key present but openai SDK not "
             "installed (pip install openai)",
@@ -2081,3 +2092,7 @@ class LLMConfig:
                 return model
         return self.primary_model
 
+
+
+# Preserve the former detection-flag re-export for explicit wildcard imports.
+__all__ = [name for name in globals() if not name.startswith("_")] + ["OPENAI_SDK_AVAILABLE"]

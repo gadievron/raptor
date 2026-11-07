@@ -469,14 +469,9 @@ def _resolve_primary_transport() -> tuple[str, str, str] | None:
     Bedrock via the AWS credential chain.
 
     ``offline=True``: env + config-file detection only; the seam's
-    network-probing providers (``_NETWORK_PROBING_PROVIDERS``) are
-    skipped so banner generation never blocks on a socket.  Cost:
-    importing the seam pays its module-scope SDK availability probes
-    (``import anthropic`` / ``import openai`` in
-    ``core.llm.detection`` — ~0.75s once per process, no network).
-    Accepted: the banner is a one-shot session-start path, and
-    agreeing with what a run will actually resolve outranks the
-    sub-second import.
+    network-probing providers are skipped. SDK availability is validated
+    lazily for providers that need it, so reading configuration does not
+    import every optional SDK.
 
     Claude Code providers map to ``None`` — the banner reports CC on
     its own dedicated line and "external LLM" excludes it.
@@ -503,9 +498,8 @@ def check_llm() -> tuple[list, list]:
 
     Reads ~/.config/raptor/models.json directly and tests API keys with
     simple HTTP requests. The primary line itself comes from the shared
-    resolution seam via :func:`_resolve_primary_transport` — that import
-    costs ~0.75s once per process (see its docstring for why that is
-    accepted) but performs no network I/O.
+    resolution seam via :func:`_resolve_primary_transport`, without
+    network availability probes.
 
     Returns (lines, warnings).
     """

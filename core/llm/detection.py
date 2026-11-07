@@ -24,47 +24,43 @@ from core.logging import get_logger
 
 logger = get_logger()
 
-# SDK availability flags — canonical source, imported by other modules
-# Pre-fix these ``except ImportError`` blocks silently set the
-# availability flag to False with no diagnostic. If openai /
-# anthropic / google-genai is partially installed (broken venv,
-# missing C extension, ``pip install --no-deps`` half-finished),
-# operators saw "provider unavailable" downstream with no
-# breadcrumb pointing at the real cause. ``logger.debug`` keeps
-# normal-startup quiet but lets operators rerun with --verbose
-# to see the import-failure traceback.
-try:
-    import openai as _openai_module  # noqa: F401 — availability probe
-    OPENAI_SDK_AVAILABLE = True
-except ImportError as _e:
-    logger.debug("openai SDK probe failed: %s", _e)
-    OPENAI_SDK_AVAILABLE = False
+# Validate SDK imports when a provider needs them, rather than importing
+# every optional SDK just to read configuration or resolve an offline banner.
+# Importing the real module (not find_spec) still catches broken installs.
+_SDK_IMPORTS = {
+    "OPENAI_SDK_AVAILABLE": "openai",
+    "ANTHROPIC_SDK_AVAILABLE": "anthropic",
+    "GENAI_SDK_AVAILABLE": "google.genai",
+    # Bedrock signing requires botocore, not boto3.
+    "BOTOCORE_SDK_AVAILABLE": "botocore",
+}
+_SDK_AVAILABILITY = {}
 
-try:
-    import anthropic as _anthropic_module  # noqa: F401 — availability probe
-    ANTHROPIC_SDK_AVAILABLE = True
-except ImportError as _e:
-    logger.debug("anthropic SDK probe failed: %s", _e)
-    ANTHROPIC_SDK_AVAILABLE = False
 
-try:
-    from google import genai as _genai_module  # noqa: F401 — availability probe
-    GENAI_SDK_AVAILABLE = True
-except ImportError as _e:
-    logger.debug("google-genai SDK probe failed: %s", _e)
-    GENAI_SDK_AVAILABLE = False
+def _sdk_available(name):
+    # Preserve explicit availability overrides used by callers and tests.
+    if name in globals():
+        return globals()[name]
+    if name not in _SDK_AVAILABILITY:
+        import importlib
+        try:
+            importlib.import_module(_SDK_IMPORTS[name])
+        except ImportError as error:
+            logger.debug("%s SDK probe failed: %s", _SDK_IMPORTS[name], error)
+            _SDK_AVAILABILITY[name] = False
+        else:
+            _SDK_AVAILABILITY[name] = True
+    return _SDK_AVAILABILITY[name]
 
-try:
-    # Probe botocore, not boto3: everything RAPTOR needs for Bedrock
-    # SigV4 (the dispatcher's signer in core/llm/dispatcher/auth.py)
-    # imports botocore only, and pyproject.toml ships botocore
-    # without boto3. Probing boto3 here made a botocore-only install
-    # fail detection while the actual signing path worked.
-    import botocore as _botocore_module  # noqa: F401 — availability probe
-    BOTOCORE_SDK_AVAILABLE = True
-except ImportError as _e:
-    logger.debug("botocore SDK probe failed: %s", _e)
-    BOTOCORE_SDK_AVAILABLE = False
+
+def __getattr__(name):
+    if name in _SDK_IMPORTS:
+        return _sdk_available(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_SDK_IMPORTS))
 
 
 @dataclass
@@ -981,16 +977,16 @@ def _config_has_keyed_models() -> bool:
 
         # Check SDK availability for this provider
         if provider == "anthropic":
-            if not (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE):
+            if not (_sdk_available("ANTHROPIC_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE")):
                 continue
         elif provider == "ollama":
-            if not OPENAI_SDK_AVAILABLE:
+            if not _sdk_available("OPENAI_SDK_AVAILABLE"):
                 continue
         elif provider == "gemini":
-            if not (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE):
+            if not (_sdk_available("GENAI_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE")):
                 continue
         elif provider in ("openai", "mistral"):
-            if not OPENAI_SDK_AVAILABLE:
+            if not _sdk_available("OPENAI_SDK_AVAILABLE"):
                 continue
         elif provider == "bedrock":
             # Bedrock entries are usable via the dispatcher (no SDK
@@ -1000,9 +996,9 @@ def _config_has_keyed_models() -> bool:
             # model + no dispatcher route + botocore installed would
             # fail detection (the May 28 review's "direct-SigV4 gap").
             if not (bool(os.getenv("RAPTOR_LLM_SOCKET"))
-                    or BOTOCORE_SDK_AVAILABLE):
+                    or _sdk_available("BOTOCORE_SDK_AVAILABLE")):
                 continue
-        elif not OPENAI_SDK_AVAILABLE:
+        elif not _sdk_available("OPENAI_SDK_AVAILABLE"):
             continue
 
         # Check if model has a key
@@ -1061,10 +1057,10 @@ def detect_llm_availability() -> LLMAvailability:
     _check_litellm_migration()
 
     # Check cloud API keys, gated on SDK availability
-    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY")) and (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
-    has_openai = bool(os.getenv("OPENAI_API_KEY")) and OPENAI_SDK_AVAILABLE
-    has_gemini = bool(os.getenv("GEMINI_API_KEY")) and (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
-    has_mistral = bool(os.getenv("MISTRAL_API_KEY")) and OPENAI_SDK_AVAILABLE
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY")) and (_sdk_available("ANTHROPIC_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE"))
+    has_openai = bool(os.getenv("OPENAI_API_KEY")) and _sdk_available("OPENAI_SDK_AVAILABLE")
+    has_gemini = bool(os.getenv("GEMINI_API_KEY")) and (_sdk_available("GENAI_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE"))
+    has_mistral = bool(os.getenv("MISTRAL_API_KEY")) and _sdk_available("OPENAI_SDK_AVAILABLE")
 
     # AWS Bedrock — gate on EXPLICIT opt-in only, NOT bare AWS_REGION
     # (which is set for countless unrelated reasons on any AWS user's
@@ -1119,7 +1115,7 @@ def detect_llm_availability() -> LLMAvailability:
     # process (which the dispatcher checks separately) — both modes
     # only need ``has_dispatcher_route`` here.
     has_bedrock = has_bedrock_signal and (
-        has_dispatcher_route or BOTOCORE_SDK_AVAILABLE
+        has_dispatcher_route or _sdk_available("BOTOCORE_SDK_AVAILABLE")
     )
     has_cloud_keys = has_cloud_keys or has_bedrock
 
@@ -1131,7 +1127,7 @@ def detect_llm_availability() -> LLMAvailability:
         has_config_file = _config_has_keyed_models()
 
     # Check Ollama reachability (requires OpenAI SDK for API calls)
-    has_ollama = OPENAI_SDK_AVAILABLE and bool(_get_available_ollama_models())
+    has_ollama = _sdk_available("OPENAI_SDK_AVAILABLE") and bool(_get_available_ollama_models())
 
     # Check Claude Code environment
     in_claude_code = bool(os.getenv("CLAUDECODE"))
@@ -1164,15 +1160,15 @@ def _warn_unusable_keys() -> None:
     from .model_data import PROVIDER_ENV_KEYS
 
     sdk_requirements = {
-        "anthropic": ("anthropic or openai", ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
-        "openai": ("openai", OPENAI_SDK_AVAILABLE),
-        "gemini": ("google-genai or openai", GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
-        "mistral": ("openai", OPENAI_SDK_AVAILABLE),
+        "anthropic": ("anthropic or openai", _sdk_available("ANTHROPIC_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE")),
+        "openai": ("openai", _sdk_available("OPENAI_SDK_AVAILABLE")),
+        "gemini": ("google-genai or openai", _sdk_available("GENAI_SDK_AVAILABLE") or _sdk_available("OPENAI_SDK_AVAILABLE")),
+        "mistral": ("openai", _sdk_available("OPENAI_SDK_AVAILABLE")),
     }
 
     for provider, env_var in PROVIDER_ENV_KEYS.items():
         if os.getenv(env_var):
-            sdk_name, available = sdk_requirements.get(provider, ("openai", OPENAI_SDK_AVAILABLE))
+            sdk_name, available = sdk_requirements.get(provider, ("openai", _sdk_available("OPENAI_SDK_AVAILABLE")))
             if not available:
                 logger.warning(
                     f"{env_var} is set but the {sdk_name} SDK is not installed. "
@@ -1189,7 +1185,7 @@ def _warn_unusable_keys() -> None:
             or os.getenv("RAPTOR_BEDROCK_MODEL")
             or os.getenv("RAPTOR_BEDROCK_PROFILE")):
         has_dispatcher_route = bool(os.getenv("RAPTOR_LLM_SOCKET"))
-        if not has_dispatcher_route and not BOTOCORE_SDK_AVAILABLE:
+        if not has_dispatcher_route and not _sdk_available("BOTOCORE_SDK_AVAILABLE"):
             logger.warning(
                 "A Bedrock opt-in signal (AWS_BEARER_TOKEN_BEDROCK or a "
                 "RAPTOR_BEDROCK_* env var) is set but neither the dispatcher "
@@ -1197,3 +1193,7 @@ def _warn_unusable_keys() -> None:
                 "calls.  Install botocore (pip install botocore; boto3 "
                 "also includes it) or run via the RAPTOR dispatcher."
             )
+
+
+# Keep explicit wildcard imports compatible without resolving SDKs eagerly.
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_SDK_IMPORTS)
