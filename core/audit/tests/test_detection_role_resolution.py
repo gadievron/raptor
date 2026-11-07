@@ -63,3 +63,13 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/snprintf_truncation_boundary.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only("coccinelle:snprintf_truncation_boundary") is True
+
+
+    def test_strncpy_read_requires_independent_termination_evidence(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/strncpy_no_nul.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:strncpy_no_nul") is True

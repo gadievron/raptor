@@ -278,6 +278,14 @@ values or sizes, and excludes simple inclusive comparisons and separate equality
 branches that return to the caller. Logging equality alone does not handle the
 boundary. Aliases and arbitrary compound guard logic require manual review.
 
+The `strncpy` termination check follows direct destinations into string uses,
+including either input of `strcmp` and `strcat`. It excludes `strncmp` and
+`strncat` source reads bounded by the same unchanged local or literal copy count; `strncat` still
+requires a terminated destination. Destination replacement ends tracking.
+Nonzero fills and zero-byte `memset` calls do not establish termination.
+Reports remain review candidates: source length, existing NUL bytes, aliases,
+format conversions and smaller read bounds can determine whether a read is safe.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
