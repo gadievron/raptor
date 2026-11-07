@@ -22026,34 +22026,54 @@ def _memoized_sweep_step(
     result lands in both layers). Every checkpoint failure mode
     degrades to "run it" — never to "skip it".
     """
+    from .verification_metrics import record_attempt
+    started = time.monotonic()
+    ran = False
+
+    def finish(result, origin):
+        record_attempt(getattr(config, "out_dir", None), tool, key_parts,
+                       result, origin=origin, elapsed_s=time.monotonic() - started)
+        return result
+
+    def fresh():
+        nonlocal ran
+        ran = True
+        try:
+            return runner()
+        except Exception as exc:
+            record_attempt(getattr(config, "out_dir", None), tool, key_parts,
+                           None, origin="fresh", elapsed_s=time.monotonic() - started,
+                           error=type(exc).__name__)
+            raise
+
     memo = getattr(config, "sweep_memo", None)
     if memo is None:
-        return runner()
+        return finish(fresh(), "unmemoized")
     key = SweepMemo.make_key(tool, key_parts)
     if key is None:
-        return memo.get_or_run(key, runner)
+        return finish(memo.get_or_run(key, fresh), "fresh" if ran else "memo")
     from .sweep_checkpoint import checkpoint_for_run, tool_checkpointable
     checkpoint = (
         checkpoint_for_run(getattr(config, "out_dir", None))
         if tool_checkpointable(tool) else None
     )
     if checkpoint is None:
-        return memo.get_or_run(key, runner)
+        return finish(memo.get_or_run(key, fresh), "fresh" if ran else "memo")
     # Protect both checkpoint lookup and fresh dispatch, preserving their
     # existing order. The in-memory-only path uses the same guard inside
     # get_or_run, so cold parallel requests cannot all spawn the tool.
     with memo.key_guard(key):
         cached = memo.get(key)
         if cached is not None:
-            return cached
+            return finish(cached, "memo")
         replayed = checkpoint.lookup(key)
         if replayed is not None:
             memo.put(key, replayed)
-            return replayed
-        result = runner()
+            return finish(replayed, "checkpoint")
+        result = fresh()
         memo.put(key, result)
         checkpoint.record(key, result)
-        return result
+        return finish(result, "fresh")
 
 
 def _run_tool_chain(

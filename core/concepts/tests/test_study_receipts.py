@@ -342,3 +342,75 @@ class TestStaleDocDelivery:
         res = resolve_identifiers(tmp_path, ["ParseHeader"])
         assert res.items
         assert "readHeader" in res.items[0].stale_doc
+
+
+class TestOmittedInvariantLocation:
+    quote = "return validate_schema(open(path).read())"
+
+    def raw(self, file=""):
+        return {"invariants": [{"id": "cfg", "concept": "parse_config_contract",
+                "statement": "delegates", "quote": self.quote, "evidence_file": file}]}
+
+    def item(self, file="pkg/mod.py"):
+        return StudyItem(id="i", name="parse_config", kind="function", file=file,
+                         line=1, definition="def parse_config(path):\n    " + self.quote)
+
+    def test_unique_supplied_quote_is_located_then_verified(self, src):
+        _, invariants, *_ = _parse_batch_response(
+            self.raw(), source_root=src, focus_items=[self.item()])
+        assert len(invariants) == 1
+        receipt = invariants[0].receipt
+        assert receipt["verified"] and receipt["file"] == "pkg/mod.py"
+        assert receipt["location_source"] == "provided-snippet"
+        assert receipt["tier"] == TIER_VERBATIM
+
+    def test_context_can_locate_without_becoming_a_contract_focus(self, src):
+        _, invariants, contracts, *_ = _parse_batch_response(
+            {**self.raw(), "contracts": [{"function": "parse_config", "file": "pkg/mod.py"}]},
+            source_root=src, focus_items=[], receipt_items=[self.item()])
+        assert invariants[0].receipt["verified"]
+        assert contracts[0].receipt is None
+
+    @pytest.mark.parametrize("case", ["ambiguous", "stale", "explicit-wrong-file", "outside-root"])
+    def test_locator_recovery_does_not_relax_source_verification(self, src, case):
+        items = [self.item()]
+        raw = self.raw()
+        if case == "ambiguous":
+            items.append(self.item("pkg/other.py"))
+            (src / "pkg/other.py").write_text(items[-1].definition)
+        elif case == "stale":
+            (src / "pkg/mod.py").write_text("def parse_config(path): return None\n")
+        elif case == "explicit-wrong-file":
+            raw = self.raw("pkg/not-there.py")
+        else:
+            items = [self.item("../outside.py")]
+            (src.parent / "outside.py").write_text(items[0].definition)
+        discarded = []
+        _, invariants, *_ = _parse_batch_response(
+            raw, source_root=src, focus_items=items, discard_sink=discarded)
+        assert not invariants
+        assert discarded[0]["reason"] == "receipt verification failed"
+
+    def test_schema_requires_locations_with_quotes(self):
+        required = _RESPONSE_SCHEMA["properties"]["invariants"]["items"]["required"]
+        assert {"evidence_file", "evidence_line", "quote"} <= set(required)
+
+    def test_batch_passes_exact_prompt_items_to_location_recovery(self, src):
+        from core.concepts.study import _run_one_batch
+        context = self.item()
+        raw = self.raw()
+        class Client:
+            def generate_structured(client, prompt, schema, **kwargs):
+                assert context.file in prompt and context.definition in prompt
+                return raw
+        _, invariants, *_ = _run_one_batch(
+            0, 1, [], [context], str(src), str(src), Client(), None, None,
+            max_tokens=256, wall_timeout=5)
+        assert invariants[0].receipt["location_source"] == "provided-snippet"
+
+
+def test_missing_locator_is_distinct_from_missing_source_file(src):
+    from core.concepts.receipts import verify_receipt
+    quote = "return validate_schema(open(path).read())"
+    assert verify_receipt(src, "", None, quote).note == "source file locator missing"
+    assert verify_receipt(src, "pkg/absent.py", None, quote).note == "file not found inside source root"

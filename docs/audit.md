@@ -1337,3 +1337,28 @@ signed profiles, using the same validation as condition literals. Unsigned
 profiles reject negative decimal inputs rather than wrapping them. Generic
 signed bounds checks include both negative indices and indices at or above
 the extent; a narrowed call result cannot hide a lower-bound violation.
+
+
+### Verification cost and reuse diagnostics
+
+`verification-attempts.jsonl` records deterministic, memo-eligible checks:
+checker outcome, bounded failure reason, elapsed call time, content-keyed
+input identity, and whether the result was fresh, memoized, or checkpointed.
+These are checker outcomes, not final finding verdicts. Checks bypassing the
+memo boundary are outside this trail's coverage. Inconclusive results already
+reuse identical semantic inputs; transient errors remain retryable.
+
+Summarize a run with `python -m core.audit.verification_metrics <run-dir>`.
+The report exposes repeated fresh inputs without suppressing retries.
+Per-check monetary cost remains unknown rather than being inferred from
+concurrent run-wide spend. Summed call times include waits and are not run
+wall time. Corpus spend summaries additionally break down unclassified LLM
+calls by their recorded caller, tokens, cost, and summed call time. These
+caller totals are already included in the authoritative spend total and do
+not change call classes or budget reservations.
+
+Study invariants require source locators and verbatim quotes. When a legacy
+response omits its file, the parser can locate an exact quote in the supplied
+focus/context snippets if it identifies one unambiguous file. The confined
+on-disk source must still verify; the receipt records the recovered locator.
+Explicit wrong paths, ambiguous matches and stale snippets remain unverified.

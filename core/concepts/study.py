@@ -1210,6 +1210,10 @@ from a related count after a transform (e.g. nents vs orig_nents).
   fail verification are DISCARDED and never delivered. Copy exactly — \
   do not paraphrase, do not reconstruct from memory. If you cannot \
   quote it, do not claim it.
+- **Invariant locations.** Every invariant must include `evidence_file`, \
+  `evidence_line` (null if unknown), and `quote`. Copy the file locator \
+  from its supplied item. Omit invariants you cannot support; never \
+  use ellipses or reconstructed text in a verbatim quote.
 - **Code over comments.** When a doc comment and the code body disagree \
   on the contract, the CODE is the contract. Describe the disagreement \
   explicitly (stale documentation) — never silently trust the comment. \
@@ -1397,6 +1401,7 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                 },
                 "required": [
                     "id", "concept", "statement", "negation", "confidence",
+                    "evidence_file", "evidence_line", "quote",
                 ],
             },
         },
@@ -2321,6 +2326,7 @@ def _parse_batch_response(
     source_root: Path | None = None,
     focus_items: list[StudyItem] | None = None,
     discard_sink: list | None = None,
+    receipt_items: list[StudyItem] | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -2331,6 +2337,9 @@ def _parse_batch_response(
     a SHA-256[:12] hash of their source span via ``core.staleness``.
     When *focus_items* is also provided, contract hashes are stamped
     by looking up the function's line range in the study items.
+
+    *receipt_items* supplies the exact focus/context snippets sent to the
+    model for recovering omitted locators. It does not expand contract focus.
 
     Returns (concepts, invariants, contracts, bug_patterns, struct_annotations).
     """
@@ -2389,11 +2398,26 @@ def _parse_batch_response(
             relevant_cwes=inv.get("relevant_cwes") or [],
         )
         if inv.get("quote"):
+            file = inv.get("evidence_file") or ""
+            line = inv.get("evidence_line")
+            location_source = "reported"
+            if not file and source_root is not None:
+                from .receipts import locate_quote_in_snippets
+                location = locate_quote_in_snippets(
+                    inv["quote"],
+                    ((item.file, item.line, item.definition)
+                     for item in (receipt_items if receipt_items is not None
+                                  else focus_items or [])),
+                )
+                if location is not None:
+                    file, line = location
+                    location_source = "provided-snippet"
             parsed_inv.receipt = {
-                "file": inv.get("evidence_file") or "",
-                "line": inv.get("evidence_line"),
+                "file": file,
+                "line": line,
                 "quote": inv.get("quote") or "",
                 "verified": False,
+                "location_source": location_source,
             }
         invariants.append(parsed_inv)
 
@@ -2572,6 +2596,7 @@ def _apply_receipts(
             r.tier = TIER_LLM_SUMMARIZED if approximate else TIER_VERBATIM
             inv.provenance = r.tier
             inv.receipt = r.to_dict()
+            inv.receipt["location_source"] = raw_receipt.get("location_source", "reported")
             kept_invariants.append(inv)
         else:
             _discard("invariant", inv.id, [inv.id, inv.concept], [r])
@@ -3281,7 +3306,7 @@ def _run_one_batch(
     concepts, invariants, contracts, bug_patterns, struct_annots = (
         _parse_batch_response(
             result, source_root=src_root, focus_items=focus,
-            discard_sink=discard_sink,
+            discard_sink=discard_sink, receipt_items=focus + context,
         )
     )
 

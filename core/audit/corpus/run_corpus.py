@@ -2111,6 +2111,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
     """
     groups: list[dict[str, Any]] = []
     per_class: dict[str, list[float]] = {}
+    origins: dict[str, dict[str, Any]] = {}
     seen: set = set()
     for base in run_dirs:
         base = Path(base)
@@ -2145,6 +2146,25 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
                             st[0] += 1
                         cost += c
                         st[1] += c
+                        if cls == "unclassified":
+                            chain = rec.get("caller_chain")
+                            first = chain[0] if isinstance(chain, list) and chain else {}
+                            if not isinstance(first, dict):
+                                first = {}
+                            module, function = first.get("module"), first.get("function")
+                            origin = (f"{module}.{function}" if isinstance(module, str)
+                                      and isinstance(function, str) and module and function else "(unknown)")
+                            bucket = origins.setdefault(origin, {
+                                "calls": 0, "failed_attempts": 0, "cost_usd": 0.0,
+                                "tokens_in": 0, "tokens_out": 0, "duration_s": 0.0,
+                            })
+                            bucket["calls"] += int(completed)
+                            bucket["failed_attempts"] += int(rec.get("event") == "attempt_failed")
+                            bucket["cost_usd"] += c
+                            if rec.get("disposition") != "cache_hit":
+                                for field in ("tokens_in", "tokens_out"):
+                                    bucket[field] += int(rec.get(field) or 0)
+                                bucket["duration_s"] += float(rec.get("duration_s") or 0)
             except OSError:
                 continue
             ledger_total = None
@@ -2176,6 +2196,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
             cls: (int(v[0]), v[1]) for cls, v in sorted(per_class.items())
         },
         "groups": groups,
+        "unclassified_origins": origins,
     }
 
 
@@ -2198,6 +2219,18 @@ def _format_spend_block(
     ]
     if cls_parts:
         lines.append("  Per class: " + ", ".join(cls_parts))
+    origins = spend.get("unclassified_origins", {})
+    if origins:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        lines.append("  Unclassified callers (diagnostic; included in total, call classes unchanged):")
+        for origin, values in sorted(origins.items(), key=lambda item: -item[1]["cost_usd"]):
+            safe = sanitise_for_terminal(origin, max_len=240)
+            lines.append(
+                f"    {safe}: {values['calls']} calls, "
+                f"{values['failed_attempts']} failed attempts, ${values['cost_usd']:.4f}, "
+                f"tokens {values['tokens_in']} in/{values['tokens_out']} out, "
+                f"summed call time {values['duration_s']:.1f}s"
+            )
     lines.append(
         f"  {'Group':<38} {'Calls':>6} {'Telemetry':>11} "
         f"{'Summary':>11} {'Delta':>7}",
