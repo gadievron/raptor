@@ -906,6 +906,7 @@ class OrchestratorConfig:
     max_refinements: int = 2
     clean_check: bool = True
     dynamic_validation: bool = False
+    automatic_witnesses: bool = True
     # Operator repo-trust assertion (the project 'config' trust marker
     # / --trust-repo umbrella, resolved at config build).  Consumed by
     # trust-gated witnesses (the Go internal-concurrency discharge)
@@ -926,6 +927,7 @@ class OrchestratorConfig:
     # allocator invariants, API contracts from the actual linked version).
     study_libraries: tuple[tuple[str, str], ...] = ()
     no_study_libraries: bool = False
+    study_concept_seeding: bool = True
     mode: ReviewMode = ReviewMode.SECURITY
     project_sinks: frozenset | None = None  # IRIS-derived sink names for wrapper pre-filter
     # The LLM client whose cost cap governs this run (core.llm.client.
@@ -17809,6 +17811,8 @@ def _study_consumer_loop(
             prep_cmd.extend(["--reading-list", str(rl_path)])
         if config.models and config.models[0] != "default":
             prep_cmd.extend(["--model", config.models[0]])
+        if not getattr(config, "study_concept_seeding", True):
+            prep_cmd.append("--no-concept-seeding")
 
         from core.config import RaptorConfig
 
@@ -18076,6 +18080,8 @@ def _study_consumer_loop(
                 prep_cmd.extend(["--reading-list", str(rl_path)])
             if config.models and config.models[0] != "default":
                 prep_cmd.extend(["--model", config.models[0]])
+            if not getattr(config, "study_concept_seeding", True):
+                prep_cmd.append("--no-concept-seeding")
 
             from core.config import RaptorConfig
 
@@ -18852,6 +18858,8 @@ def _run_library_studies(
         ]
         if config.models and config.models[0] != "default":
             lib_cmd.extend(["--model", config.models[0]])
+        if not getattr(config, "study_concept_seeding", True):
+            lib_cmd.append("--no-concept-seeding")
 
         logger.info(
             "study-consumer: running study-prep for library %s (%s)",
@@ -34897,6 +34905,9 @@ def _submit_dark_probes_early(
     main pipeline phases, then closes it.  If no outcomes are eligible
     or no client is available, returns empty lists and None.
     """
+    if not getattr(config, "automatic_witnesses", True):
+        return [], [], None
+
     import concurrent.futures
 
     if llm_client is None:
@@ -35253,6 +35264,9 @@ def _run_dark_verification(
     order until the first refusal — which records exactly one
     unverifiable-environment row, persists, and re-raises.
     """
+    if not getattr(config, "automatic_witnesses", True):
+        return
+
     if llm_client is None:
         return
 

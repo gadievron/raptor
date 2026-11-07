@@ -110,6 +110,7 @@ class AuditPipelineOpts:
     study_root: Path | None = None
     study_libraries: tuple[tuple[str, str], ...] = ()
     no_study_libraries: bool = False
+    study_concept_seeding: bool = True
     mode: ReviewMode = ReviewMode.SECURITY
     max_workers: int = 0
     # Tri-state: True/False = explicit per-run choice (--dynamic /
@@ -117,6 +118,7 @@ class AuditPipelineOpts:
     # trust marker, else off. Resolved via
     # core.project.trust.resolve_dynamic_validation at config build.
     dynamic_validation: bool | None = None
+    automatic_witnesses: bool = True
     # Tri-state repo-trust assertion for trust-gated witnesses:
     # True/False = explicit programmatic choice; None = defer to the
     # active project's 'config' trust marker (the --trust-repo
@@ -477,9 +479,11 @@ def _build_orchestrator_config(
         study_root=opts.study_root,
         study_libraries=opts.study_libraries,
         no_study_libraries=opts.no_study_libraries,
+        study_concept_seeding=opts.study_concept_seeding,
         mode=mode,
         max_workers=opts.max_workers,
         dynamic_validation=_resolve_dynamic(opts),
+        automatic_witnesses=opts.automatic_witnesses,
         repo_trusted=_resolve_repo_trust(opts),
         verdict_reuse=opts.verdict_reuse,
         cross_entry=opts.cross_entry,

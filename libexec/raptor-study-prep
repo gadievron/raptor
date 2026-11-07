@@ -2127,6 +2127,7 @@ def _scope_fingerprint(parsed: argparse.Namespace) -> dict:
         "bridge_seed_file": _bridge_seed_fingerprint(
             parsed.bridge_seed_file),
         "reading_list_pending": pending,
+        **({"concept_seeding": False} if getattr(parsed, "no_concept_seeding", False) else {}),
     }
 
 
@@ -3167,7 +3168,16 @@ def main() -> None:
     # Strict parsing: a typo'd scoping flag (e.g. a misspelled
     # --identifier) must error out, not silently degrade the run to a
     # full unscoped extraction of the whole tree.
+    ap.add_argument("--no-concept-seeding", action="store_true",
+                    help="Use mechanical identifier resolution only; do not start an independent semantic-seeding LLM client")
     parsed = ap.parse_args(sys.argv[1:])
+
+    def no_seed(*_args, **_kwargs):
+        print("study-prep: semantic concept seeding disabled (shared-budget caller)")
+        return []
+
+    seed_names = no_seed if parsed.no_concept_seeding else _llm_seed_concepts_from_names
+    seed_concepts = no_seed if parsed.no_concept_seeding else _llm_seed_concepts
 
     target = Path(parsed.target).resolve()
     output_dir = Path(parsed.output_dir)
@@ -3516,7 +3526,7 @@ def main() -> None:
             print("study-prep: no prior study-list.json — will seed concepts "
                   "from in-memory items after extraction", file=sys.stderr)
         else:
-            seeded = _llm_seed_concepts(semantic_concepts, study_list_path,
+            seeded = seed_concepts(semantic_concepts, study_list_path,
                                         model=parsed.model,
                                         run_dir=output_dir)
             if seeded:
@@ -3707,7 +3717,7 @@ def main() -> None:
             | {s["name"] for s in all_structs})
         _seed_pool = ThreadPoolExecutor(max_workers=1)
         _seed_future = _seed_pool.submit(
-            _llm_seed_concepts_from_names,
+            seed_names,
             _deferred_concepts, all_candidate_names,
             model=parsed.model, run_dir=output_dir)
 
@@ -4039,7 +4049,7 @@ def main() -> None:
     # so the LLM call would buy nothing.
     if bridge_concepts and items and not identifiers:
         all_item_names = sorted({it.name for it in items})
-        seeded = _llm_seed_concepts_from_names(
+        seeded = seed_names(
             bridge_concepts, all_item_names, model=parsed.model,
             run_dir=output_dir)
         if seeded:

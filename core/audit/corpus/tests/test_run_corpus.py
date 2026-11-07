@@ -1805,6 +1805,8 @@ def _run_stamp(**overrides):
         "triage": "off",
         "prefilter": "off",
         "integer_abi": select_integer_abi(None),
+        "open_discovery": False, "static_only": False,
+        "max_cost": None, "max_time": None, "max_group_cost": None,
         "scope": "excerpt",
         "label_kind": "real",
     }
@@ -2026,6 +2028,7 @@ def _stamped_ckpt(groups, **overrides):
     stamp = {
         "mode": "security", "model": "", "profile": "deployed",
         "triage": True, "prefilter": True,
+        "open_discovery": False, "static_only": False,
         "integer_abi": select_integer_abi(None),
     }
     stamp.update(overrides)

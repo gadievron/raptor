@@ -1362,3 +1362,23 @@ response omits its file, the parser can locate an exact quote in the supplied
 focus/context snippets if it identifies one unambiguous file. The confined
 on-disk source must still verify; the receipt records the recovered locator.
 Explicit wrong paths, ambiguous matches and stale snippets remain unverified.
+
+
+Corpus calibration accepts `--max-cost` and `--max-time` for a whole invocation,
+including preparation and all repository groups. Spend uses the telemetry
+ledger, not label-attributed review costs. Unreviewed budget-stopped labels
+remain explicit errors. Cost caps gate dispatch using estimates and can be
+overshot by in-flight requests; wall limits are cooperative. Use an external
+process supervisor when a hard deadline is required. `--static-only` disables
+automatic native witnesses and dynamic validation in both experimental arms.
+
+For paired comparisons, inspect finalized coverage by class and confirm the
+discovery stage actually ran. Budget-censored positive-only samples cannot
+estimate precision. Place the checkout and automatic library-source cache
+on a filesystem with adequate free inodes; changing `TMPDIR` alone does not
+relocate every cache. Report environment failures separately from accuracy.
+
+Cost-limited corpus runs disable semantic concept-seeding calls in the isolated
+study-prep subprocess, whose client cannot share the parent reservation ledger.
+Mechanical preparation and in-process study remain enabled; their paid study
+calls use the governed run client. The choice is recorded in result metadata.
