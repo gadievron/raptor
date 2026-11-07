@@ -137,7 +137,7 @@ def _summarize_rows(rows):
                    "by_tool": {tool: dict(counts) for tool, counts in by_tool[cell].items()}}
             for cell in _CELLS
         },
-        "mode_expectations": {"checked": checked, "mismatches": len(mismatches)},
+        "mode_expectations": {"checked": checked, "mismatches": len(mismatches), "details": mismatches},
         "label_support": {
             "raw": {kind: support[kind] for kind in ("positive", "negative")},
             "unreviewed": {kind: unreviewed[kind] for kind in ("positive", "negative")},
@@ -202,6 +202,13 @@ def _print_report(path, report):
         scores = " ".join(f"{k}={metrics[k]:.1%}" if metrics[k] is not None else f"{k}=n/a"
                           for k in ("precision", "recall", "f1"))
         print(sanitise_for_terminal(f"  Raw scores: {scores}"))
+        modes = cohort["mode_expectations"]
+        print(f"  Explicit mode expectations: {modes['checked']} checked, {modes['mismatches']} mismatches")
+        for mismatch in modes["details"]:
+            print(sanitise_for_terminal(
+                f"    {mismatch['function_id']} [{mismatch['mode']}]: "
+                f"expected={mismatch['expected']} got={mismatch['actual']}"
+            ))
         print(sanitise_for_terminal(f"  {'Cell':5} {'Rows':>6} {'Matching':>9} {'Other-only':>11} {'Unavailable':>12} {'Missing':>8} {'Malformed':>10}"))
         for cell, counts in cohort["availability_by_cell"].items():
             values = " ".join(f"{counts[state]:>{width}}" for state, width in zip(_STATES, (9, 11, 12, 8, 10)))
