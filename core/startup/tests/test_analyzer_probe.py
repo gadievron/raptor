@@ -11,7 +11,31 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from core.startup.init import _check_analyzer_capabilities
+
+
+from types import ModuleType
+from core.testing.module_bindings import mock_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.startup.init as owner
+    import importlib.metadata
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('_check_analyzer_capabilities',), {'importlib.metadata': importlib.metadata}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            monkeypatch.setitem(globals(), '_check_analyzer_capabilities', owner._check_analyzer_capabilities)
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 
 class TestAnalyzerProbe:
@@ -86,8 +110,7 @@ class TestAnalyzerProbe:
             "core.audit.compiler_sweep._clang_path", return_value=None,
         ), patch(
             "core.startup.init._gcc_version", return_value=None,
-        ), patch(
-            "importlib.metadata.version", return_value="4.13.0.0",
+        ), mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="4.13.0.0",
         ):
             parts, _ = _check_analyzer_capabilities()
         assert "z3 4.13.0.0 ✓" in parts
@@ -102,8 +125,7 @@ class TestAnalyzerProbe:
             "core.audit.compiler_sweep._clang_path", return_value=None,
         ), patch(
             "core.startup.init._gcc_version", return_value=None,
-        ), patch(
-            "importlib.metadata.version",
+        ), mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version',
             side_effect=PackageNotFoundError("z3-solver"),
         ):
             parts, warnings = _check_analyzer_capabilities()

@@ -18,6 +18,10 @@ from packages.joern.runner import build_cpg, run_query
 from packages.joern.models import JoernCPG
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+
 @pytest.fixture(autouse=True)
 def _fresh_path_cache(monkeypatch):
     from core.testing.module_state import isolated_module_state
@@ -60,15 +64,13 @@ def _fake_install(root: Path, *, flat: bool = False) -> dict[str, str]:
 class TestJoernToolPaths:
     def test_returns_launcher_parent_deduplicated(self, tmp_path, monkeypatch):
         launchers = _fake_install(tmp_path)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
 
     def test_flat_install_returns_cli_dir(self, tmp_path, monkeypatch):
         launchers = _fake_install(tmp_path, flat=True)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
 
@@ -78,8 +80,7 @@ class TestJoernToolPaths:
         # even when /opt/lib/ exists (unrelated system libraries).
         launchers = _fake_install(tmp_path, flat=True)
         (tmp_path / "joern-install" / "lib").mkdir()
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
         assert str(tmp_path / "joern-install") not in paths
@@ -95,22 +96,20 @@ class TestJoernToolPaths:
             p = home_bin / name
             p.write_text("#!/bin/sh\n")
             launchers[name] = str(p)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         monkeypatch.setenv("HOME", str(home))
         paths = joern_tool_paths()
         assert str(home) not in paths
         assert str(home_bin) in paths
 
     def test_system_installs_need_no_declaration(self, monkeypatch):
-        monkeypatch.setattr(
-            "shutil.which",
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which',
             lambda name: "/usr/bin/env" if name in (
                 "joern", "joern-parse", "java") else None)
         assert joern_tool_paths() == []
 
     def test_nothing_resolved_returns_empty(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda name: None)
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: None)
         assert joern_tool_paths() == []
 
     def test_user_local_jdk_root_included_when_jdk_shaped(
@@ -122,8 +121,7 @@ class TestJoernToolPaths:
         java = jdk_bin / "java"
         java.write_text("")
         launchers["java"] = str(java)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert str(tmp_path / "jdk") in paths
 
@@ -137,8 +135,7 @@ class TestJoernToolPaths:
         java.write_text("#!/bin/sh\n")
         launchers = _fake_install(tmp_path)
         launchers["java"] = str(java)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         monkeypatch.setenv("HOME", str(home))
         paths = joern_tool_paths()
         assert str(home) not in paths
@@ -155,8 +152,7 @@ class TestJoernToolPaths:
         java.write_text("")
         launchers = _fake_install(tmp_path)
         launchers["java"] = str(java)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         monkeypatch.setenv("HOME", str(home))
         paths = joern_tool_paths()
         assert str(home) not in paths
@@ -171,8 +167,7 @@ class TestJoernToolPaths:
         java.write_text("#!/bin/sh\n")
         launchers = _fake_install(tmp_path)
         launchers["java"] = str(java)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         monkeypatch.setenv("HOME", str(home))
         paths = joern_tool_paths()
         assert str(home / ".local") not in paths
@@ -194,8 +189,7 @@ class TestJoernToolPaths:
         shim = shim_dir / "joern-parse"
         shim.symlink_to(launchers["joern-parse"])
         launchers["joern-parse"] = str(shim)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
 
@@ -215,8 +209,7 @@ class TestRunnerDeclaresToolPaths:
 
     def test_build_cpg_passes_tool_paths(self, tmp_path, monkeypatch):
         launchers = _fake_install(tmp_path)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         target = tmp_path / "src"
         target.mkdir()
         (target / "a.c").write_text("int main(void){return 0;}\n")
@@ -227,8 +220,7 @@ class TestRunnerDeclaresToolPaths:
 
     def test_run_query_passes_tool_paths(self, tmp_path, monkeypatch):
         launchers = _fake_install(tmp_path)
-        monkeypatch.setattr(
-            "shutil.which", lambda name: launchers.get(name))
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda name: launchers.get(name))
         cpg_path = tmp_path / "cpg.bin"
         cpg_path.write_bytes(b"\x00")
         cpg = JoernCPG(path=cpg_path, target=tmp_path, languages=["c"])

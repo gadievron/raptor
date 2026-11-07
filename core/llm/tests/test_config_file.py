@@ -18,6 +18,27 @@ from core.llm.config import (
 from core.llm.model_data import MODEL_COSTS, MODEL_LIMITS, PROVIDER_DEFAULT_MODELS
 
 
+from types import ModuleType
+from core.testing.module_bindings import mock_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.detection as owner
+    import importlib.metadata
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('_check_litellm_installed',), {'importlib.metadata': importlib.metadata}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture(autouse=True)
 def _restore_llm_caches(monkeypatch):
     """Own cold selection and detection caches instead of exposing caller entries."""
@@ -593,7 +614,7 @@ class TestCompromisedLitellmDetection:
     def test_182_8_causes_system_exit(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path
         from core.llm.detection import _check_litellm_installed
-        with patch("importlib.metadata.version", return_value="1.82.8"):
+        with mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.82.8"):
             with pytest.raises(SystemExit) as exc_info:
                 _check_litellm_installed()
             assert "1.82.8" in str(exc_info.value)
@@ -603,7 +624,7 @@ class TestCompromisedLitellmDetection:
     def test_182_7_causes_system_exit(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path
         from core.llm.detection import _check_litellm_installed
-        with patch("importlib.metadata.version", return_value="1.82.7"):
+        with mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.82.7"):
             with pytest.raises(SystemExit) as exc_info:
                 _check_litellm_installed()
             assert "1.82.7" in str(exc_info.value)
@@ -612,7 +633,7 @@ class TestCompromisedLitellmDetection:
     def test_safe_version_no_exit(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
         from core.llm.detection import _check_litellm_installed
-        with patch("importlib.metadata.version", return_value="1.55.0"):
+        with mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.55.0"):
             _check_litellm_installed()
         captured = capsys.readouterr()
         assert "malicious" not in captured.out
@@ -621,7 +642,7 @@ class TestCompromisedLitellmDetection:
     def test_182_8_shows_shell_removal(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
         from core.llm.detection import _check_litellm_installed
-        with patch("importlib.metadata.version", return_value="1.82.8"), \
+        with mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.82.8"), \
              pytest.raises(SystemExit):
             _check_litellm_installed()
         captured = capsys.readouterr()
@@ -639,7 +660,7 @@ class TestCompromisedLitellmDetection:
     def test_182_7_shows_pip_removal(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
         from core.llm.detection import _check_litellm_installed
-        with patch("importlib.metadata.version", return_value="1.82.7"), \
+        with mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.82.7"), \
              pytest.raises(SystemExit):
             _check_litellm_installed()
         captured = capsys.readouterr()
@@ -664,7 +685,7 @@ model_list:
 
         from core.llm.detection import _check_litellm_installed
         with patch("core.llm.detection.Path.home", return_value=tmp_path), \
-             patch("importlib.metadata.version", return_value="1.55.0"):
+             mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.55.0"):
             _check_litellm_installed()
 
         assert new_config.exists()
@@ -682,7 +703,7 @@ model_list:
 
         from core.llm.detection import _check_litellm_installed
         with patch("core.llm.detection.Path.home", return_value=tmp_path), \
-             patch("importlib.metadata.version", return_value="1.55.0"):
+             mock_module_attribute(_discovery_imports, 'importlib.metadata', 'version', return_value="1.55.0"):
             _check_litellm_installed()
 
         assert json.loads(new_config.read_text()) == {"models": []}

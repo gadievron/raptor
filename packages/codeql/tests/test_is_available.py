@@ -5,13 +5,17 @@ from __future__ import annotations
 from packages import codeql
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+
 class TestIsAvailable:
     def test_returns_bool(self):
         result = codeql.is_available()
         assert isinstance(result, bool)
 
     def test_false_when_not_on_path(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, codeql, 'shutil', 'which', lambda x: None)
         monkeypatch.delenv("CODEQL_CLI", raising=False)
         assert codeql.is_available() is False
 
@@ -25,7 +29,7 @@ class TestIsAvailable:
 
 class TestVersion:
     def test_returns_none_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, codeql, 'shutil', 'which', lambda x: None)
         monkeypatch.delenv("CODEQL_CLI", raising=False)
         assert codeql.version() is None
 
@@ -46,7 +50,7 @@ class TestQueryRunnerCliResolution:
         fake.write_text("#!/bin/sh\n", encoding="utf-8")
         fake.chmod(0o755)
         monkeypatch.setenv("CODEQL_CLI", str(fake))
-        monkeypatch.setattr("shutil.which", lambda _x: None)
+        patch_module_attribute(monkeypatch, codeql, 'shutil', 'which', lambda _x: None)
         runner = QueryRunner()
         assert runner.codeql_cli == str(fake.resolve())
 
@@ -68,7 +72,7 @@ class TestQueryRunnerCliResolution:
         from packages.codeql.query_runner import QueryRunner
 
         monkeypatch.delenv("CODEQL_CLI", raising=False)
-        monkeypatch.setattr("shutil.which", lambda _x: None)
+        patch_module_attribute(monkeypatch, codeql, 'shutil', 'which', lambda _x: None)
         with pytest.raises(RuntimeError, match="CODEQL_CLI"):
             QueryRunner()
 
@@ -82,6 +86,6 @@ class TestQueryRunnerCliResolution:
         fake.write_text("#!/bin/sh\n", encoding="utf-8")
         fake.chmod(0o755)
         monkeypatch.setenv("CODEQL_CLI", str(fake))
-        monkeypatch.setattr("shutil.which", lambda _x: None)
+        patch_module_attribute(monkeypatch, codeql, 'shutil', 'which', lambda _x: None)
         assert pkg.is_available() is True
         QueryRunner()  # must not raise

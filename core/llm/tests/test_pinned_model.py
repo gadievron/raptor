@@ -26,6 +26,27 @@ import core.llm.client as _client_mod
 from core.llm.client import LLMClient, _pinned_llm_config
 
 
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.config as owner
+    import core.llm.detection as detection
+    from core.testing.llm_state import scoped_claudecode_discovery
+
+    with scoped_claudecode_discovery(owner, detection) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture(autouse=True)
 def _reset_banner_flag(monkeypatch):
     """Pin fresh banner latches and restore the caller's values."""
@@ -118,8 +139,7 @@ def test_pinned_llm_config_provider_name_uses_provider_builder(monkeypatch):
     of falling through provider inference to a keyless anthropic config
     that dies with an SDK auth error at call time."""
     monkeypatch.setenv("RAPTOR_CC_MODEL", "claude-opus-4-7")
-    monkeypatch.setattr(
-        "shutil.which",
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which',
         lambda name: "/usr/bin/claude" if name == "claude" else None,
     )
     cfg = _pinned_llm_config("claudecode")
@@ -131,7 +151,7 @@ def test_pinned_llm_config_provider_name_uses_provider_builder(monkeypatch):
 def test_pinned_llm_config_provider_name_unavailable_raises(monkeypatch):
     """Provider-name pin whose backend is absent fails loudly at
     construction instead of synthesising a config for the wrong provider."""
-    monkeypatch.setattr("shutil.which", lambda name: None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda name: None)
     with pytest.raises(ValueError, match="claudecode"):
         _pinned_llm_config("claudecode")
 

@@ -23,6 +23,27 @@ from core.llm.cc_adapter import (
 )
 
 
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.cc_adapter as owner
+    import shutil
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('resolve_claude_cli',), {'shutil': shutil}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 class TestBuildCCCommand:
     def test_minimal_config(self):
         config = CCDispatchConfig(claude_bin="/usr/bin/claude")
@@ -1418,7 +1439,7 @@ class TestResolveClaudeCli:
 
     def test_none_when_not_found(self, monkeypatch):
         from core.llm.cc_adapter import resolve_claude_cli
-        monkeypatch.setattr("shutil.which", lambda _: None)
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: None)
         assert resolve_claude_cli() is None
 
     def test_path_lookup_result_is_realpathed(self, monkeypatch, tmp_path):
@@ -1429,7 +1450,7 @@ class TestResolveClaudeCli:
         link = tmp_path / "bin" / "claude"
         link.parent.mkdir()
         link.symlink_to(real)
-        monkeypatch.setattr("shutil.which", lambda _: str(link))
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: str(link))
         assert resolve_claude_cli() == str(real.resolve())
 
     def test_explicit_path_is_realpathed(self, tmp_path):

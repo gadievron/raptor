@@ -20,6 +20,27 @@ from core.llm.config import (
     _get_default_primary_model,
 )
 
+
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.config as owner
+    import core.llm.detection as detection
+    from core.testing.llm_state import scoped_claudecode_discovery
+
+    with scoped_claudecode_discovery(owner, detection) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 # ---------------------------------------------------------------------------
 # Test fixtures — strip env so each test sees a clean slate
 # ---------------------------------------------------------------------------
@@ -68,7 +89,7 @@ def no_thinking_model(monkeypatch):
 def no_claudecode(monkeypatch):
     """Pretend ``claude`` isn't on PATH so the ultimate fallback
     is None rather than ClaudeCodeLLMProvider."""
-    monkeypatch.setattr("shutil.which", lambda _bin: None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _bin: None)
 
 
 @pytest.fixture
@@ -136,7 +157,7 @@ def test_claudecode_fallthrough_when_no_external_llm(
     """The keyless case: no API keys, no Ollama, but ``claude`` on
     PATH. The resolver falls through to ClaudeCodeLLMProvider so
     tool-using consumers can still operate."""
-    monkeypatch.setattr("shutil.which", lambda b: "/usr/bin/claude" if b == "claude" else None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda b: "/usr/bin/claude" if b == "claude" else None)
     config = _get_default_primary_model()
     assert config is not None
     assert config.provider == "claudecode"
@@ -149,7 +170,7 @@ def test_claudecode_only_used_as_last_resort(
     """When *any* API key is set, the resolver picks the API path
     over Claude Code — CC is slower (subprocess + JSON-protocol
     synthesis for tool-use) so it's the absolute last resort."""
-    monkeypatch.setattr("shutil.which", lambda b: "/usr/bin/claude" if b == "claude" else None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda b: "/usr/bin/claude" if b == "claude" else None)
     clean_env.setenv("MISTRAL_API_KEY", "test-key")
     config = _get_default_primary_model()
     assert config.provider == "mistral"        # not "claudecode"
@@ -256,7 +277,7 @@ def test_prefer_falls_through_to_claudecode(
     """Keyless preference: cve-diff says ``prefer="anthropic"``,
     operator has nothing set up, ``claude`` is on PATH → CC subprocess.
     The complete fallback chain ends here."""
-    monkeypatch.setattr("shutil.which", lambda b: "/usr/bin/claude" if b == "claude" else None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda b: "/usr/bin/claude" if b == "claude" else None)
     config = _get_default_primary_model(prefer="anthropic")
     assert config.provider == "claudecode"
 
