@@ -5,6 +5,9 @@ import pytest
 from cve_env.agent import tools
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 @pytest.mark.parametrize("automatic", [True, False])
 def test_fused_build_exception_respects_context_ownership(
@@ -13,7 +16,7 @@ def test_fused_build_exception_respects_context_ownership(
     context = tmp_path / "context"
     context.mkdir()
     (context / "Dockerfile").write_text("partial data")
-    monkeypatch.setattr(tools.tempfile, "mkdtemp", lambda **kw: str(context))
+    patch_module_attribute(monkeypatch, tools, 'tempfile', "mkdtemp", lambda **kw: str(context))
 
     def fail(**kw):
         raise error
@@ -28,7 +31,7 @@ def test_fused_build_exception_respects_context_ownership(
 def test_successful_fused_build_keeps_automatic_context(tmp_path, monkeypatch):
     context = tmp_path / "context"
     context.mkdir()
-    monkeypatch.setattr(tools.tempfile, "mkdtemp", lambda **kw: str(context))
+    patch_module_attribute(monkeypatch, tools, 'tempfile', "mkdtemp", lambda **kw: str(context))
     result = SimpleNamespace(
         ok=True,
         image_tag="image",

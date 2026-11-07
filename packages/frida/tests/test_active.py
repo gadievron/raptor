@@ -641,7 +641,7 @@ class TestSandboxedProbeEnvHygiene:
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setenv("PYTHONPATH", "/evil")
         monkeypatch.setenv("PYTHONSTARTUP", "/evil/rc.py")
-        monkeypatch.setattr(sandboxed.sys, "executable", str(py))
+        patch_module_attribute(monkeypatch, sandboxed, 'sys', "executable", str(py))
 
         sandboxed._find_frida_site()
 

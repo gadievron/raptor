@@ -5,6 +5,9 @@ from packages.code_understanding.dispatch import hunt_cocci_dispatch as dispatch
 from core.run import scratch
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_rule_write_failure_closes_sandbox_scratch(tmp_path, monkeypatch, error):
     repo = tmp_path / "repo"
@@ -17,12 +20,12 @@ def test_rule_write_failure_closes_sandbox_scratch(tmp_path, monkeypatch, error)
         dispatch, "translate_pattern_to_cocci_rule", lambda *a, **kw: "@@\n@@\nfoo();"
     )
     monkeypatch.setattr(dispatch, "_make_locked_sandbox_runner", lambda *a: object())
-    monkeypatch.setattr(scratch.tempfile, "mkdtemp", lambda **kw: str(allocated))
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "mkdtemp", lambda **kw: str(allocated))
 
     def failed_write(*args, **kw):
         raise error
 
-    monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", failed_write)
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "NamedTemporaryFile", failed_write)
     if isinstance(error, OSError):
         result = dispatch.cocci_hunt_dispatch(None, "find foo", str(repo))
         assert "error" in result[0]

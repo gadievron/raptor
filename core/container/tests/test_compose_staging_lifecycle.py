@@ -25,7 +25,7 @@ def staging_case(tmp_path, monkeypatch):
         staging.mkdir()
         return str(staging)
 
-    monkeypatch.setattr(cco.tempfile, "mkdtemp", allocate)
+    patch_module_attribute(monkeypatch, cco, 'tempfile', "mkdtemp", allocate)
     monkeypatch.setattr(cco, "keepalive_register", live.add)
     monkeypatch.setattr(cco, "keepalive_unregister", live.discard)
     monkeypatch.setattr(cco, "_rewrite_ports_in_place", lambda *a, **kw: None)
@@ -192,7 +192,7 @@ def test_staging_inside_source_is_refused_and_removed(staging_case, monkeypatch)
         nested.mkdir()
         return str(nested)
 
-    monkeypatch.setattr(cco.tempfile, "mkdtemp", allocate)
+    patch_module_attribute(monkeypatch, cco, 'tempfile', "mkdtemp", allocate)
     with pytest.raises(cco.ComposeError, match="outside the source tree"):
         cco.rewrite_for_localhost(config)
     assert not nested.exists()

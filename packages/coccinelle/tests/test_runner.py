@@ -39,6 +39,9 @@ from packages.coccinelle.runner import (
 from core.testing.module_bindings import patch_module_attribute
 
 
+from core.testing.module_bindings import mock_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _isolate_probe_patch_targets(monkeypatch):
     """Keep probe mocks local, including delegated discovery and execution."""
@@ -2369,7 +2372,7 @@ class TestTimeoutElapsedMs:
             raise sp.TimeoutExpired(cmd, 1)
 
         with patch.object(runner_mod, "is_available", return_value=True), \
-             patch.object(runner_mod.time, "monotonic",
+             mock_module_attribute(runner_mod, 'time', "monotonic",
                           side_effect=self._ticker()):
             result = run_rule(
                 target, rule, timeout=1, subprocess_runner=fake_runner,
@@ -2392,7 +2395,7 @@ class TestTimeoutElapsedMs:
             raise sp.TimeoutExpired(cmd, 1)
 
         with patch.object(runner_mod, "is_available", return_value=True), \
-             patch.object(runner_mod.time, "monotonic",
+             mock_module_attribute(runner_mod, 'time', "monotonic",
                           side_effect=self._ticker()):
             out = run_rules_batched(
                 target, rules, timeout=1, subprocess_runner=fake_runner,

@@ -467,7 +467,7 @@ def test_distro_probes_handle_network_failure(probe, monkeypatch) -> None:
 # --- probe_dns ---
 
 def test_probe_dns_success(monkeypatch) -> None:
-    monkeypatch.setattr(service_health.socket, "gethostbyname",
+    patch_module_attribute(monkeypatch, service_health, 'socket', "gethostbyname",
                         lambda host: "1.2.3.4")
     r = service_health.probe_dns()
     assert r.ok is True
@@ -476,7 +476,7 @@ def test_probe_dns_success(monkeypatch) -> None:
 def test_probe_dns_failure_on_gaierror(monkeypatch) -> None:
     def fail(host):
         raise service_health.socket.gaierror(8, "nodename nor servname provided")
-    monkeypatch.setattr(service_health.socket, "gethostbyname", fail)
+    patch_module_attribute(monkeypatch, service_health, 'socket', "gethostbyname", fail)
     r = service_health.probe_dns()
     assert r.ok is False
     assert "resolve failure" in r.detail

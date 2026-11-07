@@ -7,11 +7,14 @@ import pytest
 from core.run import scratch
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def allocation(tmp_path, monkeypatch):
     path = tmp_path / "scratch"
     path.mkdir()
-    monkeypatch.setattr(scratch.tempfile, "mkdtemp", lambda **kw: str(path))
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "mkdtemp", lambda **kw: str(path))
     monkeypatch.setattr(scratch, "keepalive_register", lambda path: None)
     monkeypatch.setattr(scratch, "_inode_ceiling_advisory", lambda path: None)
     return path
@@ -60,7 +63,7 @@ def test_temp_unlink_cancellation_preserves_write_error(tmp_path, monkeypatch):
     def cancel_unlink(*args, **kwargs):
         raise KeyboardInterrupt("cleanup cancellation")
 
-    monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", lambda **kw: Broken())
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "NamedTemporaryFile", lambda **kw: Broken())
     try:
         with monkeypatch.context() as fault:
             fault.setattr(Path, "unlink", cancel_unlink)
@@ -160,7 +163,7 @@ def test_failed_write_still_unlinks_when_close_fails(tmp_path, monkeypatch, clos
             closed.append(True)
             raise close_error
 
-    monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", lambda **kw: Broken())
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "NamedTemporaryFile", lambda **kw: Broken())
     try:
         with pytest.raises(ValueError, match="primary write failure"):
             scratch.write_temp_text("payload", prefix="input-", suffix=".txt")
@@ -178,7 +181,7 @@ def test_failed_temp_allocation_has_no_cleanup_target(monkeypatch):
     def forbidden_unlink(*args, **kwargs):
         pytest.fail("no temporary file was allocated")
 
-    monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", fail_allocate)
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "NamedTemporaryFile", fail_allocate)
     monkeypatch.setattr(Path, "unlink", forbidden_unlink)
     with pytest.raises(OSError, match="allocation failed"):
         scratch.write_temp_text("payload", prefix="input-", suffix=".txt")

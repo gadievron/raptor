@@ -14,6 +14,10 @@ import pytest
 
 from packages.joern.tests import test_netns_forwarder_sigmask as module
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.linux_native
 
 NETWORK = [
@@ -146,7 +150,7 @@ def test_mask_case_failure_releases_sockets_and_directory(
     )
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(module.tempfile, "mkdtemp", lambda **kw: str(root))
+            patch_module_attribute(patcher, module, 'tempfile', "mkdtemp", lambda **kw: str(root))
             patcher.setattr(module, "socket", sockets)
             patcher.setattr(module, "os", filesystem)
             patcher.setattr(module, "create_listener", create_listener)

@@ -13,6 +13,9 @@ from core.project import session_titles as policy, registry_home, sessions
 from core.startup import session_title as hook
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def titles(tmp_path, monkeypatch):
     monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'registry'))
@@ -131,7 +134,7 @@ def test_state_write_failure_is_nonfatal_and_can_retry(titles, monkeypatch, caps
         raise OSError(failure, 'owned state unavailable')
     with monkeypatch.context() as patch:
         patch.setattr(policy, 'save_json', refuse)
-        patch.setattr(hook.sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
+        patch_module_attribute(patch, hook, 'sys', 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
         assert hook.main() == 0
         assert capsys.readouterr().out == ''
     assert policy.save_json is real
@@ -147,7 +150,7 @@ def test_busy_lock_skips_instead_of_writing_unlocked(titles, monkeypatch, capsys
         raise TimeoutError('owned lock busy')
         yield
     monkeypatch.setattr(policy, 'sidecar_flock', busy)
-    monkeypatch.setattr(hook.sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
+    patch_module_attribute(monkeypatch, hook, 'sys', 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
     assert hook.main() == 0
     assert capsys.readouterr().out == ''
     assert states() == []
@@ -215,7 +218,7 @@ def test_corrupt_state_cannot_be_replaced_as_a_fresh_automatic_session(titles, m
     emitted(event())
     path = next((registry_home.sessions_dir() / '.titles').glob('*.json'))
     path.write_text('{bad json')
-    monkeypatch.setattr(hook.sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
+    patch_module_attribute(monkeypatch, hook, 'sys', 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
     assert hook.main() == 0
     assert capsys.readouterr().out == ''
     assert path.read_text() == '{bad json'
@@ -252,7 +255,7 @@ def test_hook_entrypoint_emits_native_protocol_and_invalid_input_is_optional(tmp
 
 
 def test_successful_hook_main_emits_only_native_title_json(titles, monkeypatch, capsys):
-    monkeypatch.setattr(hook.sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
+    patch_module_attribute(monkeypatch, hook, 'sys', 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
     assert hook.main() == 0
     output = json.loads(capsys.readouterr().out)
     assert output == {'hookSpecificOutput': {'hookEventName': 'SessionStart',

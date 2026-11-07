@@ -10,6 +10,9 @@ from core.env.spec import EnvironmentSpec, RunSpec, SourceSpec
 from core.testing.restricted_tree import restricted_tree
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def resources(tmp_path, monkeypatch):
     work = tmp_path / "owned"
@@ -114,7 +117,7 @@ def provision_setup(resources, monkeypatch):
         source=SourceSpec(kind="image", image_ref="image"),
         run=RunSpec(surface="http", port=80),
     )
-    monkeypatch.setattr(pv.tempfile, "mkdtemp", lambda **kwargs: str(resources.work))
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp", lambda **kwargs: str(resources.work))
     monkeypatch.setattr(pv, "keepalive_register", resources.live.add)
     return spec
 

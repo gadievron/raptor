@@ -67,8 +67,6 @@ def _live_tool_prerequisite_0(_live_tool_home, _live_tool_probe_state):
         pytest.skip('needs a joern install and user namespaces')
 
 
-
-
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_launch_patches(monkeypatch):
     """Keep launch mocks on consumer-owned subprocess module bindings."""
@@ -349,7 +347,7 @@ class TestMakeUdsDir:
                 dir = str(long_root)
             return real_mkdtemp(prefix=prefix, dir=dir)
 
-        monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        patch_module_attribute(monkeypatch, server_mod, 'tempfile', "mkdtemp", fake_mkdtemp)
         from packages.joern import client
         monkeypatch.setattr(client, "runtime_base", lambda: Path(str(long_root)))
         d = server_mod._make_uds_dir()
@@ -394,7 +392,7 @@ class TestMakeUdsDir:
                 dir = multi_root
             return real_mkdtemp(prefix=prefix, dir=dir)
 
-        monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        patch_module_attribute(monkeypatch, server_mod, 'tempfile', "mkdtemp", fake_mkdtemp)
         from packages.joern import client
         monkeypatch.setattr(client, "runtime_base", lambda: Path(multi_root))
         d = server_mod._make_uds_dir()
@@ -445,7 +443,7 @@ class TestMakeUdsDir:
                 dir = target
             return real_mkdtemp(prefix=prefix, dir=dir)
 
-        monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        patch_module_attribute(monkeypatch, server_mod, 'tempfile', "mkdtemp", fake_mkdtemp)
         from packages.joern import client
         monkeypatch.setattr(client, "runtime_base", lambda: Path(target))
         d = server_mod._make_uds_dir()

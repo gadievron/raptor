@@ -14,9 +14,9 @@ from core.testing.module_bindings import patch_module_attribute
 @pytest.fixture
 def calls(monkeypatch):
     opened, closed, killed = Mock(return_value=42), Mock(), Mock()
-    monkeypatch.setattr(probe.os, 'pidfd_open', opened, raising=False)
-    monkeypatch.setattr(probe.os, 'close', closed)
-    monkeypatch.setattr(probe.os, 'kill', killed)
+    patch_module_attribute(monkeypatch, probe, 'os', 'pidfd_open', opened, raising=False)
+    patch_module_attribute(monkeypatch, probe, 'os', 'close', closed)
+    patch_module_attribute(monkeypatch, probe, 'os', 'kill', killed)
     return opened, closed, killed
 
 
@@ -24,9 +24,9 @@ def calls(monkeypatch):
                                    PermissionError(errno.EPERM, 'blocked'), AttributeError('missing')])
 def test_signal_failure_falls_back_only_after_child_check(monkeypatch, calls, error):
     _, closed, killed = calls
-    monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=error), raising=False)
+    patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', Mock(side_effect=error), raising=False)
     wait = Mock(side_effect=[(0, 0), (123, signal.SIGKILL)])
-    monkeypatch.setattr(probe.os, 'waitpid', wait)
+    patch_module_attribute(monkeypatch, probe, 'os', 'waitpid', wait)
     probe._try_kill_and_reap(123)
     killed.assert_called_once_with(123, signal.SIGKILL)
     closed.assert_called_once_with(42)
@@ -36,9 +36,9 @@ def test_signal_failure_falls_back_only_after_child_check(monkeypatch, calls, er
 @pytest.mark.parametrize('result', [ChildProcessError(), (123, 0)])
 def test_lost_or_terminal_child_is_not_signalled(monkeypatch, calls, result):
     _, closed, killed = calls
-    monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
+    patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
     wait = Mock(side_effect=result) if isinstance(result, Exception) else Mock(return_value=result)
-    monkeypatch.setattr(probe.os, 'waitpid', wait)
+    patch_module_attribute(monkeypatch, probe, 'os', 'waitpid', wait)
     probe._try_kill_and_reap(123)
     killed.assert_not_called()
     closed.assert_called_once_with(42)
@@ -46,8 +46,8 @@ def test_lost_or_terminal_child_is_not_signalled(monkeypatch, calls, result):
 
 def test_pinned_process_gone_does_not_fall_back(monkeypatch, calls):
     _, closed, killed = calls
-    monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=ProcessLookupError(errno.ESRCH, 'gone')), raising=False)
-    monkeypatch.setattr(probe.os, 'waitpid', Mock(return_value=(123, 0)))
+    patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', Mock(side_effect=ProcessLookupError(errno.ESRCH, 'gone')), raising=False)
+    patch_module_attribute(monkeypatch, probe, 'os', 'waitpid', Mock(return_value=(123, 0)))
     probe._try_kill_and_reap(123)
     killed.assert_not_called()
     closed.assert_called_once_with(42)
@@ -76,7 +76,7 @@ def test_real_child_is_reaped_when_pidfd_signalling_is_blocked(monkeypatch):
         else:
             os.close(fd)
         sender = Mock(side_effect=PermissionError(errno.EPERM, 'blocked'))
-        monkeypatch.setattr(probe.signal, 'pidfd_send_signal', sender, raising=False)
+        patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', sender, raising=False)
         probe._try_kill_and_reap(child)
         sender.assert_called_once()
         with pytest.raises(ChildProcessError):
@@ -94,9 +94,9 @@ def test_real_child_is_reaped_when_pidfd_signalling_is_blocked(monkeypatch):
 
 def test_interrupted_ownership_check_retries_before_signal(monkeypatch, calls):
     _, _, killed = calls
-    monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
+    patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
     wait = Mock(side_effect=[InterruptedError(), (0, 0), (123, signal.SIGKILL)])
-    monkeypatch.setattr(probe.os, 'waitpid', wait)
+    patch_module_attribute(monkeypatch, probe, 'os', 'waitpid', wait)
     probe._try_kill_and_reap(123)
     assert wait.call_count == 3
     killed.assert_called_once_with(123, signal.SIGKILL)
@@ -104,8 +104,8 @@ def test_interrupted_ownership_check_retries_before_signal(monkeypatch, calls):
 
 def test_ownership_check_respects_cleanup_deadline(monkeypatch, calls):
     _, _, killed = calls
-    monkeypatch.setattr(probe.signal, 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
-    monkeypatch.setattr(probe.os, 'waitpid', Mock(side_effect=InterruptedError()))
+    patch_module_attribute(monkeypatch, probe, 'signal', 'pidfd_send_signal', Mock(side_effect=OSError(errno.ENOSYS, 'unsupported')), raising=False)
+    patch_module_attribute(monkeypatch, probe, 'os', 'waitpid', Mock(side_effect=InterruptedError()))
     with monkeypatch.context() as scoped:
         patch_module_attribute(scoped, probe, "time", 'monotonic', Mock(side_effect=[100.0, 106.0]))
         probe._try_kill_and_reap(123)

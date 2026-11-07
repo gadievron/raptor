@@ -11,6 +11,9 @@ from core.sandbox.errors import SandboxFloorError
 from core.symbolic import _isolate as isolate
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def clean_policy(monkeypatch):
     monkeypatch.delenv('RAPTOR_ALLOW_DEGRADED_UNTRUSTED', raising=False)
@@ -78,7 +81,7 @@ def test_worker_obeys_untrusted_floor(tmp_path, monkeypatch, policy, refused):
 def test_failed_private_scratch_never_starts_worker(monkeypatch):
     def fail(**kwargs):
         raise OSError('owned scratch failure')
-    monkeypatch.setattr(isolate.tempfile, 'mkdtemp', fail)
+    patch_module_attribute(monkeypatch, isolate, 'tempfile', 'mkdtemp', fail)
     monkeypatch.setattr(isolate.mp, 'get_context', lambda *a: pytest.fail('worker started'))
     result = isolate.run_isolated('core.symbolic._reach', '_find_reaching_input_impl', {}, timeout=1)
     assert result.metadata['sandbox_refused'] is True

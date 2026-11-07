@@ -9,6 +9,9 @@ from core.security.python_probe import run_python_probe
 from packages.frida import sandboxed
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_discovery_does_not_execute_target_frida(tmp_path, monkeypatch):
     marker = tmp_path/'executed'
     (tmp_path/'frida.py').write_text(
@@ -35,7 +38,7 @@ def test_user_site_discovery_never_imports_package_init(tmp_path, monkeypatch):
     (package/'__init__.py').write_text(
         f'from pathlib import Path\nPath({str(marker)!r}).write_text("bad")\n'
         'raise RuntimeError("discovery must not initialize frida")\n')
-    monkeypatch.setattr(sandboxed.sys, 'executable', executable)
+    patch_module_attribute(monkeypatch, sandboxed, 'sys', 'executable', executable)
     assert sandboxed._find_frida_site() == str(site.resolve())
     assert not marker.exists()
 
@@ -84,7 +87,7 @@ def test_cli_interpreter_discovery_supports_linux_and_macos_paths(tmp_path, monk
     site = tmp_path/'site-packages'
     (site/'frida').mkdir(parents=True)
     (site/'frida/__init__.py').write_text('')
-    monkeypatch.setattr(sandboxed.sys, 'executable', '/nonexistent-fixture-python')
+    patch_module_attribute(monkeypatch, sandboxed, 'sys', 'executable', '/nonexistent-fixture-python')
     monkeypatch.setattr('shutil.which', lambda name: str(cli) if name == 'frida' else None)
     monkeypatch.setattr(sandboxed.os.path, 'isfile', lambda path: path == interpreter)
     def probe(executable, source, **kwargs):

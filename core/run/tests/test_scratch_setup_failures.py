@@ -5,13 +5,16 @@ import pytest
 from core.run import scratch
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("keep", [False, True])
 @pytest.mark.parametrize("stage", ["register", "advisory", "env"])
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_setup_failure_removes_allocation(tmp_path, monkeypatch, stage, error, keep):
     allocated = tmp_path / "scratch"
     allocated.mkdir()
-    monkeypatch.setattr(scratch.tempfile, "mkdtemp", lambda **kw: str(allocated))
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "mkdtemp", lambda **kw: str(allocated))
     live = set()
 
     def register(path):
@@ -68,7 +71,7 @@ def test_temp_text_failure_removes_partial_file(tmp_path, monkeypatch, failure, 
         def __exit__(self, *exc):
             self.close()
 
-    monkeypatch.setattr(scratch.tempfile, "NamedTemporaryFile", Broken)
+    patch_module_attribute(monkeypatch, scratch, 'tempfile', "NamedTemporaryFile", Broken)
     with pytest.raises(type(error)):
         scratch.write_temp_text("payload", prefix="rule-", suffix=".yaml")
     assert paths and all(not p.exists() for p in paths)

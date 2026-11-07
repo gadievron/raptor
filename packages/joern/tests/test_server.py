@@ -989,7 +989,7 @@ class TestServerAuthSupportProbe:
             assert kwargs["env"]["JAVACMD"] == str(java)
             assert kwargs["env"]["JAVA_HOME"] == str(home)
             return subprocess.CompletedProcess(command, 0, "--server-auth-username", "")
-        monkeypatch.setattr(server.subprocess, "run", launch)
+        patch_module_attribute(monkeypatch, server, 'subprocess', "run", launch)
         assert server._server_auth_supported(binary)
 
 

@@ -22,6 +22,9 @@ from packages.joern import netns_forwarder as nf
 from packages.joern.server import JoernServer
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestPositiveFloat:
     def test_accepts_positive(self):
         assert nf._positive_float("900") == 900.0
@@ -69,9 +72,9 @@ def _run_main(monkeypatch, argv: list[str]) -> tuple[int, dict[str, Any]]:
         captured.update(kw)
 
     monkeypatch.setattr(nf, "_start_orphan_watchdog", _fake_watchdog)
-    monkeypatch.setattr(nf.signal, "signal", lambda *_a: None)
-    monkeypatch.setattr(
-        nf.subprocess, "Popen",
+    patch_module_attribute(monkeypatch, nf, 'signal', "signal", lambda *_a: None)
+    patch_module_attribute(monkeypatch,
+        nf, 'subprocess', "Popen",
         lambda cmd, **kwargs: SimpleNamespace(wait=lambda **kwargs: 0),
     )
     return nf.main(argv), captured

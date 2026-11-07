@@ -11,6 +11,9 @@ from packages.describe import cli
 from core.testing.restricted_tree import restricted_tree
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def archive(tmp_path, monkeypatch):
     path = tmp_path / "source.zip"
@@ -34,7 +37,7 @@ def test_resolution_failure_cleans_before_ownership_transfer(
         created.append(Path(result))
         return result
 
-    monkeypatch.setattr(cli.tempfile, "mkdtemp", track)
+    patch_module_attribute(monkeypatch, cli, 'tempfile', "mkdtemp", track)
 
     def fail(*args):
         raise failure

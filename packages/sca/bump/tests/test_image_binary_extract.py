@@ -35,6 +35,11 @@ from packages.sca.bump.image_binary_extract import (
 # ---------------------------------------------------------------------------
 
 
+import pytest
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 @dataclass
 class _StubResp:
     parsed: dict[str, Any]
@@ -630,7 +635,7 @@ class TestOwnedDirFailureCleanup:
         def _failing_open(*a, **kw):
             raise OSError(28, "No space left on device")
 
-        monkeypatch.setattr(mod.tempfile, "mkdtemp",
+        patch_module_attribute(monkeypatch, mod, 'tempfile', "mkdtemp",
                             _tracking_mkdtemp)
         monkeypatch.setattr(mod, "write_new_bytes", _failing_open)
 
@@ -641,3 +646,13 @@ class TestOwnedDirFailureCleanup:
         assert len(created) == 2  # default output root and private staging
         from pathlib import Path as _P
         assert all(not _P(d).exists() for d in created)
+
+
+@pytest.fixture(autouse=True)
+def _forward_host_interface_mock(monkeypatch):
+    """Observe both direct allocation and delegated staging without global mocks."""
+    import packages.sca.bump.image_binary_extract as primary
+    import core.run.scratch as delegated
+
+    patch_module_attribute(monkeypatch, delegated, "tempfile", "mkdtemp",
+                           lambda *args, **kwargs: primary.tempfile.mkdtemp(*args, **kwargs))

@@ -23,6 +23,9 @@ from core.testing.module_bindings import patch_module_attribute
 import pytest
 
 
+from core.testing.module_bindings import mock_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _isolate_shutil_patch_targets(monkeypatch):
     """Keep shutil patch decorators and contexts on consumer-owned views."""
@@ -434,7 +437,7 @@ class TestRuleCompatibilityDisplay:
         with mock.patch.object(startup_init, "_cached_cli_version", return_value="1.3.0") as probe:
             assert startup_init._tool_version("coccinelle") == "1.3.0"
         probe.assert_called_once_with("spatch")
-        with mock.patch.object(startup_init.shutil, "which", return_value="/tools/codeql"), \
+        with mock_module_attribute(startup_init, 'shutil', "which", return_value="/tools/codeql"), \
              mock.patch.object(startup_init, "_cached_cli_version", return_value="2.23.8") as probe:
             assert startup_init._tool_version("codeql") == "2.23.8"
         probe.assert_called_once_with("codeql")
