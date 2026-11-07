@@ -1818,6 +1818,7 @@ def _run_stamp(**overrides):
         "integer_abi": select_integer_abi(None),
         "open_discovery": False, "static_only": False,
         "max_cost": None, "max_time": None, "max_group_cost": None,
+        "max_group_time": None,
         "scope": "excerpt",
         "label_kind": "real",
     }
