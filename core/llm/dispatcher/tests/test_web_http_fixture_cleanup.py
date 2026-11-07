@@ -7,6 +7,9 @@ import threading
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.web.tests import http_server as http_support
+
 _CASES = [
     ("packages.web.tests.test_client_hardening", "_server", "context", "handler"),
     ("packages.web.tests.test_client_scope", "_server", "context", "none"),
@@ -88,7 +91,7 @@ def test_http_fixture_owns_listener(
             ):
                 if hasattr(module, attr):
                     patcher.setattr(module, attr, recording(factory))
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
             if fault == "none":
                 with function(*args):
                     assert len(servers) == 1

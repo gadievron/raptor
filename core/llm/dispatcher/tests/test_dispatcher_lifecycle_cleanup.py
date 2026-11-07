@@ -26,7 +26,7 @@ def creds():
 def tracked_listeners(monkeypatch):
     servers, threads, directories = [], [], []
     real_init = socketserver.TCPServer.__init__
-    real_thread = threading.Thread
+    real_thread = server.threading.Thread
     real_mkdtemp = server.tempfile.mkdtemp
 
     def initialize(instance, *args, **kwargs):
@@ -46,7 +46,7 @@ def tracked_listeners(monkeypatch):
 
     with monkeypatch.context() as fault:
         fault.setattr(socketserver.TCPServer, "__init__", initialize)
-        fault.setattr(threading, "Thread", thread)
+        patch_module_attribute(fault, server, "threading", "Thread", thread)
         patch_module_attribute(fault, server, 'tempfile', "mkdtemp", directory)
         try:
             yield servers, threads, directories
@@ -90,7 +90,7 @@ def test_partial_constructor_retires_all_acquired_listeners(
         tracked_listeners(monkeypatch) as (listeners, threads, directories),
         monkeypatch.context() as fault,
     ):
-        real_thread = threading.Thread
+        real_thread = server.threading.Thread
 
         def thread(*args, **kwargs):
             number = 2 if "-child-" in kwargs.get("name", "") else 1
@@ -106,7 +106,7 @@ def test_partial_constructor_retires_all_acquired_listeners(
                 instance.start = fail
             return instance
 
-        fault.setattr(threading, "Thread", thread)
+        patch_module_attribute(fault, server, "threading", "Thread", thread)
         handler = server._make_request_handler
 
         def make_handler(*args, **kwargs):
@@ -244,7 +244,7 @@ def test_failed_optional_tcp_setup_is_retired_and_can_be_retried(
         dispatcher = server.LLMDispatcher(run_id="tcp-retry", creds=creds)
         try:
             with monkeypatch.context() as fault:
-                thread = threading.Thread
+                thread = server.threading.Thread
 
                 def failed_thread(*args, **kwargs):
                     tcp = kwargs.get("name", "").startswith(
@@ -261,7 +261,7 @@ def test_failed_optional_tcp_setup_is_retired_and_can_be_retried(
                         instance.start = fail
                     return instance
 
-                fault.setattr(threading, "Thread", failed_thread)
+                patch_module_attribute(fault, server, "threading", "Thread", failed_thread)
                 audit = dispatcher._audit
 
                 def failed_audit(event):

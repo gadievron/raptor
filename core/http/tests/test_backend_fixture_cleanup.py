@@ -11,6 +11,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.web.tests import http_server as http_support
+
 import core.sandbox
 from core.sandbox import proxy
 from core.http.tests import test_egress_backend as egress
@@ -148,7 +151,7 @@ def test_http_fixture_failure_retires_listener_and_worker(
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(http.server, "ThreadingHTTPServer", server)
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
             if kind == "egress":
                 patcher.setattr(egress, "ThreadingHTTPServer", server)
                 patcher.setattr(

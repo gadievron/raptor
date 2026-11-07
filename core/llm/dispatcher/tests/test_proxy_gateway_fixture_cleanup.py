@@ -15,6 +15,9 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.web.tests import http_server as http_support
+
 from core.llm.dispatcher import client, server as dispatcher_server
 from core.llm.dispatcher.auth import ProviderRule
 from core.llm.dispatcher.tests import test_cc_proxy_integration as cc
@@ -233,7 +236,7 @@ def test_gateway_fixture_retires_resources_and_unread_token(
             patcher.setattr(client, "_cached_token", "previous-cached-token")
             patcher.setattr(dispatcher_server, "LLMDispatcher", construct)
             patcher.setattr(http.server, "HTTPServer", server)
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
             patcher.setattr(
                 gateway, "os", SimpleNamespace(**(vars(os) | {"fstat": stat}))
             )
@@ -329,7 +332,7 @@ def test_proxy_http_startup_and_shutdown_own_listener_and_thread(
                 "ThreadingHTTPServer" if kind == "mantle" else "HTTPServer",
                 server,
             )
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
             with pytest.raises(error, match="owned proxy HTTP failure"):
                 if kind == "mantle":
                     cc._FakeMantle().shutdown()

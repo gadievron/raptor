@@ -6,7 +6,12 @@ import threading
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.web.tests import http_server as http_support
+
 from core.llm.dispatcher.auth import CredentialStore
+from core.llm.tests import mock_upstream
+from core.sandbox.tests import socket_server
 
 _CALLERS = [
     (
@@ -233,7 +238,9 @@ def test_dispatcher_failure_reclaims_started_upstream(
     method = getattr(getattr(module, class_name)(), method_name)
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, http_support, "threading", "Thread", thread)
+            patch_module_attribute(patcher, socket_server, "threading", "Thread", thread)
+            patch_module_attribute(patcher, mock_upstream, "threading", "Thread", thread)
             patcher.setattr(module, factory_name, upstream)
             patcher.setattr(module, "_make_dispatcher", fail_dispatcher)
             available = {
