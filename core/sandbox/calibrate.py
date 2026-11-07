@@ -63,7 +63,7 @@ from pathlib import Path
 from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact, dumps_canonical
 from core.sandbox.evidence import _unique_evidence_object
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -599,7 +599,7 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
         os.chmod(_CACHE_DIR, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError as exc:
         logger.warning("calibrate: cache dir setup failed: %s",
-                       sanitise_for_terminal(str(exc)))
+                       sanitise_exception_message(exc))
         return
     path = _cache_path_for(fingerprint)
     # Atomic write: sandbox calibration cache. mode=0o600 to preserve
@@ -617,7 +617,7 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     except OSError as exc:
         logger.warning("calibrate: cache write failed for %s: %s",
                        sanitise_for_terminal(str(path)),
-                       sanitise_for_terminal(str(exc)))
+                       sanitise_exception_message(exc))
 
 
 
@@ -669,7 +669,7 @@ def _load_from_cache(fingerprint: str) -> SandboxProfile | None:
         logger.warning(
             "calibrate: cache load failed for %s: %s "
             "(treating as miss)", sanitise_for_terminal(str(path)),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
         return None
 
