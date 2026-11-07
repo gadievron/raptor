@@ -14,6 +14,7 @@ from core.source.lines import join_lf_slice
 # receipt. A larger cap admits generated sources at higher per-probe
 # read cost; oversized files remain unverified, never prefix-hashed.
 MAX_SOURCE_BYTES = 10 * 1024 * 1024
+_HASH_CHUNK_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -45,9 +46,27 @@ def capture_source_identity(root, file, *, excerpt=None, line_start=0) -> Source
             before = os.fstat(stream.fileno())
             if before.st_size > MAX_SOURCE_BYTES:
                 return None
-            data = stream.read(MAX_SOURCE_BYTES + 1)
+            # One byte beyond the stamped size detects growth without
+            # allocating the entire cap for a small file or excerpt.
+            read_limit = before.st_size + 1
+            if excerpt is None and before.st_size > _HASH_CHUNK_BYTES:
+                # Rechecks need only the digest, not decoded source. Keep the
+                # read budget cumulative even if the file grows during reads.
+                digest = hashlib.sha256()
+                size = 0
+                while size < read_limit:
+                    chunk = stream.read(min(_HASH_CHUNK_BYTES, read_limit - size))
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    digest.update(chunk)
+                hexdigest = digest.hexdigest()
+            else:
+                data = stream.read(read_limit)
+                size = len(data)
+                hexdigest = None
             after = os.fstat(stream.fileno())
-        if len(data) > MAX_SOURCE_BYTES or len(data) != before.st_size or _version(before) != _version(after):
+        if size > MAX_SOURCE_BYTES or size != before.st_size or _version(before) != _version(after):
             return None
     except (OSError, ValueError, RuntimeError):
         return None
@@ -58,4 +77,4 @@ def capture_source_identity(root, file, *, excerpt=None, line_start=0) -> Source
         window = join_lf_slice(text, start, start + len(snippet.split("\n")))  # line-model: text and snippet normalize CRLF and bare CR above
         if snippet != text.rstrip("\n") and snippet != window:
             return None  # a cached excerpt is not the source now on disk
-    return SourceIdentity(hashlib.sha256(data).hexdigest(), _version(after))
+    return SourceIdentity(hexdigest if hexdigest is not None else hashlib.sha256(data).hexdigest(), _version(after))
