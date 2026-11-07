@@ -463,6 +463,21 @@ covering C/C++ structural patterns that require control-flow sensitivity:
 
 Run `ls engine/coccinelle/rules/` for the current file list.
 
+### Non-base deallocation
+
+The pointer-arithmetic check covers `free`, `kfree`, `vfree`, `kvfree`,
+`kfree_sensitive` and `kzfree`. For builtin pointers, postfix increment passes
+the original value to the deallocator. Explicit integer zero offsets, including common
+suffixes, parentheses and builtin integer casts, are excluded along with
+recognized `offsetof` base-recovery expressions.
+
+Other arithmetic and prefix increments produce review candidates. Allocation
+origin and the effective offset are needed to distinguish an invalid free
+from a legitimate adjustment back to the owner. Typedef conversions, computed offsets and
+other recovery idioms and user-defined C++ operators require separate review.
+In `/audit`, this detection rule requires independent verification before
+promoting a finding.
+
 ### Uninitialised returns
 
 `uninitialized_return` distinguishes a loop initializer or mandatory first
