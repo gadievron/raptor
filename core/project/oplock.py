@@ -32,11 +32,15 @@ from __future__ import annotations
 
 import contextlib
 import json
+import errno
 import os
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from core.atomic_fs.fs_lock import validate_lock_fd
+from core.source.gated import read_text_gated
 
 try:
     import fcntl
@@ -96,8 +100,8 @@ def read_holder(lock_path: Path) -> dict:
     truncates and fails the parse — the diagnostic degrades to the
     holder-unknown message, never to an unbounded buffer."""
     try:
-        with open(Path(lock_path), encoding="utf-8") as fh:
-            data = json.loads(fh.read(_HOLDER_STAMP_MAX_BYTES))
+        data = json.loads(read_text_gated(
+            lock_path, max_bytes=_HOLDER_STAMP_MAX_BYTES, follow_symlinks=False))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -135,10 +139,22 @@ def _stamp_holder(fd: int, operation: str) -> None:
         os.write(fd, payload)
 
 
+def _open_op_lock(lock_path: Path) -> int:
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+                 | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+    try:
+        validate_lock_fd(fd, lock_path)
+        return fd
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            os.close(fd)
+        raise
+
+
 @contextlib.contextmanager
 def project_op_lock(project_dir: Path, operation: str,
                     grace: float | None = None,
-                    wait: bool = False):
+                    wait: bool = False, *, required: bool = False):
     """Exclusive per-project operation lock.
 
     Silent for ``grace`` seconds of retries (default: the module's
@@ -149,8 +165,12 @@ def project_op_lock(project_dir: Path, operation: str,
     Degrades to a no-op without fcntl or when the lock file is
     uncreatable (read-only dir, ENOSPC) — same fail direction as the
     sibling RMW locks: proceed unserialised rather than refuse.
+    ``required=True`` refuses unavailable or unstable locks and yields the
+    held fd for ownership transitions that must retain its inode.
     """
     if not _HAS_FCNTL:
+        if required:
+            raise OSError(errno.ENOTSUP, "project operation locking is unavailable")
         yield
         return
     if grace is None:
@@ -159,10 +179,13 @@ def project_op_lock(project_dir: Path, operation: str,
     lock_path = op_lock_path(project_dir)
     try:
         project_dir.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+        fd = _open_op_lock(lock_path)
     except OSError:
+        if required:
+            raise
         yield
         return
+    failed = False
     try:
         acquired = False
         if wait:
@@ -218,7 +241,7 @@ def project_op_lock(project_dir: Path, operation: str,
         for _ in range(3):
             try:
                 held = os.fstat(fd)
-                current = os.stat(str(lock_path))
+                current = os.lstat(str(lock_path))
                 if (held.st_ino == current.st_ino
                         and held.st_dev == current.st_dev):
                     break
@@ -230,7 +253,7 @@ def project_op_lock(project_dir: Path, operation: str,
             fd = -1
             try:
                 project_dir.mkdir(parents=True, exist_ok=True)
-                fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+                fd = _open_op_lock(lock_path)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 # Another locker beat us onto the re-minted inode —
@@ -241,15 +264,34 @@ def project_op_lock(project_dir: Path, operation: str,
                     f"({describe_holder(holder)}) — retry shortly or "
                     f"pass --wait", holder) from None
             except OSError:
-                # Same degrade posture as the uncreatable-lock branch.
+                if required:
+                    raise
                 yield
                 return
+        else:
+            if required:
+                raise OSError("project operation lock identity did not stabilize")
+            yield
+            return
         _stamp_holder(fd, operation)
         try:
-            yield
+            yield fd if required else None
+        except BaseException:
+            failed = True
+            raise
         finally:
-            with contextlib.suppress(OSError):
+            try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException as exc:
+                if not failed and not isinstance(exc, OSError):
+                    raise
+    except BaseException:
+        failed = True
+        raise
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException as exc:
+                if not failed and not isinstance(exc, OSError):
+                    raise

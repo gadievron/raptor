@@ -7,17 +7,17 @@ zip archives back, with path traversal and symlink validation.
 from contextlib import ExitStack
 import fnmatch
 import os
-import shutil
 import stat
+import time
 import zipfile
 from pathlib import Path
 
-from core.atomic_fs import publish_new_directory
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.logging import get_logger
 from core.project.registry_home import refuse_registry_overlap
 from core.run.scratch import scratch_dir
+from core.source.gated import open_regular_gated
 from core.zip import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 
 logger = get_logger()
@@ -89,6 +89,7 @@ _MAX_ENTRIES = DEFAULT_MAX_ENTRIES
 # aggregate 10 GiB declared-size fast-reject is far too coarse to
 # protect a single-entry read.
 _MAX_PROJECT_META_BYTES = 1024 * 1024
+_MAX_PROJECT_ARCHIVE_BYTES = 10 * 1024 * 1024 * 1024
 
 
 class _ZipBombShapeError(Exception):
@@ -283,12 +284,60 @@ def export_project(project_output_dir: Path, dest_path: Path,
     return {"path": str(dest_path), "sha256": sha256}
 
 
+def _write_zip_regular(zf: zipfile.ZipFile, path: Path, arcname: str,
+                       remaining: int) -> int:
+    """Stream one opened regular inode, enforcing the importer's byte limit."""
+    with open_regular_gated(path, follow_symlinks=False) as source:
+        info = os.fstat(source.fileno())
+        if info.st_size > remaining:
+            raise ValueError('Project export exceeds the importable archive byte limit')
+        try:
+            stamp = time.localtime(info.st_mtime)[:6]
+        except (OverflowError, OSError, ValueError):
+            stamp = (1970, 1, 1, 0, 0, 0) if info.st_mtime < 0 else (9999, 1, 1, 0, 0, 0)
+        if stamp[0] < 1980:
+            stamp = (1980, 1, 1, 0, 0, 0)
+        elif stamp[0] > 2107:
+            stamp = (2107, 12, 31, 23, 59, 58)
+        entry = zipfile.ZipInfo(arcname, date_time=stamp)
+        entry.compress_type = zipfile.ZIP_DEFLATED
+        entry.external_attr = info.st_mode << 16
+        entry.file_size = info.st_size
+        written = 0
+        with zf.open(entry, 'w', force_zip64=True) as destination:
+            while True:
+                chunk = source.read(min(1024 * 1024, remaining - written + 1))
+                if not chunk:
+                    break
+                if written + len(chunk) > remaining:
+                    raise ValueError('Project export exceeds the importable archive byte limit')
+                destination.write(chunk)
+                written += len(chunk)
+        return written
+
+
 def _write_project_zip(project_output_dir: Path, staged_path: Path,
                        project_json_path: Path | None,
                        destination: Path) -> None:
     """Build the archive, excluding its own output and private staging."""
     with zipfile.ZipFile(staged_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for dirpath, dirnames, filenames in os.walk(project_output_dir, followlinks=False):
+        written = entries = 0
+
+        def add(path, arcname, limit=None):
+            nonlocal written, entries
+            if entries >= _MAX_ENTRIES:
+                raise ValueError('Project export exceeds the importable archive entry limit')
+            remaining = _MAX_PROJECT_ARCHIVE_BYTES - written
+            if limit is not None:
+                remaining = min(remaining, limit)
+            written += _write_zip_regular(zf, path, arcname, remaining)
+            entries += 1
+
+        def failed_walk(error):
+            raise error  # A successful archive must not silently omit an unreadable subtree.
+
+        for dirpath, dirnames, filenames in os.walk(
+                project_output_dir, followlinks=False, onerror=failed_walk):
             # Do not pack current or crash-left export staging into a
             # later archive when the destination sits inside the source.
             dirnames[:] = [
@@ -324,8 +373,9 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
                 item = Path(dirpath, fname)
                 if item.parent.resolve() / item.name == destination:
                     continue
-                if item.is_symlink():
-                    logger.debug("Skipping symlink in export: %s", item)
+                info = item.lstat()
+                if not stat.S_ISREG(info.st_mode):
+                    logger.debug("Skipping non-regular entry in export: %s", item)
                     continue
                 if _is_transient_artefact(item):
                     logger.debug("Skipping transient artefact: %s", item)
@@ -337,11 +387,16 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
                     # (cache mkdir fails on the name collision).
                     logger.debug("Skipping reserved-name file: %s", item)
                     continue
+                if project_json_path is not None and item == project_output_dir / '.project.json':
+                    continue  # The explicit registry metadata is the single authoritative member.
                 arcname = f"{project_output_dir.name}/{item.relative_to(project_output_dir)}"
-                zf.write(item, arcname)
+                limit = _MAX_PROJECT_META_BYTES if item == project_output_dir / '.project.json' else None
+                add(item, arcname, limit)
         # Include project metadata if provided
         if project_json_path and project_json_path.exists():
-            zf.write(project_json_path, f"{project_output_dir.name}/.project.json")
+            if project_json_path.stat().st_size > _MAX_PROJECT_META_BYTES:
+                raise ValueError('Project metadata exceeds the importable metadata byte limit')
+            add(project_json_path, f"{project_output_dir.name}/.project.json", _MAX_PROJECT_META_BYTES)
 
 
 
@@ -730,7 +785,8 @@ def import_project(zip_path: Path, projects_dir: Path,
         output_base: Base directory for output data (default: out/projects/).
 
     Returns:
-        Dict with 'name', 'output_dir', and optionally 'orphaned_output'.
+        Dict with 'name' and 'output_dir'; optional 'orphaned_output',
+        'retained_backup' and 'retained_registry_backup' name retained data.
 
     Raises:
         ValueError: If zip is unsafe, not a RAPTOR archive, or project
@@ -817,7 +873,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
             # Reuse the already-bounded infolist from the cap check
             # above (F029: avoids a second full infolist materialisation).
             declared_size = sum(info.file_size for info in bounded_entries)
-            max_size = 10 * 1024 * 1024 * 1024  # 10GB
+            max_size = _MAX_PROJECT_ARCHIVE_BYTES
             if declared_size > max_size:
                 msg = (
                     f"Zip declared size ({declared_size / 1024 / 1024:.0f}MB) exceeds "
@@ -952,14 +1008,14 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
             # the running cumulative bytes BEFORE writing each
             # chunk to the destination. The per-chunk write
             # short-circuits as soon as the cap is exceeded.
-            max_size = 10 * 1024 * 1024 * 1024  # 10GB
+            max_size = _MAX_PROJECT_ARCHIVE_BYTES
             chunk = 1024 * 1024  # 1 MiB
             bytes_extracted = 0
             # Reuse the bounded infolist captured during validation
             # (F029): the cap check has already proven the count is
             # ≤ _MAX_ENTRIES, no need to materialise again.
             for info in bounded_entries:
-                if info.filename.endswith("/.project.json") or info.filename == ".project.json":
+                if info.filename == meta_path:
                     continue
                 if info.is_dir():
                     continue
@@ -1076,63 +1132,6 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
             f"Import failed while quarantining privileged artifacts: {e}"
         ) from e
 
-    # --- Publish the staged tree ---
-    # Everything below only runs once the staged import is complete
-    # and demoted; the pre-existing tree (registered project with
-    # --force, or an unregistered orphan the operator --force'd over)
-    # is removed at the last moment before the atomic rename.
-    #
-    # Refusal must PRECEDE destruction: create()'s shared-dir refusal
-    # fires only after the old tree is rmtree'd and the staging
-    # renamed in — reaching it then has already destroyed ANOTHER
-    # project's registered output and left the registry inconsistent
-    # (import name unregistered, dir holding the imported tree). Check
-    # ownership up front and fail closed while nothing has been
-    # touched.
-    other_owner = mgr._output_dir_owner(
-        str(output_dir), exclude=project_name,
-    )
-    if other_owner:
-        raise ValueError(
-            f"Refusing import: output dir {output_dir} already belongs "
-            f"to project '{other_owner}' — two projects must never "
-            f"share an output directory (clean/purge on one would "
-            f"delete the other's runs). Import under a different name "
-            f"or move that project first."
-        )
-    orphaned_output = None
-    if existing and force:
-        old_output_path = Path(existing.output_dir).resolve()
-        mgr.delete(project_name, purge=False)
-        if old_output_path != output_dir.resolve() and old_output_path.exists():
-            orphaned_output = str(old_output_path)
-        logger.info("Removed existing project '%s' (force=True)", project_name)
-    if output_dir.exists():
-        if not force:
-            # The pre-extraction check already refused this shape;
-            # reaching it here means the dir appeared mid-import.
-            # Refuse rather than delete data import didn't create.
-            raise ValueError(
-                f"Refusing import: output dir {output_dir} "
-                f"appeared during import and --force was not given"
-            )
-        shutil.rmtree(output_dir)
-    publish_new_directory(staging_dir, output_dir)
-
-    # Register the project
-    target = embedded_meta.get("target", "(imported)") if embedded_meta else "(imported)"
-    description = embedded_meta.get("description", "") if embedded_meta else ""
-    notes = embedded_meta.get("notes", "") if embedded_meta else ""
-    created = embedded_meta.get("created") if embedded_meta else None
-
-    mgr.create(project_name, target, description=description,
-               output_dir=str(output_dir), resolve_target=False,
-               created=created)
-    if notes:
-        mgr.update_notes(project_name, notes)
-
-    logger.info("Imported project '%s' to %s", project_name, output_dir)
-    result = {"name": project_name, "output_dir": str(output_dir)}
-    if orphaned_output:
-        result["orphaned_output"] = orphaned_output
-    return result
+    from .import_transaction import publish_import
+    return publish_import(mgr, project_name, embedded_meta or {},
+                          staging_dir, output_dir, force)
