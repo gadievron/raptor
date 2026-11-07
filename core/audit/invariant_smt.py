@@ -784,6 +784,23 @@ def _check_one_site(
     )
 
 
+def check_site_batch(
+    invariant: str,
+    sites: list[dict],
+    *,
+    timeout_ms: int = 5000,
+) -> list[SiteResult] | None:
+    """Check ordered code/line/pre_conditions records in one confined worker.
+
+    None means the batch was unavailable or incomplete; callers must not
+    aggregate it as preservation. Every accepted input has one result, even
+    when the shared deadline expires. Each site's native budget stays at 5s.
+    """
+    from .invariant_batch import run_batch
+    with query_budget(timeout_ms) as deadline:
+        return run_batch(invariant, sites, timeout_ms=timeout_ms, deadline=deadline)
+
+
 def check_site_preservation(
     invariant: str,
     code: str,

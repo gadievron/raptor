@@ -258,7 +258,7 @@ def test_protocol_state_consumer_does_not_promote_a_partial_transition(code, out
         assert result["sites"][0]["verdict"] == "out_of_scope"
 
 
-@pytest.mark.parametrize("budget,expected", [(1.0, [1000, 600]), (10.0, [5000, 5000])])
+@pytest.mark.parametrize("budget,expected", [(1.0, [1000]), (10.0, [10000])])
 def test_protocol_consumer_passes_remaining_budget_without_raising_site_cap(
     monkeypatch, budget, expected
 ):
@@ -272,12 +272,15 @@ def test_protocol_consumer_passes_remaining_budget_without_raising_site_cap(
     )
     observed = []
 
-    def check(invariant, code, **kwargs):
+    def check(invariant, sites, **kwargs):
         observed.append(kwargs["timeout_ms"])
         clock[0] += 0.4
-        return inv.SiteResult(line=kwargs["line"], code=code, verdict="preserved")
+        return [
+            inv.SiteResult(line=site["line"], code=site["code"], verdict="preserved")
+            for site in sites
+        ]
 
-    monkeypatch.setattr(inv, "check_site_preservation", check)
+    monkeypatch.setattr(inv, "check_site_batch", check)
     sites = [
         {"file": "record.c", "function": "", "line": line, "code": "Count=0;"}
         for line in [1, 2]
@@ -308,12 +311,15 @@ def test_guard_discovery_time_is_charged_before_site_solver_budget(monkeypatch):
 
     observed = []
 
-    def check(invariant, code, **kwargs):
+    def check(invariant, sites, **kwargs):
         observed.append(kwargs["timeout_ms"])
-        return inv.SiteResult(line=1, code=code, verdict="preserved")
+        return [
+            inv.SiteResult(line=site["line"], code=site["code"], verdict="preserved")
+            for site in sites
+        ]
 
     monkeypatch.setattr(protocol_state, "_branch_guards", guards)
-    monkeypatch.setattr(inv, "check_site_preservation", check)
+    monkeypatch.setattr(inv, "check_site_batch", check)
     site = {"file": "record.c", "function": "Read", "line": 1, "code": "Count=0;"}
     result = protocol_state.check_invariant_multi_site(
         "Count <= Limit",
@@ -340,7 +346,16 @@ def test_actual_sizeof_remains_a_positive_opaque_constant():
     assert result.verdict == "preserved"
 
 
-@pytest.mark.parametrize("text", ["(unsigned char)Count <= Limit", "(Alias)+Count <= Limit",
-    "-Count <= Limit", "Count * Factor <= Limit", "Count <= Limit * Factor", "Count <= Limit[Index]"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "(unsigned char)Count <= Limit",
+        "(Alias)+Count <= Limit",
+        "-Count <= Limit",
+        "Count * Factor <= Limit",
+        "Count <= Limit * Factor",
+        "Count <= Limit[Index]",
+    ],
+)
 def test_candidate_extraction_does_not_drop_unsupported_expression_parts(text):
     assert inv.extract_invariants(text) == []

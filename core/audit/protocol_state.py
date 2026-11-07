@@ -22,7 +22,7 @@ decoded ACK frame, never compared against ``highest_sent``;
 3. *Invariant preservation/violation at write sites* — the
    census-driven multi-site extension of :mod:`core.audit.
    invariant_smt` (:func:`~core.audit.invariant_smt.
-   check_site_preservation`): every write site of every invariant
+   check_site_batch`): every write site of every invariant
    identifier, across functions, gets one inductive step with
    polarity-resolved dominating guards as pre-conditions. Real
    verification — but only of *preservation of a stated invariant*.
@@ -738,7 +738,7 @@ def check_invariant_multi_site(
 ) -> dict[str, Any]:
     """Every census write site of every invariant identifier, across
     functions, gets the existing inductive step
-    (:func:`invariant_smt.check_site_preservation`) with
+    (:func:`invariant_smt.check_site_batch`) with
     polarity-resolved dominating guards. Returns ``{outcome, sites,
     reason, guard_leg}`` — ``outcome`` ∈ violable | preserved |
     inconclusive; ``guard_leg`` is False when the CFG leg was
@@ -775,10 +775,11 @@ def check_invariant_multi_site(
             "guard_leg": True,
         }
 
-    from .invariant_smt import check_site_preservation
+    from .invariant_smt import SiteResult, check_site_batch
 
     guard_leg = True
     per_site: list[dict[str, Any]] = []
+    prepared = []
     skipped = 0
     for site in sites:
         remaining_s = budget_s - (time.monotonic() - t0)
@@ -796,20 +797,26 @@ def check_invariant_multi_site(
             if any(v in _bare_fields(g, variables) for v in variables)
         )
         code = _bare_fields(site["code"], variables)
-        res = check_site_preservation(
-            invariant, code,
-            line=site["line"],
-            pre_conditions=bare_guards,
-            # Guard discovery also consumes the consumer's budget. Cap
-            # before converting to milliseconds so a large outer budget
-            # never raises the site's normal five-second allowance.
-            timeout_ms=int(max(0.0, min(5.0, budget_s - (time.monotonic() - t0))) * 1000),
-        )
+        prepared.append((site, {"code": code, "line": site["line"], "pre_conditions": bare_guards}))
+
+    if prepared:
+        # One process for the entire census. Guard discovery and worker
+        # startup both consume the outer budget; each site retains its
+        # normal native cap inside the worker.
+        remaining_ms = int(max(0.0, budget_s - (time.monotonic() - t0)) * 1000)
+        results = check_site_batch(invariant, [record for _, record in prepared], timeout_ms=remaining_ms)
+        if results is None or len(results) != len(prepared):
+            results = [SiteResult(line=record["line"], code=record["code"], verdict="unknown",
+                                 reason="confined invariant batch unavailable or incomplete")
+                       for _, record in prepared]
+    else:
+        results = []
+    for (site, record), res in zip(prepared, results, strict=True):
         entry = res.to_dict()
         entry["file"] = site["file"]
         entry["function"] = site["function"]
         entry["rhs_class"] = site.get("rhs_class", "")
-        entry["guards_applied"] = list(bare_guards)
+        entry["guards_applied"] = list(record["pre_conditions"])
         per_site.append(entry)
 
     verdicts = {e["verdict"] for e in per_site}
