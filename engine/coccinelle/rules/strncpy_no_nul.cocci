@@ -1,43 +1,113 @@
-// strncpy_no_nul.cocci — Detect strncpy where the destination is
-// used as a C string without explicit null termination.
-//
-// strncpy does NOT guarantee null termination when src >= n.
-// If the destination is later passed to strlen/strcmp/printf %s
-// without a manual dst[n-1] = '\0', it can overread.
-//
-// CWE-170: Improper Null Termination
-// More precise than 0xdea's semgrep pattern: we track actual use as
-// a string after the copy.
-// @role: verification
+// strncpy_no_nul.cocci — Review string reads after possibly unterminated copies.
+// strncpy may omit NUL when the source length reaches the copy count. A later
+// string read is a candidate, not proof: source length, existing termination,
+// and formatted-argument conversion/bounds require independent review.
+// Track direct destinations, ending at replacement, update, address escape,
+// another strncpy or an explicit NUL write. Alias writes remain outside scope.
+// strncmp and the source of strncat bounded by the unchanged copy count do not
+// need NUL within that range; the destination of strncat is still unbounded.
+// Broad printf-family argument matches remain candidates: a pointer/numeric or
+// precision-bounded conversion may not read an unbounded string.
+// https://man7.org/linux/man-pages/man3/strncpy.3.html
+// https://man7.org/linux/man-pages/man3/strncmp.3.html
+// @role: detection
 
-// First disjunction branch is an unstarred exception: a copy sized
-// strlen(src)+1 includes the terminator by construction, so the later
-// string use is safe. For snprintf, DST only counts as a string USE
-// from the third argument on — as the first argument it is the
-// DESTINATION being overwritten, not read (F/SZ pin the dest and
-// size slots).
+// Match the copied prefix, not a same-spelled count changed after copying.
+@bounded_use@
+expression DST, SRC, OTHER;
+identifier N;
+assignment operator op_dst, op_n;
+position p;
+@@
+
+strncpy(DST, SRC, N);
+... when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+    when != N op_n ...
+    when != &N
+    when != N++
+    when != ++N
+    when != N--
+    when != --N
+(
+strncmp(DST, OTHER, N)@p
+|
+strncmp(OTHER, DST, N)@p
+|
+strncat(OTHER, DST, N)@p
+)
+
+@bounded_constant_use@
+expression DST, SRC, OTHER;
+constant N;
+assignment operator op_dst;
+position p;
+@@
+
+strncpy(DST, SRC, N);
+... when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+(
+strncmp(DST, OTHER, N)@p
+|
+strncmp(OTHER, DST, N)@p
+|
+strncat(OTHER, DST, N)@p
+)
+
 @strncpy_then_string_use@
 expression DST, SRC, N, F, SZ;
-position p_copy, p_use;
+assignment operator op_dst;
+constant COUNT =~ "^[1-9][0-9]*[uUlL]*$";
+position p_copy;
+position p_use != {bounded_use.p, bounded_constant_use.p};
 @@
 
 (
   strncpy(DST, SRC, strlen(SRC) + 1);
 |
   strncpy@p_copy(DST, SRC, N);
-  ... when != DST[...] = '\0'
-      when != DST[...] = 0
-      when != memset(DST, ...)
+... when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+    when != DST[...] = '\0'
+    when != DST[...] = 0
+    when != memset(DST, 0, sizeof(...))
+    when != memset(DST, '\0', sizeof(...))
+    when != memset(DST, 0, COUNT)
+    when != memset(DST, '\0', COUNT)
 (
 * strlen(DST)@p_use
 |
 * strcmp(DST, ...)@p_use
 |
+* strcmp(..., DST)@p_use
+|
 * strncmp(DST, ...)@p_use
+|
+* strncmp(F, DST, SZ)@p_use
 |
 * strcat(DST, ...)@p_use
 |
+* strcat(..., DST)@p_use
+|
 * strncat(DST, ...)@p_use
+|
+* strncat(F, DST, SZ)@p_use
 |
 * printf(..., DST, ...)@p_use
 |
@@ -54,11 +124,9 @@ p_copy << strncpy_then_string_use.p_copy;
 p_use << strncpy_then_string_use.p_use;
 @@
 import json
-msg = {
-  "rule":  "strncpy_no_nul",
-  "file":  p_use[0].file,
-  "line":  int(p_use[0].line),
-  "col":   int(p_use[0].column),
-  "message":   "Buffer from strncpy (line %s) used as string without null termination — potential overread (CWE-170)" % p_copy[0].line
-}
-print("COCCIRESULT:" + json.dumps(msg))
+for pos in p_use:
+    print("COCCIRESULT:" + json.dumps({
+        "rule": "strncpy_no_nul", "file": pos.file,
+        "line": int(pos.line), "col": int(pos.column),
+        "message": "Candidate: buffer from strncpy (line %s) reaches a string or format argument; review source length, termination, conversion and read bounds (CWE-170)" % p_copy[0].line,
+    }))
