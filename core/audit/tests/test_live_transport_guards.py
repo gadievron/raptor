@@ -1693,6 +1693,7 @@ class TestPhpSurfaceFences:
         assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
             "test_vulnerable_snippet_confirms",
             "test_sanitized_snippet_refutes",
+            "test_attribute_encoding_miss_on_indirect_flow_stays_inconclusive",
         }
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_semgrep_php_target_selection_pin",
