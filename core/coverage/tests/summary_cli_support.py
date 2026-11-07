@@ -101,5 +101,8 @@ def run_cli(*args: str, operator: bool = False, trusted: bool = True):
     env["RAPTOR_DIR"] = str(REPO_ROOT)
     return run_standalone_cli(
         [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True, timeout=60,
+        # The coverage autouse fixture owns this key directory. Share it
+        # across CLI calls and the in-process operator/reader paths.
+        env=env, data_home=os.environ["XDG_DATA_HOME"],
+        capture_output=True, text=True, timeout=60,
     )

@@ -6,11 +6,12 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 
-def run_standalone_cli(args, *, env=None, **kwargs):
+def run_standalone_cli(args, *, env=None, data_home=None, **kwargs):
     """Preserve test transport configuration while owning home and launch state.
 
     Use only for standalone behavior; session inheritance tests must supply
-    their actual launch context instead.
+    their actual launch context instead. Pass an explicitly test-owned
+    data_home when parent and child must verify each other's signed artifacts.
     """
     with TemporaryDirectory(prefix="raptor-cli-test-") as directory:
         root = Path(directory)
@@ -26,6 +27,8 @@ def run_standalone_cli(args, *, env=None, **kwargs):
             XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"),
             XDG_DATA_HOME=str(home / ".local/share"), XDG_STATE_HOME=str(home / ".local/state"),
         )
+        if data_home is not None:
+            child_env["XDG_DATA_HOME"] = str(data_home)
         kwargs.setdefault("timeout", 60)
         if "input" not in kwargs:
             kwargs.setdefault("stdin", subprocess.DEVNULL)
