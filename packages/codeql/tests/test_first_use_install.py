@@ -19,6 +19,15 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
+def _owned_toolchain_discovery(monkeypatch, which):
+    from importlib import import_module
+
+    for owner in (import_module("packages.codeql"), import_module("core.recall.score"),
+                  import_module("core.run.toolprobe")):
+        patch_module_attribute(monkeypatch, owner, "shutil", "which", which)
+
+
+
 ROOT = Path(__file__).resolve().parents[3]
 INSTALLER = ROOT / '.devcontainer/codeql-bootstrap.py'
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux container installer')
@@ -307,7 +316,7 @@ def test_diagnostic_consumers_do_not_install_or_record_errors(diagnostic_launche
 
     command, marker = diagnostic_launcher
     # Exercise the actual launcher, without running unrelated installed tools.
-    monkeypatch.setattr('shutil.which', lambda name: str(command) if name == 'codeql' else None)
+    _owned_toolchain_discovery(monkeypatch, lambda name: str(command) if name == 'codeql' else None)
     assert 'codeql' not in collect_toolchain()
     assert tool_version('codeql') is None
     assert codeql.version() is None
@@ -325,7 +334,7 @@ def test_failed_version_output_is_not_recorded(tmp_path, monkeypatch):
     command.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('CODEQL_CLI', raising=False)
-    monkeypatch.setattr('shutil.which', lambda name: str(command) if name in ('codeql', str(command)) else None)
+    _owned_toolchain_discovery(monkeypatch, lambda name: str(command) if name in ('codeql', str(command)) else None)
     assert 'codeql' not in collect_toolchain()
     assert tool_version('codeql') is None
     assert codeql.version() is None

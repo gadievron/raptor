@@ -18,6 +18,9 @@ import core.sandbox.tracer as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
 
 
+
+
+
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
@@ -68,7 +71,7 @@ class TestLibcCacheSentinel:
         call_count = [0]
         def fake_find(name):
             call_count[0] += 1
-        monkeypatch.setattr("ctypes.util.find_library", fake_find)
+        patch_module_attribute(monkeypatch, tracer, "ctypes.util", "find_library", fake_find)
 
         first = tracer._get_libc()
         second = tracer._get_libc()

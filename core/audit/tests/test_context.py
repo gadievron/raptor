@@ -36,6 +36,29 @@ import pytest
 from core.testing.module_state import isolated_module_state
 
 
+import shutil
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("catalog_discovery_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_catalog_discovery(monkeypatch):
+    with (
+        isolated_module_state(ctx_mod, {"_tool_catalog_cache": None}),
+        scoped_function_imports(ctx_mod, ("_build_tool_catalog",), {"shutil": shutil}) as imports,
+    ):
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            monkeypatch.setitem(globals(), "_build_tool_catalog", ctx_mod._build_tool_catalog)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 def _make_oversized(path):
     """Create a sparse file just past the read cap (no real IO cost)."""
     path.touch()
@@ -1116,7 +1139,7 @@ class TestToolCatalog:
     def test_semgrep_only_when_installed(self, monkeypatch):
         import core.audit.context as ctx_mod
         ctx_mod._tool_catalog_cache = None
-        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda cmd: None)
         catalog = _build_tool_catalog()
         assert "Semgrep" not in catalog
         ctx_mod._tool_catalog_cache = None

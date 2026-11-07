@@ -25,6 +25,26 @@ from core.audit.validate import (
 from core.testing.module_bindings import patch_module_attribute
 
 
+import shutil
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+
+_discovery_imports = ModuleType("dispatch_discovery_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    from core.llm import cc_adapter
+
+    with scoped_function_imports(cc_adapter, ("resolve_claude_cli",), {"shutil": shutil}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_run_patches(monkeypatch):
     """Keep subprocess run mocks on consumer-owned module bindings."""
@@ -347,7 +367,7 @@ class TestBuildPrompt:
 @pytest.mark.usefixtures("cc_spawn_machinery_enabled")
 class TestDispatchValidate:
     def test_skipped_without_claude(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda _: None)
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: None)
 
         postpass = _dispatch_validate(
             target_path=tmp_path,
@@ -360,7 +380,7 @@ class TestDispatchValidate:
         assert "claude not on PATH" in postpass.skipped_reason
 
     def test_skipped_on_rule_of_two(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: "/usr/bin/claude")
 
         from core.security.rule_of_two import NonInteractiveError
         def mock_require(*args, **kwargs):
@@ -382,7 +402,7 @@ class TestDispatchValidate:
 
     def test_never_raises(self, tmp_path, monkeypatch):
         """Dispatch failures must not break the audit pipeline."""
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: "/usr/bin/claude")
 
         def boom(*args, **kwargs):
             raise RuntimeError("kaboom")

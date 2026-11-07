@@ -22,6 +22,23 @@ from core.startup import doctor
 from core.startup.doctor import _render, main
 
 
+from functools import lru_cache
+from packages.describe import package_manager as _install_advice
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_state import isolated_module_state
+
+
+@pytest.fixture(autouse=True)
+def _owned_package_manager_cache(monkeypatch):
+    private = lru_cache(maxsize=1)(_install_advice.detect_package_manager.__wrapped__)
+    with isolated_module_state(_install_advice, {"detect_package_manager": private}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 _probe_imports = ModuleType("doctor_probe_imports")
 
 
@@ -439,15 +456,14 @@ class TestOutputShape:
     def test_install_hint_attached_to_missing_tool_warning(
         self, capsys, monkeypatch,
     ):
-        monkeypatch.setattr("packages.describe.package_manager._platform.system", lambda: "Linux")
+        patch_module_attribute(monkeypatch, _install_advice, "_platform", "system", lambda: "Linux")
         # Missing rr → warning carries the PM-aware install hint
         # on a continuation line. Shared substrate with /describe.
         from packages.describe.package_manager import (
             detect_package_manager,
         )
         detect_package_manager.cache_clear()
-        monkeypatch.setattr(
-            "shutil.which",
+        patch_module_attribute(monkeypatch, _install_advice, 'shutil', 'which',
             lambda cmd: "/usr/bin/apt" if cmd == "apt" else None,
         )
         monkeypatch.setattr(
@@ -477,8 +493,7 @@ class TestOutputShape:
             detect_package_manager,
         )
         detect_package_manager.cache_clear()
-        monkeypatch.setattr(
-            "shutil.which",
+        patch_module_attribute(monkeypatch, _install_advice, 'shutil', 'which',
             lambda cmd: "/usr/bin/apt" if cmd == "apt" else None,
         )
         monkeypatch.setattr(

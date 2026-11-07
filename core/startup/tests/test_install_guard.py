@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 
+import concurrent.futures
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ import pytest
 
 from core.startup import install_guard as guard
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 # Keep kernel checks independent of the host's unrelated tool environment.
 KERNEL_PYTHON = '/usr/bin/python3' if Path('/usr/bin/python3').exists() else sys.executable
@@ -483,21 +485,21 @@ def test_bytecode_worker_initialization_failure_stops_preparation(tmp_path, monk
 
 
 def test_restricted_worker_ipc_still_performs_full_serial_validation(tmp_path, monkeypatch):
-    import concurrent.futures
-    monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    patch_module_attribute(monkeypatch, guard, 'os', 'sched_getaffinity', lambda _: {0, 1}, raising=False)
-    for index in range(9):
-        (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
+    with scoped_function_imports(guard, ('precompile',), {"concurrent.futures": concurrent.futures}) as imports:
+        monkeypatch.setattr(guard, 'ROOT', tmp_path)
+        patch_module_attribute(monkeypatch, guard, 'os', 'sched_getaffinity', lambda _: {0, 1}, raising=False)
+        for index in range(9):
+            (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
 
-    def unavailable(**kwargs):
-        raise PermissionError('IPC resources unavailable')
+        def unavailable(**kwargs):
+            raise PermissionError('IPC resources unavailable')
 
-    monkeypatch.setattr(concurrent.futures, 'ProcessPoolExecutor', unavailable)
-    guard.precompile()
-    for index in range(9):
-        source = tmp_path / f'module{index}.py'
-        cache = Path(importlib.util.cache_from_source(str(source)))
-        assert cache.read_bytes() == guard._compile_bytecode(source.read_bytes(), str(source))
+        patch_module_attribute(monkeypatch, imports, 'concurrent.futures', 'ProcessPoolExecutor', unavailable)
+        guard.precompile()
+        for index in range(9):
+            source = tmp_path / f'module{index}.py'
+            cache = Path(importlib.util.cache_from_source(str(source)))
+            assert cache.read_bytes() == guard._compile_bytecode(source.read_bytes(), str(source))
 
 
 def test_warm_preparation_reuses_trusted_bytecode_without_compilation(tmp_path, monkeypatch):

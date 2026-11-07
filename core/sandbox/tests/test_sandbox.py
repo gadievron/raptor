@@ -32,6 +32,11 @@ from core.sandbox.tests.capability import (
     requires_userns,
 )
 
+
+from core.testing.module_state import isolated_module_state
+from core.testing.module_views import scoped_function_imports
+
+
 # Real spawns against whatever enforcement the REAL kernel provides
 # (namespaces/Landlock on Linux, seatbelt on macOS) — a real-kernel
 # binding on both platforms, so both native markers (pytest.ini): the
@@ -62,13 +67,14 @@ class TestAvailabilityCheck(unittest.TestCase):
         exactly the system where PATH-hijack matters). check_net_available
         catches the exception and returns False.
         """
+        from core.sandbox import probes
         from core.sandbox import state as mod_state
-        mod_state._net_available_cache = None
-        mod_state._unshare_path_cache = None
-        with patch("os.path.isfile", return_value=False):
+        with (
+            isolated_module_state(mod_state, {"_net_available_cache": None, "_unshare_path_cache": None}),
+            scoped_function_imports(probes, ("_resolve_sandbox_binary",), {"os": os}) as imports,
+            mock_module_attribute(imports, "os.path", "isfile", return_value=False),
+        ):
             self.assertFalse(check_sandbox_available())
-        mod_state._net_available_cache = None  # Reset for other tests
-        mod_state._unshare_path_cache = None
 
 
 class TestResourceLimits(unittest.TestCase):
@@ -1089,6 +1095,11 @@ class TestPidNamespace(unittest.TestCase):
 
 @requires_landlock
 class TestFdIsolation(unittest.TestCase):
+
+    @pytest.fixture
+    def _owned_short_socket_directory(self, short_socket_dir):
+        self._short_socket_directory = short_socket_dir
+
     """File descriptors must NOT be inherited from RAPTOR into the sandbox
     except via the explicit pass_fds= escape hatch."""
 
@@ -1133,6 +1144,7 @@ class TestFdIsolation(unittest.TestCase):
             parent_half.close()
             child_half.close()
 
+    @pytest.mark.usefixtures("_owned_short_socket_directory")
     def test_pass_fds_pathname_socket_rejected_even_declared(self):
         """The docker.sock client shape (connected to a PATHNAME
         server) stays refused, and pass_fds_declared cannot override
@@ -1140,7 +1152,7 @@ class TestFdIsolation(unittest.TestCase):
         mismatches on files/dirs, never sockets outside the
         own-socketpair carve-out."""
         import socket as _socket
-        with TemporaryDirectory() as td:
+        with TemporaryDirectory(dir=self._short_socket_directory) as td:
             path = os.path.join(td, "srv.sock")
             srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
             cli = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
@@ -2896,10 +2908,8 @@ class TestSeccompProbeCompleteness:
                     raise AttributeError(name)
                 return lambda *a, **k: 0
 
-        monkeypatch.setattr(
-            "ctypes.util.find_library", lambda _n: "libseccomp.so.2")
-        monkeypatch.setattr(
-            "ctypes.CDLL", lambda *a, **k: _LibWithoutAttrSet())
+        patch_module_attribute(monkeypatch, sc, "ctypes.util", "find_library", lambda _n: "libseccomp.so.2")
+        patch_module_attribute(monkeypatch, sc, "ctypes", "CDLL", lambda *a, **k: _LibWithoutAttrSet())
         monkeypatch.setattr(state, "_libseccomp_cache", None)
         assert sc.check_seccomp_available() is False
 

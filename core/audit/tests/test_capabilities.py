@@ -9,6 +9,28 @@ from core.audit.capabilities import (
 )
 
 
+from contextlib import ExitStack, contextmanager
+from core.testing.module_bindings import mock_module_attribute
+from core.testing.module_state import isolated_module_state
+
+
+@contextmanager
+def _missing_tool_discovery(*args, **kwargs):
+    from core.audit import capabilities
+    from packages.joern import prereqs
+
+    with ExitStack() as scope:
+        scope.enter_context(isolated_module_state(prereqs, {
+            "_resolved_joern": None, "_joern_resolved": False,
+            "_resolved_joern_parse": None, "_joern_parse_resolved": False,
+            "_resolved_java": None, "_java_resolved": False,
+        }))
+        mocked = scope.enter_context(mock_module_attribute(capabilities, "shutil", "which", *args, **kwargs))
+        scope.enter_context(mock_module_attribute(prereqs, "shutil", "which", new=mocked))
+        yield mocked
+
+
+
 class TestProbeCapabilities:
     def test_returns_dataclass(self):
         caps = probe_capabilities()
@@ -23,14 +45,14 @@ class TestProbeCapabilities:
         caps = probe_capabilities(binary_path=tmp_path / "nope")
         assert not caps.binary_available
 
-    @patch("shutil.which", return_value=None)
-    def test_all_tools_missing(self, _mock_which):
-        caps = probe_capabilities()
-        assert not caps.joern
-        assert not caps.r2
-        assert not caps.semgrep
-        assert not caps.coccinelle
-        assert not caps.codeql
+    def test_all_tools_missing(self):
+        with _missing_tool_discovery(return_value=None) as _mock_which:
+            caps = probe_capabilities()
+            assert not caps.joern
+            assert not caps.r2
+            assert not caps.semgrep
+            assert not caps.coccinelle
+            assert not caps.codeql
 
     def test_tool_found(self):
         """Joern detected when check_prereqs returns no issues."""

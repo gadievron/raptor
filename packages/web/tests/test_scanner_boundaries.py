@@ -14,6 +14,28 @@ from core.json import load_jsonl
 from packages.web.models import WebFinding
 
 
+from contextlib import contextmanager
+from types import MethodType
+import shutil
+from core.testing.module_views import module_function_view, scoped_function_imports
+from core.testing.module_bindings import mock_module_attribute
+
+
+@contextmanager
+def _validate_path_lookup(scanner, *args, **kwargs):
+    from packages.web import scanner as scanner_module
+
+    # Expose just the real method as a function in a private globals view.
+    view = module_function_view(scanner_module, bindings={"_owned_validate": type(scanner)._phase_validate})
+    with scoped_function_imports(view, ("_owned_validate",), {"shutil": shutil}) as imports:
+        with (
+            mock_module_attribute(imports, "shutil", "which", *args, **kwargs) as mocked,
+            patch.object(scanner, "_phase_validate", MethodType(view._owned_validate, scanner)),
+        ):
+            yield mocked
+
+
+
 def _make_scanner(tmpdir: str, **kwargs):
     from packages.web.scanner import WebScanner
 
@@ -852,8 +874,7 @@ class TestValidatePostpassFailureSurfacing(unittest.TestCase):
             with patch(
                 "core.security.rule_of_two.is_interactive",
                 return_value=True,
-            ), patch(
-                "shutil.which", return_value="/usr/bin/claude",
+            ), _validate_path_lookup(scanner, return_value="/usr/bin/claude",
             ), patch(
                 "core.orchestration.agentic_passes.run_validate_postpass",
                 side_effect=RuntimeError("stage runner crashed"),
