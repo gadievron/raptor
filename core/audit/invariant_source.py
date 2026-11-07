@@ -165,6 +165,9 @@ def source_mutations(source, variables=None):
         return None
 
     def guard_frame(target):
+        from .narrowing_bindings import visible_declarations
+
+        target_declarations = visible_declarations(target, data)
         current = target
         while (
             current.parent is not None
@@ -193,8 +196,6 @@ def source_mutations(source, variables=None):
                     no is not None and no.start_byte <= target.start_byte < no.end_byte
                 ):
                     return (), "mutation in a condition requires value-flow modeling"
-                from .narrowing_bindings import visible_declarations
-
                 declarations = visible_declarations(condition, data)
                 for item in descendants(condition):
                     if in_unevaluated(item):
@@ -216,6 +217,8 @@ def source_mutations(source, variables=None):
                     ):
                         continue
                     declaration = declarations.get(name)
+                    if declaration != target_declarations.get(name):
+                        return (), "guard name is rebound before the mutation"
                     if (
                         variables is not None
                         and declaration is not None
@@ -260,6 +263,8 @@ def source_mutations(source, variables=None):
         # The guarded block is visited before its owning if during ascent.
         for sibling in prefixes:
             for item in descendants(sibling):
+                if in_unevaluated(item):
+                    continue
                 if item.type in {
                     "return_statement",
                     "goto_statement",
@@ -268,6 +273,8 @@ def source_mutations(source, variables=None):
                 }:
                     return (), "preceding control transfer requires path modeling"
                 if watched and item.start_byte >= guard_start:
+                    if item.type == "gnu_asm_expression":
+                        return (), "assembly may invalidate the reaching guard snapshot"
                     if item.type == "call_expression":
                         return (), "call may invalidate the reaching guard snapshot"
                     if item.type in {"assignment_expression", "update_expression"}:
