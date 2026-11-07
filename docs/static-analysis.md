@@ -442,7 +442,10 @@ and deduplicated by resolved absolute path.
 
 The closed-stream rule checks stdio operations after either `fclose()` or
 `pclose()`, including character I/O, formatted input, positioning and buffered
-reads and writes. Assigning a new stream before reuse suppresses the report.
+reads and writes, plus `getc`, `putc`, `vfprintf` and `vfscanf`. The
+double-close rule also checks repeated stream closure through any combination
+of `fclose()` and `pclose()`. Assigning a new stream before reuse suppresses
+the report.
 The rule follows direct uses of the same pointer; it does not trace aliases.
 
 ### Rule Inventory

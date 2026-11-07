@@ -56,3 +56,36 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("first", ["fclose", "pclose"])
+@pytest.mark.parametrize("second", ["fclose", "pclose"])
+def test_stream_release_pairs_and_lifetime_barriers(tmp_path, first, second):
+    lines = ["typedef struct stream FILE;"]
+    expected = set()
+    cases = (
+        ("", "fp", True),
+        ('fp = fopen("fresh", "r");', "fp", False),
+        ('fp = popen("true", "r");', "fp", False),
+        ("fp = other;", "fp", False),
+        ("replace(&fp);", "fp", False),
+        ("", "other", False),
+    )
+    for barrier, operand, should_report in cases:
+        lines += [f"void case_{len(lines)}(FILE *fp, FILE *other) {{",
+                  f"{first}(fp);", barrier, f"{second}({operand});", "}"]
+        if should_report:
+            expected.add(len(lines) - 1)
+    # Similar names are wrappers, not modeled standard-library releases.
+    for before, after in ((f"my_{first}", second), (first, f"my_{second}")):
+        lines += [f"void wrapper_{len(lines)}(FILE *fp) {{",
+                  f"{before}(fp);", f"{after}(fp);", "}"]
+    for index in range(120):
+        lines += [f"void repeated_{index}(FILE *fp) {{", f"{first}(fp);",
+                  f"{second}(fp);", "}"]
+        expected.add(len(lines) - 1)
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in results}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(results) == len(expected)
+    assert {row["rule"] for row in results} == {"double_fclose"}
