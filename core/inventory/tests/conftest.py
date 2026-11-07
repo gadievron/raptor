@@ -37,3 +37,11 @@ def _isolated_home_stores(tmp_path: Path,
     monkeypatch.setenv("HOME", str(isolated_test_dir(tmp_path_factory, "inventory-home")))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+
+
+@pytest.fixture(autouse=True)
+def _owned_inventory_scratch():
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_scratch_keepalive():
+        yield

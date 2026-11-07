@@ -12,6 +12,7 @@ import stat
 import zipfile
 from pathlib import Path
 
+from core.atomic_fs import publish_new_directory
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.logging import get_logger
@@ -260,7 +261,7 @@ def export_project(project_output_dir: Path, dest_path: Path,
     # partial zip at the advertised destination. Keep staging on the same
     # filesystem so publication needs no second copy of the archive.
     destination = dest_path.parent.resolve() / dest_path.name
-    with scratch_dir(".export-", dir=dest_path.parent) as staging_dir:
+    with scratch_dir(".export-", dir=dest_path.parent, keepalive=True) as staging_dir:
         staged_path = staging_dir / "archive.zip"
         _write_project_zip(project_output_dir, staged_path, project_json_path,
                            destination)
@@ -925,12 +926,13 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
             # so a failed import destroyed the previous data with no
             # rollback. Failure cleanup now only ever removes the
             # staging dir import itself created.
-            staging_dir = cleanup.enter_context(scratch_dir(
-                prefix=f".import-{project_name}-", dir=output_base,
+            workspace = cleanup.enter_context(scratch_dir(
+                prefix=f".import-{project_name}-", dir=output_base, keepalive=True,
             ))
-            # mkdtemp creates 0o700; project output dirs are plain
-            # mkdir-default dirs, so widen before the rename publishes
-            # the tree (umask still applies to files within).
+            staging_dir = workspace / "project"
+            staging_dir.mkdir()
+            # Keep the workspace private; widen only the publishable child
+            # to the conventional project output-directory mode.
             os.chmod(staging_dir, 0o755)
 
             # --- Extract output data ---
@@ -1115,7 +1117,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                 f"appeared during import and --force was not given"
             )
         shutil.rmtree(output_dir)
-    staging_dir.rename(output_dir)
+    publish_new_directory(staging_dir, output_dir)
 
     # Register the project
     target = embedded_meta.get("target", "(imported)") if embedded_meta else "(imported)"
