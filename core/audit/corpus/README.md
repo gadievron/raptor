@@ -309,6 +309,10 @@ It also lists differences in recorded configuration, including fields present
 on only one side. Missing values are shown as unrecorded, separately from
 explicit nulls. The notice does not change flip classifications or scores;
 configuration changes mean the comparison alone cannot isolate fix impact.
+Matched counts for shared function IDs are shown separately from whole-run
+totals. Both retain the existing non-skipped counting rule; differing skip
+counts and lack of overlap are called out. Shared IDs alone do not establish
+unchanged label expectations.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history

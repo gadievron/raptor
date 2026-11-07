@@ -563,6 +563,8 @@ def compare_runs(
     cost_b = float(run_b.get("cost_usd") or 0.0)
     matched_a, reviewed_a = _matched(labels_a)
     matched_b, reviewed_b = _matched(labels_b)
+    common_matched_a, common_reviewed_a = _matched({fid: labels_a[fid] for fid in common})
+    common_matched_b, common_reviewed_b = _matched({fid: labels_b[fid] for fid in common})
     config_a = run_a.get("config") or {}
     config_b = run_b.get("config") or {}
     configuration_changes = []
@@ -583,6 +585,10 @@ def compare_runs(
         "reviewed_a": reviewed_a,
         "matched_b": matched_b,
         "reviewed_b": reviewed_b,
+        "common_label_matches": {
+            "matched_a": common_matched_a, "reviewed_a": common_reviewed_a,
+            "matched_b": common_matched_b, "reviewed_b": common_reviewed_b,
+        },
         "flips": flips,
         "attribution_changes": attribution_changes,
         "cost_a": cost_a,
@@ -642,9 +648,20 @@ def format_compare(diff: dict[str, Any]) -> str:
         + (f", {len(diff['only_in_b'])} only in {b.get('run_id')}"
            if diff["only_in_b"] else "")
     )
+    shared = diff.get("common_label_matches")
+    if shared is not None:
+        shared_delta = shared["matched_b"] - shared["matched_a"]
+        lines.append(
+            f"  Matched on shared labels (reviewed): {shared['matched_a']}/{shared['reviewed_a']}"
+            f" -> {shared['matched_b']}/{shared['reviewed_b']} ({shared_delta:+d})"
+        )
+        if not diff["common"]:
+            lines.append("  NOTE: no shared labels; whole-run totals do not measure a common set.")
+        elif shared["reviewed_a"] != shared["reviewed_b"]:
+            lines.append("  NOTE: shared labels have different non-skipped counts.")
     delta = diff["matched_b"] - diff["matched_a"]
     lines.append(
-        f"  Matched (reviewed): {diff['matched_a']}/{diff['reviewed_a']}"
+        f"  Matched in whole runs (reviewed): {diff['matched_a']}/{diff['reviewed_a']}"
         f" -> {diff['matched_b']}/{diff['reviewed_b']} ({delta:+d})"
     )
     lines.append(
