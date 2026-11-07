@@ -11,12 +11,16 @@ backed by dynamic/frida/dark_verify evidence could never be recorded.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
+import os
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "libexec" / "raptor-audit"
@@ -86,11 +90,15 @@ def test_namespaced_evidence_tool_records_finding(tmp_path, capsys):
     assert "recorded: src/a.c:foo" in captured.out
 
 
-def test_namespaced_evidence_tool_accepted_via_cli(tmp_path):
+@pytest.mark.parametrize("stale_launch", [False, True])
+def test_namespaced_evidence_tool_accepted_via_cli(tmp_path, monkeypatch, stale_launch):
     """Full argparse surface: choices offer dynamic:crash and the gate
     must not then reject its own choice."""
     out_dir, target = _seed_run(tmp_path)
-    cp = subprocess.run(
+    if stale_launch:
+        monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
+    cp = run_standalone_cli(
         [sys.executable, str(_SCRIPT), "record",
          "--out", str(out_dir), "--target", str(target),
          "--file", "src/a.c", "--function", "foo",
@@ -100,10 +108,19 @@ def test_namespaced_evidence_tool_accepted_via_cli(tmp_path):
          "--vuln-type", "buffer_overflow",
          "--reach-via", "exported API",
          "--body", "crash replay output"],
+        data_home=os.environ["XDG_DATA_HOME"],
         capture_output=True, text=True, check=False, timeout=120,
     )
     assert cp.returncode == 0, cp.stderr
     assert "not a recognised tool" not in cp.stderr
+
+    from core.audit.record import load_verified_audit_log
+
+    recorded = [row for row in load_verified_audit_log(out_dir)
+                if row.get("action") == "record"]
+    assert len(recorded) == 1
+    assert recorded[0]["evidence_tool"] == "dynamic:crash"
+    assert recorded[0]["status"] == "finding"
 
 
 def test_unknown_evidence_tool_still_rejected(tmp_path, capsys):
