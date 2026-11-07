@@ -313,6 +313,10 @@ Matched counts for shared function IDs are shown separately from whole-run
 totals. Both retain the existing non-skipped counting rule; differing skip
 counts and lack of overlap are called out. Shared IDs alone do not establish
 unchanged label expectations.
+Recorded expected-status differences are listed separately, including revisions
+with no actual-verdict change. Missing expectations remain distinguishable from
+explicit nulls. These notices explain another source of match-count movement;
+they do not regrade saved verdicts or change flip classifications.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history
