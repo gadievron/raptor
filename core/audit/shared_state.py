@@ -163,6 +163,9 @@ class SharedState:
     # Eager compilation already exhausted its bounded retries for these
     # exact invariant/engine inputs. Run-local only; never a clean verdict.
     eager_compile_rejections: set[str] = field(default_factory=set)
+    # Successful run-local compilations survive domain-model reloads.
+    # Each entry also pins the generated rule bytes before it can be reused.
+    eager_compile_successes: dict[str, tuple[Any, str]] = field(default_factory=dict)
 
     # Callee taint summaries; new entries are added after each function
     # review so that callers later in the topological order can use them.

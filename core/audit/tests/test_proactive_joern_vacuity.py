@@ -186,14 +186,39 @@ class TestCrossFunctionDispatchRecord:
         assert "cross_function" not in (oc.tools_dispatched or set())
         assert "cross_function" in (oc.tools_skipped or set())
 
-    def test_refuted_verdict_stays_in_dispatch_record(
+    def test_negative_observation_is_dispatched_but_does_not_refute(
         self, tmp_path, monkeypatch,
     ):
-        class _XF:
-            verified = False
-            verifier_name = "lock_pairing"
-            evidence = ""
+        from core.audit.cross_function_verify import CrossFunctionVerdict
 
-        oc, tiers = _run(tmp_path, _Server(covers=True), monkeypatch, _XF())
+        raw = CrossFunctionVerdict(False, "caller_constraint", "No guard-name absence observed")
+        oc, tiers = _run(tmp_path, _Server(covers=True), monkeypatch, raw)
         assert "cross_function" in (oc.tools_dispatched or set())
-        assert tiers["joern_xf"].refuted == 1
+        assert "cross_function" in (oc.tools_inconclusive or set())
+        assert tiers["joern_xf"].refuted == 0
+        assert tiers["joern_xf"].inconclusive == 1
+
+
+def test_arithmetic_flow_is_recorded_without_verification_authority(tmp_path, monkeypatch):
+    from core.audit.cross_function_verify import CrossFunctionVerdict
+    from core.audit.evidence_grade import is_verification_evidence
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.json import load_json
+
+    raw = CrossFunctionVerdict(True, 'taint_to_arithmetic', 'Parameter flow with operator text',
+                               {'flows': ['fixture flow']})
+    outcome, tiers = _run(tmp_path, _Server(covers=False), monkeypatch, raw)
+    assert not is_verification_evidence(outcome.evidence_tool)
+    assert tiers['joern_xf'].confirmed == 0
+    assert tiers['joern_xf'].inconclusive == 1
+    assert 'cross_function' in outcome.tools_inconclusive
+    write_graded_findings(export_findings([outcome]), tmp_path)
+    checks = load_json(tmp_path / 'verification-checks.json')['checks']
+    check = next(c for c in checks if c['rule_id'] == 'joern:xf:taint_to_arithmetic')
+    assert check['outcome'] == 'inconclusive'
+    assert check['result']['data']['outcome'] == 'confirmed'
+    assert check['result']['data']['details']['raw_verified'] is True
+    assert check['result']['data']['details']['observations'] == {'flows': ['fixture flow']}
+    finding = load_json(tmp_path / 'findings-graded.json')['findings'][0]
+    assert finding['discovery']['confirmed_by'] == []
+    assert {'id': check['id'], 'matches_final_claim': True} in finding['verification_trace']['check_results']['references']

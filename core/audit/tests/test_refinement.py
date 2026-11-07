@@ -504,3 +504,42 @@ class TestMergeScopedRefutations:
                                       replace(receipt, line_start=3), receipt.to_record())
         winner = merge_outcomes(original, refined)
         assert winner.claim_refutations == ()
+
+
+class TestRefinementSourceScope:
+    def test_scope_survives_refinement_and_links_recorded_checks(self, tmp_path):
+        from core.audit.check_trace import record_check_observation
+        from core.audit.findings_export import export_findings, write_graded_findings
+        from core.audit.orchestrator import ReviewOutcome
+        from core.audit.verification_results import ToolChainResult
+        from core.json import load_json
+
+        original = ReviewOutcome(file='a.c', function='f', function_qualified='Owner.f', line=25,
+                                 status='suspicious', body='Review', hypothesis='Claim')
+        refined = ReviewOutcome(file='a.c', function='f', status='suspicious', body='Refined', hypothesis='Claim')
+        record_check_observation(tmp_path, ToolChainResult(file='a.c', function='f', line_start=25,
+                                                          hypothesis='Claim'),
+                                 tool='cross_function', verdict='inconclusive', rule_id='fixture')
+        merged = merge_outcomes(original, refined, source_scope={
+            'file': 'a.c', 'function': 'f', 'line': 25, 'function_qualified': 'Owner.f',
+        })
+        write_graded_findings(export_findings([merged]), tmp_path)
+        finding = load_json(tmp_path / 'findings-graded.json')['findings'][0]
+        trace = finding['verification_trace']
+        assert finding['line'] == 25
+        assert trace['scope']['function_qualified'] == 'Owner.f'
+        assert trace['check_results']['status'] == 'recorded'
+        assert trace['check_results']['references'][0]['matches_final_claim'] is True
+        assert finding['discovery']['confirmed_by'] == []
+        assert merged.status == 'suspicious'
+
+    def test_foreign_context_does_not_rebind_a_refined_occurrence(self):
+        from core.audit.orchestrator import ReviewOutcome
+
+        original = ReviewOutcome(file='a.c', function='f', line=25, status='suspicious', body='Original')
+        refined = ReviewOutcome(file='a.c', function='f', status='suspicious', body='Refined')
+        winner = merge_outcomes(original, refined, source_scope={
+            'file': 'b.c', 'function': 'f', 'line': 25, 'function_qualified': 'Other.f',
+        })
+        assert winner.line == 0
+        assert winner.function_qualified == ''
