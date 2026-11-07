@@ -100,6 +100,9 @@ for isolation and cleanup patterns, see
 - Tests live in `tests/` subdirectories alongside the code they test.
 - Use `pytest`. No `jsonschema` validation — assert on actual data shapes.
 - Test against production-class object shapes, not toy stubs.
+- Include the [companion checks for test changes](docs/developers.md#companion-checks-for-test-changes):
+  live-tool caller inventories, fixture ownership harnesses, and CI-lane
+  dependencies must stay aligned with the tests they cover.
 - Keep tests hermetic: own temporary state and restore process state and
   resources on success and failure. Follow the
   [hermetic test guidelines](docs/developers.md#writing-hermetic-tests),

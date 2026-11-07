@@ -509,6 +509,31 @@ catalog and mock every model transport in CI; a live provider is never a
 valid fallback for missing test fixtures. HTTP journals and connection
 evidence are uploaded as CI artifacts.
 
+### Companion checks for test changes
+
+A changed test can pass while its ownership or transport census fails in
+another shard. Include the relevant companion change in the same patch,
+and rerun its check after rebasing onto changes to the same helpers.
+
+| Change | Companion update and validation |
+| --- | --- |
+| Add, rename, or remove a live compiler, Semgrep, or preprocessor test | Use the guarded runner in `core/audit/tests/_live_transport.py`; update the corresponding exact caller inventory in `core/audit/tests/test_live_transport_guards.py` and run that file. Keep expected callers explicit so new unguarded calls remain detectable. |
+| Move a fault injection from a native OS/module attribute to a helper, or change its consumer | Update the relevant inventory under `core/testing/tests/`, such as `test_os_fault_fixture_scope.py`. Remove obsolete native-patch entries only when that patch no longer exists; retain the domain test for the replacement helper's behavior. Run the inventory and the affected domain tests. |
+| Change a fixture helper's API | Update fake adapters used by ownership and fault-injection tests. For example, a monkeypatch adapter must forward supported `raising=` arguments and `setitem` operations. Preserve undo behavior, borrowed object identities, and error/interrupt coverage; run affected ownership tests in randomized serial and xdist modes. |
+| Change a curated rule's evidence role | Update tests that pin that rule's role and its result semantics. A confirm-only rule's zero-match is inconclusive; do not restore refutation authority merely to satisfy an old assertion. |
+| Add a workflow or checker test under `.github/tests` or `.github/scripts/tests` | Keep it compatible with the `ci-lint-tests` lane, which installs only pinned pytest and uses the standard library. A developer environment with PyYAML installed can hide a collection failure. Reuse the existing scoped workflow-block extraction patterns; do not skip required workflow assertions when an optional parser is absent. |
+
+For live-tool test changes, the quick companion check is:
+
+```bash
+python -m pytest core/audit/tests/test_live_transport_guards.py -q
+```
+
+For fixture changes, run the specific ownership harness and domain tests,
+using the randomized-order commands above. Run CI-filter tests in the
+pytest-only environment defined by `.github/workflows/tests.yml`, rather
+than relying solely on the fully provisioned development environment.
+
 ## Mechanical gates you will hit
 
 The full control inventory, triggers, and reproduce-locally commands
