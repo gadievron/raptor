@@ -155,6 +155,11 @@ class TestDirReaping:
             _make_old_dir(tmp_root, "raptor-joern-ws-abc123"),
             _make_old_dir(tmp_root, "raptor-calibrate-abc123"),
             _make_old_dir(tmp_root, "raptor_auto_abc123"),
+            _make_old_dir(tmp_root, "raptor-rpm-abc12345"),
+            _make_old_dir(tmp_root, "binoracle_prov_abc12345"),
+            _make_old_dir(tmp_root, "codeql_resolve_abc12345"),
+            _make_old_dir(tmp_root, "cc-sysprompt-abc12345"),
+            _make_old_dir(tmp_root, "raptor-sca-cascade-abc12345"),
             _make_old_dir(tmp_root, "raptor_git_frk_abc1"),
             _make_old_dir(tmp_root, "raptor_decomp_abc123"),
             _make_old_dir(tmp_root, "raptor-cocci-tmp-abc123"),
@@ -699,9 +704,9 @@ def _derived_production_scratch_prefixes(
     """Mechanically derive production scratch prefixes.
 
     Sweeps every production source (tests / core/testing / subsystem scripts /
-    .github excluded) for ``tempfile.mkdtemp(prefix=...)`` and
-    ``TemporaryDirectory(prefix=...)`` calls that land in the SYSTEM
-    tmp (no contained ``dir=``). Both shapes are exit-path-cleaned
+    .github excluded) for ``tempfile.mkdtemp(prefix=...)``,
+    ``TemporaryDirectory(prefix=...)`` and ``scratch_dir(...)`` calls
+    that land in the SYSTEM tmp (no contained ``dir=``). All are exit-path-cleaned
     only — SIGKILL and OOM skip finally/GC — so each derived prefix
     needs static reaper coverage. This replaces the hand-picked
     census tuple whose fail direction was disk-leak: a new production
@@ -733,7 +738,7 @@ def _derived_production_scratch_prefixes(
             src = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "mkdtemp" not in src and "TemporaryDirectory" not in src:
+        if not any(name in src for name in ("mkdtemp", "TemporaryDirectory", "scratch_dir")):
             continue
         try:
             tree = ast.parse(src)
@@ -747,7 +752,7 @@ def _derived_production_scratch_prefixes(
                 name = node.func.attr
             elif isinstance(node.func, ast.Name):
                 name = node.func.id
-            if name not in ("mkdtemp", "TemporaryDirectory"):
+            if name not in ("mkdtemp", "TemporaryDirectory", "scratch_dir"):
                 continue
             kw = {k.arg: k.value for k in node.keywords}
             dirv = kw.get("dir")
@@ -755,6 +760,8 @@ def _derived_production_scratch_prefixes(
                     isinstance(dirv, ast.Constant) and dirv.value is None):
                 continue  # contained under an explicit parent dir
             pv = kw.get("prefix")
+            if pv is None and name == "scratch_dir" and node.args:
+                pv = node.args[0]
             if isinstance(pv, ast.Constant) and isinstance(pv.value, str):
                 found.setdefault(pv.value, []).append(rel)
     return found
@@ -788,7 +795,8 @@ class TestProductionScratchPrefixDerivation:
         return any(tr._anchored_name_match(probe_name, e)
                    for e in tr._ANCHORED_DIR_PREFIXES)
 
-    def test_shared_test_helpers_excluded_without_hiding_runtime(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("factory", ["native", "shared-positional", "shared-keyword", "shared-contained"])
+    def test_shared_test_helpers_excluded_without_hiding_runtime(self, tmp_path, monkeypatch, factory):
         import subprocess
         from types import SimpleNamespace
 
@@ -802,7 +810,15 @@ class TestProductionScratchPrefixDerivation:
         for rel, prefix in files.items():
             path = tmp_path / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"import tempfile\ntempfile.mkdtemp(prefix={prefix!r})\n")
+            if factory == "native":
+                source = f"import tempfile\ntempfile.mkdtemp(prefix={prefix!r})\n"
+            elif factory == "shared-positional":
+                source = f"from core.run.scratch import scratch_dir\nscratch_dir({prefix!r})\n"
+            elif factory == "shared-keyword":
+                source = f"from core.run.scratch import scratch_dir\nscratch_dir(prefix={prefix!r}, dir=None)\n"
+            else:
+                source = f"from core.run.scratch import scratch_dir\nscratch_dir({prefix!r}, dir='owned')\n"
+            path.write_text(source)
 
         def tracked_files(command, **kwargs):
             assert command == ["git", "-C", str(tmp_path), "ls-files", "*.py", "libexec/*"]
@@ -811,7 +827,7 @@ class TestProductionScratchPrefixDerivation:
         monkeypatch.setattr(subprocess, "run", tracked_files)
         assert _derived_production_scratch_prefixes(tmp_path) == {
             prefix: [rel] for rel, prefix in files.items()
-            if not rel.startswith("core/testing/")
+            if not rel.startswith("core/testing/") and factory != "shared-contained"
         }
 
     def test_every_derived_prefix_is_covered(self):

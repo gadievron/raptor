@@ -127,3 +127,15 @@ def _accept_degraded_egress_tier(monkeypatch):
     core/sandbox/tests/test_proxy_netns_enforcement.py.
     Subprocess-based e2e tests inherit it via os.environ."""
     monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
+
+
+@pytest.fixture(autouse=True)
+def _owned_sca_scratch():
+    from core.run import tmp_reaper
+    from core.testing.module_state import isolated_module_state
+    from core.testing.scratch_state import isolated_scratch_keepalive
+
+    with isolated_module_state(tmp_reaper, {
+        "_RUNTIME_DIR_PREFIXES": set(tmp_reaper._RUNTIME_DIR_PREFIXES),
+    }), isolated_scratch_keepalive():
+        yield

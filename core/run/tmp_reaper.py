@@ -105,6 +105,13 @@ _DIR_PREFIXES = (
     "raptor-joern-ws-",
     "raptor-calibrate-",
     "raptor_auto_",
+    # Package-metadata parsers use protected, whole-workspace scratch.
+    "raptor-rpm-",
+    # Shared scratch owners formerly missed by the native-tempfile census.
+    # The prompt cache renews its pin until process-owned teardown.
+    "binoracle_prov_",
+    "codeql_resolve_",
+    "cc-sysprompt-",
     "raptor_git_",
     "raptor_decomp_",
     # Per-invocation spatch scratch (packages/coccinelle/runner.py);
