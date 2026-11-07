@@ -414,7 +414,7 @@ _REPORT_SEVERITY_ROW = re.compile(
 
 
 def _parity_check(art: "_ScanArtifacts") -> Tuple[bool, str]:
-    """Compare the markdown report's severity counts against the
+    """Compare the markdown report's full finding population against the
     findings.json's per-severity counts. Returns ``(ok, note)``;
     ``ok=False`` means the human-readable rendering disagrees with
     the machine-readable artefact — a real presentation bug.
@@ -436,8 +436,27 @@ def _parity_check(art: "_ScanArtifacts") -> Tuple[bool, str]:
         if sev in severity_counts:
             severity_counts[sev] += 1
     md_counts: Dict[str, int] = {}
-    for m in _REPORT_SEVERITY_ROW.finditer(art.report_md):
-        md_counts[m.group(1).lower()] = int(m.group(2))
+    # The shared report's Findings table contains every recorded row. The
+    # later Dependency summary intentionally excludes signals and suppressed
+    # advisories, so it cannot represent the findings.json population.
+    header = "| Ref | Tool | Rule | Location | Status | Scanner level | Security severity | Scanner security score |"
+    if header in art.report_md:
+        md_counts = dict.fromkeys(severity_counts, 0)
+        table = art.report_md.split(header, 1)[1].splitlines()
+        for line in table[1:]:
+            if not line.strip():
+                continue
+            if not line.startswith("|"):
+                break
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) == 8 and re.fullmatch(r"F[0-9]+", cells[0]):
+                severity = cells[6].lower()
+                if severity in md_counts:
+                    md_counts[severity] += 1
+    else:
+        # Legacy renderer: a single severity summary covered all row kinds.
+        for m in _REPORT_SEVERITY_ROW.finditer(art.report_md):
+            md_counts[m.group(1).lower()] = int(m.group(2))
     if not md_counts:
         # No summary table found — the report renderer must have
         # changed shape. Don't fail the parity check on this alone;
@@ -653,7 +672,7 @@ def _format_report(
     lines.append("")
     lines.append(f"Catch rate:  {passed}/{total} ({rate:.0f}%)")
     lines.append(f"Parity rate: {parity_ok}/{total} ({parity_rate:.0f}%) — "
-                 f"report.md summary counts vs findings.json")
+                 f"report.md finding counts vs findings.json")
     lines.append(f"Gate rate:   {gate_ok}/{total} ({gate_rate:.0f}%) — "
                  f"--fail-on-severity info exits 1 on every fixture")
     return "\n".join(lines)
