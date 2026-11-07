@@ -3129,6 +3129,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_llm_cache:
         os.environ["RAPTOR_LLM_CACHE"] = "off"
 
+    # Snapshot the same environment policy that downstream LLMConfig
+    # defaults consume, before any audit work can change process state.
+    from core.llm.config import _default_cache_ttl, _default_enable_caching
+
+    llm_cache_policy = {
+        "enabled": _default_enable_caching(),
+        "ttl_seconds": _default_cache_ttl(),
+    }
+
     # Fail fast: a mistyped --splice path silently produced a partial
     # results file the operator believed was merged.  Check before any
     # cost is spent, not after the run.  Exit 1 (run failure) — 2 is
@@ -3628,11 +3637,10 @@ def main(argv: list[str] | None = None) -> int:
         # regression floors, never real-bug recall — splice and the
         # history store refuse to mix kinds on this field.
         "label_kind": run_kind,
-        # Whether LLM response-cache replay was possible for this run
-        # ("off" = every completion was generated fresh — see
-        # --no-llm-cache). Rows may still carry cached=True markers
-        # only when this is "on".
-        "llm_cache": "off" if args.no_llm_cache else "on",
+        # Configured response-cache policy, including environment bypass.
+        # This does not establish cache availability or actual reuse.
+        "llm_cache": "on" if llm_cache_policy["enabled"] else "off",
+        "llm_cache_policy": llm_cache_policy,
     }
     meta["max_cost_usd"] = args.max_cost
     meta["max_seconds"] = args.max_time
@@ -3702,6 +3710,7 @@ def main(argv: list[str] | None = None) -> int:
                 "scope": args.scope,
                 "splice": str(args.splice) if args.splice else None,
                 "llm_cache": meta["llm_cache"],
+                "llm_cache_policy": meta["llm_cache_policy"],
                 "integer_abi": meta["integer_abi"],
                 "max_cost_usd": args.max_cost,
                 "max_seconds": args.max_time,

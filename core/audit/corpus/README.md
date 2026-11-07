@@ -142,6 +142,13 @@ it does not allocate overhead to labels or cohorts. Missing telemetry leaves
 the snapshot absent rather than recording zero spend. Summed caller durations
 are call time, not elapsed wall time, because calls may overlap.
 
+Results metadata and history config also record the run-start
+`llm_cache_policy`: configured enablement and TTL in seconds (`null` means
+no expiry). The existing `llm_cache` on/off field honors environment bypass
+as well as the CLI flag. This describes configuration, not cache availability
+or actual reuse; use the spend snapshot's hit counts for observed reuse.
+Older results without this policy cannot establish the TTL used.
+
 Resume (requires a stable `--out`): each pass checkpoints per group
 (`checkpoint-*-groups.json`) as groups finish, so a mid-pass stop
 loses at most the in-flight group; a resume replays checkpointed

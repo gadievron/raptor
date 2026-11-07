@@ -1559,6 +1559,43 @@ class TestLlmCacheKnob:
         from core.llm.config import LLMConfig
         assert LLMConfig().enable_caching is False
 
+    @pytest.mark.parametrize("value", ["off", "none", "0", "false", "no", " OFF "])
+    def test_environment_bypass_is_recorded_without_cli_flag(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv("RAPTOR_LLM_CACHE", value)
+        rc, out, history = _stub_main_run(
+            tmp_path, monkeypatch, rows=[dict(_result_row("a.c:f"), model="")],
+        )
+        assert rc == 0
+        meta = _meta_of(out)
+        assert meta["llm_cache"] == "off"
+        assert meta["llm_cache_policy"]["enabled"] is False
+        records = [json.loads(line) for line in history.read_text().splitlines()]
+        run = next(row for row in records if row["record"] == "run")
+        assert run["config"]["llm_cache"] == "off"
+        assert run["config"]["llm_cache_policy"] == meta["llm_cache_policy"]
+
+    @pytest.mark.parametrize("value, expected", [
+        (None, 86400.0), ("120", 120.0), ("off", None), ("0", None), ("nan", 86400.0),
+    ], ids=["default", "override", "no-expiry", "zero", "invalid"])
+    def test_run_start_policy_uses_shared_ttl_resolution(self, tmp_path, monkeypatch, value, expected):
+        monkeypatch.setenv("RAPTOR_LLM_CACHE", "on")
+        if value is None:
+            monkeypatch.delenv("RAPTOR_LLM_CACHE_TTL_S", raising=False)
+        else:
+            monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", value)
+
+        def audit(labels, dirs, **kwargs):
+            # Metadata describes the run-start policy, not a later env read.
+            monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", "999")
+            monkeypatch.setenv("RAPTOR_LLM_CACHE", "off")
+            return [dict(_result_row("a.c:f"), model="")], []
+
+        rc, out, _ = _stub_main_run(tmp_path, monkeypatch, audit_stub=audit)
+        assert rc == 0
+        meta = _meta_of(out)
+        assert meta["llm_cache"] == "on"
+        assert meta["llm_cache_policy"] == {"enabled": True, "ttl_seconds": expected}
+
 
 class TestExcerptIncludeClosure:
     """Excerpt trees carry the headers each labelled C file includes,
