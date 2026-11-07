@@ -173,6 +173,14 @@ the report does not revalidate snapshots, follow artifact references, or alter
 scoring gates. The optional output must differ from every input path.
 Recorded total spend and wall/LLM time stay at run level; they are not split
 across cohorts, and missing total spend is not estimated from label costs.
+Each cohort and class also includes `label_support`: raw positive/negative
+counts, unreviewed labels by polarity, and explicit expectations for the row's
+stored mode. Missing mode expectations remain unspecified. The terminal report
+identifies classes without positive or negative controls: recall is unmeasured
+without positives, and false-positive behavior is untested without negatives.
+Support includes unreviewed labels even though existing P/R metrics exclude
+errors; the report does not change those metrics or infer mode expectations
+from file-level metadata.
 
 Three layers, all emitted by the run summary and recomputable offline
 with `corpus_metrics`:
