@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import ChainMap, deque
 from pathlib import Path
 
 MARK = re.compile(r"^\[[A-Za-z]")
@@ -80,17 +81,17 @@ def _collection(node, env) -> tuple[str, ...]:
     if s:
         return s
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-        out: tuple[str, ...] = ()
+        out: list[str] = []
         for e in node.elts:
-            out += _collection(e, env)
-        return out
+            out.extend(_collection(e, env))
+        return tuple(out)
     if isinstance(node, ast.Dict):
-        out = ()
+        out = []
         for k, v in zip(node.keys, node.values):
             if k is not None:
-                out += _collection(k, env)
-            out += _collection(v, env)
-        return out
+                out.extend(_collection(k, env))
+            out.extend(_collection(v, env))
+        return tuple(out)
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id in ("frozenset", "set", "tuple", "list")
             and node.args):
@@ -123,9 +124,9 @@ def _consts(nodes) -> dict[str, tuple[str, ...]]:
     return env
 
 
-def _loop_env(nodes, env) -> dict[str, tuple[str, ...]]:
-    """Loop / comprehension variables bound over constant collections."""
-    loops = dict(env)
+def _loop_env(nodes, env) -> ChainMap[str, tuple[str, ...]]:
+    """Own loop bindings above the read-only constant environment."""
+    loops = ChainMap({}, env)
     for n in nodes:
         gens = []
         if isinstance(n, (ast.For, ast.AsyncFor)):
@@ -155,6 +156,30 @@ def _normalised(node) -> bool:
         return False
 
 
+def _candidate_nodes(tree: ast.AST):
+    """Three buckets in ast.walk order, visiting every parsed subtree."""
+    assignments, loops, consumers = [], [], []
+    pending = deque([tree])
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            assignments.append(node)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp,
+                               ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            loops.append(node)
+        elif isinstance(node, (ast.Compare, ast.Call)):
+            consumers.append(node)
+        # Inline iter_child_nodes' field iteration to avoid its nested
+        # generators at every node. Keep contexts and all expression fields.
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                pending.extend(item for item in value if isinstance(item, ast.AST))
+            elif isinstance(value, ast.AST):
+                pending.append(value)
+    return assignments, loops, consumers
+
+
 def scan(sources: dict[str, str], *, parsed_trees=None) -> tuple[list[tuple], list[tuple]]:
     """(sites, normalised_sites); each item (file, line, kind, marker)."""
     trees = {}
@@ -170,23 +195,17 @@ def scan(sources: dict[str, str], *, parsed_trees=None) -> tuple[list[tuple], li
         # Classify once rather than repeatedly visiting inert names, literals
         # and contexts. Every subtree is still walked; these buckets match
         # the node forms handled by _consts, _loop_env and the consumer pass.
-        assignments, loops, consumers = [], [], []
-        for node in ast.walk(t):
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                assignments.append(node)
-            elif isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp,
-                                   ast.SetComp, ast.GeneratorExp, ast.DictComp)):
-                loops.append(node)
-            elif isinstance(node, (ast.Compare, ast.Call)):
-                consumers.append(node)
+        assignments, loops, consumers = _candidate_nodes(t)
         constants = _consts(assignments)
         trees[rel] = (loops, consumers, constants)
         for k, v in constants.items():
             genv.setdefault(k, v)
     sites, normed = set(), set()
     for rel, (loops, consumers, constants) in trees.items():
-        env = dict(genv)
-        env.update(constants)
+        # Constant tables are complete and read-only during this pass.
+        # Overlay local constants, then independently owned loop bindings,
+        # instead of copying the whole global table twice for every file.
+        env = ChainMap(constants, genv)
         env = _loop_env(loops, env)
         for n in consumers:
             hits: list[tuple[str, str, bool]] = []
