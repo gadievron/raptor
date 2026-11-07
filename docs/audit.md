@@ -1357,6 +1357,17 @@ calls by their recorded caller, tokens, cost, and summed call time. These
 caller totals are already included in the authoritative spend total and do
 not change call classes or budget reservations.
 
+
+Eager invariant compilation keeps a run-local memo of exhausted, clean control
+rejections. After the existing retries and engine fallback, an unchanged
+invariant does not restart paid synthesis each time a study batch reloads the
+domain model. A changed invariant, evidence, source stamp, engine, or model
+reopens compilation. LLM failures, scanner errors, missing fixtures, and
+interrupted attempts remain retryable. A rejected checker leaves the invariant
+uncompiled and the issue unverified; it is not evidence that the code is safe.
+Logs distinguish fresh compilations from reused control rejections. The memo
+is cleared for every new audit.
+
 Study invariants require source locators and verbatim quotes. When a legacy
 response omits its file, the parser can locate an exact quote in the supplied
 focus/context snippets if it identifies one unambiguous file. The confined

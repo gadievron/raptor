@@ -12272,6 +12272,7 @@ def _compile_eager_invariants(
         return
 
     from core.concepts.compiler import compile_invariant
+    from core.json import dumps_canonical
     from core.concepts.model import Invariant
     from core.llm.task_types import TaskType
     from packages.checker_synthesis.languages import fallback_engine
@@ -12294,6 +12295,25 @@ def _compile_eager_invariants(
             return None
 
     compiled_count = 0
+    reused_rejections = 0
+    fresh_attempts = 0
+
+    def _compile(inv, engine, entry):
+        nonlocal reused_rejections, fresh_attempts
+        key = dumps_canonical({
+            "invariant": entry,
+            "engine": engine,
+            "model": getattr(client, "model_name", "") or "",
+        })
+        if key in shared.eager_compile_rejections:
+            reused_rejections += 1
+            return None
+        fresh_attempts += 1
+        result = compile_invariant(inv, engine, _llm, config.out_dir or Path("."))
+        if not result.success and getattr(result, "control_rejected", False):
+            shared.eager_compile_rejections.add(key)
+        return result
+
     for entry in uncompiled:
         inv = Invariant(
             id=entry.get("id", ""),
@@ -12318,17 +12338,19 @@ def _compile_eager_invariants(
                     engine = detected
                     break
 
-        cr = compile_invariant(inv, engine, _llm, config.out_dir or Path("."))
-        if not cr.success:
+        cr = _compile(inv, engine, entry)
+        if cr is None or not cr.success:
             alt = fallback_engine(engine)
             if alt:
-                cr = compile_invariant(
-                    inv, alt, _llm, config.out_dir or Path("."),
-                )
-        if cr.success:
+                cr = _compile(inv, alt, entry)
+        if cr is not None and cr.success:
             entry["mechanical_rule"] = cr.rule_id
             compiled_count += 1
 
+    logger.info(
+        "eager compile attempts: %d fresh, %d reused control rejection(s)",
+        fresh_attempts, reused_rejections,
+    )
     if not compiled_count:
         return
 

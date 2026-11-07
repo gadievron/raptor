@@ -160,6 +160,10 @@ class SharedState:
     # post-loop synthesis; None until immediate_verify is on.
     synthesis_counter: Any = None
 
+    # Eager compilation already exhausted its bounded retries for these
+    # exact invariant/engine inputs. Run-local only; never a clean verdict.
+    eager_compile_rejections: set[str] = field(default_factory=set)
+
     # Callee taint summaries; new entries are added after each function
     # review so that callers later in the topological order can use them.
     taint_summary_results: dict[str, Any] = field(default_factory=dict)
