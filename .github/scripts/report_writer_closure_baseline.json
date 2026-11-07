@@ -193,9 +193,6 @@
     "core/audit/intra_function.py::format_intra_function_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
-    "core/audit/invariant_smt.py::_term::sanitiser_shadow::_term": {
-      "note": "name collision, not a sanitiser definition: this _term is the SMT invariant expression parser's TERM production (recursive-descent), sharing a name with the recognised _term terminal helper; it renders nothing and the file is not a writer. Surfaced when the shadow arm's dead self-reference wrapper was fixed. Rename on next touch."
-    },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::file": {
       "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
@@ -415,9 +412,6 @@
     "libexec/raptor-run-feasibility::main::unsanitised_llm_value::id": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
-    "libexec/raptor-run-lifecycle::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
     "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::data": {
       "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
     },
@@ -492,15 +486,6 @@
     },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
-    },
-    "packages/codeql/agent.py::CodeQLAgent._print_dataflow_table::unsanitised_llm_value::sink": {
-      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes — sanitise + register on next functional touch"
-    },
-    "packages/codeql/agent.py::CodeQLAgent._print_dataflow_table::unsanitised_llm_value::source": {
-      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes — sanitise + register on next functional touch"
-    },
-    "packages/codeql/agent.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.generate_exploit::unsanitised_llm_value::line": {
       "note": "exploit PoC source assembly — byte-exact artifact by design, not a rendered report"
@@ -718,9 +703,6 @@
     "packages/source_intel/render.py::derive_evidence_strings::unsanitised_llm_value::_render_hazard_line": {
       "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
-    "packages/web/scanner.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
     "raptor.py::<module>::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
@@ -737,9 +719,6 @@
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor_codeql.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
-    "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     }
   },
