@@ -448,6 +448,13 @@ of `fclose()` and `pclose()`. Assigning a new stream before reuse suppresses
 the report.
 The rule follows direct uses of the same pointer; it does not trace aliases.
 
+The missing-creation-mode check covers `open`, `openat` and their `64`
+variants. It reports omitted mode arguments when exact `O_CREAT` or `O_TMPFILE`
+flags demonstrably survive bitwise OR/AND expressions. Numeric flag values,
+casts, other arithmetic, indirect flag definitions and expressions longer
+than 512 characters
+are outside this check's proof scope.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
