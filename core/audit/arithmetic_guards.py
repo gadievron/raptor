@@ -139,7 +139,7 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                 if prefix.value_domain(item) is None:
                     return True  # no complete definedness/value domain was established
             if item.type == "unary_expression" and text(item.child_by_field_name("operator")) in {"*", "-"}:
-                if source_integer_atom(item, data) is None:
+                if source_integer_atom(item, data) is None and prefix.value_domain(item) is None:
                     return True
             if item.type in {"assignment_expression", "update_expression", "new_expression", "delete_expression"}:
                 return True  # no alias/evaluation-order model, including C++ references

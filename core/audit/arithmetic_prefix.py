@@ -6,13 +6,12 @@ implementation-defined signed narrowing behavior.
 """
 
 from .arithmetic_operation import _unwrap
-from .arithmetic_prefix_obligations import PrefixProofBudget, binary_domain
+from .arithmetic_prefix_obligations import PrefixProofBudget, binary_domain, unary_domain
+from .arithmetic_expression_types import MAX_PREFIX_DEPTH as _MAX_DEPTH, expression_kind
 from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_types import integer_type, common_integer_type, has_builtin_integer_type
 from .integer_literals import source_integer_atom, integer_literal_value
 from .narrowing_bindings import visible_declarations
-
-_MAX_DEPTH = 64
 
 
 class PrefixIntegerModel:
@@ -23,6 +22,7 @@ class PrefixIntegerModel:
         self.language = language
         self.abi = abi
         self._domains = {}
+        self._kinds = {}
         self.proofs = PrefixProofBudget()
 
     def text(self, node):
@@ -77,6 +77,9 @@ class PrefixIntegerModel:
     def cast_kind(self, node):
         base = self.descriptor_base(node.child_by_field_name("type"))
         return integer_type(self.text(base), self.abi) if has_builtin_integer_type(base, self.text(base), self.language) else None
+
+    def expression_kind(self, node, depth=0):
+        return expression_kind(self, node, depth)
 
     def discarded_integer_cast(self, node):
         return (self.text(self.descriptor_base(node.child_by_field_name("type"))) == "void"
@@ -155,6 +158,8 @@ class PrefixIntegerModel:
                     result = domain
                 elif not kind.signed:
                     result = (minimum, maximum)
+        elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) in {"+", "-", "~"}:
+            result = unary_domain(self, node, depth)
         elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) == "!":
             if self.value_domain(node.child_by_field_name("argument"), depth + 1) is not None:
                 result = (0, 1)

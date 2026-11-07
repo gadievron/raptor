@@ -11,9 +11,7 @@ from core.smt_solver.csem import (
 from core.smt_solver.session import check_solver, query_budget, solver_reason_unknown
 
 from .arithmetic_operation import _unwrap
-from .arithmetic_types import common_integer_type
-from .integer_literals import source_integer_atom
-from .narrowing_bindings import visible_declarations
+from .arithmetic_expression_types import promoted
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +50,7 @@ class PrefixProofBudget:
 
 
 def binary_domain(model, node, depth):
-    """Admit atomic integer arithmetic with full-domain definedness.
+    """Admit pure integer arithmetic with full-domain definedness.
 
     Guard refinement and local value flow are intentionally absent: these
     intervals overapproximate each operand independently. A proof therefore
@@ -64,32 +62,20 @@ def binary_domain(model, node, depth):
     left, right = (_unwrap(node.child_by_field_name(field)) for field in ('left', 'right'))
     if left is None or right is None:
         return None
-    atoms = []
-    for item in (left, right):
-        if item.type == 'identifier':
-            if model.kind_for_name(item) is None:
-                return None
-            atoms.append(model.text(item))
-        else:
-            atom = source_integer_atom(item, model.data)
-            if atom is None:
-                return None
-            atoms.append(atom)
     domains = [model.value_domain(item, depth + 1) for item in (left, right)]
     if any(domain is None or None in domain for domain in domains):
         return None
-    declarations = visible_declarations(node, model.data)
-    types = [(name, value[0]) for name, value in declarations.items()]
     if operator in {'<<', '>>'}:
-        left_kind = common_integer_type([atoms[0]], types, model.abi)
-        count_kind = common_integer_type([atoms[1]], types, model.abi)
+        left_kind = model.expression_kind(node, depth)
+        raw_count_kind = model.expression_kind(right, depth + 1)
+        count_kind = promoted(raw_count_kind) if raw_count_kind is not None else None
         if left_kind is None or count_kind is None or (operator == '>>' and domains[0][0] < 0):
             return None  # negative signed right shifts need implementation assumptions
         count = z3.FreshConst(z3.BitVecSort(count_kind.width), prefix='prefix_count')
         if operator == '>>':
             invalid = shift_count_invalid(count, left_kind.width, signed=count_kind.signed)
             if model.proofs.impossible(invalid, [(count, *domains[1], count_kind.signed)]):
-                return (0, domains[0][1])  # conservative for all admitted counts
+                return domains[0][0] >> domains[1][1], domains[0][1] >> domains[1][0]
             return None
         value = z3.FreshConst(z3.BitVecSort(left_kind.width), prefix='prefix_value')
         invalid = left_shift_undefined(value, count, value_signed=left_kind.signed, count_signed=count_kind.signed)
@@ -101,7 +87,7 @@ def binary_domain(model, node, depth):
         low, high = domains[0][0] << domains[1][0], domains[0][1] << domains[1][1]
         maximum = (1 << (left_kind.width - (1 if left_kind.signed else 0))) - 1
         return (low, high) if high <= maximum else (0, maximum)
-    kind = common_integer_type(atoms, types, model.abi)
+    kind = model.expression_kind(node, depth)
     if kind is None:
         return None
     a, b = (z3.FreshConst(z3.BitVecSort(kind.width), prefix='prefix_operand') for _ in range(2))
@@ -138,3 +124,31 @@ def binary_domain(model, node, depth):
         bound = min(max(abs(low_a), abs(high_a)), max(abs(low_b), abs(high_b)) - 1)
         return (-bound if low_a < 0 else 0, bound if high_a > 0 else 0)
     return None
+
+
+def unary_domain(model, node, depth):
+    """Promote pure unary integers; prove signed negation before executing it."""
+    if not z3_available():
+        return None
+    child = node.child_by_field_name('argument')
+    domain = model.value_domain(child, depth + 1)
+    kind = model.expression_kind(node, depth)
+    if domain is None or None in domain or kind is None:
+        return None
+    low, high = domain
+    operator = model.text(node.child_by_field_name('operator'))
+    if operator == '+':
+        return domain
+    if operator == '~':
+        # The explicit ABI requires two's-complement integers without padding.
+        maximum = (1 << kind.width) - 1
+        return (-high - 1, -low - 1) if kind.signed else (maximum - high, maximum - low)
+    if operator != '-':
+        return None
+    if kind.signed:
+        value = z3.FreshConst(z3.BitVecSort(kind.width), prefix='prefix_negated')
+        zero = z3.BitVecVal(0, kind.width)
+        if not model.proofs.impossible(ssub_overflows(zero, value), [(value, low, high, True)]):
+            return None
+        return -high, -low
+    return (0, 0) if low == high == 0 else (0, (1 << kind.width) - 1)
