@@ -22,13 +22,28 @@ from core.run.scratch import scratch_dir
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.scratch as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.scratch as consumer_0
+    import core.run.tmp_reaper as consumer_1
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setattr(consumer_1, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 
 
 @pytest.fixture
-def tmp_root(tmp_path, monkeypatch):
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+def tmp_root(tmp_path, monkeypatch, _owned_tempfile_namespace):
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(tmp_path))
     monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
     return tmp_path
 

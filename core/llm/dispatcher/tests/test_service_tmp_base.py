@@ -10,6 +10,20 @@ from core.llm.dispatcher import server
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.llm.dispatcher.server as _tempfile_owner
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.llm.dispatcher.server as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 def test_compact_socket_uses_captured_service_base_not_later_environment(monkeypatch):
     # Keep physical test paths short on the real host. Darwin's real private
@@ -19,7 +33,7 @@ def test_compact_socket_uses_captured_service_base_not_later_environment(monkeyp
         selected = Path(directory)
         deep = selected / ('session-' + 'x' * 110)
         deep.mkdir()
-        monkeypatch.setattr(tempfile, 'tempdir', str(deep))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(deep))
         monkeypatch.setattr(server, '_SERVICE_TMP_BASE', str(selected))
         monkeypatch.setenv('_RAPTOR_SERVICE_TMP_BASE', '/changed-after-startup')
         patch_module_attribute(monkeypatch, server, 'sys', 'platform', 'darwin')

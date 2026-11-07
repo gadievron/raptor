@@ -13,6 +13,19 @@ from packages.web import _browser_sandbox as boundary
 
 from core.testing.module_bindings import patch_module_attribute
 
+import packages.web._browser_sandbox as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import packages.web._browser_sandbox as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 @pytest.fixture(autouse=True)
 def selected_nonroot_driver(monkeypatch):
@@ -77,7 +90,7 @@ def test_launcher_restores_environment_and_keeps_controls_outside_work(tmp_path,
         monkeypatch.setenv('PLAYWRIGHT_NODEJS_PATH', previous)
     long_base = tmp_path / ('long-session-' * 8)
     long_base.mkdir()
-    monkeypatch.setattr(boundary.tempfile, 'tempdir', str(long_base))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(long_base))
     launched = []
     closed = []
     class Factory:

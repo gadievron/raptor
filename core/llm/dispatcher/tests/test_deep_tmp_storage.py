@@ -3,12 +3,25 @@ import errno
 import os
 from pathlib import Path
 import sys
-import tempfile
 
 import pytest
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import LLMDispatcher
+
+import core.llm.dispatcher.server as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.llm.dispatcher.server as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux procfs socket address')
 
@@ -16,7 +29,7 @@ pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux procfs so
 def test_deep_socket_storage_stays_owned_and_pin_closes_at_shutdown(tmp_path, monkeypatch):
     base = tmp_path / ('selected-base-' + 'x' * 100)
     base.mkdir()
-    monkeypatch.setattr(tempfile, 'tempdir', str(base))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(base))
     creds = CredentialStore.__new__(CredentialStore)
     creds._keys = {}
     dispatcher = LLMDispatcher(run_id='deep-owned', creds=creds)
@@ -40,7 +53,7 @@ def test_deep_socket_storage_stays_owned_and_pin_closes_at_shutdown(tmp_path, mo
 def test_failed_server_setup_closes_deep_directory_pin(tmp_path, monkeypatch):
     base = tmp_path / ('failed-base-' + 'x' * 100)
     base.mkdir()
-    monkeypatch.setattr(tempfile, 'tempdir', str(base))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(base))
     descriptor = []
     def refused(self, run_id):
         descriptor.append(int(self.socket_path.parent.name))

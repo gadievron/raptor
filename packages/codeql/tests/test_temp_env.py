@@ -15,6 +15,19 @@ from packages.codeql.temp_env import temporary_command
 import packages.codeql.temp_env as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
 
+import packages.codeql.temp_env as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import packages.codeql.temp_env as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux read-only /tmp steering")
 
@@ -43,9 +56,8 @@ def test_readonly_system_tmp_steers_shell_and_java_without_shell_evaluation(read
 
 
 def test_standalone_caller_uses_python_selected_tmp_without_launcher(readonly_tmp, monkeypatch):
-    import tempfile
     monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {}))
-    monkeypatch.setattr(tempfile, 'tempdir', str(readonly_tmp))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(readonly_tmp))
     assert temporary_command(['/tools/codeql', 'version'])[5] == str(readonly_tmp)
 
 

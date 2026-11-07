@@ -19,6 +19,19 @@ from core.run.tmp_reaper import reap_stale_logs, reap_stale_runs, reap_stale_tmp
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.tmp_reaper as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.tmp_reaper as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 
@@ -104,8 +117,8 @@ def _guard_pid_one_kill(monkeypatch):
 
 
 @pytest.fixture
-def tmp_root(tmp_path, monkeypatch):
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+def tmp_root(tmp_path, monkeypatch, _owned_tempfile_namespace):
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(tmp_path))
     monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
     return tmp_path
 
@@ -266,7 +279,7 @@ class TestDirReaping:
         import shutil
         import tempfile
         short_root = tempfile.mkdtemp(prefix="rpt_", dir="/tmp")
-        monkeypatch.setattr("tempfile.gettempdir", lambda: short_root)
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: short_root)
         monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
         try:
             d = _make_old_dir(Path(short_root),
@@ -1033,14 +1046,14 @@ class TestMultiRootSweep:
     the per-session TMPDIR and root-level strays were invisible."""
 
     @pytest.fixture
-    def roots(self, tmp_path, monkeypatch):
+    def roots(self, tmp_path, monkeypatch, _owned_tempfile_namespace):
         from core.run import tmp_reaper as reaper_mod
         session = tmp_path / "session-tmp"
         system = tmp_path / "system-tmp"
         runuser = tmp_path / "run-user"
         for d in (session, system, runuser):
             d.mkdir()
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(session))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(session))
         monkeypatch.setattr(
             reaper_mod, "_SYSTEM_TMP_ROOTS", (str(system),))
         monkeypatch.setattr(
@@ -1101,7 +1114,7 @@ class TestMultiRootSweep:
         # Bare-shell shape: gettempdir() IS the system root — one
         # sweep, no double-reporting.
         _session, system, _runuser = roots
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(system))
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: str(system))
         stray = _make_old_dir(system, "raptor-pytest-dedupe1")
         assert reap_stale_tmp() == [stray]
 

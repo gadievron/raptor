@@ -7,6 +7,19 @@ from core.run import scratch
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.run.scratch as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import core.run.scratch as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
 
 @pytest.mark.parametrize("keep", [False, True])
 @pytest.mark.parametrize("stage", ["register", "advisory", "env"])
@@ -78,7 +91,7 @@ def test_temp_text_failure_removes_partial_file(tmp_path, monkeypatch, failure, 
 
 
 def test_temp_text_success_transfers_closed_utf8_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(scratch.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_path))
     path = scratch.write_temp_text("café", prefix="rule-", suffix=".yaml")
     try:
         assert path.read_bytes() == "café".encode("utf-8")

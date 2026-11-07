@@ -27,6 +27,21 @@ from packages.joern.tests.conftest import (
 
 # Bytes ``_uds_budget_ok`` appends to the root it is given:
 # "/" + "j" + 8 mkdtemp chars + "/" + the longest socket filename.
+
+import packages.joern.tests.conftest as _tempfile_owner
+
+
+@pytest.fixture(autouse=True)
+def _owned_tempfile_namespace(monkeypatch):
+    """Share temporary-root faults only among this file's consumers."""
+    from core.testing.tempdirs import private_tempfile_module
+    import packages.joern.tests.conftest as consumer_0
+
+    private = private_tempfile_module(consumer_0.tempfile)
+    monkeypatch.setattr(consumer_0, "tempfile", private)
+    monkeypatch.setitem(globals(), "tempfile", private)
+
+
 _WORST_SUFFIX_BYTES: int = 1 + 9 + 1 + _UDS_SOCK_NAME_MAX
 
 
@@ -76,7 +91,7 @@ class TestUdsDirFixtureByteBudget:
         assert len(fake_root) + _WORST_SUFFIX_BYTES <= _SUN_PATH_MAX
         assert len(os.fsencode(fake_root)) + _WORST_SUFFIX_BYTES > _SUN_PATH_MAX
 
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: fake_root)
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: fake_root)
         d = request.getfixturevalue("uds_dir")
         sock = os.path.join(d, "n" * _UDS_SOCK_NAME_MAX)
         assert len(os.fsencode(sock)) <= _SUN_PATH_MAX
