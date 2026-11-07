@@ -22,7 +22,7 @@ import sys
 from collections.abc import Callable, Mapping
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -1318,15 +1318,77 @@ _TMP_FAKE_HOME = "/tmp/.home"
 #: writable by any EARLIER sandboxed child sharing the output dir, so
 #: the parent-side staging walk must be bounded. Both directions
 #: matter: legitimate pre-population is a handful of small dotfiles
-#: (gitconfig, tool rc files — hundreds of bytes each), so 256 files /
+#: (gitconfig, tool rc files — hundreds of bytes each), so 256 subdirectories / 256 files /
 #: 8 MiB is an order of magnitude of headroom; raising the caps lets a
 #: hostile prior child make the parent buffer arbitrarily much of its
 #: run-dir plant into memory AND replay it into every subsequent
 #: sandbox's tmpfs budget. Exceeding a cap never fails the run — the
 #: child keeps the attributable ``<output>/.home`` (status quo ante)
 #: with a warning.
+_FAKE_HOME_INGEST_MAX_DIRS = 256
 _FAKE_HOME_INGEST_MAX_FILES = 256
 _FAKE_HOME_INGEST_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _bounded_fake_home_walk(home_fd):
+    """Walk pinned directories with bounded enumeration and descriptor ownership.
+
+    The root descriptor is borrowed. Child descriptors and scanners belong to
+    this generator, including when its consumer stops before traversal ends.
+    """
+    directories = files = 0
+    frames = [(".", home_fd, False, None)]
+    try:
+        while frames:
+            rel, fd, owned, children = frames[-1]
+            if children is None:
+                dirnames, filenames = [], []
+                entries = None
+                try:
+                    entries = os.scandir(fd)
+                    for entry in entries:
+                        if entry.is_dir(follow_symlinks=False):
+                            directories += 1
+                            if directories > _FAKE_HOME_INGEST_MAX_DIRS:
+                                raise OSError(errno.E2BIG, "fake-home directory budget exceeded")
+                            dirnames.append(entry.name)
+                        else:
+                            files += 1
+                            if files > _FAKE_HOME_INGEST_MAX_FILES:
+                                raise OSError(errno.E2BIG, "fake-home file budget exceeded")
+                            filenames.append(entry.name)
+                except BaseException:
+                    if entries is not None:
+                        with suppress(OSError):
+                            entries.close()
+                    raise
+                else:
+                    entries.close()
+                frames[-1] = (rel, fd, owned, iter(dirnames))
+                yield rel, dirnames, filenames, fd
+            else:
+                name = next(children, None)
+                if name is None:
+                    frames.pop()
+                    if owned:
+                        os.close(fd)
+                else:
+                    child_rel = os.path.join(rel, name)
+                    child_fd = os.open(
+                        name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        dir_fd=fd)
+                    try:
+                        frames.append((child_rel, child_fd, True, None))
+                    except BaseException:
+                        with suppress(OSError):
+                            os.close(child_fd)
+                        raise
+    finally:
+        while frames:
+            _, fd, owned, _ = frames.pop()
+            if owned:
+                with suppress(OSError):
+                    os.close(fd)
 
 
 def _stage_fake_home_intake(
@@ -1336,7 +1398,7 @@ def _stage_fake_home_intake(
     Returns ``(stage_files, stage_dirs)`` for the mount-ns staging
     seam — file contents keyed by in-sandbox path, plus the directory
     skeleton (empty XDG subdirs included). Returns ``None`` when the
-    intake cannot be staged faithfully: over the file-count/byte
+    intake cannot be staged faithfully: over the directory-count/file-count/byte
     budgets, or any member is not a plain file/directory (a symlink,
     FIFO, or device in the intake is a plant from an earlier child —
     following it would read attacker-chosen host paths into the next
@@ -1347,68 +1409,60 @@ def _stage_fake_home_intake(
     stage_dirs: list[str] = [_TMP_FAKE_HOME]
     total = 0
 
-    def _raise(err: OSError) -> None:
-        # os.walk swallows listdir errors by default: an unreadable
-        # SUBDIR would be staged as an empty directory — contents
-        # silently dropped — while an unreadable FILE refuses the
-        # whole stage. Re-raise so both shapes take the same
-        # refuse-and-fall-back path (the except below).
-        raise err
-
     home_fd = None
     body_failed = False
     home_close_failed = False
     try:
         home_fd = _open_fake_home(fake_home_path)
-        for rel, dirnames, filenames, dir_fd in os.fwalk(
-                '.', dir_fd=home_fd, onerror=_raise, follow_symlinks=False):
-            rel = os.path.normpath(rel)
-            in_sbx_dir = (_TMP_FAKE_HOME if rel == "."
-                          else os.path.join(_TMP_FAKE_HOME, rel))
-            for name in dirnames:
-                st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-                if not stat.S_ISDIR(st.st_mode):
-                    return None
-                stage_dirs.append(os.path.join(in_sbx_dir, name))
-            for name in filenames:
-                if len(stage_files) >= _FAKE_HOME_INGEST_MAX_FILES:
-                    return None
-                # O_NOFOLLOW + fstat: the lstat/open race is real in
-                # a dir an earlier sandboxed child could write.
-                read_failed = False
-                fd = os.open(name,
-                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                             dir_fd=dir_fd)
-                try:
-                    st = os.fstat(fd)
-                    if not stat.S_ISREG(st.st_mode):
+        with closing(_bounded_fake_home_walk(home_fd)) as walk:
+            for rel, dirnames, filenames, dir_fd in walk:
+                rel = os.path.normpath(rel)
+                in_sbx_dir = (_TMP_FAKE_HOME if rel == "."
+                              else os.path.join(_TMP_FAKE_HOME, rel))
+                for name in dirnames:
+                    st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+                    if not stat.S_ISDIR(st.st_mode):
                         return None
-                    budget = _FAKE_HOME_INGEST_MAX_BYTES - total
-                    if st.st_size > budget:
+                    stage_dirs.append(os.path.join(in_sbx_dir, name))
+                for name in filenames:
+                    if len(stage_files) >= _FAKE_HOME_INGEST_MAX_FILES:
                         return None
-                    data = b""
-                    while len(data) <= budget:
-                        chunk = os.read(fd, 65536)
-                        if not chunk:
-                            break
-                        data += chunk
-                    if len(data) > budget:
-                        # The file grew past its fstat size mid-read
-                        # (concurrent writer) — refuse rather than
-                        # stage a torn/oversize copy.
-                        return None
-                except BaseException:
-                    read_failed = True
-                    raise
-                finally:
+                    # O_NOFOLLOW + fstat: the lstat/open race is real in
+                    # a dir an earlier sandboxed child could write.
+                    read_failed = False
+                    fd = os.open(name,
+                                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=dir_fd)
                     try:
-                        os.close(fd)
-                    except OSError:
-                        # Keep a read failure or cancellation authoritative.
-                        if not read_failed:
-                            raise
-                total += len(data)
-                stage_files[os.path.join(in_sbx_dir, name)] = data
+                        st = os.fstat(fd)
+                        if not stat.S_ISREG(st.st_mode):
+                            return None
+                        budget = _FAKE_HOME_INGEST_MAX_BYTES - total
+                        if st.st_size > budget:
+                            return None
+                        data = b""
+                        while len(data) <= budget:
+                            chunk = os.read(fd, 65536)
+                            if not chunk:
+                                break
+                            data += chunk
+                        if len(data) > budget:
+                            # The file grew past its fstat size mid-read
+                            # (concurrent writer) — refuse rather than
+                            # stage a torn/oversize copy.
+                            return None
+                    except BaseException:
+                        read_failed = True
+                        raise
+                    finally:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            # Keep a read failure or cancellation authoritative.
+                            if not read_failed:
+                                raise
+                    total += len(data)
+                    stage_files[os.path.join(in_sbx_dir, name)] = data
     except OSError:
         return None
     except BaseException:
