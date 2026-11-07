@@ -96,3 +96,14 @@ def test_digest_is_canonical_and_handles_escaped_unicode():
     reordered = dict(reversed(list(capture.items())))
     assert audit_capture_digest(capture) == audit_capture_digest(reordered)
     assert len(audit_capture_digest(capture)) == 64
+
+
+@pytest.mark.parametrize("sampled", [0, 1, -1, True, "1"])
+def test_sampled_observations_cannot_prove_complete_absence(sampled):
+    events, capture = partition_audit_records([
+        {"type": "audit_summary", "reader_drained": True, "sampled_keeps": sampled},
+    ])
+    assert events == []
+    assert capture["capture_incomplete"] is (type(sampled) is not int or sampled != 0)
+    assert capture["budget_truncated"] is False
+    assert valid_audit_capture(capture)
