@@ -45,4 +45,4 @@ def test_confined_worker_preserves_checked_subtraction_artifact(guard):
     assert result.details["witness_validated"] is True
     assert result.details["mathematical_result"] == result.details["model"]["Value"] - result.details["model"]["Step"]
     assert result.details["proof_scope"] == "function-entry-source-model"
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v16"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v17"

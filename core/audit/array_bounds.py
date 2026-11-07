@@ -20,7 +20,6 @@ from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
-from .integer_literals import source_integer_atom
 from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import visible_declarations
 
@@ -217,9 +216,6 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
             return ArrayAccess("unavailable", "array initializer effects are unsupported")
 
     for node in body_nodes:
-        if (node.type == "unary_expression" and text(node.child_by_field_name("operator")) != "!"
-                and source_integer_atom(node, data) is None):
-            return ArrayAccess("unavailable", "unary evaluation is unsupported")
         if node.type == "identifier" and text(node) == claim[0] and node not in (name, array):
             return ArrayAccess("unavailable", "the object has another use or escape")
         if node.type == "declaration" and node != declaration:

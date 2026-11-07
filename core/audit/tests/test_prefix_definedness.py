@@ -41,7 +41,7 @@ def test_safe_prefix_arithmetic_reaches_the_real_source_verifier(language, prefi
                                      source=source(prefix, extra), hypothesis='integer overflow in `Value + Step`',
                                      integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v16'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v17'
 
 
 @pytest.mark.parametrize('prefix,extra', [
@@ -145,8 +145,11 @@ def test_auxiliary_disproof_consumes_the_same_defined_prefix_model():
 @pytest.mark.parametrize('spelling', ['signed char', 'unsigned char'])
 @pytest.mark.parametrize('operator', ['/', '%'])
 @pytest.mark.parametrize('divisor', [-7, -2, -1, 1, 2, 3, 7])
-def test_proven_prefix_result_domains_contain_every_independent_integer_result(spelling, operator, divisor):
+def test_proven_prefix_result_domains_contain_every_independent_integer_result(spelling, operator, divisor, monkeypatch):
     from core.audit.arithmetic_prefix import PrefixIntegerModel
+    from core.audit import arithmetic_prefix_obligations
+    # Interval correctness is independent of the production soft deadline.
+    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
     from core.audit.condition_extraction import _get_parser
     from core.audit.integer_abi import resolve_integer_abi
     data = f'int Read({spelling} Extra){{return Extra {operator} {divisor};}}'.encode()
