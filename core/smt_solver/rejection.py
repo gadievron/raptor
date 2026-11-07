@@ -150,6 +150,12 @@ class RejectionKind(str, Enum):
     path. Independent contradictions within one segment remain useful.
     Call occurrences are always fresh, regardless of mutation markers."""
 
+    UNMODELED_STATE_EFFECT = "unmodeled_state_effect"
+    """Call-shaped input may expose mutable state through address arguments.
+    Opaque argument syntax cannot establish purity or preserve scalar value
+    identity across the call. As with rejected assignments, native core
+    provenance must confine a refutation to one mutation-free segment."""
+
 
 # RejectionKinds that no encoder emits any more but that we've kept in
 # the enum for back-compat with downstream consumers that match on the

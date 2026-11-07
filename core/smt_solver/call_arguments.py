@@ -1,6 +1,30 @@
 """Conservative argument boundaries for optional SMT call summaries."""
 
 
+def mask_quoted_text(text: str) -> str:
+    """Blank quoted bytes for effect scans, preserving every source offset.
+
+    Backslash escapes are interpreted only for finding the closing quote.
+    This is lexical masking, not a C string or character literal evaluator.
+    """
+    out = list(text)
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if quote:
+            out[index] = " "
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+            out[index] = " "
+    return "".join(out)
+
+
 def split_call_arguments(text: str) -> tuple[str, ...] | None:
     """Split top-level commas, declining malformed delimiters or empty slots.
 
