@@ -269,6 +269,22 @@ as well. A silent result is not a safety verdict. Prefer JSON for
 untrusted data; class restrictions alone do not make untrusted
 `unserialize` safe. See the [PHP unserialize manual](https://www.php.net/manual/en/function.unserialize.php).
 
+For raw PHP attribute-XSS checks, literal continuations must keep the
+attribute open: a safe attribute value does not borrow request taint from
+body text after a closing-attribute literal. Request values after fixed
+prefixes inside the same attribute still report. Nested calls, spaced array
+reads, earlier balanced attributes and common escapes in PHP double-quoted
+opener literals are supported. Numeric casts/results and URL-encoded results
+are modeled as safe values; ignored conversions do not sanitize the original
+variable.
+
+These concatenation checks operate on expressions, so the result need not
+be echoed. Complex templates, opener literals spanning lines and comments
+at the opener/dot/value boundary need separate review. Interpolation remains
+a narrower, string-level check for single-quoted attributes in `echo` or
+`print`: a safe attribute interpolation with request data elsewhere in the
+same string can still report. A no-match remains inconclusive in `/audit`.
+
 PHP quoted-attribute encoding checks cover both `htmlspecialchars` and
 `htmlentities`. They check whether explicit flags protect the surrounding
 quote, including document/error flags that do not enable quoting, supported

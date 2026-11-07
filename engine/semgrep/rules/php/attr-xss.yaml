@@ -25,56 +25,30 @@ rules:
   # not help in the unquoted context, which is why the fix is
   # ENT_QUOTES plus a quoted attribute.
   #
-  # Shape note (load-bearing, do not "simplify" back): the
-  # concatenation sinks are text-level (pattern-regex), not the AST
-  # shape `$LIT . $V`. The AST shape enumerates operand splits of a
-  # flattened concatenation chain, which is superlinear on 100+-term
-  # chains — past semgrep's default per-rule-per-file timeout, so a
-  # whole-pack scan silently STRIPPED this rule from exactly the
-  # concat-heavy files it targets. The text anchor scans flat and
-  # also covers openers mid-chain (a leading expression before the
-  # opener literal needs no separate pattern). The literal-content
-  # classes are newline-bounded, so an OPENER LITERAL never spans
-  # lines, and only whitespace may sit between literal, dot, and
-  # value — that whitespace may span lines (dot-continuation across
-  # lines still fires), while a comment in between is a pinned
-  # boundary shape.
+  # Concatenation follows complete operands while literal continuations
+  # keep the attribute open. It stops before a literal closing that HTML
+  # attribute, so a safe value cannot borrow request taint from body text.
+  # Balanced calls/indexes retain nested arguments and spaced reads;
+  # top-level operands are bounded to 120 atoms and opener segments to 512.
+  # Atomic subroutine atoms avoid flattened-concatenation AST splits and
+  # partial-call matches. Earlier balanced attributes and common PHP
+  # escapes in a double-quoted opener are supported.
   #
-  # Division of labour: ANY htmlspecialchars/htmlentities call
-  # (qualified or not) clears taint here. php/attr-encoding.yaml
-  # (CWE-116) checks insufficient quote flags in quoted attributes and
-  # encoded request values in unquoted attributes.
+  # Encoded values belong to php/attr-encoding.yaml (CWE-116), which checks
+  # quote flags and encoded request values in unquoted attributes. Numeric
+  # casts/results and URL-encoded results clear only their return value;
+  # ignored conversions do not sanitize the original request variable.
   #
-  # Known FP modes:
-  #   - The concatenation sinks are expression-level, not echo-bound:
-  #     a tainted value concatenated after an attribute-opener-shaped
-  #     literal fires even when the result never reaches output —
-  #     bounded by requiring a <tag prefix in the literal (a config
-  #     line ending in = stays silent).
-  #   - The text-level sinks match opener-shaped character runs
-  #     anywhere in a line, including inside a longer string's
-  #     CONTENT (a code sample embedded in a string) — a tainted
-  #     expression must still land inside the matched range for a
-  #     finding, which bounds the mode to concatenations adjacent to
-  #     such text.
-  #   - The interpolation sink is string-granular: it requires an
-  #     interpolation directly after a single-quoted attribute opener
-  #     and taint somewhere in the string, but does not prove they
-  #     are the SAME slot — a string with a safe '$var' in opener
-  #     position and the tainted variable elsewhere still fires.
-  # Sanitizer note: ANY htmlspecialchars call clears taint, flagged
-  #   or flagless — since PHP 8.1 the default flags include
-  #   ENT_QUOTES, so flagging the flagless call would FP on every
-  #   modern codebase (the php/attr-encoding.yaml precedent).
+  # Scope: opener literals use PHP double quotes and remain newline-bounded;
+  # comments at the opener/dot/value boundary, printf templates and comma
+  # echo forms remain outside this rule. Concatenations are expression-level,
+  # so a matching value need not be echoed. Arbitrary character reconstruction,
+  # application validators and imported function aliases need separate review.
   #
-  # Scope pins: an opener is one double-quote-delimited literal with
-  #   no embedded escapes (the php/attr-encoding.yaml delimiter
-  #   restriction); the value arrives by direct concatenation or by
-  #   interpolation in ONE echoed/printed string; taint is
-  #   single-function; double-quoted attributes and text content
-  #   belong to the generic echo-XSS class, which this rule does not
-  #   claim. The negative fixture carries out-of-scope shape pins for
-  #   each boundary — each flips when a matching shape lands.
+  # Interpolation keeps its existing single-quoted-attribute, echo/print
+  # subset. It is string-granular: a safe interpolation in an attribute
+  # and request data elsewhere in the same string can still report. Do not
+  # replace it with one greedy regex that loses other attribute slots.
   - id: raptor.php.attr-xss.attr-context
     mode: taint
     languages: [php]
@@ -186,46 +160,80 @@ rules:
               }
         exact: true
     pattern-sanitizers:
-      - exact: true
-        pattern-either:
-          - pattern: htmlspecialchars(...)
-          - pattern: \htmlspecialchars(...)
-          - pattern: htmlentities(...)
-          - pattern: \htmlentities(...)
-          - pattern: urlencode(...)
-          - pattern: \urlencode(...)
-          - pattern: rawurlencode(...)
-          - pattern: \rawurlencode(...)
-          - pattern: intval(...)
-          - pattern: \intval(...)
+      - patterns:
+          - pattern: $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:htmlspecialchars|htmlentities|urlencode|rawurlencode|intval|floatval|count|sizeof|strlen)$'
+        exact: true
+      - pattern-either:
           - pattern: (int) $X
-      # Semgrep 1.177 needs simple-local assignment results marked too.
-      # Exact matching keeps unsafe calls inside the RHS visible.
+          - pattern: (float) $X
+          - pattern: (bool) $X
+        exact: true
+      # Return-only assignment specs preserve nested sinks and the original value.
+      - patterns:
+          - pattern: $SAFE = $CONVERTER(...)
+          - metavariable-regex:
+              metavariable: $CONVERTER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:htmlspecialchars|htmlentities|urlencode|rawurlencode|intval|floatval|count|sizeof|strlen)$'
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+        exact: true
       - patterns:
           - pattern-either:
-              - pattern: $SAFE = htmlspecialchars(...)
-              - pattern: $SAFE = \htmlspecialchars(...)
-              - pattern: $SAFE = htmlentities(...)
-              - pattern: $SAFE = \htmlentities(...)
-              - pattern: $SAFE = urlencode(...)
-              - pattern: $SAFE = \urlencode(...)
-              - pattern: $SAFE = rawurlencode(...)
-              - pattern: $SAFE = \rawurlencode(...)
-              - pattern: $SAFE = intval(...)
-              - pattern: $SAFE = \intval(...)
               - pattern: $SAFE = (int) $X
+              - pattern: $SAFE = (float) $X
+              - pattern: $SAFE = (bool) $X
           - metavariable-regex:
               metavariable: $SAFE
               regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
         exact: true
     pattern-sinks:
-      # 1: single-quoted attribute opener literal, then `.` and the
-      # value (which must carry the taint).
-      - pattern-regex: '"[^"\n]*<[a-zA-Z][^>"\n]*=''[^''"\n]*"\s*\.\s*\S{1,120}'
-      # 2: unquoted attribute opener literal (single quotes balanced
-      # — an unclosed opener belongs to shape 1), then `.` and the
-      # value.
-      - pattern-regex: '"(?:[^"''\n]|''[^''\n]*'')*<[a-zA-Z](?:[^"''>\n]|''[^''\n]*'')*[a-zA-Z0-9_-]="\s*\.\s*\S{1,120}'
+      # Follow operands only while literal continuations keep this attribute
+      # open. A closing-attribute literal blocks taint in later body text.
+      # Atomic balanced-call/index atoms avoid partial-expression borrowing.
+      - pattern-regex: |-
+          (?x)
+          "(?1){0,512}<[A-Za-z](?4){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+'(?2){0,512}"
+          \s*+\.\s*+\K(?!/\*|//|\#)(?9)(?:\.\s*+(?!/\*|//|\#)(?9))*+
+          (?=[ \t\r\n]*(?:\.(?![0-9])|;|,|\)|\]|$))
+          (?(DEFINE)
+          ((?:[^"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+          ((?:[^'"\\\n]|\\[\\"$nrtvef]))
+          ((?:[^"\\\n]|\\[\\$nrtvef]))
+          ((?:[^<>"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+          ('(?:[^'\\\n]|\\[^'\n])*+')
+          ("(?:[^'"\\\n]|\\[^'0-7xuU\n])*+")
+          ((?:[^.()\[\]{};'",\s]|[ \t\r\n]|(?5)|(?6)|\((?8)*+\)|\[(?8)*+\]))
+          ((?:[^()\[\]'"\\]|\\.|(?10)|(?11)|\((?8)*+\)|\[(?8)*+\]))
+          ((?7){1,120}+)
+          ('(?:[^'\\\n]|\\.)*+')
+          ("(?:[^"\\\n]|\\.)*+")
+          )
+      - pattern-regex: |-
+          (?x)
+          "(?1){0,512}<[A-Za-z](?4){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+"
+          \s*+\.\s*+\K(?!/\*|//|\#)(?9)(?:\.\s*+(?!/\*|//|\#)(?9))*+
+          (?=[ \t\r\n]*(?:\.(?![0-9])|;|,|\)|\]|$))
+          (?(DEFINE)
+          ((?:[^"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+          ((?:[^'"\\\n]|\\[\\"$nrtvef]))
+          ((?:[^"\\\n]|\\[\\$nrtvef]))
+          ((?:[^<>"'\\\n]|\\[\\$nrtvef]|'(?2){0,512}'|\\"(?3){0,512}\\"))
+          ('(?:[^'\\\s<>]|\\[^'\s<>])*+')
+          ("(?:[^'"\\\s<>]|\\[\\$])*+")
+          ((?:[^.()\[\]{};'",\s]|[ \t\r\n]|(?5)|(?6)|\((?8)*+\)|\[(?8)*+\]))
+          ((?:[^()\[\]'"\\]|\\.|(?10)|(?11)|\((?8)*+\)|\[(?8)*+\]))
+          ((?7){1,120}+)
+          ('(?:[^'\\\n]|\\.)*+')
+          ("(?:[^"\\\n]|\\.)*+")
+          )
       # 3: interpolation in the single-quoted opener position of one
       # echoed/printed double-quoted string.
       - patterns:

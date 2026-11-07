@@ -58,6 +58,11 @@ def test_encoded_request_requires_attribute_quoting(tmp_path):
         (r'''$v=strlen(htmlspecialchars($_GET['x'])); echo "<a title=" . $v . ">";''', False),
         (r'''$v=htmlspecialchars(sizeof($_POST['items'])); echo "<a title=" . $v . ">";''', False),
     ]
+    cases += [
+        ('echo "<a title=" . (bool)htmlspecialchars($_GET["x"]) . ">";', False),
+        ('$v=(bool)htmlspecialchars($_GET["x"]); echo "<a title=" . $v . ">";', False),
+        ('$raw=$_GET["x"]; $safe=(bool)$raw; $v=htmlspecialchars($raw); echo "<a title=" . $v . ">";', True),
+    ]
     targets = []
     expected = set()
     for index, (body, finding) in enumerate(cases):
