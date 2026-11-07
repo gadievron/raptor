@@ -1189,6 +1189,8 @@ def _extract_wp(
     undecided; the result remains equivalent, but minimality is incomplete.
     Limits, unavailable solvers, and serialization failures also prevent a
     complete summary. Background axioms are not themselves deleted.
+    All predicates and axioms must be Boolean formulas in one native
+    context; Python Boolean constants are normalized in that same context.
     """
     n = len(pending)
     if n == 0:
@@ -1197,6 +1199,20 @@ def _extract_wp(
         return None, [text for text, _ in pending], False
 
     _axioms = axioms or []
+    expressions = [expr for _, expr in [*pending, *_axioms]]
+    context = next((expr.ctx for expr in expressions if z3.is_bool(expr)), None)
+    if context is None:
+        context = z3.main_ctx()
+    if any(type(expr) is not bool and (not z3.is_bool(expr) or expr.ctx != context)
+           for expr in expressions):
+        raise ValueError("constraint reduction requires Boolean formulas in one Z3 context")
+    # Work on copies so normalization cannot rewrite a caller's registry or
+    # frame. In particular Not(True) must not allocate in the default context
+    # when another predicate or a background axiom owns a private context.
+    pending = [(text, z3.BoolVal(expr, ctx=context) if type(expr) is bool else expr)
+               for text, expr in pending]
+    _axioms = [(text, z3.BoolVal(expr, ctx=context) if type(expr) is bool else expr)
+               for text, expr in _axioms]
 
     order = sorted(range(n), key=lambda i: (_canonicalise(pending[i][0]), i))
     kept = [True] * n
@@ -1210,7 +1226,7 @@ def _extract_wp(
     effective_ms = WP_TIMEOUT_MS
     if timeout_ms is not None:
         effective_ms = min(WP_TIMEOUT_MS, timeout_ms)
-    solver = _new_solver(effective_ms)
+    solver = _new_solver(effective_ms, ctx=context)
     for idx in order:
         if calls >= cap:
             complete = False
