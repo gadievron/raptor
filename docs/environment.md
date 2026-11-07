@@ -796,6 +796,13 @@ Use a model ID from cheapaimodel's `/v1/models` catalog (for example
 `deepseek-v4-1-flash`). This route is opt-in and does not change the default
 provider or model selection.
 
+For CloudGPU, set `CLOUDGPU_API_KEY` to a key created at https://cloudgpu.app.
+Dispatcher requests to `/cloudgpu/v1/chat/completions` are forwarded to
+`https://cloudgpu.app/v1/chat/completions` with Bearer authentication.
+Use a model ID from CloudGPU's `/v1/models` catalog (for example
+`deepseek-v4-flash`). This route is opt-in and does not change the default
+provider or model selection.
+
 For Opper, set `OPPER_API_KEY` to a key from https://platform.opper.ai.
 Dispatcher requests to `/opper/v3/compat/chat/completions` are forwarded to
 `https://api.opper.ai/v3/compat/chat/completions` with Bearer authentication.
