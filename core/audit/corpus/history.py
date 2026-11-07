@@ -563,6 +563,16 @@ def compare_runs(
     cost_b = float(run_b.get("cost_usd") or 0.0)
     matched_a, reviewed_a = _matched(labels_a)
     matched_b, reviewed_b = _matched(labels_b)
+    config_a = run_a.get("config") or {}
+    config_b = run_b.get("config") or {}
+    configuration_changes = []
+    for field in sorted(config_a.keys() | config_b.keys()):
+        if (field in config_a, config_a.get(field)) != (field in config_b, config_b.get(field)):
+            configuration_changes.append({
+                "field": field,
+                "from_recorded": field in config_a, "from": config_a.get(field),
+                "to_recorded": field in config_b, "to": config_b.get(field),
+            })
     return {
         "run_a": run_a,
         "run_b": run_b,
@@ -578,6 +588,7 @@ def compare_runs(
         "cost_a": cost_a,
         "cost_b": cost_b,
         "cost_delta": cost_b - cost_a,
+        "configuration_changes": configuration_changes,
     }
 
 
@@ -615,6 +626,15 @@ def format_compare(diff: dict[str, Any]) -> str:
             if prof_a != prof_b else ""
         )
         lines.append(f"  Profiles: {prof_a} -> {prof_b}{note}")
+    configuration_changes = diff.get("configuration_changes", [])
+    if configuration_changes:
+        from core.security.log_sanitisation import sanitise_for_terminal
+
+        lines.append("  NOTE: recorded configuration differs; verdict changes alone do not isolate fix impact.")
+        for change in configuration_changes:
+            before = repr(change["from"]) if change["from_recorded"] else "(unrecorded)"
+            after = repr(change["to"]) if change["to_recorded"] else "(unrecorded)"
+            lines.append(sanitise_for_terminal(f"    {change['field']}: {before} -> {after}"))
     lines.append(
         f"  Labels: {diff['common']} common"
         + (f", {len(diff['only_in_a'])} only in {a.get('run_id')}"
