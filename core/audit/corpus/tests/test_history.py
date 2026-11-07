@@ -130,7 +130,7 @@ class TestRecordRun:
         out.parent.mkdir()
         out.write_text("{}")
         ok = history.record_run(
-            [_row()], {"wall_s": 5.0, "cost_usd": 1.25, "model": "m"},
+            [_row()], {"wall_s": 5.0, "cost_usd": 1.25, "total_spend_usd": 4.5, "model": "m"},
             output_path=out, run_tag="1700000000",
             labels=[_label()],
             config={"mode": "security", "triage": "off"},
@@ -145,6 +145,7 @@ class TestRecordRun:
         assert run["config"] == {"mode": "security", "triage": "off"}
         assert len(run["label_set_hash"]) == 64
         assert run["cost_usd"] == 1.25
+        assert run["total_spend_usd"] == 4.5
         assert run["totals"]["labels"] == 1
         assert run["totals"]["matched"] == 1
         assert run["imported"] is False
@@ -320,6 +321,41 @@ class TestClassifyFlip:
 
 
 class TestCompareRuns:
+    @pytest.mark.parametrize("before, after, delta", [(4.0, 9.0, 5.0), (0, 0, 0)], ids=["recorded", "zero"])
+    def test_total_spend_is_separate_from_label_cost(self, before, after, delta):
+        a = _run_rec("a", cost_usd=1.0, total_spend_usd=before)
+        b = _run_rec("b", cost_usd=2.0, total_spend_usd=after)
+        diff = history.compare_runs(a, b, {}, {})
+        assert diff["cost_delta"] == 1.0
+        assert diff["total_spend_a"] == before
+        assert diff["total_spend_b"] == after
+        assert diff["total_spend_delta"] == delta
+        output = history.format_compare(diff)
+        assert "Label-attributed cost: $1.0000 -> $2.0000" in output
+        assert f"Recorded total spend: ${before:.4f} -> ${after:.4f} (delta ${delta:+.4f})" in output
+
+    @pytest.mark.parametrize("value", [None, True, -1, "3.0", float("nan"), float("inf"), 10**1000],
+                             ids=["absent", "bool", "negative", "string", "nan", "infinity", "overflow"])
+    def test_missing_or_invalid_total_is_not_inferred_from_label_cost(self, value):
+        a = _run_rec("a", cost_usd=2.0, total_spend_usd=value)
+        b = _run_rec("b", cost_usd=4.0, total_spend_usd=0)
+        diff = history.compare_runs(a, b, {}, {})
+        assert diff["total_spend_a"] is None
+        assert diff["total_spend_delta"] is None
+        assert "Recorded total spend: unknown -> $0.0000 (delta unknown)" in history.format_compare(diff)
+
+    def test_legacy_comparison_without_total_fields_still_formats_unknown(self):
+        diff = history.compare_runs(_run_rec("a"), _run_rec("b"), {}, {})
+        for key in ("total_spend_a", "total_spend_b", "total_spend_delta"):
+            del diff[key]
+        assert "Recorded total spend: unknown -> unknown (delta unknown)" in history.format_compare(diff)
+
+    def test_listing_distinguishes_label_cost_and_recorded_total(self):
+        output = history.format_runs([_run_rec("known", cost_usd=1, total_spend_usd=5), _run_rec("legacy")])
+        assert "Label $" in output and "Total $" in output
+        assert "1.0000" in output and "$5.0000" in output
+        assert "unknown" in output
+
     def test_expectation_revision_is_visible_without_verdict_flip(self):
         a = {"a.c:f": _label_rec("a.c:f", "clean", expected="clean", match=True)}
         b = {"a.c:f": _label_rec("a.c:f", "clean", expected="finding", match=False)}
@@ -526,11 +562,26 @@ class TestImport:
         path.write_text(json.dumps(payload))
         return path
 
+    def test_cli_import_to_compare_retains_both_spend_figures(self, tmp_path, capsys):
+        before = self._write(tmp_path, "before", {
+            "meta": {"cost_usd": 1.0, "total_spend_usd": 4.0}, "results": [_row()],
+        })
+        after = self._write(tmp_path, "after", {
+            "meta": {"cost_usd": 2.0, "total_spend_usd": 9.0}, "results": [_row()],
+        })
+        store = tmp_path / "store.jsonl"
+        assert history.main(["--store", str(store), "import", str(before), str(after)]) == 0
+        capsys.readouterr()
+        assert history.main(["--store", str(store), "compare", "before", "after"]) == 0
+        output = capsys.readouterr().out
+        assert "Label-attributed cost: $1.0000 -> $2.0000" in output
+        assert "Recorded total spend: $4.0000 -> $9.0000 (delta $+5.0000)" in output
+
     def test_wrapped_shape_with_meta(self, tmp_path):
         store = tmp_path / "store.jsonl"
         path = self._write(tmp_path, "corpus-full-v3", {
             "meta": {"wall_s": 9.0, "cost_usd": 3.6, "model": "default",
-                     "count": 1, "triage": "off"},
+                     "count": 1, "triage": "off", "total_spend_usd": 8.5},
             "results": [_row(actual="suspicious", match=False,
                              attribution="wrong_verdict",
                              observed_mechanisms=["smt"])],
@@ -540,6 +591,7 @@ class TestImport:
         runs, labels_by_run = history.load_store(store)
         run = runs[0]
         assert run["imported"] is True
+        assert run["total_spend_usd"] == 8.5
         assert run["config"]["triage"] == "off"
         assert run["config"]["model"] == "default"
         assert run["pipeline_tree_sha"] == ""
@@ -574,6 +626,7 @@ class TestImport:
         assert labels_by_run["corpus-full-v2"][0]["error_reason"] == ""
         assert labels_by_run["corpus-bare"][0]["match"] is False
         for run in runs:
+            assert run["total_spend_usd"] is None
             for key in ("model_resolved", "llm_cache", "llm_cache_policy", "integer_abi"):
                 assert key not in run["config"]
 
