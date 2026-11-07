@@ -4,6 +4,8 @@ import pytest
 
 from core.audit import invariant_smt as inv
 
+pytestmark = pytest.mark.usefixtures("invariant_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def solver_available():
@@ -117,9 +119,11 @@ def test_zero_budget_never_calls_native_check(monkeypatch, entry):
 
     monkeypatch.setattr(inv, "new_solver", construct)
     result = entry("Count <= Limit", "Count++;", timeout_ms=0)
-    site = result.sites[0] if hasattr(result, "sites") else result
-    assert site.verdict == "unknown" and site.model == {}
-    assert "budget exhausted" in site.reason
+    if hasattr(result, "sites"):
+        assert result.outcome == "inconclusive" and result.sites == []
+    else:
+        assert result.verdict == "unknown" and result.model == {}
+    assert "budget exhausted" in result.reason
 
 
 def test_nonnegative_regime_cannot_restart_the_first_query_budget(monkeypatch):

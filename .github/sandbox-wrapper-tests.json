@@ -113,6 +113,14 @@
       ]
     },
     {
+      "source": "core/audit/invariant_worker.py",
+      "entrypoints": [],
+      "contracts": [
+        "core/audit/tests/test_invariant_worker.py::test_isolation_refusal_propagates_without_native_fallback"
+      ],
+      "discovery": "Delegates bounded invariant queries to the confined SMT JSON worker through condition_smt._run_z3_child; isolation refusals propagate without a native fallback."
+    },
+    {
       "source": "core/audit/preprocessor_view.py",
       "entrypoints": [
         "expand_translation_unit"
@@ -812,9 +820,10 @@
             "core/audit/tests/test_smt_worker_native.py::test_native_worker_has_no_host_or_network_authority",
             "core/audit/tests/test_smt_worker_native.py::test_native_timeout_returns_no_verdict",
             "core/audit/tests/test_smt_worker_native.py::test_native_memory_limit",
-            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted"
+            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted",
+            "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker"
           ],
-          "expected": 8
+          "expected": 13
         },
         "darwin": {
           "tests": [
@@ -822,9 +831,10 @@
             "core/audit/tests/test_smt_worker_native.py::test_native_sweep_keeps_kernel_vocabulary_without_read_grant",
             "core/audit/tests/test_smt_worker_native.py::test_native_worker_has_no_host_or_network_authority",
             "core/audit/tests/test_smt_worker_native.py::test_native_timeout_returns_no_verdict",
-            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted"
+            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted",
+            "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker"
           ],
-          "expected": 7
+          "expected": 12
         }
       }
     },

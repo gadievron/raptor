@@ -176,3 +176,15 @@ def test_inconclusive_results_cannot_advertise_a_complete_summary():
 def test_factory_contexts_are_not_coerced(factory, ctx):
     with pytest.raises(ValueError, match='Z3 context'):
         factory(ctx=ctx)
+
+
+def test_yielded_deadline_cannot_extend_an_outer_budget(clock):
+    with session.query_budget(1000) as outer:
+        assert outer == 11.0
+        clock[0] = 10.5
+        with session.query_budget(5000) as inherited:
+            assert inherited == outer
+        with session.query_budget(100) as shorter:
+            assert shorter == 10.6
+    with session.query_budget(5000) as fresh:
+        assert fresh == 15.5

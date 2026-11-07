@@ -1394,6 +1394,9 @@ def _z3_dispatch_json(request: dict) -> Any:
     """
     tag = request.get("tag")
     args = request.get("args") or {}
+    if tag == "invariant_preservation":
+        from .invariant_worker import run_request
+        return run_request(args)
     if tag == "overflow_disproof":
         from .overflow_disproof import run_request
         return run_request(args)

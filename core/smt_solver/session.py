@@ -29,21 +29,24 @@ _QUERY_DEADLINE: ContextVar[float | None] = ContextVar("smt_query_deadline", def
 
 
 @contextmanager
-def query_budget(timeout_ms: int) -> Iterator[None]:
+def query_budget(timeout_ms: int) -> Iterator[float]:
     """Share a soft query budget across path/verb checks and their subqueries.
 
     Time spent parsing or between queries also consumes the budget. Nested
     scopes cannot extend an outer deadline. This is not a process wall-time
     limit: native solver timeouts are cooperative. Use check_solver with
     factory-created solvers; direct native check() calls are outside it.
+    Yields the effective monotonic deadline for same-host worker handoff;
+    process startup must consume the budget rather than restart it.
     """
     if type(timeout_ms) is not int or timeout_ms < 0:
         raise ValueError("query budget must be a nonnegative integer in milliseconds")
     deadline = monotonic() + min(timeout_ms, _MAX_TIMEOUT_MS) / 1000
     outer = _QUERY_DEADLINE.get()
-    token = _QUERY_DEADLINE.set(min(deadline, outer) if outer is not None else deadline)
+    deadline = min(deadline, outer) if outer is not None else deadline
+    token = _QUERY_DEADLINE.set(deadline)
     try:
-        yield
+        yield deadline
     finally:
         _QUERY_DEADLINE.reset(token)
 

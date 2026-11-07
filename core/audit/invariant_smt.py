@@ -39,7 +39,8 @@ Scope — declared, not guessed:
   initialisation) is not proven here.
 
 Degrades gracefully without z3 (outcome ``inconclusive``,
-reason ``z3 unavailable``). No LLM calls, no subprocesses.
+reason ``z3 unavailable``). Native queries run in the shared confined JSON
+worker. No LLM calls or target code execution.
 """
 
 from __future__ import annotations
@@ -487,8 +488,9 @@ def check_invariant_preservation(
     This proves mathematical-integer induction steps, not C conversion,
     overflow, source reachability or the invariant's initialization.
     """
-    with query_budget(timeout_ms):
-        return _check_invariant_preservation(invariant, source, timeout_ms=timeout_ms)
+    from .invariant_worker import run_check
+    with query_budget(timeout_ms) as deadline:
+        return run_check("function", invariant, source, timeout_ms=timeout_ms, deadline=deadline)
 
 
 def _check_invariant_preservation(
@@ -791,9 +793,10 @@ def check_site_preservation(
     timeout_ms: int = 5000,
 ) -> SiteResult:
     """Check exactly one direct mutation using a shared soft query budget."""
-    with query_budget(timeout_ms):
-        return _check_site_preservation(invariant, code, line=line,
-                                       pre_conditions=pre_conditions, timeout_ms=timeout_ms)
+    from .invariant_worker import run_check
+    with query_budget(timeout_ms) as deadline:
+        return run_check("site", invariant, code, line=line, pre_conditions=pre_conditions,
+                         timeout_ms=timeout_ms, deadline=deadline)
 
 
 def _check_site_preservation(
