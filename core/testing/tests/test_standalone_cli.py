@@ -38,3 +38,24 @@ def test_child_owns_state_and_preserves_transport(tmp_path, monkeypatch, trusted
     assert not Path(child["HOME"]).exists(), "owned state was not removed"
     assert dict(os.environ) == before
     assert env["_RAPTOR_SCRATCH_AUTH"] == "stale"
+
+
+def test_explicit_owned_data_home_survives_multiple_children(tmp_path, monkeypatch):
+    data_home = tmp_path / "keys"
+    data_home.mkdir()
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "unrelated-parent-data"))
+    before = dict(os.environ)
+    program = (
+        "import os,pathlib; "
+        "p=pathlib.Path(os.environ['XDG_DATA_HOME'])/'owned-marker'; "
+        "print(p.read_text() if p.exists() else 'fresh'); p.write_text('shared')"
+    )
+    for expected in ("fresh", "shared"):
+        result = run_standalone_cli(
+            [sys.executable, "-I", "-c", program],
+            data_home=data_home, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+    assert (data_home / "owned-marker").read_text() == "shared"
+    assert dict(os.environ) == before
