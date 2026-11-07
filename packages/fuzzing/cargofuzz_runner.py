@@ -79,7 +79,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass, field
 from itertools import islice
@@ -89,6 +88,7 @@ from typing import Any
 from core.atomic_fs import open_exclusive_artifact, write_new_text
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.scratch import scratch_dir
 from core.run.workdir import exec_workdir
 from packages.fuzzing import libfuzzer_runner as _lf
 from packages.fuzzing.env_hygiene import scrub_identity_env
@@ -191,11 +191,11 @@ def nightly_toolchain_arg(cargo: str | None = None) -> str | None:
     if cargo is None:
         return None
     try:
-        with tempfile.TemporaryDirectory(prefix="raptor-fuzz-probe-", dir=exec_workdir()) as home:
+        with scratch_dir("raptor-fuzz-probe-", dir=exec_workdir(), keepalive=True) as home:
             env = _probe_env()
             # Preserve RUSTUP_HOME, but never let a host probe discover config
             # through the identity scrubber's shared HOME=/tmp fallback.
-            env["HOME"] = home
+            env["HOME"] = str(home)
             # rustup shims consult rust-toolchain.toml up the cwd ancestry even
             # for cargo --version. Pin the launcher before leaving target cwd.
             cargo = os.path.abspath(cargo if os.sep in cargo else (shutil.which(cargo) or cargo))

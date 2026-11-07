@@ -43,10 +43,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from tempfile import TemporaryDirectory
 import threading
 from dataclasses import dataclass, field
 from core.security.env_sanitisation import safe_subprocess_env
+from core.run.scratch import scratch_dir
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,8 @@ def _probe_environment(isolated_home: bool):
         return
     # Some --version commands initialize settings and logs. Keep those writes
     # inside the caller's writable scratch, never in the operator's HOME.
-    with TemporaryDirectory(prefix="raptor-toolprobe-", dir=env.get("TMPDIR")) as home:
-        env["HOME"] = home
+    with scratch_dir("raptor-toolprobe-", dir=env.get("TMPDIR"), keepalive=True) as home:
+        env["HOME"] = str(home)
         for name, suffix in (("XDG_CONFIG_HOME", ".config"),
                              ("XDG_CACHE_HOME", ".cache"),
                              ("XDG_DATA_HOME", ".local/share")):

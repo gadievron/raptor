@@ -45,10 +45,12 @@ doctor without per-site updates.
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 from collections.abc import Iterable
 
 from core.security.log_sanitisation import escape_nonprintable
+from core.run.scratch import scratch_dir
 
 _USAGE = (
     "usage: raptor doctor [--strict] [--verbose]\n"
@@ -130,9 +132,6 @@ def _module_dep_warnings() -> list[str]:
     sys.path, PYTHON* env ignored, no user site), from a fresh empty
     temp directory, with the sanitised env.
     """
-    import subprocess
-    import tempfile
-
     out: list[str] = []
     try:
         import importlib.util
@@ -158,9 +157,7 @@ def _module_dep_warnings() -> list[str]:
             )
             continue
         try:
-            with tempfile.TemporaryDirectory(
-                prefix="raptor-doctor-probe-",
-            ) as neutral_cwd:
+            with scratch_dir("raptor-doctor-probe-") as neutral_cwd:
                 # -I isolates the probe from cwd/PYTHONPATH shadowing,
                 # but it ALSO disables user site-packages — a healthy
                 # `pip install --user` dep then probes as "installed

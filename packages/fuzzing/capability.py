@@ -17,12 +17,12 @@ import os
 import platform
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field
 
 from core.config import RaptorConfig
 from packages.fuzzing.env_hygiene import scrub_identity_env
+from core.run.scratch import scratch_dir
 from core.run.workdir import exec_workdir
 from packages.binary_analysis.radare2_understand import probe_capability as _probe_radare2_capability
 
@@ -381,12 +381,12 @@ def _probe_executable(binary: str) -> str:
 def _probe_version(binary: str, args: list[str]) -> str:
     """Best-effort version extraction. Returns first non-empty version-looking line."""
     try:
-        with tempfile.TemporaryDirectory(prefix="raptor-fuzz-probe-", dir=exec_workdir()) as tmp:
+        with scratch_dir("raptor-fuzz-probe-", dir=exec_workdir(), keepalive=True) as tmp:
             env = scrub_identity_env(RaptorConfig.get_safe_env())
             # Identity scrubbing uses HOME=/tmp for sandboxed targets. These
             # trusted probes run on the host: never read shared-temp dotfiles.
-            env["HOME"] = tmp
-            env["TMPDIR"] = tmp
+            env["HOME"] = str(tmp)
+            env["TMPDIR"] = str(tmp)
             result = subprocess.run(
                 [_probe_executable(binary)] + args,
                 capture_output=True,
@@ -437,8 +437,8 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
         # raptor-fuzz-probe-*.o in the system temp dir on every probe.
         # Pointing TMPDIR into the context-managed dir routes those
         # intermediates through the same cleanup on success and failure.
-        with tempfile.TemporaryDirectory(
-            prefix="raptor-fuzz-probe-", dir=exec_workdir(),
+        with scratch_dir(
+            "raptor-fuzz-probe-", dir=exec_workdir(), keepalive=True,
         ) as tmp:
             src_path = os.path.join(tmp, "probe.c")
             with open(src_path, "w") as src:
@@ -446,8 +446,8 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
             out_path = os.path.join(tmp, "probe.out")
 
             env = scrub_identity_env(RaptorConfig.get_safe_env())
-            env["TMPDIR"] = tmp
-            env["HOME"] = tmp
+            env["TMPDIR"] = str(tmp)
+            env["HOME"] = str(tmp)
             result = subprocess.run(
                 [_probe_executable(clang), flag, src_path, "-o", out_path],
                 capture_output=True,
@@ -472,8 +472,8 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
     if not Path(cat).exists():
         return True
     try:
-        with tempfile.TemporaryDirectory(
-                prefix="raptor-afl-probe-", dir=exec_workdir(),
+        with scratch_dir(
+                "raptor-afl-probe-", dir=exec_workdir(), keepalive=True,
         ) as tmp:
             tmp_path = Path(tmp)
             seeds = tmp_path / "in"
@@ -481,8 +481,8 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
             seeds.mkdir()
             (seeds / "seed").write_bytes(b"seed\n")
             env = scrub_identity_env(RaptorConfig.get_safe_env())
-            env["HOME"] = tmp
-            env["TMPDIR"] = tmp
+            env["HOME"] = str(tmp)
+            env["TMPDIR"] = str(tmp)
             env.setdefault("AFL_SKIP_CPUFREQ", "1")
             env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
             result = subprocess.run(
