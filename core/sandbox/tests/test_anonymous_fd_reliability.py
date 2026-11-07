@@ -8,6 +8,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import evidence
 
 
@@ -26,9 +28,10 @@ def tempfile_branch(tmp_path, monkeypatch):
             released.add(fd)
         real_close(fd)
 
-    monkeypatch.delattr(evidence.os, "memfd_create", raising=False)
-    monkeypatch.setattr(evidence.tempfile, "mkstemp", mkstemp)
-    monkeypatch.setattr(evidence.os, "close", close)
+    local_os = patch_module_attribute(monkeypatch, evidence, "os", "__name__", evidence.os.__name__)
+    monkeypatch.delattr(local_os, "memfd_create", raising=False)
+    patch_module_attribute(monkeypatch, evidence, 'tempfile', "mkstemp", mkstemp)
+    patch_module_attribute(monkeypatch, evidence, 'os', "close", close)
     try:
         yield allocated
     finally:
@@ -52,7 +55,7 @@ def test_unlink_failure_closes_fd_and_removes_tempfile(
             raise failure
         real_unlink(path)
 
-    monkeypatch.setattr(evidence.os, "unlink", unlink)
+    patch_module_attribute(monkeypatch, evidence, 'os', "unlink", unlink)
     with pytest.raises(failure_type) as raised:
         evidence.anonymous_fd(b"config")
     assert raised.value is failure
@@ -74,7 +77,7 @@ def test_partial_writes_use_one_backing_buffer_and_rewind(
         buffers.append(data)
         return real_write(fd, data[:7])
 
-    monkeypatch.setattr(evidence.os, "write", partial)
+    patch_module_attribute(monkeypatch, evidence, 'os', "write", partial)
     fd = evidence.anonymous_fd(payload)
     try:
         assert len(buffers) > 1
@@ -83,7 +86,7 @@ def test_partial_writes_use_one_backing_buffer_and_rewind(
         assert not os.get_inheritable(fd)
         assert list(tmp_path.iterdir()) == []
     finally:
-        os.close(fd)
+        evidence.os.close(fd)
 
 
 @pytest.mark.parametrize("failure", ["zero", "error"])
@@ -101,7 +104,7 @@ def test_write_failure_releases_anonymous_fd(
             return 0
         raise OSError(errno.ENOSPC, "no space")
 
-    monkeypatch.setattr(evidence.os, "write", write)
+    patch_module_attribute(monkeypatch, evidence, 'os', "write", write)
     with pytest.raises(OSError) as exc:
         evidence.anonymous_fd(b"config")
     assert exc.value.errno == (errno.EIO if failure == "zero" else errno.ENOSPC)
@@ -112,7 +115,7 @@ def test_write_failure_releases_anonymous_fd(
 
 
 def test_rewind_failure_releases_descriptor(monkeypatch, tempfile_branch):
-    monkeypatch.setattr(evidence.os, "lseek", Mock(side_effect=OSError("seek failed")))
+    patch_module_attribute(monkeypatch, evidence, 'os', "lseek", Mock(side_effect=OSError("seek failed")))
     with pytest.raises(OSError, match="seek failed"):
         evidence.anonymous_fd(b"config")
     with pytest.raises(OSError) as exc:
@@ -122,10 +125,8 @@ def test_rewind_failure_releases_descriptor(monkeypatch, tempfile_branch):
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux memfd fallback")
 def test_runtime_enosys_uses_unlinked_tempfile(tmp_path, monkeypatch, tempfile_branch):
-    monkeypatch.setattr(
-        evidence.os, "memfd_create",
-        Mock(side_effect=OSError(errno.ENOSYS, "unsupported syscall")), raising=False,
-    )
+    local_os = patch_module_attribute(monkeypatch, evidence, "os", "__name__", evidence.os.__name__)
+    monkeypatch.setattr(local_os, "memfd_create", Mock(side_effect=OSError(errno.ENOSYS, "unsupported syscall")), raising=False)
     fd = evidence.anonymous_fd(b"config")
     try:
         assert len(tempfile_branch) == 1
@@ -133,16 +134,17 @@ def test_runtime_enosys_uses_unlinked_tempfile(tmp_path, monkeypatch, tempfile_b
         assert not os.get_inheritable(fd)
         assert list(tmp_path.iterdir()) == []
     finally:
-        os.close(fd)
+        evidence.os.close(fd)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux memfd errors")
 @pytest.mark.parametrize("code", [errno.EMFILE, errno.EINVAL, errno.EPERM])
 def test_other_memfd_errors_are_not_hidden(monkeypatch, code):
     failure = OSError(code, "memfd failed")
-    monkeypatch.setattr(evidence.os, "memfd_create", Mock(side_effect=failure), raising=False)
+    local_os = patch_module_attribute(monkeypatch, evidence, "os", "__name__", evidence.os.__name__)
+    monkeypatch.setattr(local_os, "memfd_create", Mock(side_effect=failure), raising=False)
     temporary = Mock(side_effect=AssertionError("must not fall back"))
-    monkeypatch.setattr(evidence.tempfile, "mkstemp", temporary)
+    patch_module_attribute(monkeypatch, evidence, 'tempfile', "mkstemp", temporary)
     with pytest.raises(OSError) as raised:
         evidence.anonymous_fd(b"config")
     assert raised.value is failure

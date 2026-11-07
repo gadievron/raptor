@@ -5,6 +5,8 @@ import socket
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import _proxy_bridge as bridge
 
 
@@ -34,7 +36,7 @@ def test_listener_objects_are_closed(tmp_path, monkeypatch, exit_path):
         os.close(death_w)
         try:
             with monkeypatch.context() as patch:
-                patch.setattr(bridge.socket, "socket", tracked_socket)
+                patch_module_attribute(patch, bridge, 'socket', "socket", tracked_socket)
                 if exit_path == "shutdown":
                     bridge._run_bridges(bridges, death_r, ready_cb=ready)
                 elif exit_path == "bind":

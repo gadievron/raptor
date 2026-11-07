@@ -8,6 +8,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import _pathpin as pin
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "O_PATH"), reason="requires Linux O_PATH")
@@ -32,8 +34,8 @@ def descriptors(monkeypatch):
         owned.discard(fd)
         real_close(fd)
 
-    monkeypatch.setattr(pin.os, "open", open_fd)
-    monkeypatch.setattr(pin.os, "close", close_fd)
+    patch_module_attribute(monkeypatch, pin, 'os', "open", open_fd)
+    patch_module_attribute(monkeypatch, pin, 'os', "close", close_fd)
     try:
         yield SimpleNamespace(owned=owned, opened=opened, closed=closed, close=close_fd)
     finally:
@@ -57,7 +59,7 @@ def test_component_stat_failure_releases_both_pins(
             raise failure
         return real_fstat(fd)
 
-    monkeypatch.setattr(pin.os, "fstat", fstat)
+    patch_module_attribute(monkeypatch, pin, 'os', "fstat", fstat)
     with pytest.raises(failure_type) as raised:
         pin.open_pinned(str(tmp_path))
     assert raised.value is failure
@@ -74,7 +76,7 @@ def test_previous_pin_close_error_does_not_close_it_twice(tmp_path, monkeypatch,
             failed.append(fd)
             raise failure
 
-    monkeypatch.setattr(pin.os, "close", close)
+    patch_module_attribute(monkeypatch, pin, 'os', "close", close)
     with pytest.raises(OSError) as raised:
         pin.open_pinned(str(tmp_path))
     assert raised.value is failure
@@ -92,8 +94,8 @@ def test_cleanup_error_preserves_original_stat_failure(tmp_path, monkeypatch, de
             failed_close.append(fd)
             raise OSError("cleanup failed")
 
-    monkeypatch.setattr(pin.os, "fstat", Mock(side_effect=failure))
-    monkeypatch.setattr(pin.os, "close", close)
+    patch_module_attribute(monkeypatch, pin, 'os', "fstat", Mock(side_effect=failure))
+    patch_module_attribute(monkeypatch, pin, 'os', "close", close)
     with pytest.raises(RuntimeError) as raised:
         pin.open_pinned(str(tmp_path))
     assert raised.value is failure
@@ -109,12 +111,12 @@ def test_success_transfers_only_the_final_pin(tmp_path, descriptors):
         assert (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino)
         assert not os.get_inheritable(fd)
     finally:
-        os.close(fd)
+        descriptors.close(fd)
 
 
 def test_initial_open_failure_preserves_error_without_closing_none(monkeypatch, descriptors):
     failure = OSError(errno.EMFILE, "descriptor table full")
-    monkeypatch.setattr(pin.os, "open", Mock(side_effect=failure))
+    patch_module_attribute(monkeypatch, pin, 'os', "open", Mock(side_effect=failure))
     with pytest.raises(OSError) as raised:
         pin.open_pinned("/")
     assert raised.value is failure

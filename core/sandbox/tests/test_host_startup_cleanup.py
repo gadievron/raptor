@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import host as host_mod
 
 
@@ -32,8 +34,8 @@ def setup_tracker(monkeypatch, tmp_path):
         fds.extend(pair)
         return pair
 
-    monkeypatch.setattr(host_mod.tempfile, "mkdtemp", mkdtemp)
-    monkeypatch.setattr(host_mod.os, "pipe", pipe)
+    patch_module_attribute(monkeypatch, host_mod, 'tempfile', "mkdtemp", mkdtemp)
+    patch_module_attribute(monkeypatch, host_mod, 'os', "pipe", pipe)
     monkeypatch.setattr(host_mod, "_resolve_daemon_script", lambda: Path(__file__))
     monkeypatch.setattr(context, "_require_userns_or_optin", lambda *a, **kw: False)
     monkeypatch.setattr(python_paths, "python_runtime_tool_paths", lambda: [])
@@ -103,11 +105,9 @@ def test_preparation_failure_releases_resources(
                 raise failure
             super().__init__(**kwargs)
 
-    monkeypatch.setattr(host_mod.os, "pipe", pipe)
+    patch_module_attribute(monkeypatch, host_mod, 'os', "pipe", pipe)
     monkeypatch.setattr(python_paths, "python_runtime_tool_paths", paths)
-    monkeypatch.setattr(host_mod, "threading", SimpleNamespace(
-        Thread=Thread, Lock=threading.Lock, Event=threading.Event,
-    ))
+    patch_module_attribute(monkeypatch, host_mod, "threading", "Thread", Thread)
     with pytest.raises(OSError) as raised:
         Host.start(target=tracker.target, output=explicit)
     assert raised.value is failure
@@ -127,9 +127,7 @@ def test_interrupted_thread_start_never_launches_backend(setup_tracker, monkeypa
             super().start()
             raise failure
 
-    monkeypatch.setattr(host_mod, "threading", SimpleNamespace(
-        Thread=InterruptedStart, Lock=threading.Lock, Event=threading.Event,
-    ))
+    patch_module_attribute(monkeypatch, host_mod, "threading", "Thread", InterruptedStart)
     with pytest.raises(KeyboardInterrupt) as raised:
         host_mod.SandboxHost.start(target=tracker.target)
     assert raised.value is failure
@@ -271,9 +269,7 @@ def test_close_defers_private_output_cleanup_until_worker_exit(setup_tracker, mo
             return {"ok": True}
 
     monkeypatch.setattr(core.sandbox, "run", delayed_backend)
-    monkeypatch.setattr(host_mod, "threading", SimpleNamespace(
-        Thread=QuickJoinThread, Lock=threading.Lock, Event=threading.Event,
-    ))
+    patch_module_attribute(monkeypatch, host_mod, "threading", "Thread", QuickJoinThread)
     host = Host.start(target=tracker.target)
     try:
         host.close()
