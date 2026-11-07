@@ -553,6 +553,7 @@ def export_findings(
             logger.debug("promotion alarm export sweep failed", exc_info=True)
 
     findings: list[dict[str, Any]] = []
+    clean_review_traces: list[dict[str, Any]] = []
     gate_resolved_clean = 0
     for outcome in outcomes:
         status = getattr(outcome, "status", "clean")
@@ -562,6 +563,10 @@ def export_findings(
         # to the operator and to /validate, the one pipeline built to
         # judge tool-blind findings.
         if status not in ("finding", "suspicious", "dark"):
+            if status == "clean":
+                # Retain rejected theories without turning clean reviews
+                # into findings or downstream validation candidates.
+                clean_review_traces.append(build_graded_finding(outcome)["verification_trace"])
             if getattr(outcome, "clean_basis", "") == "gate_resolved":
                 gate_resolved_clean += 1
             continue
@@ -578,6 +583,7 @@ def export_findings(
 
     result: dict[str, Any] = {
         "findings": findings,
+        "clean_review_traces": clean_review_traces,
         "stats": {
             "total": len(findings),
             "high_confidence": sum(
@@ -725,7 +731,7 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
     except OSError:
         run_identity = out_dir.name
     for entry in latest_entries(out_dir).values():
-        if entry.verdict not in ("finding", "suspicious", "dark"):
+        if entry.verdict not in ("finding", "suspicious", "dark", "clean"):
             continue
         hypothesis = ""
         for hyp in entry.hypotheses or []:

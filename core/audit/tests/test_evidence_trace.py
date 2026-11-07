@@ -12,6 +12,7 @@ from core.audit.orchestrator import ReviewOutcome
 from core.audit.refutation_source import SourceIdentity
 from core.audit.verification_results import ClaimRefutation, ProbeOutcome
 from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
+from core.json import load_json
 
 
 def test_normal_json_export_retains_channel_states_without_confirming_them(tmp_path):
@@ -73,6 +74,70 @@ def test_review_assumptions_remain_unverified():
                                      "origin": "review", "verified": False}]
 
 
+def test_counterarguments_survive_normal_export_without_acquiring_support(tmp_path):
+    hypotheses = [
+        {"mechanism": "First claim", "confidence": "refuted", "counter": "Caller bounds input",
+         "counter_scope": "cross_function", "assumed_property": "Input is bounded"},
+        {"mechanism": "Independent claim", "confidence": "medium"},
+    ]
+    outcome = ReviewOutcome(file="a.c", function="f", line=12, status="clean", body="Review",
+                            hypothesis="First claim", hypotheses=hypotheses)
+    write_graded_findings(export_findings([outcome]), tmp_path)
+    saved = load_json(tmp_path / "findings-graded.json")
+    trace = saved["clean_review_traces"][0]
+    reviews = trace["hypothesis_reviews"]
+    assert reviews == [
+        {"index": 0, "hypothesis": "First claim", "model_confidence": "refuted",
+         "counterargument": "Caller bounds input", "counter_scope": "cross_function",
+         "assumed_property": "Input is bounded", "origin": "review",
+         "support_status": "not_assessed", "candidate_claim_check_indices": []},
+        {"index": 1, "hypothesis": "Independent claim", "model_confidence": "medium",
+         "counterargument": None, "counter_scope": None, "assumed_property": None,
+         "origin": "review", "support_status": "not_assessed", "candidate_claim_check_indices": []},
+    ]
+    assert trace["final_status"] == outcome.status == "clean"
+    assert saved["findings"] == []
+    assert saved["stats"]["total"] == 0
+    assert outcome.hypotheses == hypotheses
+
+
+def test_clean_journal_review_retains_rejected_theory_without_a_finding(tmp_path):
+    append_entry(tmp_path, ReviewJournalEntry(
+        ts=now_iso(), run_id=tmp_path.name, file="a.c", function="f", verdict="clean",
+        source_hash="abc", line_start=12,
+        hypotheses=[{"mechanism": "Claim", "confidence": "refuted", "counter": "Caller validates",
+                     "counter_scope": "cross_function", "assumed_property": "Input bounded"}],
+    ))
+    exported = export_graded_from_journal(tmp_path)
+    saved = load_json(tmp_path / "findings-graded.json")
+    assert exported["findings"] == saved["findings"] == []
+    trace = saved["clean_review_traces"][0]
+    assert trace["derivation"] == "review-journal"
+    assert trace["final_status"] == "clean"
+    assert trace["hypothesis_reviews"][0]["counterargument"] == "Caller validates"
+    assert trace["hypothesis_reviews"][0]["support_status"] == "not_assessed"
+
+
+def test_candidate_checks_do_not_establish_counterargument_support():
+    check = ProbeOutcome("smt", "refuted", "smt:test", "Unsatisfiable")
+    receipts = tuple(ClaimRefutation(file, function, line, claim, (check,))
+                     for file, function, line, claim in [
+                         ("a.c", "f", 12, "Claim"),
+                         ("a.c", "f", 12, "Other claim"),
+                         ("a.c", "f", 13, "Claim"),
+                         ("a.c", "g", 12, "Claim"),
+                         ("b.c", "f", 12, "Claim"),
+                     ])
+    outcome = ReviewOutcome(file="a.c", function="f", line=12, status="clean", body="Review",
+                            hypothesis="Claim", claim_refutations=receipts,
+                            hypotheses=[{"mechanism": "Claim", "confidence": "refuted",
+                                         "counter": "Caller holds lock"}])
+    trace = build_graded_finding(outcome)["verification_trace"]
+    assert trace["hypothesis_reviews"][0]["candidate_claim_check_indices"] == [0]
+    assert trace["hypothesis_reviews"][0]["support_status"] == "not_assessed"
+    assert len(trace["claim_checks"]) == 5
+
+
 def test_journal_reconstruction_preserves_available_states_and_marks_unknowns(tmp_path):
     append_entry(tmp_path, ReviewJournalEntry(
         ts=now_iso(), run_id=tmp_path.name, file="a.c", function="f", function_qualified="Owner.f",
@@ -88,6 +153,8 @@ def test_journal_reconstruction_preserves_available_states_and_marks_unknowns(tm
                                  "errored": None, "inconclusive": None}
     assert trace["claim_check_details"] == "unavailable"
     assert trace["assumptions"][0]["verified"] is False
+    assert trace["hypothesis_reviews"][0]["hypothesis"] == "Claim"
+    assert trace["hypothesis_reviews"][0]["support_status"] == "not_assessed"
     assert trace["scope"]["function_qualified"] == "Owner.f"
 
 

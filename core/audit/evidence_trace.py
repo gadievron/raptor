@@ -56,6 +56,32 @@ def build_verification_trace(outcome: Any, finding: dict[str, Any]) -> dict[str,
             })
 
     discovery = finding["discovery"]
+    hypothesis_reviews = []
+    for index, hypothesis in enumerate(hypotheses):
+        if not isinstance(hypothesis, dict):
+            continue
+        claim = hypothesis.get("mechanism") or hypothesis.get("text") or ""
+        # Text and location identify candidate records, not semantic support.
+        # In particular, a check about the hypothesis is not automatically
+        # evidence for its counterargument or an external caller guarantee.
+        candidates = [
+            check_index for check_index, check in enumerate(checks)
+            if claim and check["hypothesis"] == claim
+            and check["file"] == finding["file"]
+            and check["function"] == finding["function"]
+            and check["line_start"] == finding["line"]
+        ]
+        hypothesis_reviews.append({
+            "index": index,
+            "hypothesis": claim,
+            "model_confidence": hypothesis.get("confidence"),
+            "counterargument": hypothesis.get("counter"),
+            "counter_scope": hypothesis.get("counter_scope"),
+            "assumed_property": hypothesis.get("assumed_property"),
+            "origin": "review",
+            "support_status": "not_assessed",
+            "candidate_claim_check_indices": candidates,
+        })
     return {
         "schema_version": 1,
         "derivation": getattr(outcome, "trace_derivation", "outcome"),
@@ -72,10 +98,13 @@ def build_verification_trace(outcome: Any, finding: dict[str, Any]) -> dict[str,
         "claim_checks": checks,
         "claim_check_details": "recorded" if checks else "unavailable",
         "assumptions": assumptions,
+        "hypothesis_reviews": hypothesis_reviews,
         "limitations": [
             "Markers are provenance, not raw proof results.",
             "Channel states are cumulative and do not identify individual attempts.",
             "Claim checks may cover earlier claims; source freshness is not rechecked at export.",
             "Missing check details are unavailable, not a refutation or confirmation.",
+            "Model confidence and counterarguments are judgments, not evidence-supported adjudications.",
+            "Candidate check references match claim text and location only; they do not validate counterarguments.",
         ],
     }
