@@ -132,10 +132,11 @@ class TestDispatchEntries:
     def test_rule_file_exists_on_disk(self, cwe: str):
         assert (_RULES_DIR / _PHP_FAMILIES[cwe][0]).is_file()
 
-    def test_php_attribute_encoding_rule_cannot_refute_the_whole_class(self):
+    @pytest.mark.parametrize("cwe", ["CWE-116", "CWE-327", "CWE-338"])
+    def test_narrow_php_rules_cannot_refute_the_whole_class(self, cwe: str):
         from core.audit.sweep import is_confirm_only_rule
 
-        rule = resolve_semgrep_rule_for_cwe("CWE-116", "index.php")
+        rule = resolve_semgrep_rule_for_cwe(cwe, "index.php")
         assert rule is not None
         assert is_confirm_only_rule(rule)
 
@@ -324,8 +325,8 @@ class TestLiveAdjudication:
             function_name="f",
             rule_config=rule,
         )
-        if cwe == "CWE-116":
-            # The rule only covers immediate quoted-attribute encoders.
+        if cwe in {"CWE-116", "CWE-327", "CWE-338"}:
+            # Encoding shapes and name-anchored crypto are partial detectors.
             assert result.outcome == "inconclusive", (
                 f"{cwe}: {result.outcome} {result.errors}"
             )
@@ -390,6 +391,43 @@ class TestLiveAdjudication:
         )
         assert result.outcome == expected, result.errors
         assert bool(result.matches) == (expected == "confirmed")
+
+    @pytest.mark.parametrize("cwe, body", [
+        ("CWE-327", '$raw=$_POST["password"]; return md5($raw);'),
+        ("CWE-338", '$r=mt_rand(); $csrf_token=$r; return $csrf_token;'),
+    ], ids=["neutral-password-alias", "neutral-prng-alias"])
+    def test_crypto_name_misses_stay_inconclusive(self, cwe: str, body: str, tmp_path: Path):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text('<?php\nfunction f() {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == "inconclusive", result.errors
+        assert not result.matches
+        assert "confirm-only" in (result.details or {}).get("reason", "")
+
+    @pytest.mark.parametrize("cwe, body, finding", [
+        ("CWE-327", 'Foo::$password_hash=\\HASH("MD5", $input);', True),
+        ("CWE-338", 'Foo::$csrf_token=\\MT_RAND();', True),
+        ("CWE-327", 'return md5("password_reset_template");', False),
+        ("CWE-338", '$token_key="cache"; $values[$token_key]=rand();', False),
+    ], ids=["password-static-store", "prng-static-store", "noncredential-text", "dynamic-key"])
+    def test_crypto_builtin_and_name_context(
+        self, cwe: str, body: str, finding: bool, tmp_path: Path,
+    ):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text('<?php\nfunction f() {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == ("confirmed" if finding else "inconclusive"), result.errors
+        assert bool(result.matches) == finding
 
     def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
         """Live pin of the engine's ACTUAL selection for language:php
