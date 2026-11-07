@@ -16,6 +16,9 @@ the kernel reports.
 
 import sys as _sys
 import pytest as _pytest
+
+
+from core.testing.module_state import isolated_module_state
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
@@ -34,16 +37,15 @@ from core.testing.module_bindings import patch_module_attribute  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def reset_probe_cache():
-    """Each test starts with no cached probe result.
-
-    The autouse conftest fixture restores the cache at TEST END, but
-    we also need it cleared at TEST START — multiple probes within a
-    test should observe a consistent starting point.
-    """
-    state._ptrace_available_cache = None
-    state._ptrace_unavailable_warned = False
-    yield
+def reset_probe_cache(monkeypatch):
+    """Own both the cold probe result and its warning latch."""
+    with isolated_module_state(state, {
+        "_ptrace_available_cache": None, "_ptrace_unavailable_warned": False,
+    }, lock=state._cache_lock):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 class TestProbeReturnsBoolean:

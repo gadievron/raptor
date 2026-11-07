@@ -33,6 +33,9 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
+from core.testing.module_state import isolated_module_state
+
+
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_launch_patches(monkeypatch):
     """Keep launch mocks on consumer-owned subprocess module bindings."""
@@ -177,9 +180,16 @@ class TestProbeCaching(unittest.TestCase):
     process; determinate kernel verdicts cached, infrastructure
     failures re-probed."""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
         from core.sandbox import state
-        state._pidns_fresh_proc_cache = None
+        with isolated_module_state(state, {'_pidns_fresh_proc_cache': None, '_unshare_path_cache': None}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
+
 
     @staticmethod
     def _completed(rc, args=("unshare",)):

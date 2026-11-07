@@ -1,0 +1,129 @@
+[
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestAvailabilityCheck",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_net_available_cache": null,
+      "_unshare_path_cache": null
+    },
+    "path": false,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestUserLimitsInvalidUtf8",
+    "fixture": "_owned_user_limits",
+    "state": {
+      "_user_limits_cache": null,
+      "_user_limits_cache_decided_at": 0.0
+    },
+    "preserve_path": true
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestUserLimitsValidation",
+    "fixture": "_owned_user_limits",
+    "state": {
+      "_user_limits_cache": null,
+      "_user_limits_cache_decided_at": 0.0
+    },
+    "preserve_path": true
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestUserLimitsCacheSentinel",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_user_limits_cache": null,
+      "_user_limits_cache_decided_at": 0.0
+    },
+    "path": true,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestNetProbeLockDiscipline",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_net_available_cache": null,
+      "_unshare_path_cache": null
+    },
+    "path": false,
+    "extra": "self._state = state"
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "class": "TestCacheLockReentrant",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_net_available_cache": null,
+      "_mount_available_cache": null,
+      "_unshare_path_cache": null,
+      "_newuidmap_path_cache": null,
+      "_newgidmap_path_cache": null,
+      "_mount_unavailable_warned": false
+    },
+    "path": false,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_spawn_mount_ns.py",
+    "class": "TestMountNSAvailableProbe",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_mount_ns_available_cache": null,
+      "_newuidmap_path_cache": null,
+      "_newgidmap_path_cache": null
+    },
+    "path": false,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_spawn_mount_ns.py",
+    "class": "TestGidmapAllowProbe",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_gidmap_allow_cache": null,
+      "_gidmap_allow_warned_missing": false
+    },
+    "path": false,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_pidns_proc_mount.py",
+    "class": "TestProbeCaching",
+    "fixture": "_owned_probe_cache",
+    "state": {
+      "_pidns_fresh_proc_cache": null,
+      "_unshare_path_cache": null
+    },
+    "path": false,
+    "extra": ""
+  },
+  {
+    "file": "core/sandbox/tests/test_ptrace_probe.py",
+    "class": null,
+    "fixture": "reset_probe_cache",
+    "state": {
+      "_ptrace_available_cache": null,
+      "_ptrace_unavailable_warned": false
+    }
+  },
+  {
+    "file": "core/startup/tests/test_install_guard.py",
+    "class": null,
+    "fixture": "_owned_bytecode_prefix",
+    "owner": "sys",
+    "state": {
+      "pycache_prefix": null
+    }
+  },
+  {
+    "file": "core/audit/tests/test_capabilities.py",
+    "class": "TestProbeCapabilities",
+    "fixture": "_owned_capability_discovery",
+    "owner": "capabilities",
+    "state": {}
+  }
+]

@@ -14,6 +14,9 @@ from core.testing.module_bindings import mock_module_attribute
 from core.testing.module_state import isolated_module_state
 
 
+import pytest
+
+
 @contextmanager
 def _missing_tool_discovery(*args, **kwargs):
     from core.audit import capabilities
@@ -32,6 +35,21 @@ def _missing_tool_discovery(*args, **kwargs):
 
 
 class TestProbeCapabilities:
+
+    @pytest.fixture(autouse=True)
+    def _owned_capability_discovery(self, monkeypatch):
+        from core.audit import capabilities
+
+        with _missing_tool_discovery(return_value=None):
+            try:
+                # These cases assert snapshot shape and Joern issue plumbing;
+                # SDK import and optional-solver discovery are separate probes.
+                monkeypatch.setattr(capabilities, "_can_import", lambda name: False)
+                monkeypatch.setattr(capabilities, "_angr_available", lambda: False)
+                yield
+            finally:
+                monkeypatch.undo()
+
     def test_returns_dataclass(self):
         caps = probe_capabilities()
         assert isinstance(caps, AuditCapabilities)

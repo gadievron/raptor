@@ -17,6 +17,19 @@ from core.startup import install_guard as guard
 from core.testing.module_bindings import patch_module_attribute
 from core.testing.module_views import scoped_function_imports
 
+
+from core.testing.module_state import isolated_module_state
+
+
+@pytest.fixture(autouse=True)
+def _owned_bytecode_prefix(monkeypatch):
+    """Let preparation clear the prefix without changing its caller's setting."""
+    with isolated_module_state(sys, {"pycache_prefix": None}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 # Keep kernel checks independent of the host's unrelated tool environment.
 KERNEL_PYTHON = '/usr/bin/python3' if Path('/usr/bin/python3').exists() else sys.executable
 

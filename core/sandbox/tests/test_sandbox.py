@@ -46,6 +46,16 @@ pytestmark = [pytest.mark.linux_native, pytest.mark.darwin_native]
 
 class TestAvailabilityCheck(unittest.TestCase):
 
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
+        from core.sandbox import state
+        with isolated_module_state(state, {'_net_available_cache': None, '_unshare_path_cache': None}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
+
     def test_returns_bool(self):
         result = check_sandbox_available()
         self.assertIsInstance(result, bool)
@@ -1560,6 +1570,22 @@ class TestSanitizerStderrBytes(unittest.TestCase):
 class TestUserLimitsInvalidUtf8(unittest.TestCase):
     """_load_user_limits must not crash on non-UTF-8 config files."""
 
+    @pytest.fixture(autouse=True)
+    def _owned_user_limits(self, monkeypatch):
+        from core.sandbox import preexec, state
+
+        with (
+            isolated_module_state(state, {
+                "_user_limits_cache": None, "_user_limits_cache_decided_at": 0.0,
+            }, lock=state._cache_lock),
+            isolated_module_state(preexec, {"_CONFIG_PATH": preexec._CONFIG_PATH}),
+        ):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
+
     def test_invalid_utf8_config(self):
         import tempfile
         from pathlib import Path
@@ -1597,6 +1623,22 @@ class TestUserLimitsValidation(unittest.TestCase):
     Zero is a valid "skip this rlimit" sentinel — e.g. memory_mb=0 disables
     RLIMIT_AS, which is required for ASAN-instrumented binaries.
     """
+
+    @pytest.fixture(autouse=True)
+    def _owned_user_limits(self, monkeypatch):
+        from core.sandbox import preexec, state
+
+        with (
+            isolated_module_state(state, {
+                "_user_limits_cache": None, "_user_limits_cache_decided_at": 0.0,
+            }, lock=state._cache_lock),
+            isolated_module_state(preexec, {"_CONFIG_PATH": preexec._CONFIG_PATH}),
+        ):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
 
     def test_rejects_negatives_accepts_zero(self):
         import json
@@ -1667,27 +1709,20 @@ class TestUserLimitsCacheSentinel(unittest.TestCase):
     reclassified as the empty-dict failure sentinel and re-parsed
     every _FAIL_TTL_S."""
 
-    def setUp(self):
-        import tempfile
-
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch, tmp_path):
+        from core.sandbox import state
         from core.sandbox import preexec
-        from core.sandbox import state as mod_state
-        self._preexec = preexec
-        self._state = mod_state
-        tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(tmpdir.cleanup)
-        self._config = Path(tmpdir.name) / "sandbox.json"
-        self._saved_path = preexec._CONFIG_PATH
-        preexec._CONFIG_PATH = self._config
-        self._saved_cache = (mod_state._user_limits_cache,
-                             mod_state._user_limits_cache_decided_at)
-        mod_state._user_limits_cache = None
-        mod_state._user_limits_cache_decided_at = 0.0
+        self._state, self._preexec = state, preexec
+        self._config = tmp_path / "sandbox.json"
+        with isolated_module_state(state, {'_user_limits_cache': None, '_user_limits_cache_decided_at': 0.0}, lock=state._cache_lock), isolated_module_state(preexec, {"_CONFIG_PATH": self._config}):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
 
-    def tearDown(self):
-        self._preexec._CONFIG_PATH = self._saved_path
-        (self._state._user_limits_cache,
-         self._state._user_limits_cache_decided_at) = self._saved_cache
+
+
 
     def test_empty_valid_config_cached_as_success(self):
         import json
@@ -1852,14 +1887,18 @@ class TestNetProbeLockDiscipline(unittest.TestCase):
     """check_net_available: brief-lock cache ops, probe outside the
     lock, first published verdict wins on a double-probe race."""
 
-    def setUp(self):
-        from core.sandbox import state as mod_state
-        self._state = mod_state
-        self._saved = mod_state._net_available_cache
-        mod_state._net_available_cache = None
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
+        from core.sandbox import state
+        self._state = state
+        with isolated_module_state(state, {'_net_available_cache': None, '_unshare_path_cache': None}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
 
-    def tearDown(self):
-        self._state._net_available_cache = self._saved
+
+
 
     def test_probe_subprocess_runs_outside_cache_lock(self):
         from unittest import mock
@@ -1923,6 +1962,16 @@ class TestNetProbeLockDiscipline(unittest.TestCase):
 
 class TestCacheLockReentrant(unittest.TestCase):
     """check_mount_available nests a call to check_net_available — must not deadlock."""
+
+    @pytest.fixture(autouse=True)
+    def _owned_probe_cache(self, monkeypatch):
+        from core.sandbox import state
+        with isolated_module_state(state, {'_net_available_cache': None, '_mount_available_cache': None, '_unshare_path_cache': None, '_newuidmap_path_cache': None, '_newgidmap_path_cache': None, '_mount_unavailable_warned': False}, lock=state._cache_lock):
+            try:
+                yield
+            finally:
+                monkeypatch.undo()
+
 
     def test_nested_check_does_not_deadlock(self):
         from core.sandbox import state as mod_state
