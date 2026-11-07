@@ -752,21 +752,23 @@ def _minmax_summary(pick_smaller: bool):
     """Build a min/max summary: ``var == ITE(a <= b, a, b)`` (or the
     max mirror), applied only when BOTH arguments parse as plain
     arithmetic expressions (nested calls or unsupported syntax mean no
-    axiom — the placeholder stays free, today's behaviour)."""
+    axiom — the placeholder stays free, today's behaviour). Argument types
+    determine comparison signedness using the parser's uniform-width
+    conversions, just as they do in an ordinary relational expression."""
     def _builder(var: Any, args_text: str, vars_: dict[str, Any],
                  profile: BVProfile) -> Any | None:
         parts = split_call_arguments(args_text)
         if parts is None or len(parts) != 2:
             return None
-        a = _parse_expr(parts[0].strip(), vars_, profile=profile)
+        a = _parse_typed_expr(parts[0].strip(), vars_, profile=profile)
         if isinstance(a, Rejection):
             return None
-        b = _parse_expr(parts[1].strip(), vars_, profile=profile)
+        b = _parse_typed_expr(parts[1].strip(), vars_, profile=profile)
         if isinstance(b, Rejection):
             return None
-        cond = le(a, b, signed=profile.signed)
-        return var == z3.If(cond, a, b) if pick_smaller \
-            else var == z3.If(cond, b, a)
+        cond = le(a.value, b.value, signed=a.signed and b.signed)
+        return var == z3.If(cond, a.value, b.value) if pick_smaller \
+            else var == z3.If(cond, b.value, a.value)
     return _builder
 
 
