@@ -1,389 +1,153 @@
-// use_after_fclose.cocci — Detect stdio operations on a FILE* after
-// fclose() or pclose() without reassignment.
+// use_after_fclose.cocci — Review stdio uses after fclose or pclose.
+// Track the stream value across observations and modeled stdio operations;
+// assignments, increments/decrements and address-taking end that path.
+// Receiver writes and escapes end direct field/slot tracking on that path.
+// Supported storage: identifiers, direct fields, pointer dereferences and
+// constant/direct-variable array indices. Computed/nested receivers need review.
 //
-// After fclose(fp) or pclose(fp), the FILE object is deallocated. Any subsequent
-// stdio operation (fprintf, fread, fwrite, fgets, fputs, fputc, fgetc,
-// fscanf, fflush, fseek, ftell, rewind and their modeled variants) on
-// that pointer is
-// use-after-free — reads/writes freed heap memory.
-//
+// Candidates require lifetime and alias review. Pointer identity, opaque
+// helper effects and complex receiver expressions are not whole-program
+// proofs, and the pattern does not establish a reachable heap exploit.
 // CWE-416: Use After Free
-// Zero-FP: stdio ops on a closed FILE* without reassignment is
-// always a use-after-free.
-// @role: verification
+// @role: detection
 
-@fclose_then_fprintf@
+@stdio_null_release@
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position null_release;
+@@
+\(fclose\|pclose\)(\(NULL\|nullptr\|ZERO\))@null_release;
+
+@stdio_use_after_close exists@
 expression FP;
+assignment operator op;
+identifier CONTEXT, FIELD;
+constant INDEX;
+identifier FIRST =~ "^\(fprintf\|fscanf\|vfprintf\|vfscanf\|fflush\|fgetc\|getc\|fseek\|ftell\|rewind\|feof\|ferror\|clearerr\|fileno\)$";
+identifier LAST =~ "^\(fwrite\|fread\|fgets\|fputs\|fputc\|putc\)$";
+position released != stdio_null_release.null_release;
 position p;
 @@
+\(fclose\|pclose\)(\(CONTEXT@FP\|CONTEXT->FIELD@FP\|CONTEXT.FIELD@FP\|CONTEXT[INDEX]@FP\))@released;
+... when any
+    when != FP op ...
+    when != CONTEXT op ...
+    when != &CONTEXT
+    when != CONTEXT++
+    when != ++CONTEXT
+    when != CONTEXT--
+    when != --CONTEXT
+    when != &FP
+    when != FP++
+    when != ++FP
+    when != FP--
+    when != --FP
+(
+FIRST@p(FP, ...)
+|
+LAST@p(..., FP)
+)
 
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fprintf@p(FP, ...)
-
-@script:python report_fprintf depends on fclose_then_fprintf@
-p << fclose_then_fprintf.p;
+@script:python stdio_lifetime_report depends on stdio_use_after_close@
+p << stdio_use_after_close.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fprintf() on closed FILE* — use-after-free (CWE-416)"
+    "rule": "use_after_fclose",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: stdio operation follows fclose/pclose on an unrebound stream value; review stream lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@fclose_then_fwrite@
-expression FP;
+// Pointer-to-pointer slots require explicit dereference patterns so the
+// pointee and its receiver retain separate identities in SmPL.
+@stdio_pointer_use_after_close exists@
+identifier SLOT;
+expression FN;
+assignment operator op;
+identifier FIRST =~ "^\(fprintf\|fscanf\|vfprintf\|vfscanf\|fflush\|fgetc\|getc\|fseek\|ftell\|rewind\|feof\|ferror\|clearerr\|fileno\)$";
+identifier LAST =~ "^\(fwrite\|fread\|fgets\|fputs\|fputc\|putc\)$";
 position p;
 @@
+  \(fclose\|pclose\)(*SLOT);
+... when any
+    when != SLOT op ...
+    when != (*SLOT) op ...
+    when != &SLOT
+    when != &(*SLOT)
+    when != FN(..., SLOT, ...)
+    when != SLOT++
+    when != ++SLOT
+    when != SLOT--
+    when != --SLOT
+    when != (*SLOT)++
+    when != ++(*SLOT)
+    when != (*SLOT)--
+    when != --(*SLOT)
+(
+FIRST@p(*SLOT, ...)
+|
+LAST@p(..., *SLOT)
+)
 
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fwrite@p(..., FP)
-
-@script:python report_fwrite depends on fclose_then_fwrite@
-p << fclose_then_fwrite.p;
+@script:python stdio_pointer_report depends on stdio_pointer_use_after_close@
+p << stdio_pointer_use_after_close.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fwrite() on closed FILE* — use-after-free (CWE-416)"
+    "rule": "use_after_fclose",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: stdio operation follows fclose/pclose through an unrebound stream slot; review lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@fclose_then_fread@
-expression FP;
+@stdio_indexed_use_after_close exists@
+identifier STREAMS, INDEX;
+expression FN;
+assignment operator op;
+identifier FIRST =~ "^\(fprintf\|fscanf\|vfprintf\|vfscanf\|fflush\|fgetc\|getc\|fseek\|ftell\|rewind\|feof\|ferror\|clearerr\|fileno\)$";
+identifier LAST =~ "^\(fwrite\|fread\|fgets\|fputs\|fputc\|putc\)$";
 position p;
 @@
+\(fclose\|pclose\)(STREAMS[INDEX]);
+... when any
+    when != STREAMS op ...
+    when != INDEX op ...
+    when != STREAMS[INDEX] op ...
+    when != &STREAMS
+    when != &INDEX
+    when != &STREAMS[INDEX]
+    when != FN(..., STREAMS, ...)
+    when != STREAMS++
+    when != ++STREAMS
+    when != STREAMS--
+    when != --STREAMS
+    when != INDEX++
+    when != ++INDEX
+    when != INDEX--
+    when != --INDEX
+    when != STREAMS[INDEX]++
+    when != ++STREAMS[INDEX]
+    when != STREAMS[INDEX]--
+    when != --STREAMS[INDEX]
+(
+FIRST@p(STREAMS[INDEX], ...)
+|
+LAST@p(..., STREAMS[INDEX])
+)
 
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fread@p(..., FP)
-
-@script:python report_fread depends on fclose_then_fread@
-p << fclose_then_fread.p;
+@script:python stdio_indexed_report depends on stdio_indexed_use_after_close@
+p << stdio_indexed_use_after_close.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fread() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@fclose_then_fgets@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fgets@p(..., FP)
-
-@script:python report_fgets depends on fclose_then_fgets@
-p << fclose_then_fgets.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fgets() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@fclose_then_fputs@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fputs@p(..., FP)
-
-@script:python report_fputs depends on fclose_then_fputs@
-p << fclose_then_fputs.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fputs() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@fclose_then_fflush@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fflush@p(FP)
-
-@script:python report_fflush depends on fclose_then_fflush@
-p << fclose_then_fflush.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fflush() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@fclose_then_fputc@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fputc@p(..., FP)
-
-@script:python report_fputc depends on fclose_then_fputc@
-p << fclose_then_fputc.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fputc() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_fgetc@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fgetc@p(FP)
-
-@script:python report_fgetc depends on fclose_then_fgetc@
-p << fclose_then_fgetc.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fgetc() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_fscanf@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fscanf@p(FP, ...)
-
-@script:python report_fscanf depends on fclose_then_fscanf@
-p << fclose_then_fscanf.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fscanf() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_fseek@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* fseek@p(FP, ...)
-
-@script:python report_fseek depends on fclose_then_fseek@
-p << fclose_then_fseek.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "fseek() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_ftell@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* ftell@p(FP)
-
-@script:python report_ftell depends on fclose_then_ftell@
-p << fclose_then_ftell.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "ftell() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_rewind@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* rewind@p(FP)
-
-@script:python report_rewind depends on fclose_then_rewind@
-p << fclose_then_rewind.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "rewind() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@fclose_then_getc@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* getc@p(FP)
-
-@script:python report_getc depends on fclose_then_getc@
-p << fclose_then_getc.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "getc() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_putc@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* putc@p(..., FP)
-
-@script:python report_putc depends on fclose_then_putc@
-p << fclose_then_putc.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "putc() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_vfprintf@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* vfprintf@p(FP, ...)
-
-@script:python report_vfprintf depends on fclose_then_vfprintf@
-p << fclose_then_vfprintf.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "vfprintf() on closed FILE* — use-after-free (CWE-416)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-
-@fclose_then_vfscanf@
-expression FP;
-position p;
-@@
-
-  \(fclose\|pclose\)(FP);
-  ... when != FP = ...
-      when != FP
-* vfscanf@p(FP, ...)
-
-@script:python report_vfscanf depends on fclose_then_vfscanf@
-p << fclose_then_vfscanf.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_fclose",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "vfscanf() on closed FILE* — use-after-free (CWE-416)"
+    "rule": "use_after_fclose",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: stdio operation follows fclose/pclose through an unchanged indexed stream slot; review lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))

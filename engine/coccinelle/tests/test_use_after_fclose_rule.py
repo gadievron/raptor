@@ -1,9 +1,9 @@
 """Fixture tests for the use_after_fclose rule.
 
-Verification-role rule (fires mint confirmed CWE-416 verdicts):
-stdio operations on a FILE* after fclose() or pclose() are use-after-free. The
-positive pins fprintf on the closed stream; the negative pins the
-documented escape — the pointer reassigned (fopen) before reuse.
+Detection-role rule: a stdio use on a closed stream value is a lifetime
+candidate, not independent evidence of a reachable heap exploit. Pin
+stable storage, receiver changes, operation argument positions and all
+modeled uses after the same close.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class TestPositives:
             void log_and_close(void *fp)
             {
                 fclose(fp);
-                fprintf(fp, "done\n");
+                fprintf(fp, "done\\n");
             }
         """)
         assert len(results) == 1
@@ -51,7 +51,7 @@ class TestNegatives:
             {
                 fclose(fp);
                 fp = fopen(path, "w");
-                fprintf(fp, "fresh\n");
+                fprintf(fp, "fresh\\n");
             }
         """)
         assert results == []
@@ -127,3 +127,100 @@ def test_closed_stream_rule_keeps_production_batching(tmp_path, monkeypatch):
     assert len(results["use_after_fclose"].matches) == 4
     assert len(results["double_close"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.parametrize("release", ["fclose", "pclose"])
+@pytest.mark.parametrize("storage,receiver,replacement", [
+    ("fp", "fp", "other"), ("ctx->fp", "ctx", "next_ctx"),
+    ("item.fp", "item", "next_item"), ("*slot", "slot", "next_slot"),
+    ("streams[0]", "streams", "next_slot"),
+    ("streams[index]", "streams", "next_slot"),
+], ids=["local", "pointer-field", "value-field", "pointer-slot", "array-slot", "indexed-slot"])
+@pytest.mark.parametrize("phase", ["value", "receiver"])
+def test_stream_observations_and_receiver_identity(tmp_path, release, storage, receiver, replacement, phase):
+    cases = {
+        "value": [
+            ([], True), (["if (B) observe();"], True), (["observe(B);"], True),
+            (["B = other;"], False), (["replace(&B);"], False),
+            (["B++;"], False), (["B += step;"], False),
+            (["if (optional) B = other;"], True),
+            (["if (optional) B = other; else B = other;"], False),
+            (["fgetc(B);", "fflush(B);"], True),
+        ],
+        "receiver": [
+            ([f"{receiver} = {replacement};"], False),
+            ([f"if (optional) {receiver} = {replacement};"], True),
+            ([f"if (optional) {receiver} = {replacement}; else B = other;"], False),
+            ([f"replace_base(&{receiver});"], False),
+            (["unrelated++;"], True),
+        ],
+    }[phase]
+    lines = ["typedef struct stream FILE;", "struct owner { FILE *fp; int tag; };"]
+    expected = set()
+    parameters = "FILE *fp, FILE *other, FILE **slot, FILE **streams, FILE **next_slot, struct owner *ctx, struct owner *next_ctx, struct owner item, struct owner next_item, int optional, int step, int unrelated, int index"
+    for index, (between, reports) in enumerate(cases):
+        lines += [f"void case_{index}({parameters}) {{", "char buf[8];", f"{release}({storage});"]
+        for statement in between:
+            lines.append(statement.replace("B", storage))
+            if statement in ("fgetc(B);", "fflush(B);"):
+                expected.add(len(lines))
+        lines += [f"fread(buf, 1, 8, {storage});", "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected)
+    assert all(row["message"].startswith("Candidate:") for row in rows)
+
+
+@pytest.mark.parametrize("storage", ["fp", "ctx->fp", "item.fp", "*slot", "streams[0]", "streams[index]"], ids=["local", "pointer-field", "value-field", "pointer-slot", "array-slot", "indexed-slot"])
+def test_status_queries_are_closed_stream_uses(tmp_path, storage):
+    rows = _run_rule(tmp_path, f"""
+        typedef struct stream FILE;
+        struct owner {{ FILE *fp; }};
+        void f(FILE *fp, struct owner *ctx, struct owner item, FILE **slot, FILE **streams, int index) {{
+            fclose({storage});
+            feof({storage});
+            ferror({storage});
+            clearerr({storage});
+            fileno({storage});
+        }}
+    """)
+    assert len(rows) == 4
+    assert {row["rule"] for row in rows} == {"use_after_fclose"}
+
+
+def test_calculated_receivers_are_outside_local_identity_tracking(tmp_path):
+    rows = _run_rule(tmp_path, """
+        void f(void **streams, int index) {
+            fclose(streams[index + 1]);
+            fgetc(streams[index + 1]);
+        }
+        void g(void) {
+            fclose(select_stream());
+            fgetc(select_stream());
+        }
+        void h(void) { fclose(NULL); fflush(NULL); }
+    """)
+    assert rows == []
+
+
+def test_index_changes_end_the_closed_slot_relation(tmp_path):
+    cases = [
+        ("index = next;", False), ("index++;", False),
+        ("index += 1;", False), ("replace(&index);", False),
+        ("if (optional) index++;", True),
+        ("if (optional) index++; else streams[index] = other;", False),
+        ("if (index) observe();", True),
+    ]
+    lines = ["typedef struct stream FILE;"]
+    expected = set()
+    for number, (between, reports) in enumerate(cases):
+        lines += [f"void case_{number}(FILE **streams, FILE *other, int index, int next, int optional) {{",
+                  "fclose(streams[index]);", between, "fgetc(streams[index]);", "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {row["line"] for row in rows} == expected
+    assert len(rows) == len(expected)

@@ -137,3 +137,14 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/division_by_zero.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only("coccinelle:division_by_zero") is True
+
+
+    @pytest.mark.parametrize("rule_name", ["popen_fclose", "use_after_fclose"])
+    def test_stream_patterns_require_lifetime_and_ownership_review(self, monkeypatch, tmp_path, rule_name):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only(f"coccinelle:{rule_name}") is True
