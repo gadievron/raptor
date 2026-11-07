@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from core.source.lines import split_lines
 from typing import Any
 
+from .run_memo import BoundedMemo
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -420,6 +422,12 @@ def _normalise_literal(val: str) -> str:
     return v
 
 
+_LITERAL_NORMALIZE_IMPL = _normalise_literal
+_LITERAL_RETURN_IMPL = _RETURN_LITERAL_RE
+_LITERAL_EXCEPT_IMPL = _EXCEPT_HEADER_RE
+_LITERAL_SUB_IMPL = re.sub
+
+
 def _detect_error_conflated_with_empty(
     file_path: str,
     source: str,
@@ -430,6 +438,11 @@ def _detect_error_conflated_with_empty(
     for name, start_line, body in _extract_functions(source):
         lines = body.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
+        native_body = type(body) is str
+        native_values = (native_body and _normalise_literal is _LITERAL_NORMALIZE_IMPL
+                         and _RETURN_LITERAL_RE is _LITERAL_RETURN_IMPL
+                         and _EXCEPT_HEADER_RE is _LITERAL_EXCEPT_IMPL
+                         and re.sub is _LITERAL_SUB_IMPL)
         # Pass 1: identify which line-indices are inside an except block.
         # An except block starts at an ``except ...:`` header and ends
         # when indentation returns to the same level or lower.
@@ -442,7 +455,7 @@ def _detect_error_conflated_with_empty(
                 while j < len(lines):
                     stripped = lines[j].lstrip()
                     if stripped and not stripped.startswith("#"):
-                        line_indent = len(lines[j]) - len(lines[j].lstrip())
+                        line_indent = len(lines[j]) - len(stripped if native_body else lines[j].lstrip())
                         if line_indent <= header_indent:
                             break
                     except_line_indices.add(j)
@@ -453,7 +466,8 @@ def _detect_error_conflated_with_empty(
 
         # Pass 2: collect return literals, split by except vs. non-except.
         except_returns: list[tuple[str, int]] = []  # (normalised_val, line_idx)
-        success_returns: dict[str, list[int]] = {}   # val -> [line_idx, ...]
+        success_returns: dict[str, list[int]] = {}   # adapter path retains original operations
+        success_values: set[str] = set()  # only membership is consumed below
 
         for idx, line in enumerate(lines):
             m = _RETURN_LITERAL_RE.match(line)
@@ -462,13 +476,15 @@ def _detect_error_conflated_with_empty(
             val = _normalise_literal(m.group("value"))
             if idx in except_line_indices:
                 except_returns.append((val, idx))
+            elif native_values:
+                success_values.add(val)
             else:
                 success_returns.setdefault(val, []).append(idx)
 
         # Pass 3: flag except-returns whose literal also appears on a
         # success path.
         for exc_val, exc_idx in except_returns:
-            if exc_val not in success_returns:
+            if exc_val not in (success_values if native_values else success_returns):
                 continue
 
             match_line = start_line + exc_idx
@@ -547,6 +563,12 @@ def _detect_consumer_fail_open(
         calls = getattr(cg, "calls", None) or (
             cg.get("calls", []) if isinstance(cg, dict) else []
         )
+        starts: BoundedMemo[int] | None = (
+            BoundedMemo(256)
+            if (type(source) is str and len(source) >= 4096
+                and (type(calls) is list or type(calls) is tuple) and len(calls) > 1)
+            else None
+        )
         for call_info in calls:
             caller_name = (
                 getattr(call_info, "caller", None)
@@ -581,7 +603,15 @@ def _detect_consumer_fail_open(
             confidence = "high" if caller_file in silent_by_file else "medium"
 
             line = 0
-            start_line = _function_start_line(source, caller_name)
+            if (starts is not None and _function_start_line is _START_LINE_IMPL
+                    and split_lines is _START_LINES_IMPL
+                    and re.search is _START_SEARCH_IMPL and re.escape is _START_ESCAPE_IMPL
+                    and type(caller_name) is str and len(caller_name) <= 512):
+                start_line, _ = starts.get_or_compute(
+                    caller_name, lambda: _function_start_line(source, caller_name),
+                )
+            else:
+                start_line = _function_start_line(source, caller_name)
             if empty_check:
                 line = start_line + caller_body.count("\n", 0, empty_check.start())
 
@@ -609,6 +639,12 @@ def _function_start_line(source: str, func_name: str) -> int:
         if re.search(rf"\b{re.escape(func_name)}\s*\(", line):
             return i
     return 1
+
+
+_START_LINE_IMPL = _function_start_line
+_START_LINES_IMPL = split_lines
+_START_SEARCH_IMPL = re.search
+_START_ESCAPE_IMPL = re.escape
 
 
 def _extract_caller_body(

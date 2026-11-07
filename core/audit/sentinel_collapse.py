@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import Any
 from core.source.lines import split_lines
@@ -491,13 +492,39 @@ def _classify_returns_python(
             continue
 
         sem = _ReturnSemantics(function=node.name, file=file_path)
+        contexts = None
+        prepare_contexts = (type(source) is str and ast is _RETURN_AST_MODULE
+                            and re is _RETURN_RE_MODULE
+                            and getattr(ast, "parse", None) is _RETURN_PARSE_IMPL
+                            and _is_inside_except is _RETURN_EXCEPT_IMPL
+                            and _is_inside_error_if is _RETURN_ERROR_IF_IMPL
+                            and _error_if_test is _RETURN_TEST_IMPL
+                            and _walk_skipping_nested_funcs is _RETURN_WALK_IMPL
+                            and getattr(ast, "dump", None) is _RETURN_DUMP_IMPL
+                            and getattr(re, "search", None) is _RETURN_SEARCH_IMPL
+                            and getattr(re, "escape", None) is _RETURN_ESCAPE_IMPL
+                            and getattr(ast, "walk", None) is _RETURN_AST_WALK_IMPL
+                            and getattr(ast, "iter_child_nodes", None) is _RETURN_CHILDREN_IMPL
+                            and sorted is _RETURN_SORT_IMPL)
 
         for child in _walk_skipping_nested_funcs(node):
             if not isinstance(child, ast.Return):
                 continue
 
-            in_except = _is_inside_except(child, node)
-            in_error_if = _is_inside_error_if(child, node)
+            if prepare_contexts and contexts is None:
+                try:
+                    contexts = _return_contexts(node)
+                except Exception:  # noqa: BLE001 - optional preparation must retain legacy error/short-circuit behavior
+                    prepare_contexts = False
+            if contexts is None:
+                in_except = _is_inside_except(child, node)
+                in_error_if = _is_inside_error_if(child, node)
+            else:
+                starts, ends, error_returns = contexts
+                line = getattr(child, "lineno", -1)
+                index = bisect_right(starts, line) - 1
+                in_except = line >= 0 and index >= 0 and line <= ends[index]
+                in_error_if = id(child) in error_returns
             is_error_path = in_except or in_error_if
 
             val = child.value
@@ -542,6 +569,19 @@ def _is_inside_except(
     return False
 
 
+def _error_if_test(if_node: ast.If) -> bool:
+    """The existing AST-dump heuristic, shared by prepared and direct queries."""
+    test_src = ast.dump(if_node.test)
+    return (
+        any(re.search(r'\b' + re.escape(kw) + r'\b', test_src) for kw in (
+            "error", "err", "exception", "fail", "status_code",
+        ))
+        or "attr='ok'" in test_src
+        or "Is()" in test_src
+        or "IsNot()" in test_src
+    )
+
+
 def _is_inside_error_if(
     return_node: ast.Return, func_node: ast.AST,
 ) -> bool:
@@ -549,21 +589,64 @@ def _is_inside_error_if(
     for if_node in ast.walk(func_node):
         if not isinstance(if_node, ast.If):
             continue
-        test_src = ast.dump(if_node.test)
-        is_error_test = (
-            any(re.search(r'\b' + re.escape(kw) + r'\b', test_src) for kw in (
-                "error", "err", "exception", "fail", "status_code",
-            ))
-            or "attr='ok'" in test_src
-            or "Is()" in test_src
-            or "IsNot()" in test_src
-        )
+        is_error_test = _error_if_test(if_node)
         if not is_error_test:
             continue
         for child in ast.walk(if_node):
             if child is return_node:
                 return True
     return False
+
+
+def _return_contexts(func_node: ast.AST) -> tuple[list[int], list[int], set[int]]:
+    """Prepare the legacy inclusive handler ranges and whole-if descendants.
+
+    Include nested definitions and else branches exactly as the direct
+    helpers do; the separate return walker still excludes nested functions.
+    """
+    handlers = []
+    error_ifs: set[int] = set()
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.ExceptHandler):
+            start = getattr(node, "lineno", -1)
+            end = getattr(node, "end_lineno", -1)
+            if start <= end:
+                handlers.append((start, end))
+        elif isinstance(node, ast.If) and _error_if_test(node):
+            error_ifs.add(id(node))
+    starts: list[int] = []
+    ends: list[int] = []
+    for start, end in sorted(handlers):
+        if ends and start <= ends[-1]:
+            ends[-1] = max(ends[-1], end)
+        else:
+            starts.append(start)
+            ends.append(end)
+    error_returns: set[int] = set()
+    if error_ifs:
+        pending = [(func_node, False)]
+        while pending:
+            node, inside = pending.pop()
+            inside = inside or id(node) in error_ifs
+            if inside and isinstance(node, ast.Return):
+                error_returns.add(id(node))
+            pending.extend((child, inside) for child in ast.iter_child_nodes(node))
+    return starts, ends, error_returns
+
+
+_RETURN_AST_MODULE = ast
+_RETURN_RE_MODULE = re
+_RETURN_PARSE_IMPL = ast.parse
+_RETURN_DUMP_IMPL = ast.dump
+_RETURN_SEARCH_IMPL = re.search
+_RETURN_ESCAPE_IMPL = re.escape
+_RETURN_AST_WALK_IMPL = ast.walk
+_RETURN_CHILDREN_IMPL = ast.iter_child_nodes
+_RETURN_SORT_IMPL = sorted
+_RETURN_EXCEPT_IMPL = _is_inside_except
+_RETURN_ERROR_IF_IMPL = _is_inside_error_if
+_RETURN_TEST_IMPL = _error_if_test
+_RETURN_WALK_IMPL = _walk_skipping_nested_funcs
 
 
 def _callee_suffix_keys(ambiguous_funcs: dict[str, _ReturnSemantics]) -> tuple[dict[str, str], bool]:
