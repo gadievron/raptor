@@ -69,7 +69,9 @@ def _package(tree, data: bytes) -> str | None:
 
 
 def _definitions(tree, data: bytes, text: str) -> dict[str, tuple[dict, list[str]]]:
-    lines = split_lines(text)
+    # Most sibling files contain functions, not usable type declarations.
+    # Preserve eager adapter operations; native text can wait for an excerpt.
+    lines = None if type(text) is str else split_lines(text)
     definitions: dict[str, tuple[dict, list[str]]] = {}
     for declaration in tree.root_node.named_children:
         if declaration.type != "type_declaration":
@@ -80,6 +82,8 @@ def _definitions(tree, data: bytes, text: str) -> dict[str, tuple[dict, list[str
             if name_node is None or node.has_error:
                 continue
             name = data[name_node.start_byte:name_node.end_byte].decode("utf-8", "replace")
+            if lines is None:
+                lines = split_lines(text)
             excerpt_node = declaration if len(specs) == 1 else node
             first = excerpt_node.start_point.row
             last = excerpt_node.end_point.row
@@ -167,8 +171,10 @@ def resolve_go_types(target_path: Path, file_path: str, metadata: dict, source: 
         parsed, language = parse_source_cached(str(path), text)
         if parsed is None or language != "go":
             continue
-        # Tree offsets describe repaired text, so raw bytes cannot be reused.
-        encoded = text.encode("utf-8", "replace")
+        # ASCII decoding is byte-for-byte reversible. Other input retains
+        # the repaired-text encoding whose offsets describe the parsed tree.
+        encoded = (raw if type(raw) is bytes and type(text) is str and text.isascii()
+                   else text.encode("utf-8", "replace"))
         current_package = _package(parsed, encoded)
         if candidate == anchor:
             package = current_package
