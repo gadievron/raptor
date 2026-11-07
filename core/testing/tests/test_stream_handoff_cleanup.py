@@ -170,10 +170,10 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
                 if fault == "write":
                     proxy.write = fail
 
-                def setattr_fixture(target, name, value):
+                def setattr_fixture(target, name, value, *, raising=True):
                     if fault == "patch" and name == "_find_sandbox_binary":
                         fail()
-                    return patcher.setattr(target, name, value)
+                    return patcher.setattr(target, name, value, raising=raising)
 
                 fixture_patcher = SimpleNamespace(
                     setattr=setattr_fixture, setitem=patcher.setitem,
