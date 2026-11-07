@@ -38,6 +38,10 @@ Scope — declared, not guessed:
   decline; no C wraparound/overflow modelling (the
   overflow verbs cover that); no pointer, heap or alias reasoning.
   Sites needing any of that are reported ``out_of_scope``.
+* An explicitly resolved integer ABI can bind builtin integer ``sizeof``
+  terms to target C-byte sizes. Its full record and provenance travel with
+  the query and site receipts. Missing layouts retain the opaque size model;
+  integer widths do not supply pointer, aggregate or boolean storage layouts.
 * Inductive step only: the base case (invariant established at
   initialisation) is not proven here.
 
@@ -117,6 +121,7 @@ class SiteResult:
     verdict: str            # preserved | violable | unknown | out_of_scope
     reason: str = ""
     model: dict[str, int] = field(default_factory=dict)
+    integer_abi: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -128,6 +133,8 @@ class SiteResult:
             d["reason"] = self.reason
         if self.model:
             d["model"] = self.model
+        if self.integer_abi is not None:
+            d["integer_abi"] = dict(self.integer_abi)
         return d
 
 
@@ -377,6 +384,7 @@ def check_invariant_preservation(
     source: str,
     *,
     timeout_ms: int = 5000,
+    integer_abi=None,
 ) -> InvariantPreservationResult:
     """Check all mutation sites within one shared soft solver budget.
 
@@ -385,7 +393,7 @@ def check_invariant_preservation(
     """
     from .invariant_worker import run_check
     with query_budget(timeout_ms) as deadline:
-        return run_check("function", invariant, source, timeout_ms=timeout_ms, deadline=deadline)
+        return run_check("function", invariant, source, timeout_ms=timeout_ms, deadline=deadline, integer_abi=integer_abi)
 
 
 def _check_invariant_preservation(
@@ -393,6 +401,7 @@ def _check_invariant_preservation(
     source: str,
     *,
     timeout_ms: int = 5000,
+    integer_abi=None,
 ) -> InvariantPreservationResult:
     """Check that every mutation site in ``source`` preserves
     ``invariant`` (one inductive step per site). See module docstring
@@ -432,7 +441,7 @@ def _check_invariant_preservation(
             result = SiteResult(line=site.line, code=site.code, verdict="out_of_scope", reason=site.reason)
         else:
             result = _check_one_site(z3, lhs, op, rhs, variables, site.line, site.code,
-                                     site.var, site.op, site.rhs, timeout_ms, pre_conditions=site.guards)
+                                     site.var, site.op, site.rhs, timeout_ms, pre_conditions=site.guards, integer_abi=integer_abi)
         site_results.append(result)
     site_results.extend(SiteResult(line=effect.line, code=effect.code, verdict="out_of_scope", reason=effect.reason)
                         for effect in effects)
@@ -474,6 +483,7 @@ def _check_one_site(
     rhs_text: str,
     timeout_ms: int,
     pre_conditions: tuple = (),
+    integer_abi=None,
 ) -> SiteResult:
     """Encode one mutation site's transition and query preservation.
 
@@ -537,6 +547,11 @@ def _check_one_site(
         _collect_symbols(p_lhs, env, z3, solver)
         _collect_symbols(p_rhs, env, z3, solver)
 
+    from .invariant_sizeof import resolved_sizeof_values
+    expressions = [lhs, rhs, new_expr, *(node for a, _, b in parsed_pres for node in (a, b))]
+    for name, value in resolved_sizeof_values(expressions, integer_abi).items():
+        solver.add(env[name] == value)
+
     pre = _cmp_z3(_to_z3(lhs, env, z3), op, _to_z3(rhs, env, z3), z3)
     for p_lhs, p_op, p_rhs in parsed_pres:
         solver.add(_cmp_z3(
@@ -584,7 +599,7 @@ def _check_one_site(
         )
 
     math_model = _model_values(solver.model())
-    if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, math_model):
+    if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, math_model, integer_abi=integer_abi):
         return SiteResult(line=line_no, code=code, verdict="unknown",
                           reason="mathematical counterexample replay failed")
 
@@ -603,7 +618,7 @@ def _check_one_site(
         nonneg_reason = solver_reason_unknown(solver) if nonneg_check not in (z3.sat, z3.unsat) else ""
 
     if nonneg_check == z3.sat:
-        if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, nonneg_model, nonnegative=True):
+        if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, nonneg_model, nonnegative=True, integer_abi=integer_abi):
             return SiteResult(line=line_no, code=code, verdict="unknown",
                               reason="non-negative counterexample replay failed")
         return SiteResult(
@@ -638,6 +653,7 @@ def check_site_batch(
     sites: list[dict],
     *,
     timeout_ms: int = 5000,
+    integer_abi=None,
 ) -> list[SiteResult] | None:
     """Check ordered code/line/pre_conditions records in one confined worker.
 
@@ -647,7 +663,7 @@ def check_site_batch(
     """
     from .invariant_batch import run_batch
     with query_budget(timeout_ms) as deadline:
-        return run_batch(invariant, sites, timeout_ms=timeout_ms, deadline=deadline)
+        return run_batch(invariant, sites, timeout_ms=timeout_ms, deadline=deadline, integer_abi=integer_abi)
 
 
 def check_site_preservation(
@@ -657,12 +673,13 @@ def check_site_preservation(
     line: int = 0,
     pre_conditions: tuple = (),
     timeout_ms: int = 5000,
+    integer_abi=None,
 ) -> SiteResult:
     """Check exactly one direct mutation using a shared soft query budget."""
     from .invariant_worker import run_check
     with query_budget(timeout_ms) as deadline:
         return run_check("site", invariant, code, line=line, pre_conditions=pre_conditions,
-                         timeout_ms=timeout_ms, deadline=deadline)
+                         timeout_ms=timeout_ms, deadline=deadline, integer_abi=integer_abi)
 
 
 def _check_site_preservation(
@@ -672,6 +689,7 @@ def _check_site_preservation(
     line: int = 0,
     pre_conditions: tuple = (),
     timeout_ms: int = 5000,
+    integer_abi=None,
 ) -> SiteResult:
     """One inductive preservation step for ONE mutation site — the
     census-driven multi-site entry point (protocol_state channel).
@@ -711,4 +729,4 @@ def _check_site_preservation(
     import z3
     return _check_one_site(z3, lhs, op, rhs, variables, line or site.line, site.code,
                            site.var, site.op, site.rhs, timeout_ms,
-                           pre_conditions=tuple(pre_conditions) + site.guards)
+                           pre_conditions=tuple(pre_conditions) + site.guards, integer_abi=integer_abi)

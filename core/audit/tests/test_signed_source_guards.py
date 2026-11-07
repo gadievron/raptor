@@ -108,7 +108,7 @@ def test_confined_array_worker_preserves_signed_guard_semantics(guard, expected)
     result = sweep.run_smt_verb_direct(file_path="record.c", function_name="Read", verb="check-array-bounds",
                                       source=source, hypothesis="out-of-bounds read at Data[Index]", integer_abi="ilp32")
     assert result.outcome == expected, result.errors
-    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v8"
+    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v9"
     assert result.details["violation"] is (expected == "confirmed")
     if expected == "confirmed":
         assert result.details["witness_index"] == -1
@@ -122,7 +122,7 @@ def test_confined_overflow_worker_checks_negative_counterexample():
     assert result.outcome == "confirmed", result.errors
     assert result.details["witness_validated"] is True
     assert result.details["mathematical_result"] < -2147483648
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v19"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v20"
 
 
 @pytest.mark.slow
@@ -135,4 +135,4 @@ def test_confined_literal_caller_checks_the_same_negative_guard(tmp_path, argume
     decision = evaluate_caller_gate(tmp_path, "record.c", "Read", "check-array-bounds", "Data[Index]",
                                     source=source, def_span=(1, 1), integer_abi="ilp32")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v6"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v7"

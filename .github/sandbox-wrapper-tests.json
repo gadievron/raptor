@@ -834,9 +834,11 @@
             "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness",
             "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker",
             "core/audit/tests/test_invariant_conditional_preservation.py::test_native_worker_keeps_conditional_preservation_scoped",
-            "core/audit/tests/test_invariant_sizeof.py::test_native_sizeof_model_contract"
+            "core/audit/tests/test_invariant_sizeof.py::test_native_sizeof_model_contract",
+            "core/audit/tests/test_invariant_sizeof_abi.py::test_native_builtin_sizeof_abi",
+            "core/audit/tests/test_sizeof_array_proofs.py::test_native_sizeof_array_counterexample"
           ],
-          "expected": 25
+          "expected": 30
         },
         "darwin": {
           "tests": [
@@ -850,9 +852,11 @@
             "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness",
             "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker",
             "core/audit/tests/test_invariant_conditional_preservation.py::test_native_worker_keeps_conditional_preservation_scoped",
-            "core/audit/tests/test_invariant_sizeof.py::test_native_sizeof_model_contract"
+            "core/audit/tests/test_invariant_sizeof.py::test_native_sizeof_model_contract",
+            "core/audit/tests/test_invariant_sizeof_abi.py::test_native_builtin_sizeof_abi",
+            "core/audit/tests/test_sizeof_array_proofs.py::test_native_sizeof_array_counterexample"
           ],
-          "expected": 24
+          "expected": 29
         }
       }
     },

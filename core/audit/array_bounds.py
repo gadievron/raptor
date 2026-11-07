@@ -14,6 +14,7 @@ import re
 from core.smt_solver import BVProfile, DEFAULT_TIMEOUT_MS, ge, lt, z3, z3_available as _z3_available
 from core.smt_solver.session import query_budget
 from core.smt_solver.path_feasibility import PathCondition, check_path_feasibility, check_verb_feasibility, make_var
+from core.smt_solver.sizeof_model import builtin_integer_sizeof
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
 from .arithmetic_guards import guards_for_operation
@@ -35,7 +36,7 @@ _FRAME_NODES = frozenset({
     "init_declarator", "array_declarator", "identifier", "number_literal",
     "initializer_list", "if_statement", "condition_clause", "parenthesized_expression",
     "binary_expression", "unary_expression", "return_statement", "subscript_expression",
-    "subscript_argument_list", "else_clause", "comment",
+    "subscript_argument_list", "else_clause", "comment", "sizeof_expression", "type_descriptor",
 })
 _COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "==": operator.eq, "!=": operator.ne}
 
@@ -191,12 +192,23 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
         return ArrayAccess("unavailable", "array object declaration unavailable")
     name = declarator.child_by_field_name("declarator")
     size = declarator.child_by_field_name("size")
-    if name is None or name.type != "identifier" or text(name) != claim[0] or size is None or size.type != "number_literal":
-        return ArrayAccess("unavailable", "a one-dimensional literal extent is required")
-    literal = text(size)
-    if len(literal) > 22 or not _INTEGER_LITERAL_RE.fullmatch(literal):
-        return ArrayAccess("unavailable", "extent literal semantics unavailable")
-    extent = int(literal, 16 if literal.lower().startswith("0x") else 10)
+    if name is None or name.type != "identifier" or text(name) != claim[0] or size is None:
+        return ArrayAccess("unavailable", "a one-dimensional bound extent is required")
+    if size.type == "number_literal":
+        literal = text(size)
+        if len(literal) > 22 or not _INTEGER_LITERAL_RE.fullmatch(literal):
+            return ArrayAccess("unavailable", "extent literal semantics unavailable")
+        extent = int(literal, 16 if literal.lower().startswith("0x") else 10)
+    elif size.type == "sizeof_expression":
+        descriptor = size.child_by_field_name("type")
+        type_node = descriptor.child_by_field_name("type") if descriptor is not None else None
+        if descriptor is None or len(descriptor.named_children) != 1 or not has_builtin_integer_type(type_node, text(type_node), language):
+            return ArrayAccess("unavailable", "sizeof extent needs a builtin integer type")
+        extent = builtin_integer_sizeof(text(type_node), abi)
+        if extent is None:
+            return ArrayAccess("unavailable", "sizeof storage layout is unresolved")
+    else:
+        return ArrayAccess("unavailable", "extent semantics unavailable")
     if not 0 < extent <= (1 << (abi.int_bits - 1)) - 1:
         return ArrayAccess("unavailable", "extent outside supported literal range")
     element = declaration.child_by_field_name("type")

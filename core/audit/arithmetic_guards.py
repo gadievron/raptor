@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
 from .integer_literals import source_integer_atom
 from .integer_abi import resolve_integer_abi
-from .arithmetic_types import integer_type
+from .arithmetic_types import integer_type, has_builtin_integer_type
 from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_prefix import PrefixIntegerModel
 
@@ -166,8 +166,16 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                         return True  # includes shadowing and reference declarators
             if item.type == "array_declarator":
                 size = item.child_by_field_name("size")
-                if size is None or size.type != "number_literal" or not _INTEGER_LITERAL_RE.fullmatch(text(size)):
+                if size is not None and size.type == "number_literal" and _INTEGER_LITERAL_RE.fullmatch(text(size)):
+                    continue
+                if size is None or size.type != "sizeof_expression":
                     return True  # variable extents need allocation/definedness facts
+                base = prefix.descriptor_base(size.child_by_field_name("type"))
+                if not has_builtin_integer_type(base, text(base), language):
+                    return True
+                domain = prefix.size_domain(size)
+                if domain is None or domain[0] != domain[1] or domain[0] <= 0:
+                    return True
         return False
 
     def watched(facts):
