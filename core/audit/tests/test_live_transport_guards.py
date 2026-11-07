@@ -1691,6 +1691,8 @@ class TestPhpSurfaceFences:
         calls = _function_call_map("test_cwe_dispatch_php.py")
         assert _callers_of(calls, "run_semgrep_sweep") == set()
         assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
+            "test_command_and_protocol_argument_roles",
+            "test_command_and_protocol_partial_scope_stays_inconclusive",
             "test_vulnerable_snippet_confirms",
             "test_sanitized_snippet_refutes",
             "test_attribute_encoding_miss_on_indirect_flow_stays_inconclusive",
@@ -1701,6 +1703,15 @@ class TestPhpSurfaceFences:
         }
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_semgrep_php_target_selection_pin",
+        }
+
+    def test_engine_call_argument_regressions(self) -> None:
+        calls = _function_call_map(
+            "../../../engine/semgrep/tests/test_php_call_argument_precision.py",
+        )
+        assert _callers_of(calls, "run_semgrep_sweep") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_command_and_protocol_payload_positions",
         }
 
     def test_cwe_dispatch_php_web(self) -> None:

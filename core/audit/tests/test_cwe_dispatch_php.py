@@ -132,7 +132,7 @@ class TestDispatchEntries:
     def test_rule_file_exists_on_disk(self, cwe: str):
         assert (_RULES_DIR / _PHP_FAMILIES[cwe][0]).is_file()
 
-    @pytest.mark.parametrize("cwe", ["CWE-116", "CWE-327", "CWE-338"])
+    @pytest.mark.parametrize("cwe", ["CWE-88", "CWE-93", "CWE-116", "CWE-327", "CWE-338"])
     def test_narrow_php_rules_cannot_refute_the_whole_class(self, cwe: str):
         from core.audit.sweep import is_confirm_only_rule
 
@@ -325,8 +325,8 @@ class TestLiveAdjudication:
             function_name="f",
             rule_config=rule,
         )
-        if cwe in {"CWE-116", "CWE-327", "CWE-338"}:
-            # Encoding shapes and name-anchored crypto are partial detectors.
+        if cwe in {"CWE-88", "CWE-93", "CWE-116", "CWE-327", "CWE-338"}:
+            # These curated shapes do not cover their entire CWE classes.
             assert result.outcome == "inconclusive", (
                 f"{cwe}: {result.outcome} {result.errors}"
             )
@@ -428,6 +428,48 @@ class TestLiveAdjudication:
         )
         assert result.outcome == ("confirmed" if finding else "inconclusive"), result.errors
         assert bool(result.matches) == finding
+
+    @pytest.mark.parametrize("cwe, body, finding", [
+        ("CWE-88", '$out=[$_GET["x"]]; exec("/usr/bin/true", $out);', False),
+        ("CWE-88", '\\SYSTEM($_GET["x"]);', True),
+        ("CWE-88", 'popen("/usr/bin/true", $_GET["mode"]);', False),
+        ("CWE-93", '$s=fsockopen($_GET["host"],25); fwrite($s,"PING");', False),
+        ("CWE-93", '$s=\\FSOCKOPEN("localhost",25); \\FWRITE($s,$_GET["x"]);', True),
+        ("CWE-93", 'socket_write($socket,"PING",$_GET["length"]);', False),
+    ], ids=["command-output", "qualified-command", "popen-mode", "socket-host",
+            "qualified-payload", "socket-length"])
+    def test_command_and_protocol_argument_roles(
+        self, cwe: str, body: str, finding: bool, tmp_path: Path,
+    ):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text('<?php\nfunction f($socket) {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == ("confirmed" if finding else "inconclusive"), result.errors
+        assert bool(result.matches) == finding
+
+    @pytest.mark.parametrize("cwe, body", [
+        ("CWE-88", 'exec("tool " . escapeshellarg($_GET["argument"]));'),
+        ("CWE-93", 'header("X-Note: " . $_GET["value"]);'),
+    ], ids=["program-option-parsing", "response-header-channel"])
+    def test_command_and_protocol_partial_scope_stays_inconclusive(
+        self, cwe: str, body: str, tmp_path: Path,
+    ):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text('<?php\nfunction f() {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == "inconclusive", result.errors
+        assert not result.matches
+        assert "confirm-only" in (result.details or {}).get("reason", "")
 
     def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
         """Live pin of the engine's ACTUAL selection for language:php
