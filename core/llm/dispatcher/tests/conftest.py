@@ -131,16 +131,23 @@ def _af_unix_safe_tmp(monkeypatch) -> Iterator[None]:
     prefix listing only helps when some later session runs with
     ``gettempdir() == /tmp`` (CI, short-tmp hosts) and sweeps it up.
     """
-    if len(os.fsencode(tempfile.gettempdir())) <= _SAFE_TMP_LEN:
-        yield
-        return
-    short_tmp = tempfile.mkdtemp(prefix="raptor-llm-sock-", dir="/tmp")
-    monkeypatch.setenv("TMPDIR", short_tmp)
-    monkeypatch.setattr(tempfile, "tempdir", short_tmp)
-    try:
-        yield
-    finally:
-        shutil.rmtree(short_tmp, ignore_errors=True)
+    from core.testing.tempdirs import private_tempfile_module
+    from core.llm.dispatcher import server
+
+    private = private_tempfile_module(server.tempfile)
+    with monkeypatch.context() as scope:
+        scope.setattr(server, "tempfile", private)
+        scope.setitem(globals(), "tempfile", private)
+        if len(os.fsencode(tempfile.gettempdir())) <= _SAFE_TMP_LEN:
+            yield
+            return
+        short_tmp = tempfile.mkdtemp(prefix="raptor-llm-sock-", dir="/tmp")
+        try:
+            scope.setenv("TMPDIR", short_tmp)
+            scope.setattr(tempfile, "tempdir", short_tmp)
+            yield
+        finally:
+            shutil.rmtree(short_tmp, ignore_errors=True)
 
 
 # Optional-dep (h2) hermeticity: tests marked ``upstream_forward``
