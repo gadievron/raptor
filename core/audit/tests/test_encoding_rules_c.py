@@ -297,11 +297,11 @@ class TestRuleFiles:
 
     @pytest.mark.parametrize("name,confirm_only", [
         ("php/attr-encoding.yaml", True),
-        ("php/crlf-injection.yaml", False),
+        ("php/crlf-injection.yaml", True),
     ])
     def test_php_rules_keep_their_declared_evidence_roles(self, name, confirm_only):
-        # Attribute encoding covers immediate expressions, so a miss cannot
-        # refute indirect flows. The CRLF rule retains scanned-witness semantics.
+        # Immediate attribute expressions and socket writes cover only part
+        # of their CWE families; misses cannot refute other flows or channels.
         from core.audit.sweep import is_confirm_only_rule
 
         assert is_confirm_only_rule(str(_RULES_DIR / name)) is confirm_only
