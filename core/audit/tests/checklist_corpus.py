@@ -43,11 +43,12 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -148,7 +149,7 @@ class ChecklistBuildCache:
             _RAPTOR_TRUSTED="1",
             PYTHONPATH=str(_RAPTOR_DIR),
         )
-        r = subprocess.run(
+        r = run_standalone_cli(
             [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
             env=env, capture_output=True, text=True, check=False,
         )

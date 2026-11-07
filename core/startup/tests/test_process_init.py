@@ -6,6 +6,8 @@ import faulthandler
 import signal
 import sys
 
+from core.testing.standalone_cli import run_standalone_cli
+
 
 def test_init_enables_faulthandler():
     from core.startup.process_init import init
@@ -45,11 +47,10 @@ def test_init_idempotent():
 
 def test_auto_init_on_import():
     """Importing the module auto-enables faulthandler (the load-bearing contract)."""
-    import subprocess
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[3]
-    rc = subprocess.run(
+    rc = run_standalone_cli(
         [
             sys.executable, "-c",
             "import faulthandler; faulthandler.disable(); "
