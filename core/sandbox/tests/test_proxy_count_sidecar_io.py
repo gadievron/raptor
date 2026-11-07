@@ -99,7 +99,7 @@ def test_commit_failure_preserves_old_sidecar(tmp_path, monkeypatch, sidecar, op
     def fail(*args, **kwargs):
         raise OSError('commit failed')
 
-    monkeypatch.setattr(os, operation, fail)
+    patch_module_attribute(monkeypatch, _os_fault_consumer, 'os', operation, fail)
     context._write_proxy_count_sidecar(tmp_path, 12, set(), 'run-binding')
     assert path.read_bytes() == b'previous'
     assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]

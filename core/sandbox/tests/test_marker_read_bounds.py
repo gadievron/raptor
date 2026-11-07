@@ -1,8 +1,10 @@
 """Audit marker reads stay bounded and best-effort through cleanup."""
 import errno
-from types import SimpleNamespace
+import os
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 from core.sandbox import summary
 
@@ -16,9 +18,12 @@ def test_actual_bytes_enforce_bound_after_stat(tmp_path, monkeypatch, data):
 
     def stale_stat(fd):
         st = real_fstat(fd)
-        return SimpleNamespace(st_mode=st.st_mode, st_size=0)
+        sequence, fields = st.__reduce__()[1]
+        sequence = list(sequence)
+        sequence[6] = 0
+        return os.stat_result(sequence, fields)
 
-    monkeypatch.setattr(summary.os, 'fstat', stale_stat)
+    patch_module_attribute(monkeypatch, summary, 'os', 'fstat', stale_stat)
     assert summary._read_marker_bytes(marker) == (data if len(data) <= 4 else None)
 
 
@@ -27,7 +32,7 @@ def test_short_reads_are_accumulated(tmp_path, monkeypatch):
     marker.write_bytes(b'1234')
     monkeypatch.setattr(summary, '_MARKER_MAX_BYTES', 4)
     real_read = summary.os.read
-    monkeypatch.setattr(summary.os, 'read', lambda fd, count: real_read(fd, min(count, 1)))
+    patch_module_attribute(monkeypatch, summary, 'os', 'read', lambda fd, count: real_read(fd, min(count, 1)))
     assert summary._read_marker_bytes(marker) == b'1234'
 
 
@@ -47,9 +52,9 @@ def test_close_failure_does_not_escape_or_mask_read_result(tmp_path, monkeypatch
         raise OSError(errno.EIO, 'read failure')
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(summary.os, 'close', close_then_fail)
+        patch_module_attribute(scoped, summary, 'os', 'close', close_then_fail)
         if read_fails:
-            scoped.setattr(summary.os, 'read', failed_read)
+            patch_module_attribute(scoped, summary, 'os', 'read', failed_read)
         result = summary._read_marker_bytes(marker)
     assert result == (None if read_fails else b'intact')
     assert len(closed) == 1
@@ -71,7 +76,7 @@ def test_reassert_continues_after_failed_read_and_close(tmp_path, monkeypatch):
     monkeypatch.setattr(summary, 'write_text_atomically',
                         lambda path, text, **kwargs: restored.append((path, text)))
     with monkeypatch.context() as scoped:
-        scoped.setattr(summary.os, 'close', close_then_fail)
+        patch_module_attribute(scoped, summary, 'os', 'close', close_then_fail)
         assert summary.reassert_audit_degraded(tmp_path) is True
     assert len(restored) == 1
     assert restored[0][0] == marker

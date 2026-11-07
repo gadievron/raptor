@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import disable_consent as dc
 
 
@@ -16,7 +18,7 @@ def test_partial_writes_produce_valid_complete_digest(tmp_path, monkeypatch, chu
         calls.append(bytes(data))
         return real_write(fd, data[:chunk_size])
 
-    monkeypatch.setattr(dc.os, 'write', short_write)
+    patch_module_attribute(monkeypatch, dc, 'os', 'write', short_write)
     nonce = dc._mint_nonce(tmp_path)
     path = tmp_path / dc._nonce_filename(nonce)
     expected = (dc._nonce_digest(nonce) + '\n').encode()
@@ -50,8 +52,8 @@ def test_failed_write_does_not_return_nonce_and_closes_descriptor(
         real_close(fd)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(dc.os, 'write', interrupted_write)
-        scoped.setattr(dc.os, 'close', close)
+        patch_module_attribute(scoped, dc, 'os', 'write', interrupted_write)
+        patch_module_attribute(scoped, dc, 'os', 'close', close)
         expected_error = Cancelled if failure == 'cancelled' else OSError
         with pytest.raises(expected_error) as caught:
             dc._mint_nonce(tmp_path)
