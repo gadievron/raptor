@@ -1,15 +1,21 @@
 """Bounded mechanical definedness proofs for primitive integer prefixes."""
 
+import logging
 from time import monotonic
 
 from core.smt_solver import new_solver, z3, z3_available
-from core.smt_solver.csem import division_undefined, shift_count_invalid
-from core.smt_solver.session import check_solver, query_budget
+from core.smt_solver.csem import (
+    division_undefined, left_shift_undefined, shift_count_invalid,
+    sadd_overflows, ssub_overflows, smul_overflows,
+)
+from core.smt_solver.session import check_solver, query_budget, solver_reason_unknown
 
 from .arithmetic_operation import _unwrap
 from .arithmetic_types import common_integer_type
 from .integer_literals import source_integer_atom
 from .narrowing_bindings import visible_declarations
+
+logger = logging.getLogger(__name__)
 
 _MAX_CHECKS = 8
 _BUDGET_MS = 100
@@ -39,11 +45,14 @@ class PrefixProofBudget:
         solver.add(predicate)
         remaining = max(0, int((self.deadline - monotonic()) * 1000))
         with query_budget(remaining):
-            return check_solver(solver) == z3.unsat
+            result = check_solver(solver)
+        if result == z3.unknown:
+            logger.debug("Prefix definedness proof undecided: %s", solver_reason_unknown(solver))
+        return result == z3.unsat
 
 
 def binary_domain(model, node, depth):
-    """Admit atomic /, %, >> only after proving full-domain definedness.
+    """Admit atomic integer arithmetic with full-domain definedness.
 
     Guard refinement and local value flow are intentionally absent: these
     intervals overapproximate each operand independently. A proof therefore
@@ -71,20 +80,50 @@ def binary_domain(model, node, depth):
         return None
     declarations = visible_declarations(node, model.data)
     types = [(name, value[0]) for name, value in declarations.items()]
-    if operator == '>>':
+    if operator in {'<<', '>>'}:
         left_kind = common_integer_type([atoms[0]], types, model.abi)
         count_kind = common_integer_type([atoms[1]], types, model.abi)
-        if left_kind is None or count_kind is None or domains[0][0] < 0:
+        if left_kind is None or count_kind is None or (operator == '>>' and domains[0][0] < 0):
             return None  # negative signed right shifts need implementation assumptions
         count = z3.FreshConst(z3.BitVecSort(count_kind.width), prefix='prefix_count')
-        invalid = shift_count_invalid(count, left_kind.width, signed=count_kind.signed)
-        if model.proofs.impossible(invalid, [(count, *domains[1], count_kind.signed)]):
-            return (0, domains[0][1])  # conservative for all admitted counts
-        return None
+        if operator == '>>':
+            invalid = shift_count_invalid(count, left_kind.width, signed=count_kind.signed)
+            if model.proofs.impossible(invalid, [(count, *domains[1], count_kind.signed)]):
+                return (0, domains[0][1])  # conservative for all admitted counts
+            return None
+        value = z3.FreshConst(z3.BitVecSort(left_kind.width), prefix='prefix_value')
+        invalid = left_shift_undefined(value, count, value_signed=left_kind.signed, count_signed=count_kind.signed)
+        # Strict signed C definedness is sufficient for both supported C and
+        # C++ prefixes; extra cases allowed by some C++ versions still abstain.
+        if not model.proofs.impossible(invalid, [(value, *domains[0], left_kind.signed),
+                                                (count, *domains[1], count_kind.signed)]):
+            return None
+        low, high = domains[0][0] << domains[1][0], domains[0][1] << domains[1][1]
+        maximum = (1 << (left_kind.width - (1 if left_kind.signed else 0))) - 1
+        return (low, high) if high <= maximum else (0, maximum)
     kind = common_integer_type(atoms, types, model.abi)
     if kind is None:
         return None
     a, b = (z3.FreshConst(z3.BitVecSort(kind.width), prefix='prefix_operand') for _ in range(2))
+    if operator in {'+', '-', '*'}:
+        if kind.signed:
+            fault = {'+': sadd_overflows, '-': ssub_overflows, '*': smul_overflows}[operator](a, b)
+            if not model.proofs.impossible(fault, [(a, *domains[0], True), (b, *domains[1], True)]):
+                return None
+        # Unsigned add/sub/mul are defined modulo the promoted range.
+        # Retain a tight interval only when no mathematical result wraps.
+        (low_a, high_a), (low_b, high_b) = domains
+        if operator == '+':
+            low, high = low_a + low_b, high_a + high_b
+        elif operator == '-':
+            low, high = low_a - high_b, high_a - low_b
+        else:
+            corners = [a * b for a in (low_a, high_a) for b in (low_b, high_b)]
+            low, high = min(corners), max(corners)
+        if kind.signed:
+            return low, high
+        maximum = (1 << kind.width) - 1
+        return (low, high) if 0 <= low <= high <= maximum else (0, maximum)
     invalid = division_undefined(a, b, signed=kind.signed)
     if not model.proofs.impossible(invalid, [(a, *domains[0], kind.signed), (b, *domains[1], kind.signed)]):
         return None

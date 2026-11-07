@@ -158,7 +158,7 @@ class PrefixIntegerModel:
         elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) == "!":
             if self.value_domain(node.child_by_field_name("argument"), depth + 1) is not None:
                 result = (0, 1)
-        elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"/", "%", ">>"}:
+        elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"+", "-", "*", "/", "%", "<<", ">>"}:
             result = binary_domain(self, node, depth)
         elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}:
             if all(self.value_domain(node.child_by_field_name(field), depth + 1) is not None for field in ("left", "right")):

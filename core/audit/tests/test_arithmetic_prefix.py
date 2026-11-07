@@ -129,7 +129,7 @@ def test_supported_prefix_keeps_real_source_smt_verdicts(prefix):
                                      source=source(prefix, guard='Value<=10 && Step<=10'),
                                      hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v15'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v16'
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'refuted'])

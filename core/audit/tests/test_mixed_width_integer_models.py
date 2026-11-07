@@ -185,7 +185,7 @@ def test_confined_overflow_worker_uses_the_common_operand_width(guard, outcome):
                                       source=source, hypothesis="integer overflow in `Alpha + Zulu`", integer_abi="lp64")
     assert result.outcome == outcome, result.details
     assert result.details["source_operation"]["profile"] == "int64"
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v15"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v16"
 
 
 @pytest.mark.slow
@@ -197,7 +197,7 @@ def test_confined_array_worker_keeps_narrow_guards_in_the_wide_index_frame(upper
                                       source=source, hypothesis="Data[Index] out-of-bounds read", integer_abi="lp64")
     assert result.outcome == outcome, result.details
     assert result.details["source_access"]["profile"] == "int64"
-    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v4"
+    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v5"
 
 
 @pytest.mark.slow

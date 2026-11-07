@@ -161,11 +161,11 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         # Matching source is insufficient: replies must satisfy the current
         # explicit claim, operation, guard, type and variable-identity contract.
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "common-width-integer-operands-v15"
+        binding["query_contract"] = "common-width-integer-operands-v16"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-array-bounds":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "common-width-array-guards-v4"
+        binding["query_contract"] = "common-width-array-guards-v5"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-oob":
         binding["query_contract"] = "explicit-bounds-roles-v1"
