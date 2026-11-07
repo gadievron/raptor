@@ -305,6 +305,10 @@ Stability grouping keys on (tree, profile, config) — a cold run
 never shares a nondeterminism group with a deployed run — and
 `compare` warns when profiles differ or when either side is a
 selective refire.
+It also lists differences in recorded configuration, including fields present
+on only one side. Missing values are shown as unrecorded, separately from
+explicit nulls. The notice does not change flip classifications or scores;
+configuration changes mean the comparison alone cannot isolate fix impact.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history

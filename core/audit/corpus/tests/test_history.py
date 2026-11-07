@@ -320,6 +320,42 @@ class TestClassifyFlip:
 
 
 class TestCompareRuns:
+    def test_configuration_changes_preserve_nulls_and_do_not_change_flips(self):
+        config_a = {"mode": "security", "llm_cache_policy": {"enabled": True, "ttl_seconds": None}}
+        config_b = {"mode": "quality", "llm_cache_policy": {"enabled": True, "ttl_seconds": 120},
+                    "integer_abi": None}
+        a, b = _run_rec("a", config=config_a), _run_rec("b", config=config_b)
+        labels_a = {"a.c:f": _label_rec("a.c:f", "clean", expected="finding", match=False)}
+        labels_b = {"a.c:f": _label_rec("a.c:f", "finding", expected="finding", match=True)}
+        diff = history.compare_runs(a, b, labels_a, labels_b)
+        assert diff["configuration_changes"] == [
+            {"field": "integer_abi", "from_recorded": False, "from": None, "to_recorded": True, "to": None},
+            {"field": "llm_cache_policy", "from_recorded": True, "from": config_a["llm_cache_policy"],
+             "to_recorded": True, "to": config_b["llm_cache_policy"]},
+            {"field": "mode", "from_recorded": True, "from": "security", "to_recorded": True, "to": "quality"},
+        ]
+        assert len(diff["flips"]["improved"]) == 1
+        output = history.format_compare(diff)
+        assert "verdict changes alone do not isolate fix impact" in output
+        assert "integer_abi: (unrecorded) -> None" in output
+        assert "mode: 'security' -> 'quality'" in output
+
+    def test_equal_recorded_configuration_and_missing_legacy_configuration_do_not_warn(self):
+        for a, b in [(_run_rec("a"), _run_rec("b")),
+                     (_run_rec("a", config={"integer_abi": None}), _run_rec("b", config={"integer_abi": None}))]:
+            diff = history.compare_runs(a, b, {}, {})
+            assert diff["configuration_changes"] == []
+            assert "recorded configuration differs" not in history.format_compare(diff)
+
+    def test_configuration_details_are_terminal_safe_and_report_removals(self):
+        a = _run_rec("a", config={"field\x1b[31m": "value\x1b[31m"})
+        diff = history.compare_runs(a, _run_rec("b"), {}, {})
+        assert diff["configuration_changes"][0]["from_recorded"] is True
+        assert diff["configuration_changes"][0]["to_recorded"] is False
+        output = history.format_compare(diff)
+        assert "(unrecorded)" in output
+        assert "\x1b" not in output
+
     def test_flips_attribution_and_cost(self):
         run_a = _run_rec("va", cost_usd=1.0)
         run_b = _run_rec("vb", cost_usd=3.0)
