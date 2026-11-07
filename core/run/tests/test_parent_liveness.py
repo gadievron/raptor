@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.run import parent_liveness
+from core.testing.module_bindings import patch_module_attribute
 
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
@@ -131,24 +133,36 @@ def _stub_terminate(monkeypatch):
 
 class TestTrigger:
     def test_ppid_change_fires(self, monkeypatch, _stub_terminate):
-        real_ppid = os.getppid()
-        seen = {"flipped": False}
+        borrowed_getppid = os.getppid
+        real_ppid = borrowed_getppid()
+        flipped = threading.Event()
+        polled = threading.Event()
+        resume = threading.Event()
 
         def fake_getppid() -> int:
-            return real_ppid + 1 if seen["flipped"] else real_ppid
+            return real_ppid + 1 if flipped.is_set() else real_ppid
 
-        monkeypatch.setattr(parent_liveness.os, "getppid", fake_getppid)
-        thread = parent_liveness.start_orphan_watchdog("trigger", poll_s=0.05)
+        def wait_for_parent_change(seconds):
+            assert seconds == 60.0
+            polled.set()
+            assert resume.wait(5), "watchdog poll was never released"
+
+        patch_module_attribute(monkeypatch, parent_liveness, "os", "getppid", fake_getppid)
+        patch_module_attribute(monkeypatch, parent_liveness, "time", "sleep", wait_for_parent_change)
+        assert os.getppid is borrowed_getppid, "watchdog mock escaped its consumer"
+        thread = parent_liveness.start_orphan_watchdog("trigger", poll_s=60.0)
         try:
-            time.sleep(0.2)
-            assert _stub_terminate == []  # parent "alive": no fire
-            seen["flipped"] = True
-            _wait_for(lambda: _stub_terminate == ["trigger"], 5.0,
-                      "watchdog to fire on ppid change")
+            assert polled.wait(5), "watchdog never observed the live parent"
+            assert _stub_terminate == [], "watchdog fired while parent was alive"
+            flipped.set()
+            resume.set()
+            thread.join(timeout=5)
+            assert _stub_terminate == ["trigger"], "watchdog did not fire after parent change"
         finally:
-            # Finish even if an assertion failed, while _terminate_group is
-            # still stubbed. A late daemon must never regain the real action.
-            seen["flipped"] = True
+            # Release and retire the real thread before restoring its action
+            # or borrowed module bindings, including on assertion failures.
+            flipped.set()
+            resume.set()
             thread.join(timeout=5)
             assert not thread.is_alive()
 
