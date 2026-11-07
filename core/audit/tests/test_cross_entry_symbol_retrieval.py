@@ -117,3 +117,14 @@ def test_grouped_retrieval_keeps_id_order_cap_and_cached_reuse(tmp_path):
     cached = run_studies(actual, [unit], client, out_dir=tmp_path)[unit.id]
     assert cached['cache_hit']
     assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize('definitions', [2, 3, 4096])
+@pytest.mark.parametrize('same_id', [False, True])
+def test_many_definitions_stay_ambiguous_without_losing_unique_candidates(index, definitions, same_id):
+    for number in range(definitions):
+        fid = f'duplicate-{number}'
+        index.functions[fid] = function('shared-id' if same_id else fid, 'repeated')
+    names = ['repeated', 'symbol1', 'repeated', 'symbol2']
+    assert study_engine._retrieval_candidates(index, names, []) == ['f1', 'f2']
+    assert index.functions.scans == 1
