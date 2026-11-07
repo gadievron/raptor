@@ -237,6 +237,28 @@ def _read_target_text(
     return raw.decode("utf-8", errors="replace")
 
 
+def _read_target_text_prefix(full_path: Path, max_chars: int) -> str | None:
+    """Retain only a UTF-8 prefix, preserving whole-file refusal policy."""
+    from core.source.windows import read_bytes_prefix_capped
+
+    # A UTF-8 character (including a replacement for malformed input) uses
+    # at most four input bytes. Any incomplete sequence at this byte cut
+    # therefore lies after the requested decoded-character prefix.
+    got = read_bytes_prefix_capped(
+        full_path, 4 * max_chars, max_bytes=_MAX_SOURCE_FILE_BYTES,
+    )
+    if got is None:
+        return None
+    raw, truncated = got
+    if truncated:
+        logger.warning(
+            "target source file over %.0f MiB cap, skipping: %s",
+            _MAX_SOURCE_FILE_BYTES / 1024 / 1024, full_path,
+        )
+        return None
+    return raw.decode("utf-8", errors="replace")[:max_chars]
+
+
 def _read_target_line_window(
     full_path: Path, start: int, end: int,
 ) -> list[str] | None:
@@ -926,9 +948,8 @@ def _file_has_kernel_markers(ctx: dict[str, Any]) -> bool:
         if target:
             full = _safe_path(Path(target), fp)
             if full is not None and full.is_file():
-                text = _read_target_text(full)
-                if text is not None:
-                    head = text[:4096]
+                head = _read_target_text_prefix(full, 4096)
+                if head is not None:
                     result = any(
                         m in head for m in _KERNEL_SOURCE_MARKERS
                     )
