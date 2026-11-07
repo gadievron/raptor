@@ -110,6 +110,36 @@ def _escalated_outcome(**overrides: Any) -> ReviewOutcome:
 
 
 class TestCounterEscalationFloor:
+    def test_caller_constraint_lead_does_not_retain_machine_raised_verdict(self, tmp_path):
+        hypotheses = [{"mechanism": "caller precondition", "confidence": "refuted",
+                       "counter": "the caller owns the precondition", "counter_scope": "cross_function"}]
+        outcome = _escalated_outcome(
+            body="[anti_self_refutation: cross-function guarantee unverified]\nCompleted model review: clean.",
+            evidence_tool="joern:xf:caller_constraint", hypotheses=hypotheses,
+            review_result={"hypotheses": hypotheses, "cwe": "CWE-476"},
+        )
+        result = _make_result(outcome)
+        assert _is_machine_raised(outcome)
+        _resolve_gate_demoted(result, _config(tmp_path), sarif_cache=None, checklist=_CHECKLIST,
+                              available_tools=None, mechanical_findings=None)
+        assert result.outcomes[0].status == "clean"
+        assert result.clean == 1 and result.suspicious == 0
+
+    def test_guard_dominance_receipt_retains_machine_raised_verdict(self, tmp_path):
+        outcome = _escalated_outcome(evidence_tool="joern:guard-dominance")
+        result = _make_result(outcome)
+        _resolve_gate_demoted(result, _config(tmp_path), sarif_cache=None, checklist=_CHECKLIST,
+                              available_tools=None, mechanical_findings=None)
+        assert result.outcomes[0].status == "suspicious"
+
+    def test_completed_clean_review_is_not_rewritten_by_receipt_role(self, tmp_path):
+        outcome = _escalated_outcome(status="clean", body="Completed model review: clean.",
+                                     review_result={"cwe": "CWE-190"}, clean_basis="verdict")
+        result = _make_result(outcome)
+        _resolve_gate_demoted(result, _config(tmp_path), sarif_cache=None, checklist=_CHECKLIST,
+                              available_tools=None, mechanical_findings=None)
+        assert result.outcomes[0].status == "clean"
+
     def test_receiptless_resolves_clean_despite_pattern_corroboration(
         self, tmp_path: Path,
     ):

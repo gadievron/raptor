@@ -509,6 +509,25 @@ class TestDetectionVariantFirewall:
         assert not is_tool_evidence("joern:live")
         assert not is_tool_evidence("joern:pre_sweep")
 
+    def test_caller_constraint_presence_cannot_confirm_a_claim(self):
+        assert not is_tool_evidence("joern:xf:caller_constraint")
+        assert not is_verification_evidence("joern:xf:caller_constraint")
+
+    def test_detection_component_cannot_acquire_confirmation_in_a_composite(self):
+        for stamp in ("semgrep:rule-1+joern:xf:caller_constraint",
+                      "joern:xf:caller_constraint+semgrep:rule-1"):
+            assert is_verification_evidence(stamp)
+            chain = grade_review_result({"hypothesis": "candidate"}, stamp)
+            assert EvidenceSource.SEMGREP in {entry.source for entry in chain}
+            assert EvidenceSource.JOERN not in {entry.source for entry in chain}
+
+    def test_caller_constraint_role_fallback_is_detection_only(self, monkeypatch):
+        import core.audit.evidence_grade as owner
+
+        monkeypatch.setattr(owner, "_channel_detection_classifier", lambda namespace: None)
+        assert owner._is_detection_variant("joern:xf:caller_constraint")
+        assert not is_verification_evidence("joern:xf:caller_constraint")
+
     def test_joern_verification_stamps_still_qualify(self):
         for stamp in (
             "joern",

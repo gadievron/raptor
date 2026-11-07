@@ -297,6 +297,19 @@ class TestExportFindings:
 
 
 class TestWriteGradedFindings:
+    def test_detection_component_does_not_export_as_confirming_receipt(self, tmp_path):
+        from core.json import load_json
+        from core.audit.orchestrator import ReviewOutcome
+
+        outcome = ReviewOutcome(file="fixture.c", function="candidate", status="suspicious", body="Review",
+                                hypothesis="candidate", evidence_tool="semgrep:rule-1+joern:xf:caller_constraint",
+                                review_result={"hypothesis": "candidate"})
+        path = write_graded_findings(export_findings([outcome]), tmp_path)
+        finding = load_json(path)["findings"][0]
+        assert finding["discovery"]["confirmed_by"] == ["semgrep:rule-1"]
+        assert "mechanical:semgrep" in {item["source"] for item in finding["evidence_chain"]}
+        assert "mechanical:joern" not in {item["source"] for item in finding["evidence_chain"]}
+
     def test_writes_json(self, tmp_path):
         export = {
             "findings": [{"file": "a.c", "confidence": "high"}],
