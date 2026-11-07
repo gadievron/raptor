@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import standalone_cli_env
 from core.json import load_json
 from core.run.metadata import RUN_METADATA_FILE
 
@@ -50,7 +51,11 @@ def _run_stage0(tmp_path: Path, *extra: str, no_bridge: bool = True):
     if no_bridge:
         args.append("--no-bridge")
     args.extend(extra)
-    result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=30)
+    # Parent consent verification shares this fixture-owned key directory.
+    keys = tmp_path / "xdg"
+    with standalone_cli_env(env=env, data_home=keys) as child_env:
+        child_env.update(HOME=str(home), RAPTOR_REGISTRY_HOME=str(home / ".raptor"))
+        result = subprocess.run(args, capture_output=True, text=True, env=child_env, timeout=30)
     return result, out
 
 

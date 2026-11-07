@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.json import load_json, save_json
 from core.run.metadata import (
     RUN_METADATA_FILE, STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED,
@@ -694,7 +695,7 @@ class TestE2EHookScript(unittest.TestCase):
         return [sys.executable, str(hook_copy)], env
 
     def test_invalid_arg_exits_nonzero(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, str(HOOK_SCRIPT), "bogus"],
             capture_output=True, text=True,
         )
@@ -702,7 +703,7 @@ class TestE2EHookScript(unittest.TestCase):
         self.assertIn("Usage", result.stderr)
 
     def test_no_args_exits_nonzero(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, str(HOOK_SCRIPT)],
             capture_output=True, text=True,
         )
