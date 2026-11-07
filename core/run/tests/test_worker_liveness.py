@@ -66,8 +66,17 @@ def _user_state_in_tmp(tmp_path: Path):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _owned_run_summary():
+    """Preserve borrowed summary state around start/resume metadata calls."""
+    from core.testing.sandbox_state_scope import isolated_sandbox_state
+
+    with isolated_sandbox_state(()):
+        yield
+
+
 @pytest.fixture
-def monkeypatch(_user_state_in_tmp):
+def monkeypatch(_user_state_in_tmp, _owned_run_summary):
     """Undo body patches before restoring the file-owned registry pins."""
     with pytest.MonkeyPatch.context() as patch:
         yield patch

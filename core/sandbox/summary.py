@@ -78,6 +78,7 @@ from core.security.capped_read import path_may_exist, read_capped
 from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 from core.security.redaction import redact_secrets
 
+from .audit_control import audit_capture_digest, partition_audit_records
 from . import evidence as _evidence
 from .evidence import _unique_evidence_object
 from .escalation_signatures import (
@@ -1417,12 +1418,14 @@ def _assemble_and_write_summary(
     records = [r for r in records
                if r.get("type") != FLOOR_REFUSAL_TYPE]
 
+    records, audit_capture = partition_audit_records(records)
+
     _disable_consent = get_cli_disable(run_dir)
     if (not records and not refusals and not unverified_refusals
             and not corrupt_lines
             and not inode_mismatch and not planted_object
             and not evidence_write_failure
-            and _disable_consent is None):
+            and _disable_consent is None and audit_capture is None):
         return None
 
     # Verdict split. macOS audit mode records ALLOWED operations too —
@@ -1468,6 +1471,8 @@ def _assemble_and_write_summary(
         "by_type": by_type,
         "denials": denials,
     }
+    if audit_capture is not None:
+        summary["audit_capture"] = audit_capture
     # Key-exposure posture (see record_run_posture): persisted for
     # operator visibility and for post-hoc re-triage in a fresh
     # process, and MAC-bound below so it cannot be stripped or flipped
@@ -1675,7 +1680,9 @@ def _assemble_and_write_summary(
         floor_refusals=len(refusals),
         floor_refusals_sha256=_refusals_sha,
         cli_sandbox_disabled=_disable_consent is not None,
-        disable_consent=_disable_consent or ""))
+        disable_consent=_disable_consent or "",
+        **({"audit_capture_sha256": audit_capture_digest(audit_capture)}
+           if audit_capture is not None else {})))
     if _token:
         summary["mac"] = _token
 
