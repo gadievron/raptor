@@ -20,6 +20,7 @@ from core.coverage.journal import (  # noqa: F401
     is_function_grade,
     is_mechanical_echo,
     latest_entries,
+    latest_entry,
     latest_function_grade_index,
     load_domain_model,
     load_entries,

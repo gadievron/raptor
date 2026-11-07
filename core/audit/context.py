@@ -4199,16 +4199,14 @@ def _load_existing_annotation(
     """
     try:
         if out_dir:
-            from .journal import latest_entries
-            # Called once PER REVIEWED FUNCTION: latest_entries serves
+            from .journal import latest_entry
+            # Called once PER REVIEWED FUNCTION: latest_entry serves
             # the load cache's maintained latest-per-key view (one
             # collapse per journal parse, folded incrementally across
-            # appends), so this per-function call is a view copy, not
-            # a whole-journal re-collapse. Do not add caller-side
-            # caching here — it would go stale across appends the
-            # maintained view already absorbs.
-            latest = latest_entries(out_dir)
-            entry = latest.get(f"{file_path}:{function_name}")
+            # appends), without copying the whole view for one key.
+            # Do not add caller-side caching here: the maintained view
+            # already handles appends and invalidation.
+            entry = latest_entry(out_dir, f"{file_path}:{function_name}")
             if entry and entry.body:
                 return entry.body
             if entry and getattr(entry, "body_offload", None):
@@ -4262,11 +4260,10 @@ def _is_prior_audit_annotation(
     """
     try:
         if out_dir:
-            from .journal import latest_entries
+            from .journal import latest_entry
             # Per-reviewed-function call served from the maintained
             # latest-per-key view — see _load_existing_annotation.
-            latest = latest_entries(out_dir)
-            entry = latest.get(f"{file_path}:{function_name}")
+            entry = latest_entry(out_dir, f"{file_path}:{function_name}")
             if entry and entry.verdict in (
                 "clean", "suspicious", "finding", "dormant", "error",
             ):
