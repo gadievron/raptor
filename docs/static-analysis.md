@@ -343,6 +343,16 @@ pointer-sized partial copy can be intentional. Check the target ABI, source
 and destination extents, and intended copy contract before reporting a bug.
 Unresolved source types can remain outside the check's coverage.
 
+The UID/GID conversion check covers explicit casts in assignments,
+declarations, returns and call arguments. Generic unsigned-short and `__u16`
+casts require an identity type or a direct UID/GID accessor; unrelated port
+and length casts stay quiet. In-range integer literals, same-type casts,
+and already-narrow operands are excluded. Legacy UID/GID typedef widths vary
+by target architecture. A remaining match is a review candidate: verify the
+target widths, reachable value range and identity/compatibility contract.
+Range-checked or intentional legacy conversions can still match. Implicit
+conversions and arbitrary provenance through aliases are outside its scope.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

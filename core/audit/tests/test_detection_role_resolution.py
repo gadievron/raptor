@@ -107,3 +107,13 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/copy_user_size_mismatch.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only("coccinelle:copy_user_size_mismatch") is True
+
+
+    def test_uid_casts_require_range_and_target_width_review(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/uid_truncation.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:uid_truncation") is True
