@@ -90,6 +90,9 @@ def binary_domain(model, node, depth):
     kind = model.expression_kind(node, depth)
     if kind is None:
         return None
+    if operator in {'&', '|', '^'}:
+        from .arithmetic_bitwise_domains import bitwise_domain
+        return bitwise_domain(model, operator, kind, domains)
     a, b = (z3.FreshConst(z3.BitVecSort(kind.width), prefix='prefix_operand') for _ in range(2))
     if operator in {'+', '-', '*'}:
         if kind.signed:
