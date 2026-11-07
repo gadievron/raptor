@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import threading
+import tempfile
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -22,6 +23,7 @@ def proxy_handle():
     proxy._unix_lock = threading.Lock()
     proxy._lanes_lock = threading.Lock()
     proxy._unix_servers = {}
+    proxy._lane_bindings = set()
     proxy._unix_lanes = {}
     proxy._tcp_lane_servers = {}
     proxy._tcp_lanes = {}
@@ -36,13 +38,14 @@ def proxy_handle():
     return proxy
 
 
+@pytest.mark.parametrize("failure_type", [RuntimeError, OSError, KeyboardInterrupt])
 @pytest.mark.parametrize("operation", [
     "bind_unix", "bind_tcp", "close_tcp", "unbind_unix",
 ])
-def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, operation):
+def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, operation, failure_type):
     proxy = proxy_handle()
     path = str(tmp_path / "proxy.sock")
-    failure = RuntimeError("event loop is closed")
+    failure = failure_type("event loop submission rejected")
     submitted = []
 
     def reject(coroutine, loop):
@@ -51,23 +54,35 @@ def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, opera
 
     patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "run_coroutine_threadsafe", reject)
     if operation == "bind_unix":
-        with pytest.raises(RuntimeError) as raised:
+        with pytest.raises(failure_type) as raised:
             proxy.bind_unix(path)
         assert raised.value is failure
         assert proxy._unix_lanes == {}
         assert proxy._unix_servers == {}
     elif operation == "bind_tcp":
-        with pytest.raises(RuntimeError) as raised:
+        with pytest.raises(failure_type) as raised:
             proxy.bind_tcp_lane()
         assert raised.value is failure
     elif operation == "close_tcp":
         proxy._tcp_lane_servers[1234] = Mock()
-        proxy._tcp_lanes[1234] = object()
-        proxy.close_tcp_lane(1234)
+        lane = proxy._tcp_lanes[1234] = object()
+        proxy._lane_bindings.add(proxy_mod._LaneBinding(
+            lane, server=proxy._tcp_lane_servers[1234], port=1234))
+        if failure_type is KeyboardInterrupt:
+            with pytest.raises(KeyboardInterrupt):
+                proxy.close_tcp_lane(1234)
+        else:
+            proxy.close_tcp_lane(1234)
     elif operation == "unbind_unix":
         proxy._unix_servers[path] = Mock()
-        proxy._unix_lanes[path] = object()
-        proxy.unbind_unix(path)
+        lane = proxy._unix_lanes[path] = object()
+        proxy._lane_bindings.add(proxy_mod._LaneBinding(
+            lane, server=proxy._unix_servers[path], path=path))
+        if failure_type is KeyboardInterrupt:
+            with pytest.raises(KeyboardInterrupt):
+                proxy.unbind_unix(path)
+        else:
+            proxy.unbind_unix(path)
     assert len(submitted) == 1
     assert inspect.getcoroutinestate(submitted[0]) == inspect.CORO_CLOSED
 
@@ -112,11 +127,17 @@ def test_failed_unix_bind_keeps_existing_lane(tmp_path, monkeypatch):
 
 
 
+@pytest.fixture
+def short_socket_path():
+    with tempfile.TemporaryDirectory(prefix="r76-submit-", dir="/tmp") as directory:
+        yield directory + "/proxy.sock"
+
+
 @pytest.mark.parametrize("fails", [False, True])
-def test_unix_lane_is_published_only_after_successful_bind(tmp_path, monkeypatch, fails):
+def test_unix_lane_is_published_only_after_successful_bind(short_socket_path, monkeypatch, fails):
     proxy = proxy_handle()
-    path = str(tmp_path / "proxy.sock")
-    server = Mock()
+    path = short_socket_path
+    server = Mock(start_serving=AsyncMock())
     binding = AsyncMock(side_effect=OSError("bind failed")) if fails else AsyncMock(return_value=server)
 
     def submit(coroutine, loop):
@@ -132,15 +153,20 @@ def test_unix_lane_is_published_only_after_successful_bind(tmp_path, monkeypatch
 
     patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "run_coroutine_threadsafe", submit)
     patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "start_unix_server", binding)
-    if fails:
-        with pytest.raises(OSError, match="bind failed"):
+    try:
+        if fails:
+            with pytest.raises(OSError, match="bind failed"):
+                proxy.bind_unix(path)
+            assert proxy._unix_lanes == {}
+            assert proxy._unix_servers == {}
+        else:
             proxy.bind_unix(path)
-        assert proxy._unix_lanes == {}
-        assert proxy._unix_servers == {}
-    else:
-        proxy.bind_unix(path)
-        assert path in proxy._unix_lanes
-        assert proxy._unix_servers[path] is server
+            assert path in proxy._unix_lanes
+            assert proxy._unix_servers[path] is server
+    finally:
+        for owner in tuple(proxy._lane_bindings):
+            proxy._retire_lane(owner)
+
 
 
 @pytest.mark.parametrize("drain_timeout", [0, 1], ids=["abrupt", "graceful"])
