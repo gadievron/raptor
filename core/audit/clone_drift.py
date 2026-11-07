@@ -53,9 +53,12 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+from core.source.lines import iter_splitlines
+
 from .callsite_consistency import _KEYWORDS, _SECURITY_CALLEE_RE
 from .consistency_dimensions import function_spans
 from .peer_evidence import PeerEvidence, PeerExhibit
+from .run_memo import BoundedMemo
 
 logger = logging.getLogger(__name__)
 
@@ -388,18 +391,65 @@ def _bound_style(text: str) -> tuple[int, int]:
     )
 
 
+def _guard_features(text: str) -> tuple[set[str], tuple[int, int]]:
+    """Share the legacy display-line guard scan and retain its joined bounds.
+
+    Bound regexes see the same LF-joined guard lines as before, including
+    matches spanning two lines. Only guard lines need to be retained.
+    """
+    guards: set[str] = set()
+    lines: list[str] = []
+    for line in iter_splitlines(text):
+        if not _GUARD_LINE_RE.match(line):
+            continue
+        lines.append(line)
+        for match in _CALL_NAME_RE.finditer(line):
+            name = match.group(1)
+            if name not in _KEYWORDS:
+                guards.add(name)
+    guard_text = "\n".join(lines)
+    return guards, (len(_STRICT_BOUND_RE.findall(guard_text)),
+                    len(_INCLUSIVE_BOUND_RE.findall(guard_text)))
+
+
+_GUARD_CALLS_IMPL = _guard_calls
+_BOUND_STYLE_IMPL = _bound_style
+_SECURITY_CALLS_IMPL = _security_calls
+_GUARD_LINE_IMPL = _GUARD_LINE_RE
+_CALL_NAME_IMPL = _CALL_NAME_RE
+_STRICT_BOUND_IMPL = _STRICT_BOUND_RE
+_INCLUSIVE_BOUND_IMPL = _INCLUSIVE_BOUND_RE
+_SECURITY_CALLEE_IMPL = _SECURITY_CALLEE_RE
+_FEATURE_KEYWORDS_IMPL = _KEYWORDS
+_FEATURE_SORT_IMPL = sorted
+
+
 def _divergences(a: _FnBody, b: _FnBody) -> list[tuple[str, str, _FnBody]]:
     """(kind, token, deviant body) triples — the deviant is the clone
     *lacking* the security-relevant token its twin carries."""
-    guards_a, guards_b = _guard_calls(a.text), _guard_calls(b.text)
+    prepared = (type(a) is _FnBody and type(b) is _FnBody
+                and type(a.text) is str and type(b.text) is str
+                and len(a.text) + len(b.text) >= 4096
+                and _guard_calls is _GUARD_CALLS_IMPL and _bound_style is _BOUND_STYLE_IMPL
+                and _security_calls is _SECURITY_CALLS_IMPL
+                and _GUARD_LINE_RE is _GUARD_LINE_IMPL and _CALL_NAME_RE is _CALL_NAME_IMPL
+                and _STRICT_BOUND_RE is _STRICT_BOUND_IMPL
+                and _INCLUSIVE_BOUND_RE is _INCLUSIVE_BOUND_IMPL
+                and _SECURITY_CALLEE_RE is _SECURITY_CALLEE_IMPL
+                and _KEYWORDS is _FEATURE_KEYWORDS_IMPL and sorted is _FEATURE_SORT_IMPL)
+    if prepared:
+        guards_a, bounds_a = _guard_features(a.text)
+        guards_b, bounds_b = _guard_features(b.text)
+    else:
+        guards_a, guards_b = _guard_calls(a.text), _guard_calls(b.text)
     out: list[tuple[str, str, _FnBody]] = [("guard", token, b) for token in sorted(guards_a - guards_b)]
     out.extend(("guard", token, a) for token in sorted(guards_b - guards_a))
     sec_a = _security_calls(a.text) - guards_a
     sec_b = _security_calls(b.text) - guards_b
     out.extend(("call", token, b) for token in sorted(sec_a - sec_b))
     out.extend(("call", token, a) for token in sorted(sec_b - sec_a))
-    strict_a, incl_a = _bound_style(a.text)
-    strict_b, incl_b = _bound_style(b.text)
+    strict_a, incl_a = bounds_a if prepared else _bound_style(a.text)
+    strict_b, incl_b = bounds_b if prepared else _bound_style(b.text)
     if strict_a + incl_a and strict_b + incl_b \
             and (strict_a > 0) != (strict_b > 0) \
             and (incl_a > 0) != (incl_b > 0):
@@ -538,6 +588,18 @@ def load_fix_anchors(out_dir: Path | None) -> list[dict[str, Any]]:
     return [s for s in sites or [] if isinstance(s, dict)]
 
 
+_NORMALISE_IMPL = _normalise_tokens
+_FINGERPRINTS_IMPL = _fingerprints
+_CONTAINMENT_IMPL = _containment
+_STRING_IMPL = _STRING_RE
+_COMMENT_IMPL = _LINE_COMMENT_RE
+_TOKEN_IMPL = _TOKEN_RE
+_CRC_MODULE_IMPL = zlib
+_CRC_IMPL = zlib.crc32
+_FINGERPRINT_ISLICE_IMPL = islice
+_FINGERPRINT_DEQUE_IMPL = deque
+
+
 def fix_anchored_drift(
     anchors: list[dict[str, Any]],
     source_texts: dict[str, str],
@@ -572,6 +634,12 @@ def fix_anchored_drift(
         )
         return []
     deviations: list[CloneDriftDeviation] = []
+    # A body may be checked against many fixes. Reuse only pure native facts,
+    # within this call; 32 bodies of at most 16 KiB bound retained work.
+    body_prints_memo: BoundedMemo[frozenset[int]] | None = (
+        BoundedMemo(32) if (type(anchors) is list or type(anchors) is tuple) and len(anchors) > 1
+        else None
+    )
     for anchor in anchors:
         file_path = str(anchor.get("file") or "")
         function = str(anchor.get("name") or "")
@@ -593,7 +661,20 @@ def fix_anchored_drift(
             ln for ln in region.splitlines() if guard not in ln
         )
         region_prints = _fingerprints(_normalise_tokens(region))
-        body_prints = _fingerprints(_normalise_tokens(body))
+        if (body_prints_memo is not None and type(body) is str and len(body) <= 16 * 1024
+                and _normalise_tokens is _NORMALISE_IMPL and _fingerprints is _FINGERPRINTS_IMPL
+                and _containment is _CONTAINMENT_IMPL
+                and _STRING_RE is _STRING_IMPL and _LINE_COMMENT_RE is _COMMENT_IMPL
+                and _TOKEN_RE is _TOKEN_IMPL and _KEYWORDS is _FEATURE_KEYWORDS_IMPL
+                and zlib is _CRC_MODULE_IMPL and zlib.crc32 is _CRC_IMPL
+                and islice is _FINGERPRINT_ISLICE_IMPL and deque is _FINGERPRINT_DEQUE_IMPL
+                and type(K_GRAM) is int and K_GRAM == 5
+                and type(WINNOW_WINDOW) is int and WINNOW_WINDOW == 4):
+            body_prints, _ = body_prints_memo.get_or_compute(
+                body, lambda: _fingerprints(_normalise_tokens(body)),
+            )
+        else:
+            body_prints = _fingerprints(_normalise_tokens(body))
         containment = _containment(region_prints, body_prints)
         if containment < similarity:
             continue

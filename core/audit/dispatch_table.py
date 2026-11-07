@@ -80,6 +80,19 @@ class DispatchMember:
     table_field: str = ""
 
 
+_DISPATCH_MEMBER_IMPL = DispatchMember
+
+
+def _native_gap_sources(gaps) -> bool:
+    """Admit immutable source fields without observing mapping adapters."""
+    return (
+        (type(gaps) is list or type(gaps) is tuple) and len(gaps) >= 8
+        and all(type(gap) is dict and all(type(key) is str for key in gap)
+                and all(type(gap.get(key, "")) is str for key in ("file", "name", "source"))
+                for gap in gaps)
+    )
+
+
 @dataclass
 class CapabilityDisplacement:
     """A capability check that appears only outside dispatch members."""
@@ -100,6 +113,9 @@ class CapabilityDisplacement:
         )
 
 
+_CAPABILITY_DISPLACEMENT_IMPL = CapabilityDisplacement
+
+
 def find_dispatch_members(
     gaps: Sequence[dict[str, Any]],
 ) -> dict[str, list[DispatchMember]]:
@@ -111,6 +127,7 @@ def find_dispatch_members(
     members_by_file: dict[str, list[DispatchMember]] = {}
 
     file_sources: dict[str, str] = {}
+    chunks: dict[str, list[str]] | None = {} if _native_gap_sources(gaps) else None
     func_files: dict[str, str] = {}
     for gap in gaps:
         f = gap.get("file", "")
@@ -119,7 +136,17 @@ def find_dispatch_members(
         if f and name:
             func_files[name] = f
         if f and source:
-            file_sources[f] = file_sources.get(f, "") + "\n" + source
+            if chunks is None:
+                file_sources[f] = file_sources.get(f, "") + "\n" + source
+            else:
+                # The initial empty part preserves the original leading LF.
+                parts = chunks.get(f)
+                if parts is None:
+                    parts = chunks[f] = [""]
+                parts.append(source)
+
+    if chunks is not None:
+        file_sources = {f: "\n".join(parts) for f, parts in chunks.items()}
 
     all_func_names = set(func_files.keys())
 
@@ -177,13 +204,18 @@ def build_dispatch_tables(
     tables: list[DispatchTableRecord] = []
     for file_path, members in sorted(find_dispatch_members(gaps).items()):
         handlers: dict[str, str] = {}
+        suffixes: dict[str, int] | None = {}
         for m in members:
             key = m.table_field or m.name
             candidate = key
-            suffix = 2
+            if type(key) is not str:
+                suffixes = None  # retain foreign-key hashing/equality operations
+            suffix = suffixes.get(key, 2) if suffixes is not None else 2
             while candidate in handlers:
                 candidate = f"{key}#{suffix}"
                 suffix += 1
+            if suffixes is not None:
+                suffixes[key] = suffix
             handlers[candidate] = m.name
         if len(handlers) >= 2:
             tables.append(DispatchTableRecord(
@@ -211,10 +243,15 @@ def find_capability_checks(
             continue
 
         caps: list[str] = []
+        seen_caps: set[str] | None = set()
         for pat in _CAPABILITY_PATTERNS:
             for m in pat.finditer(source):
                 cap = m.group(1)
-                if cap not in caps:
+                if type(cap) is not str:
+                    seen_caps = None
+                if cap not in (seen_caps if seen_caps is not None else caps):
+                    if seen_caps is not None:
+                        seen_caps.add(cap)
                     caps.append(cap)
 
         if caps:
@@ -252,6 +289,17 @@ def check_capability_displacement(
             continue
 
         member_names = {m.name for m in members}
+        native_names = (
+            [m.name for m in members]
+            if (CapabilityDisplacement is _CAPABILITY_DISPLACEMENT_IMPL
+                and type(file_caps) is dict
+                and all(type(name) is str and type(caps) is list
+                        and all(type(cap) is str for cap in caps)
+                        for name, caps in file_caps.items())
+                and type(members) is list and all(type(m) is _DISPATCH_MEMBER_IMPL
+                                             and type(m.name) is str for m in members))
+            else None
+        )
 
         non_member_caps: dict[str, list[str]] = {}
         for func_name, caps in file_caps.items():
@@ -270,9 +318,14 @@ def check_capability_displacement(
 
         for cap, checker_funcs in non_member_caps.items():
             members_with_cap = member_caps.get(cap, set())
-            members_without = [
-                m.name for m in members if m.name not in members_with_cap
-            ]
+            if native_names is not None:
+                if members_with_cap:
+                    continue
+                members_without = native_names.copy()
+            else:
+                members_without = [
+                    m.name for m in members if m.name not in members_with_cap
+                ]
             if not members_without:
                 continue
             if members_with_cap:
