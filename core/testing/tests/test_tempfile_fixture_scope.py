@@ -256,7 +256,9 @@ def _snapshots(row, native, inherited, borrowed):
     return [(module, dict(vars(module))) for module in modules]
 
 
-def _statement(row):
+@lru_cache(maxsize=None)
+def _statement_template(index):
+    row = _SITES[index]
     tree = ast.parse((_REPO / row["file"]).read_text())
     original = ast.parse(row["call"]).body[0]
     changed = ast.parse(row["expected"]).body[0]
@@ -277,7 +279,12 @@ def _statement(row):
         matches = anchored
     assert matches, row
     rank = sum(other["file"] == row["file"] and other["call"] == row["call"] and other["line"] < row["line"] and (row["kind"] == "assignment" or other.get("anchor") == row.get("anchor")) for other in _SITES)
-    return copy.deepcopy(sorted(matches, key=lambda node: (node.lineno, node.col_offset))[rank])
+    return sorted(matches, key=lambda node: (node.lineno, node.col_offset))[rank]
+
+
+def _statement(index):
+    # Fault injection mutates this tree; never publish the cached template.
+    return copy.deepcopy(_statement_template(index))
 
 
 @pytest.mark.parametrize("index", range(len(_SITES)), ids=lambda index: _SITES[index]["file"] + ":" + str(_SITES[index]["line"]))
@@ -298,7 +305,7 @@ def test_native_temporary_root_fault_owns_namespace(index, borrowed, exit_mode):
                 namespace.setdefault("tempfile", tempfile)
                 namespace.setdefault("_tempfile", tempfile)
                 namespace.setdefault("_tempfile_owner", importlib.import_module(row["consumers"][0]))
-                statement = _statement(row)
+                statement = _statement(index)
                 token = object()
                 namespace["_owned_value"] = token
                 if row["kind"] == "assignment":
