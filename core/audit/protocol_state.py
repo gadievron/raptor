@@ -747,7 +747,9 @@ def check_invariant_multi_site(
     reason, guard_leg}`` — ``outcome`` ∈ violable | preserved |
     inconclusive; ``guard_leg`` is False when the CFG leg was
     unavailable (a violable outcome then may NOT confirm:
-    ``census-degraded``)."""
+    ``census-degraded``). Bare-field projection also requires consistent
+    scalar/object bindings; ambiguous sites retain an explicit refusal
+    receipt and do not enter the solver batch."""
     t0 = time.monotonic()
     variables = _invariant_variables(invariant)
     fields = index.get("fields") or {}
@@ -780,6 +782,7 @@ def check_invariant_multi_site(
         }
 
     from .invariant_smt import SiteResult, check_site_batch
+    from .protocol_invariant_bindings import projection_refusal
 
     guard_leg = True
     per_site: list[dict[str, Any]] = []
@@ -796,31 +799,38 @@ def check_invariant_multi_site(
         if guards is None:
             guard_leg = False
             guards = []
+        refusal = projection_refusal(site["code"], guards, variables)
+        if refusal:
+            guard_leg = False
         bare_guards = tuple(
             _bare_fields(g, variables) for g in guards
             if any(v in _bare_fields(g, variables) for v in variables)
         )
         code = _bare_fields(site["code"], variables)
-        prepared.append((site, {"code": code, "line": site["line"], "pre_conditions": bare_guards}))
+        prepared.append((site, {"code": code, "line": site["line"], "pre_conditions": bare_guards}, refusal))
 
-    if prepared:
+    runnable = [record for _, record, refusal in prepared if not refusal]
+    if runnable:
         # One process for the entire census. Guard discovery and worker
         # startup both consume the outer budget; each site retains its
         # normal native cap inside the worker.
         remaining_ms = int(max(0.0, budget_s - (time.monotonic() - t0)) * 1000)
-        results = check_site_batch(invariant, [record for _, record in prepared], timeout_ms=remaining_ms)
-        if results is None or len(results) != len(prepared):
+        results = check_site_batch(invariant, runnable, timeout_ms=remaining_ms)
+        if results is None or len(results) != len(runnable):
             results = [SiteResult(line=record["line"], code=record["code"], verdict="unknown",
                                  reason="confined invariant batch unavailable or incomplete")
-                       for _, record in prepared]
+                       for record in runnable]
     else:
         results = []
-    for (site, record), res in zip(prepared, results, strict=True):
+    solved = iter(results)
+    for site, record, refusal in prepared:
+        res = SiteResult(line=record["line"], code=site["code"], verdict="out_of_scope",
+                         reason=refusal) if refusal else next(solved)
         entry = res.to_dict()
         entry["file"] = site["file"]
         entry["function"] = site["function"]
         entry["rhs_class"] = site.get("rhs_class", "")
-        entry["guards_applied"] = list(record["pre_conditions"])
+        entry["guards_applied"] = [] if refusal else list(record["pre_conditions"])
         per_site.append(entry)
 
     verdicts = {e["verdict"] for e in per_site}
