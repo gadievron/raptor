@@ -146,6 +146,10 @@ def test_copy_and_boundary_candidates_share_production_invocation(tmp_path, monk
     source.write_text(
         'void read_second(char *d, char *s, char *o, int n) { strncpy(d, s, n); strcmp(o, d); }\n'
         'void bounded(char *d, char *s, char *o, int n) { strncpy(d, s, n); strncmp(o, d, n); }\n'
+        'void display(char *d, char *s) { strncpy(d, s, 4); printf("%p", d); }\n'
+        'void string_read(char *d, char *s) { strncpy(d, s, 4); printf("%s", d); }\n'
+        'void bounded_format(char *d, char *s) { strncpy(d, s, 4); printf("%.4s", d); }\n'
+        'void dynamic_format(char *d, char *s, char *fmt) { strncpy(d, s, 4); printf(fmt, d); }\n'
         'int boundary(char *b, int sz) { int n = snprintf(b, sz, "%s", "x"); if (n > sz) return -1; return n; }\n',
     )
     original = runner._confined_default_runner
@@ -167,6 +171,80 @@ def test_copy_and_boundary_candidates_share_production_invocation(tmp_path, monk
     )
     assert set(results) == {"strncpy_no_nul", "snprintf_truncation_boundary"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
-    assert len(results["strncpy_no_nul"].matches) == 1
+    assert len(results["strncpy_no_nul"].matches) == 3
     assert len(results["snprintf_truncation_boundary"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.parametrize("family", ["printf", "fprintf", "snprintf", "syslog"])
+def test_formatted_argument_conversion_contracts(tmp_path, family):
+    cases = [
+        ('"%s", dst', True),
+        ('"%p", dst', False),
+        ('"%d", dst', False),
+        ('"%%s", dst', False),
+        ('"plain", dst', False),
+        ('"%p %s", dst, other', False),
+        ('"%s %p", dst, other', True),
+        ('"%p %s", other, dst', True),
+        ('"%s %p", other, dst', False),
+        ('"%4s", dst', True),
+        ('"%*s", 10, dst', True),
+        ('"%*p", 10, dst', False),
+        ('"%2$s %1$p", other, dst', True),
+        ('"%2$p %1$s", other, dst', False),
+        ('"%2$*1$s", 10, dst', True),
+        ('"%1$p %1$s", dst', True),
+        ('"%.4s", dst', False),
+        ('"%.5s", dst', True),
+        ('"%.0s", dst', False),
+        ('"%.*s", 4, dst', False),
+        ('"%.*s", -1, dst', True),
+        ('"%.*s", limit, dst', True),
+        ('"%2$.*1$s", 4, dst', False),
+        ('"%2$.*1$s", -1, dst', True),
+        ('"%3$*1$.*2$s", 10, 4, dst', False),
+        ('"%3$*1$.*2$s", 10, -1, dst', True),
+        ('"%ls", dst', True),
+        ('"%n", dst', False),
+        ('"%m%s", dst', True),
+        ('"%Q", dst', True),
+        ('"%llp", dst', True),
+        ('"%s %2$p", dst, other', True),
+        ('fmt, dst', True),
+        ('"prefix " "%s", dst', True),
+        ('"prefix " "%p", dst', False),
+        ('"\\x25s", dst', True),
+        ('"%p %", dst', True),
+        ('"%2$s", dst', True),
+        ('"%2$p", other, dst', True),
+        ('"%s", nested(1, 2), dst', False),
+        ('"%p %s", nested(1, 2), dst', True),
+        ('"%p %s", (one, two), dst', True),
+        ('"' + 'x' * 8200 + '%p", dst', True),
+        ('"%p", ' + ', '.join(['other'] * 129 + ['dst']), True),
+    ]
+    lines, expected = [], set()
+    for index, (arguments, reports) in enumerate(cases):
+        prefix = {"printf": "", "fprintf": "stream, ", "snprintf": "out, 64, ", "syslog": "priority, "}[family]
+        lines += [f"void case_{index}(char *dst, char *src, char *other, char *fmt, int limit) {{",
+                  "strncpy(dst, src, 4);", f"{family}({prefix}{arguments});", "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected)
+
+
+@pytest.mark.parametrize("family", ["printf", "fprintf", "snprintf", "syslog"])
+def test_format_argument_itself_still_requires_termination(tmp_path, family):
+    prefix = {"printf": "", "fprintf": "stream, ", "snprintf": "out, 64, ", "syslog": "priority, "}[family]
+    rows = _run_rule(tmp_path, f"void f(char *dst, char *src, int n) {{ strncpy(dst, src, n); {family}({prefix}dst, 1); }}")
+    assert len(rows) == 1
+
+
+def test_each_formatted_string_operand_has_its_own_location(tmp_path):
+    rows = _run_rule(tmp_path, 'void f(char *dst, char *src) { strncpy(dst, src, 4); printf("%p %s %s", dst, dst, dst); }')
+    assert len(rows) == 2
+    assert len({(row["line"], row["col"]) for row in rows}) == 2

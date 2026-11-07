@@ -280,11 +280,16 @@ boundary. Aliases and arbitrary compound guard logic require manual review.
 
 The `strncpy` termination check follows direct destinations into string uses,
 including either input of `strcmp` and `strcat`. It excludes `strncmp` and
-`strncat` source reads bounded by the same unchanged local or literal copy count; `strncat` still
-requires a terminated destination. Destination replacement ends tracking.
+`strncat` source reads bounded by the same unchanged local or literal copy
+count; `strncat` still requires a terminated destination. Destination replacement ends tracking.
 Nonzero fills and zero-byte `memset` calls do not establish termination.
-Reports remain review candidates: source length, existing NUL bytes, aliases,
-format conversions and smaller read bounds can determine whether a read is safe.
+For supported literal formats, it checks the actual argument conversion,
+including positional arguments and width/precision arguments. Pointer displays,
+numeric conversions and unused arguments do not count as string reads. Recognized
+precision bounds within a literal copy count are excluded. Dynamic formats,
+unsupported syntax and unknown precision values remain candidates for review.
+Reports remain review candidates: source length, existing NUL bytes, aliases and
+smaller read bounds can determine whether a read is safe.
 
 ### Rule Inventory
 
