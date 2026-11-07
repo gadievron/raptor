@@ -29,6 +29,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.processes import run_in_process_group
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SETUP = REPO_ROOT / "libexec" / "raptor-sage-setup"
@@ -988,17 +990,17 @@ class TestReviewSubcommand(ReviewerBase):
                     # Queued in the line-discipline buffer before the
                     # child starts; read -r consumes it line by line.
                     os.write(master, pty_input.encode("utf-8"))
-                proc = subprocess.run(
-                    ["bash", "-c", driver], capture_output=True,
-                    text=True, env=env, stdin=slave,
+                proc = run_in_process_group(
+                    ["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, env=env, stdin=slave, timeout=30,
                 )
             finally:
                 os.close(master)
                 os.close(slave)
         else:
-            proc = subprocess.run(
-                ["bash", "-c", driver], capture_output=True, text=True,
-                env=env, stdin=subprocess.DEVNULL,
+            proc = run_in_process_group(
+                ["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env, stdin=subprocess.DEVNULL, timeout=30,
             )
         return proc, authorized
 

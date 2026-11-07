@@ -15,6 +15,8 @@ pathlib_root = Path(__file__).resolve().parents[3]
 
 import pytest
 
+from core.testing.processes import run_in_process_group
+
 from core.annotations import (
     IMPORTED,
     INTERACTIVE_TTY,
@@ -276,7 +278,6 @@ class TestDetectCorroborationFacts:
     def test_session_leader_shape_detected(self):
         # A setsid'd child that IS its own session leader (the
         # ``script -qec`` exec shape) records sid=self.
-        import os
         import subprocess
         import sys as _sys
         code = (
@@ -284,10 +285,10 @@ class TestDetectCorroborationFacts:
             "from core.annotations.provenance import _detect_sid; "
             "print(_detect_sid())" % str(pathlib_root)
         )
-        out = subprocess.run(
+        out = run_in_process_group(
             [_sys.executable, "-c", code],
-            preexec_fn=os.setsid, capture_output=True, text=True,
-            check=True,
+            start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=True, timeout=30,
         )
         assert out.stdout.strip() == "self"
 
@@ -326,8 +327,9 @@ class TestDeepChainScriptDetection:
         wrapper = tmp_path / "script"
         wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
-        out = subprocess.run(
-            [str(wrapper)], capture_output=True, text=True, check=True,
+        out = run_in_process_group(
+            [str(wrapper)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, check=True, timeout=30,
         )
         chain = out.stdout.strip()
         assert "script" in chain.split(","), chain
@@ -366,8 +368,9 @@ class TestDeepChainAgentDetection:
         wrapper = tmp_path / wrapper_name
         wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
-        out = subprocess.run(
-            [str(wrapper)], capture_output=True, text=True, check=True,
+        out = run_in_process_group(
+            [str(wrapper)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, check=True, timeout=30,
         )
         return out.stdout.strip()
 
@@ -430,8 +433,9 @@ class TestAncestryTruncation:
         wrapper = tmp_path / "script"
         wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
-        out = subprocess.run(
-            [str(wrapper)], capture_output=True, text=True, check=True,
+        out = run_in_process_group(
+            [str(wrapper)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, check=True, timeout=30,
         )
         return out.stdout.strip()
 
