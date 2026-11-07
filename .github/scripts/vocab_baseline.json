@@ -2710,21 +2710,22 @@
     "kind": "literal"
   },
   "packages/exploit_feasibility/smt_path.py::validate_path": {
-    "count": 14,
+    "count": 15,
     "kind": "literal",
-    "note": "SMT result serialization schema: feasibility, witness/model, unknown diagnostics, summary axioms and weakest-precondition metadata including wp_ordering. Fixed interchange fields, not a function-name vocabulary."
+    "note": "SMT result serialization schema: feasibility, witness/model, unknown diagnostics, summary axioms and weakest-precondition metadata including wp_ordering. Fixed interchange fields, not a function-name vocabulary. Includes refutation_uses_call_terms, the call-dependent refutation provenance field; reviewed against all three matching 15-field serializers.",
+    "reviewed": "2026-11-07"
   },
   "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
-    "count": 14,
+    "count": 15,
     "kind": "literal",
-    "note": "SMT verb result projection kept shape-compatible with validate_path, including wp_ordering and the complete weakest-precondition block. These are fixed result-schema keys.",
-    "reviewed": "2026-09-22"
+    "note": "SMT verb result projection kept shape-compatible with validate_path, including wp_ordering and the complete weakest-precondition block. These are fixed result-schema keys. Includes refutation_uses_call_terms, the call-dependent refutation provenance field; reviewed against all three matching 15-field serializers.",
+    "reviewed": "2026-11-07"
   },
   "packages/exploit_feasibility/smt_verbs.py::_smt_unavailable_result": {
-    "count": 14,
+    "count": 15,
     "kind": "literal",
-    "note": "Unavailable-SMT result schema preserves parity with validate_path and successful verb results, including wp_ordering. Fixed degraded-result fields, not learned API names.",
-    "reviewed": "2026-09-22"
+    "note": "Unavailable-SMT result schema preserves parity with validate_path and successful verb results, including wp_ordering. Fixed degraded-result fields, not learned API names. Includes refutation_uses_call_terms, the call-dependent refutation provenance field; reviewed against all three matching 15-field serializers.",
+    "reviewed": "2026-11-07"
   },
   "packages/exploit_feasibility/techniques.py::get_technique_requirements": {
     "count": 19,
