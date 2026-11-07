@@ -26,6 +26,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_bindings import mock_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
@@ -88,8 +90,7 @@ class TestGate2MultiRecordAnswers:
             try:
                 with patch.object(proxy_mod.EgressProxy,
                                   "_cached_getaddrinfo", fake_gai), \
-                     patch.object(proxy_mod.asyncio, "open_connection",
-                                  no_dial):
+                     mock_module_attribute(proxy_mod, "asyncio", "open_connection", no_dial):
                     status, _ = _send_connect(proxy.port,
                                               "mixed.example:443")
             finally:
@@ -125,8 +126,7 @@ class TestGate2MultiRecordAnswers:
             try:
                 with patch.object(proxy_mod.EgressProxy,
                                   "_cached_getaddrinfo", fake_gai), \
-                     patch.object(proxy_mod.asyncio, "open_connection",
-                                  refuse):
+                     mock_module_attribute(proxy_mod, "asyncio", "open_connection", refuse):
                     status, _ = _send_connect(proxy.port,
                                               "clean.example:443")
             finally:
@@ -165,8 +165,7 @@ class TestWalkSerialGate2Preference:
 
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x.example"})
         try:
-            with patch.object(proxy_mod.asyncio, "open_connection",
-                              refuse), \
+            with mock_module_attribute(proxy_mod, "asyncio", "open_connection", refuse), \
                  pytest.raises(proxy_mod._Gate2BlockedError) as ei:
                 self._run(proxy._happy_eyeballs_connect(
                     [_ai("10.0.0.5"), _ai("93.184.216.34")], 443))
@@ -181,8 +180,7 @@ class TestWalkSerialGate2Preference:
 
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x.example"})
         try:
-            with patch.object(proxy_mod.asyncio, "open_connection",
-                              refuse), \
+            with mock_module_attribute(proxy_mod, "asyncio", "open_connection", refuse), \
                  pytest.raises(OSError) as ei:
                 self._run(proxy._happy_eyeballs_connect(
                     [_ai("93.184.216.34")], 443))

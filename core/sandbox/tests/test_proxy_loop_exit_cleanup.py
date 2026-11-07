@@ -5,12 +5,14 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 
 
 @pytest.fixture
 def proxy(monkeypatch):
-    monkeypatch.setattr(proxy_mod.parser_jail, "get_parser_jail", lambda: Mock())
+    patch_module_attribute(monkeypatch, proxy_mod, "parser_jail", "get_parser_jail", lambda: Mock())
     instance = proxy_mod.EgressProxy([])
     try:
         yield instance
@@ -101,7 +103,7 @@ def test_listener_finishing_during_shutdown_is_closed_before_publication(
         return server
 
     method = "start_unix_server" if unix else "start_server"
-    monkeypatch.setattr(proxy_mod.asyncio, method, bind)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", method, bind)
     with pytest.raises(RuntimeError, match="stopped during listener creation"):
         if unix:
             proxy.bind_unix(str(tmp_path / "proxy.sock"))
