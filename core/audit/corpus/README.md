@@ -332,6 +332,10 @@ Stability groups also keep recorded and missing label fingerprints separate.
 Legacy groups retain their verdict-variance counts with an incomplete-provenance
 notice. Fingerprint presence is reported without revalidating archived hashes;
 it does not establish identical runtime inputs or cache contents.
+Stability counts distinct run IDs and uses each ID's latest header before
+grouping. Reused IDs retain merged label history and are flagged in the report;
+use distinct output paths for independent repeats. The stored history is not
+rewritten.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history

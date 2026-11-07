@@ -862,12 +862,21 @@ def stability_groups(
     runs, report labels with different verdicts. Missing label fingerprints
     form separate legacy groups whose incomplete provenance is reported.
     Recorded hashes are not revalidated. Label kind remains structural:
-    mutant and real-label runs never share a group.
+    mutant and real-label runs never share a group. Reused IDs contribute
+    only their latest header; their merged label history is disclosed.
     """
     grouped: dict[
         tuple[str, str, str, str, str, str], list[dict[str, Any]],
     ] = {}
-    for run in runs:
+    latest_runs: dict[str, dict[str, Any]] = {}
+    reused_run_ids = set()
+    for run in reversed(runs):
+        run_id = run.get("run_id", "")
+        if run_id in latest_runs:
+            reused_run_ids.add(run_id)
+        else:
+            latest_runs[run_id] = run
+    for run in reversed(list(latest_runs.values())):
         tree = run.get("pipeline_tree_sha") or ""
         if not tree:
             continue
@@ -911,6 +920,7 @@ def stability_groups(
             "label_files_sha256": label_files,
             "label_provenance_recorded": bool(label_set and label_files),
             "run_ids": [r.get("run_id", "") for r in group],
+            "reused_run_ids": [r.get("run_id", "") for r in group if r.get("run_id", "") in reused_run_ids],
             "comparable_labels": comparable,
             "unstable": unstable,
         })
@@ -921,7 +931,7 @@ def format_stability(groups: list[dict[str, Any]]) -> str:
     """Format variance and recorded input-provenance coverage."""
     if not groups:
         return (
-            "No comparable run groups (need two or more recorded runs "
+            "No comparable run groups (need two or more distinct recorded run IDs "
             "with matching recorded tree, label provenance, profile, kind, and configuration)."
         )
     lines = []
@@ -944,6 +954,8 @@ def format_stability(groups: list[dict[str, Any]]) -> str:
         lines.append(sanitise_for_terminal(f"  Recorded labels: set={label_set} definitions={label_files}"))
         if not g.get("label_provenance_recorded", False):
             lines.append("  NOTE: label provenance is incomplete; variance does not establish identical label inputs.")
+        if g.get("reused_run_ids"):
+            lines.append("  NOTE: reused run IDs use their latest header and merged label history.")
         n_unstable = len(g["unstable"])
         lines.append(
             f"  Verdict variance: {n_unstable}/"
@@ -1229,7 +1241,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser(
         "stability",
-        help="Verdict variance grouped by recorded pipeline, label provenance, and configuration",
+        help="Verdict variance across distinct run IDs grouped by recorded pipeline, labels, and configuration",
     )
 
     p_imp = sub.add_parser(
