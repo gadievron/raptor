@@ -17,9 +17,13 @@ from typing import Any
 from core.http import HttpError, Response
 from packages.sca.python_modules import resolve_modules
 
+import core.json.cache as _clock_consumer
+from core.testing.module_bindings import mock_module_attribute
+
 # ---------------------------------------------------------------------------
 # Test fixtures: synthesise a real .whl in-memory
 # ---------------------------------------------------------------------------
+
 
 def _make_wheel(
     *, dist: str, version: str, top_level_lines: list[str],
@@ -344,7 +348,6 @@ def test_http_error_cached_with_short_ttl_not_forever(tmp_path: Path):
     cache returns None (cache miss) and the resolver retries the network
     call."""
     import time
-    from unittest.mock import patch
 
     from core.http import HttpError
     from core.json import JsonCache
@@ -375,7 +378,7 @@ def test_http_error_cached_with_short_ttl_not_forever(tmp_path: Path):
 
     # Fast-forward time past _TTL_TRANSIENT (3600s) so the entry expires.
     from packages.sca.python_modules import _TTL_TRANSIENT
-    with patch.object(time, "time", return_value=time.time() + _TTL_TRANSIENT + 1):
+    with mock_module_attribute(_clock_consumer, 'time', 'time', return_value=time.time() + _TTL_TRANSIENT + 1):
         # Cache entry expired -> resolver retries network.
         resolve_modules("myapp", "9.9.9", http=http, cache=cache)
     # The retry hit the network (call_count incremented).

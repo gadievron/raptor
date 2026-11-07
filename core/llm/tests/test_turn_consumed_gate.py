@@ -16,12 +16,14 @@ Hermetic — stub SDK clients and synthetic hook state.
 from __future__ import annotations
 
 import logging
-import time
 
 import pytest
 
 import core.llm.dispatcher.client as dispatcher_client
 from core.llm.providers import ModelConfig
+
+import core.llm.providers as _clock_consumer
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +51,7 @@ def _clean_attempt_state(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'sleep', lambda _s: None)
 
 
 def _mark_response_started() -> None:

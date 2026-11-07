@@ -47,6 +47,12 @@ from core.testing.pipes import pipes_for_setup
 
 from packages.joern import netns_forwarder
 
+import sys as _clock_sys
+from core.testing.module_bindings import patch_module_attribute
+
+_clock_consumer = _clock_sys.modules[__name__]
+
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "netns_forwarder.py"
 
 #: The wrapped stand-in for joern: reports that it ran (the marker
@@ -308,7 +314,7 @@ def test_prespawn_handshake_waits_for_pid_after_marker_creation(tmp_path, monkey
 
     monkeypatch.setitem(globals(), "_spawn_supervisor", spawn)
     monkeypatch.setitem(globals(), "_sweep_stub_stragglers", lambda *args: None)
-    monkeypatch.setattr(time, "sleep", finish_write)
+    patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'sleep', finish_write)
     test_terminal_signal_in_prespawn_window_exits_before_spawn(
         str(tmp_path), str(tmp_path / "absent-child"), tmp_path, signal.SIGTERM, 143,
     )

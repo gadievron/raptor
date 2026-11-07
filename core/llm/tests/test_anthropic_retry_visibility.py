@@ -12,11 +12,13 @@ happening and how long the call has been stuck.
 from __future__ import annotations
 
 import logging
-import time
 
 import pytest
 
 from core.llm.providers import ModelConfig
+
+import core.llm.providers as _clock_consumer
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +75,7 @@ def test_transient_retry_logs_warning_with_elapsed(caplog, monkeypatch):
         messages = _Messages()
 
     provider.client = _Client()  # type: ignore[assignment]
-    monkeypatch.setattr(time, "sleep", lambda _s: None)  # skip backoff
+    patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'sleep', lambda _s: None)  # skip backoff
 
     with caplog.at_level(logging.WARNING, logger="raptor"):
         resp = provider.turn(

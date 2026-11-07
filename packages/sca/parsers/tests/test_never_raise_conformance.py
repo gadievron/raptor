@@ -26,8 +26,15 @@ import pytest
 from packages.sca import parsers as _parsers
 from packages.sca.parsers._safe_read import scan_root_context
 
+import sys as _clock_sys
+from core.testing.module_bindings import patch_module_attribute
+
+_clock_consumer = _clock_sys.modules[__name__]
+
 # Per-call wall ceiling. Generous vs the milliseconds honest refusal
 # takes, far below the minutes an unbounded blowup takes.
+
+
 _WALL_CEILING_S = 10.0
 
 # ---------------------------------------------------------------------------
@@ -148,7 +155,7 @@ def test_harness_detects_planted_hang(tmp_path: Path, monkeypatch) -> None:
     """Non-vacuity for the time bound (simulated clock — no real
     10s sleep in the suite)."""
     clock = iter([0.0, 100.0])
-    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+    patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', lambda: next(clock))
 
     def slow(_: Path) -> list:
         return []
