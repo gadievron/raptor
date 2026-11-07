@@ -702,7 +702,7 @@ class RaptorConfig:
         "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_CODEX_HOOK", "RAPTOR_CODEX_HOOK_ROOT",
         "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
-        "RAPTOR_CODEX_CONTEXT_ID",
+        "RAPTOR_CODEX_CONTEXT_ID", "RAPTOR_LAUNCH_TARGET",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
         # SAFE_ENV_ALLOWLIST (a pinning test holds that direction):
