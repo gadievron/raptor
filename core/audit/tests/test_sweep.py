@@ -2098,11 +2098,37 @@ class TestPremiseGate:
         assert "unencodable" in reason or "vacuous" in reason
 
 
+@pytest.mark.parametrize("runner", ["_run_smt_verb_inner", "_smt_verb_in_subprocess"])
+def test_missing_parser_refuses_source_derived_overflow(monkeypatch, runner):
+    from core.audit import condition_extraction
+
+    monkeypatch.setattr(condition_extraction, "_get_parser", lambda language: None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("unscoped source must not dispatch a solver")
+
+    monkeypatch.setattr(sweep_mod, "_run_smt_verb_on_source", forbidden)
+    monkeypatch.setattr("core.audit.subproc_json.run_json_child", forbidden)
+    result = getattr(sweep_mod, runner)(
+        file_path="a.c", function_name="f", verb="check-overflow",
+        source="unsigned f(unsigned a, unsigned b) { return a + b; }",
+        hypothesis="integer overflow in `a` + `b`", integer_abi="ilp32",
+    )
+    assert result.outcome == "inconclusive"
+    assert result.matches == []
+    assert result.details == {"source_scope_status": "unavailable"}
+
+
 @needs_z3
 class TestVacuousVerbPolicyDirect:
     """SAT on check-overflow / check-oob / check-overflow-to-oob can
     only mean something when source-level guard premises are encoded
     as Z3 constraints.  Exercises ``_run_smt_verb_inner`` in-process."""
+
+    @pytest.fixture(autouse=True)
+    def _require_c_parser(self):
+        pytest.importorskip("tree_sitter", exc_type=ImportError)
+        pytest.importorskip("tree_sitter_c", exc_type=ImportError)
 
     def _run(self, verb, source, hypothesis, file_path="a.c"):
         from core.audit.sweep import _run_smt_verb_inner
