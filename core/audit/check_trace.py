@@ -104,7 +104,7 @@ def _summarize_observations(checks: list[dict]) -> dict:
 
 
 def write_check_results(export: dict, out_dir: Path) -> None:
-    """Export run-bound check observations and link them to graded findings.
+    """Export run-bound checks and link them to findings and clean reviews.
 
     Only verified event rows are admitted. Links describe claim/location
     correspondence, not fresh source validation or verdict authority.
@@ -148,6 +148,25 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         by_location[key].append(check)
     findings = export.get("findings", [])
     locations = Counter((f.get("file"), f.get("function"), f.get("line")) for f in findings)
+    clean_traces = export.get("clean_review_traces", [])
+    for trace in clean_traces:
+        scope = trace.get("scope") or {}
+        locations[(scope.get("file"), scope.get("function"), scope.get("line"))] += 1
+
+    def link_hypotheses(trace, key):
+        for review in trace.get("hypothesis_reviews", []):
+            refs = [
+                {"id": check["id"]}
+                for check in by_location.get(key, [])
+                if review.get("hypothesis") and check["scope"].get("hypothesis") == review["hypothesis"]
+            ] if locations[key] == 1 else []
+            review["check_results"] = {
+                "artifact": artifact, "references": refs,
+                "status": ("export_error" if status == "export_error" else
+                           "ambiguous_scope" if locations[key] > 1 else
+                           "recorded" if refs else "unavailable"),
+            }
+
     matching = []
     other_claims = []
     linked_objects = set()
@@ -157,6 +176,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         if not isinstance(trace, dict):
             continue
         key = (finding.get("file"), finding.get("function"), finding.get("line"))
+        link_hypotheses(trace, key)
         if locations[key] > 1:
             trace["check_results"] = {"artifact": artifact, "references": [],
                                       "status": "export_error" if status == "export_error" else "ambiguous_scope"}
@@ -170,6 +190,22 @@ def write_check_results(export: dict, out_dir: Path) -> None:
             (matching if ref["matches_final_claim"] else other_claims).append(check)
         trace["check_results"] = {"artifact": artifact, "references": refs,
                                   "status": status if refs or status == "export_error" else "unavailable"}
+    clean_with_matches = 0
+    for trace in clean_traces:
+        scope = trace.get("scope") or {}
+        key = (scope.get("file"), scope.get("function"), scope.get("line"))
+        link_hypotheses(trace, key)
+        refs = [
+            {"id": check["id"], "matches_final_claim": check["scope"].get("hypothesis") == trace.get("claim")}
+            for check in by_location.get(key, [])
+        ] if locations[key] == 1 else []
+        clean_with_matches += any(ref["matches_final_claim"] for ref in refs)
+        trace["check_results"] = {
+            "artifact": artifact, "references": refs,
+            "status": ("export_error" if status == "export_error" else
+                       "ambiguous_scope" if locations[key] > 1 else
+                       "recorded" if refs else "unavailable"),
+        }
     trace_statuses = Counter(
         finding["verification_trace"]["check_results"]["status"]
         if isinstance(finding.get("verification_trace"), dict) else "unavailable"
@@ -180,6 +216,8 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         "findings": {"total": len(findings), "with_matching_observations": findings_with_matches,
                      "without_matching_observations": len(findings) - findings_with_matches,
                      "trace_statuses": dict(trace_statuses)},
+        "clean_reviews": {"total": len(clean_traces), "with_matching_observations": clean_with_matches,
+                          "without_matching_observations": len(clean_traces) - clean_with_matches},
         "observations": {
             "retained": retained_summary,
             "matching_final_claim": _summarize_observations(matching),
@@ -189,6 +227,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         "limitations": [
             "Counts describe retained observations, not distinct executions or proven defects.",
             "Matching compares claim text and location; source freshness is not revalidated.",
+            "Hypothesis links identify recorded checks, not support for a counterargument.",
             "Missing observations do not establish that no check ran.",
         ],
     }
