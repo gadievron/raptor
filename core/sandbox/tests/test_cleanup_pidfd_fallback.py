@@ -9,12 +9,25 @@ import pytest
 
 from core.sandbox import probes
 from core.sandbox import _landlock_audit as audit
+from core.testing.module_bindings import patch_module_attribute
+
+
+def _local_cleanup_modules(monkeypatch, consumer):
+    # The cleanup owner and its test must observe the same injected functions.
+    for binding in ('os', 'signal'):
+        borrowed = getattr(consumer, binding)
+        private = patch_module_attribute(
+            monkeypatch, consumer, binding, '__name__', borrowed.__name__,
+        )
+        monkeypatch.setitem(globals(), binding, private)
 
 
 @pytest.fixture(params=['probe', 'audit'])
-def cleanup(request):
+def cleanup(request, monkeypatch):
     if request.param == 'probe':
+        _local_cleanup_modules(monkeypatch, probes)
         return lambda pid, fd: probes._cleanup_probe_child(pid, 'test', pidfd=fd)
+    _local_cleanup_modules(monkeypatch, audit)
     return lambda pid, fd: audit._kill_and_reap(pid, timeout_s=0.5)
 
 
@@ -95,6 +108,7 @@ def test_real_child_cleanup_with_blocked_pidfd_signal(cleanup, monkeypatch):
 
 @pytest.mark.skipif(not hasattr(os, 'fork') or not hasattr(os, 'pidfd_open'), reason='requires fork and pidfds')
 def test_audit_kill_phase_falls_back_for_term_ignoring_child(monkeypatch):
+    _local_cleanup_modules(monkeypatch, audit)
     read_fd, write_fd = os.pipe()
     child = os.fork()
     if child == 0:
