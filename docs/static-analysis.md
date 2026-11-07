@@ -238,6 +238,12 @@ calls that mix correct and incorrect flag types. Similarly named identifiers
 and flags that are masked out do not trigger these reports. Numeric flag
 values and indirect flag definitions need source review.
 
+The directory-ownership check detects closing both an `fdopendir` stream and
+its underlying descriptor in either order. It stops following an ownership
+chain when the relevant pointer or descriptor is replaced or passed by address,
+and excludes explicit descriptor rebinding between releases. It follows direct
+uses rather than aliases.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
