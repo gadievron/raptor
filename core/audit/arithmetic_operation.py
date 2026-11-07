@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 
 from .condition_extraction import _get_parser
+from .arithmetic_evaluation import unevaluated_context
 
 logger = logging.getLogger(__name__)
 _INTEGER_LITERAL_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|0|[1-9][0-9]*)")
@@ -112,16 +113,8 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
                 if item.type in {"array_declarator", "abstract_array_declarator"}:
                     return ArithmeticOperation("unavailable")  # VLA extents may execute
                 pending.extend(item.named_children)
-        # These recognized forms do not evaluate the arithmetic operand.
-        if node.type in {
-            "sizeof_expression", "alignof_expression", "decltype", "noexcept_expression",
-            "requires_expression", "static_assert_declaration", "enum_specifier",
-        }:
-            continue
-        # The pinned C++ grammar represents the noexcept operator as a call.
-        if language == "cpp" and node.type == "call_expression" and text(
-            node.child_by_field_name("function")
-        ) == "noexcept":
+        # The sizeof VLA check above must run before skipping operands.
+        if unevaluated_context(node, data, language):
             continue
         if node.type == "binary_expression" and text(node.child_by_field_name("operator")) == operator:
             left = _unwrap(node.child_by_field_name("left"))
@@ -141,9 +134,13 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     if not matches:
         return ArithmeticOperation("unbound")
     from .arithmetic_guards import guards_for_operation
-    guards = guards_for_operation(bodies[0], matches[0], data, operands)
-    from .arithmetic_types import model_for_operation
-    model = model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi, language=language)
+    guards = guards_for_operation(bodies[0], matches[0], data, operands,
+                                  language=language, integer_abi=integer_abi)
+    from .arithmetic_types import ArithmeticModel, model_for_operation
+    # An incomplete execution frame has no complete integer model. Do not
+    # silently rebuild a typed query from the now-empty guard tuple.
+    model = (ArithmeticModel("unavailable") if guards.status == "unavailable"
+             else model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi, language=language))
     row, column = matches[0].start_point
     return ArithmeticOperation(
         "bound", row + 1, column + 1, guards.status, guards.premises,

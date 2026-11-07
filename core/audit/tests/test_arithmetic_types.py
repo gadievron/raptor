@@ -195,7 +195,8 @@ def test_auxiliary_disproof_uses_source_types_not_hint_overrides(c_grammar, hint
 ])
 def test_every_guard_value_needs_a_compatible_visible_type(c_grammar, text):
     result = operation.bind_arithmetic_operation(text, ["a", "b"], "+", language="c", integer_abi="ilp32")
-    assert result.status == "bound" and result.guard_status == "bound"
+    assert result.status == "bound"
+    assert result.guard_status in {"bound", "unavailable"}
     assert result.type_status == "unavailable"
 
 
@@ -226,3 +227,15 @@ def test_signed_subtraction_uses_the_signed_backend_oracle(c_grammar):
     result = bind("int", "int", expression="a - b")
     assert result.status == "bound" and result.guard_status == "bound"
     assert result.type_status == "bound" and result.kind == "signed_wrap"
+
+
+@pytest.mark.parametrize('declaration', [
+    pytest.param('unsigned a __attribute__((vector_size(16)))', id='vector-width-after-name'),
+    pytest.param('unsigned __attribute__((mode(DI))) a', id='integer-mode-before-name'),
+    pytest.param('unsigned a __attribute__((mode(DI)))', id='integer-mode-after-name'),
+    pytest.param('unsigned a __attribute__((aligned(16)))', id='unmodeled-alignment-attribute'),
+])
+def test_parameter_attributes_cannot_masquerade_as_plain_scalar_types(c_grammar, declaration):
+    text = f'unsigned Read({declaration},unsigned b){{return a+b;}}'
+    result = operation.bind_arithmetic_operation(text, ['a', 'b'], '+', language='c', integer_abi='ilp32')
+    assert result.status == 'bound' and result.type_status == 'unavailable'

@@ -160,7 +160,16 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
         # an unconstrained entry domain. Parameters are entry inputs.
         if declaration.type != "parameter_declaration":
             return ArithmeticModel("unavailable")
+        declarator = declaration.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "identifier":
+            return ArithmeticModel("unavailable")
         type_node = declaration.child_by_field_name("type")
+        # Attribute syntax can change the value type or width (mode/vector
+        # extensions) without changing the visible builtin type spelling.
+        if any(child not in (type_node, declarator) and child.type != "comment"
+               and not (child.type == "type_qualifier" and data[child.start_byte:child.end_byte] == b"const")
+               for child in declaration.named_children):
+            return ArithmeticModel("unavailable")
         if not has_builtin_integer_type(type_node, spelling, language):
             return ArithmeticModel("unavailable")
         kind = integer_type(spelling, abi)

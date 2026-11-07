@@ -230,7 +230,8 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
             children = [child for child in node.named_children if child.type != "comment"]
             if len(children) != 1 or children[0].type != "number_literal" or text(children[0]) != "0":
                 return ArrayAccess("unavailable", "other return effects are unsupported")
-    guards = guards_for_operation(body, target, data, [claim[1]])
+    guards = guards_for_operation(body, target, data, [claim[1]],
+                                  language=language, integer_abi=abi)
     if guards.status == "unavailable":
         return ArrayAccess("unavailable", "reaching guards unavailable")
     terms = sorted({text(node) for node in body_nodes if node.type == "identifier" and text(node) != claim[0]})
