@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import json
 from typing import Any
 from unittest.mock import patch
@@ -15,17 +18,8 @@ from cve_env.tools.image_resolve import (
 )
 
 from core.container.proc import RunOutcome
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import cve_env.tools.image_resolve as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -181,12 +175,7 @@ def test_resolve_not_found_when_all_candidates_miss(mock_cli: Any) -> None:
     assert len(r.candidates_tried) >= 3  # We tried multiple candidate names.
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_resolve_rate_limited_surfaces_pivot_signal(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_resolve_rate_limited_surfaces_pivot_signal() -> None:
     """Phase 12.1: when ALL candidates hit Docker Hub anon rate-limit, the
     reason field tells the agent to pivot to a generic base (ubuntu/debian/
     alpine) + manual host install, rather than give up.
@@ -195,187 +184,185 @@ def test_resolve_rate_limited_surfaces_pivot_signal(
     all hit rate_limited and the agent gave up without trying the ubuntu
     fallback that smoke 3 used successfully.
     """
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()  # don't inherit prior test's counter
-    mock_cli.return_value = RunOutcome(timed_out=False,
-        returncode=1,
-        stdout="",
-        stderr="toomanyrequests: You have reached your unauthenticated pull rate limit",
-    )
-    r = image_resolve(product="rare-product", version="1.0", host_arch="arm64")
-    assert r.ok is False
-    assert r.reason_class == "rate_limited"
-    assert "PIVOT" in r.reason
-    assert "ubuntu" in r.reason or "debian" in r.reason or "alpine" in r.reason
+        reset_rate_limit_budget()  # don't inherit prior test's counter
+        mock_cli.return_value = RunOutcome(timed_out=False,
+            returncode=1,
+            stdout="",
+            stderr="toomanyrequests: You have reached your unauthenticated pull rate limit",
+        )
+        r = image_resolve(product="rare-product", version="1.0", host_arch="arm64")
+        assert r.ok is False
+        assert r.reason_class == "rate_limited"
+        assert "PIVOT" in r.reason
+        assert "ubuntu" in r.reason or "debian" in r.reason or "alpine" in r.reason
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_resolve_transport_surfaces_retry_or_pivot(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_resolve_transport_surfaces_retry_or_pivot() -> None:
     """Phase 12.1: transport errors get a retry-or-pivot hint (separate from
     rate_limited which is more aggressive about pivoting since it persists
     for hours)."""
-    mock_cli.return_value = RunOutcome(timed_out=False,
-        returncode=1, stdout="", stderr="error: i/o timeout"
-    )
-    r = image_resolve(product="some-obscure-app", version="1.0", host_arch="arm64")
-    assert r.ok is False
-    assert r.reason_class == "transport"
-    assert "Retry" in r.reason or "retry" in r.reason
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        mock_cli.return_value = RunOutcome(timed_out=False,
+            returncode=1, stdout="", stderr="error: i/o timeout"
+        )
+        r = image_resolve(product="some-obscure-app", version="1.0", host_arch="arm64")
+        assert r.ok is False
+        assert r.reason_class == "transport"
+        assert "Retry" in r.reason or "retry" in r.reason
 
 
 # Phase 13.2: rate-limit budget -----------------------------------------
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")  # skip 10s retry backoff in tests
-@patch("core.container.registry.run_cli")
-def test_rate_limit_budget_short_circuits_after_two_hits(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_rate_limit_budget_short_circuits_after_two_hits() -> None:
     """Phase 13.2: 3rd rate_limited call for same product short-circuits to
     decision='rate_limited_persistent' — no CLI invocation, immediate pivot.
     """
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False,
-        returncode=1,
-        stdout="",
-        stderr="toomanyrequests: pull rate limit",
-    )
-    # Burn the budget: 2 rate_limited calls.
-    image_resolve(product="wordpress", version="5.6", host_arch="arm64")
-    image_resolve(product="wordpress", version="5.7", host_arch="arm64")
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False,
+            returncode=1,
+            stdout="",
+            stderr="toomanyrequests: pull rate limit",
+        )
+        # Burn the budget: 2 rate_limited calls.
+        image_resolve(product="wordpress", version="5.6", host_arch="arm64")
+        image_resolve(product="wordpress", version="5.7", host_arch="arm64")
 
-    # 3rd call must short-circuit without invoking the CLI.
-    mock_cli.reset_mock()
-    r = image_resolve(product="wordpress", version="5.8", host_arch="arm64")
-    assert r.ok is False
-    assert r.decision == "rate_limited_persistent"
-    assert r.reason_class == "rate_limited"
-    assert "STOP probing" in r.reason or "PIVOT" in r.reason
-    mock_cli.assert_not_called()
+        # 3rd call must short-circuit without invoking the CLI.
+        mock_cli.reset_mock()
+        r = image_resolve(product="wordpress", version="5.8", host_arch="arm64")
+        assert r.ok is False
+        assert r.decision == "rate_limited_persistent"
+        assert r.reason_class == "rate_limited"
+        assert "STOP probing" in r.reason or "PIVOT" in r.reason
+        mock_cli.assert_not_called()
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_rate_limit_budget_per_product_isolated(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_rate_limit_budget_per_product_isolated() -> None:
     """Phase 13.2: rate-limit budget is per-product. Different product
     starts with fresh budget."""
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
-    image_resolve(product="wordpress", version="5.6", host_arch="arm64")
-    image_resolve(product="wordpress", version="5.7", host_arch="arm64")
-    # Different product, different counter.
-    mock_cli.reset_mock()
-    r = image_resolve(product="drupal", version="9.4", host_arch="arm64")
-    # NOT short-circuited at call entry — CLI called.
-    assert r.decision != "rate_limited_persistent"
-    assert mock_cli.called
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
+        image_resolve(product="wordpress", version="5.6", host_arch="arm64")
+        image_resolve(product="wordpress", version="5.7", host_arch="arm64")
+        # Different product, different counter.
+        mock_cli.reset_mock()
+        r = image_resolve(product="drupal", version="9.4", host_arch="arm64")
+        # NOT short-circuited at call entry — CLI called.
+        assert r.decision != "rate_limited_persistent"
+        assert mock_cli.called
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_phase35_cumulative_rate_limit_short_circuits_cross_product() -> None:
     """Phase 35.1: CVE-level cumulative counter catches cross-product
     thrash even when each individual product stays under the per-product
     threshold. Real-world pattern (CVE-2022-42889): agent rotates through
     text4shell → maven → tomcat → eclipse-temurin, hitting rate_limited
     on each, never tripping per-product but burning budget.
     """
-    from cve_env.tools._image_resolve_state import (
-        _RATE_LIMIT_TOTAL_THRESHOLD,
-    )
-    from cve_env.tools.image_resolve import (
-        reset_rate_limit_budget,
-    )
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools._image_resolve_state import (
+            _RATE_LIMIT_TOTAL_THRESHOLD,
+        )
+        from cve_env.tools.image_resolve import (
+            reset_rate_limit_budget,
+        )
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
-    # Burn cumulative budget across DIFFERENT products (each increments
-    # cumulative by 1). After 3 calls we should be at the threshold.
-    image_resolve(product="text4shell", version="1.0", host_arch="arm64")
-    image_resolve(product="maven", version="3.8", host_arch="arm64")
-    image_resolve(product="eclipse-temurin", version="17", host_arch="arm64")
-    # The 4th call across a NEW product should be short-circuited.
-    mock_cli.reset_mock()
-    r = image_resolve(product="tomcat", version="9.0", host_arch="arm64")
-    # Cumulative threshold should have tripped → short-circuit.
-    assert r.ok is False
-    assert r.decision == "rate_limited_persistent"
-    assert "across multiple products" in r.reason
-    assert "per-IP" in r.reason
-    # CLI NOT called — short-circuited at function entry.
-    mock_cli.assert_not_called()
-    # Sanity check on the threshold constant.
-    assert _RATE_LIMIT_TOTAL_THRESHOLD >= 3, "threshold too tight"
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
+        # Burn cumulative budget across DIFFERENT products (each increments
+        # cumulative by 1). After 3 calls we should be at the threshold.
+        image_resolve(product="text4shell", version="1.0", host_arch="arm64")
+        image_resolve(product="maven", version="3.8", host_arch="arm64")
+        image_resolve(product="eclipse-temurin", version="17", host_arch="arm64")
+        # The 4th call across a NEW product should be short-circuited.
+        mock_cli.reset_mock()
+        r = image_resolve(product="tomcat", version="9.0", host_arch="arm64")
+        # Cumulative threshold should have tripped → short-circuit.
+        assert r.ok is False
+        assert r.decision == "rate_limited_persistent"
+        assert "across multiple products" in r.reason
+        assert "per-IP" in r.reason
+        # CLI NOT called — short-circuited at function entry.
+        mock_cli.assert_not_called()
+        # Sanity check on the threshold constant.
+        assert _RATE_LIMIT_TOTAL_THRESHOLD >= 3, "threshold too tight"
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_phase37_2_rate_limit_cooldown_retry_one_shot(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_phase37_2_rate_limit_cooldown_retry_one_shot() -> None:
     """Phase 37.2: when ALL candidates rate-limited, image_resolve sleeps
     once + retries the candidate loop. If retry also rate-limited, returns
     the failure (existing flow). The cooldown only fires ONCE per CVE.
     """
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as mock_sleep,
+    ):
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
-    r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
-    # Sleep was called (at least once for the cooldown).
-    assert mock_sleep.called
-    # Final result is still rate_limited (retry also failed in this mock).
-    assert r.ok is False
-    # candidates_tried should include both initial + retry candidates.
-    assert r.candidates_tried  # non-empty
-    # Second call: cooldown should NOT fire again (one-shot per CVE).
-    mock_sleep.reset_mock()
-    image_resolve(product="apache", version="2.4", host_arch="arm64")
-    # The cooldown branch shouldn't fire (returns False from
-    # _take_rate_limit_cooldown). Sleep can still be called by other paths
-    # (probe retry on transient), so we can't assert "no sleep at all";
-    # but we CAN assert the 30s cooldown wasn't invoked.
-    # Easier: verify _RATE_LIMIT_COOLDOWN_DONE is True after reset.
-    from cve_env.tools import _image_resolve_state as _state
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
+        r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
+        # Sleep was called (at least once for the cooldown).
+        assert mock_sleep.called
+        # Final result is still rate_limited (retry also failed in this mock).
+        assert r.ok is False
+        # candidates_tried should include both initial + retry candidates.
+        assert r.candidates_tried  # non-empty
+        # Second call: cooldown should NOT fire again (one-shot per CVE).
+        mock_sleep.reset_mock()
+        image_resolve(product="apache", version="2.4", host_arch="arm64")
+        # The cooldown branch shouldn't fire (returns False from
+        # _take_rate_limit_cooldown). Sleep can still be called by other paths
+        # (probe retry on transient), so we can't assert "no sleep at all";
+        # but we CAN assert the 30s cooldown wasn't invoked.
+        # Easier: verify _RATE_LIMIT_COOLDOWN_DONE is True after reset.
+        from cve_env.tools import _image_resolve_state as _state
 
-    assert _state._RATE_LIMIT_COOLDOWN_DONE is True
+        assert _state._RATE_LIMIT_COOLDOWN_DONE is True
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_phase37_2_cooldown_resets_per_cve(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_phase37_2_cooldown_resets_per_cve() -> None:
     """Phase 37.2: reset_rate_limit_budget() (called per-CVE by the bench
     loop) clears the cooldown flag so the next CVE gets its own one-shot.
     """
-    from cve_env.tools import _image_resolve_state as _state
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools import _image_resolve_state as _state
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
-    image_resolve(product="nginx", version="1.20", host_arch="arm64")
-    assert _state._RATE_LIMIT_COOLDOWN_DONE is True
-    reset_rate_limit_budget()
-    assert _state._RATE_LIMIT_COOLDOWN_DONE is False
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
+        image_resolve(product="nginx", version="1.20", host_arch="arm64")
+        assert _state._RATE_LIMIT_COOLDOWN_DONE is True
+        reset_rate_limit_budget()
+        assert _state._RATE_LIMIT_COOLDOWN_DONE is False
 
 
 def test_phase35_reset_rate_limit_clears_cumulative() -> None:
@@ -435,22 +422,21 @@ def test_resolve_not_found_emits_next_step_hint(mock_cli: Any) -> None:
     assert "source_build" in r.next_step_hint or "ubuntu" in r.next_step_hint
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_resolve_rate_limited_persistent_emits_pivot_hint(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+def test_resolve_rate_limited_persistent_emits_pivot_hint() -> None:
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
-    image_resolve(product="wp-x", version="1", host_arch="arm64")
-    image_resolve(product="wp-x", version="2", host_arch="arm64")
-    r = image_resolve(product="wp-x", version="3", host_arch="arm64")
-    assert r.decision == "rate_limited_persistent"
-    hint_lower = r.next_step_hint.lower()
-    assert "ubuntu" in hint_lower or "pivot" in hint_lower
+        reset_rate_limit_budget()
+        mock_cli.return_value = RunOutcome(timed_out=False, returncode=1, stdout="", stderr="toomanyrequests")
+        image_resolve(product="wp-x", version="1", host_arch="arm64")
+        image_resolve(product="wp-x", version="2", host_arch="arm64")
+        r = image_resolve(product="wp-x", version="3", host_arch="arm64")
+        assert r.decision == "rate_limited_persistent"
+        hint_lower = r.next_step_hint.lower()
+        assert "ubuntu" in hint_lower or "pivot" in hint_lower
 
 
 @patch("core.container.registry.run_cli")
@@ -626,12 +612,7 @@ def test_phase45_mirror_gcr_io_is_high_priority_candidate() -> None:
     )
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_phase46_2_transport_cooldown_retry_one_shot(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_phase46_2_transport_cooldown_retry_one_shot() -> None:
     """Phase 46.2 (2026-04-30): when ALL candidates hit transport-class
     (5xx / timeout / connection-reset), image_resolve sleeps once + retries
     the candidate loop. Forensic: CVE-2021-41274 in bench50-20260430-000207
@@ -639,59 +620,62 @@ def test_phase46_2_transport_cooldown_retry_one_shot(
     failures, then gave up at turn 20. Pre-46.2 there was no retry — only
     rate_limit had a cooldown branch.
     """
-    from cve_env.tools import _image_resolve_state as _state
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as mock_sleep,
+    ):
+        from cve_env.tools import _image_resolve_state as _state
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    # Simulate every candidate returning a 5xx-class transport error
-    # (returncode=1 with "received unexpected HTTP status: 503").
-    mock_cli.return_value = RunOutcome(timed_out=False,
-        returncode=1,
-        stdout="",
-        stderr="received unexpected HTTP status: 503 Service Unavailable",
-    )
-    r = image_resolve(product="solidus", version="2.11", host_arch="arm64")
-    # Cooldown sleep was invoked.
-    assert mock_sleep.called, "transport cooldown should have invoked sleep"
-    # Cooldown flag now set so a second image_resolve in the same CVE
-    # won't fire the cooldown again.
-    assert _state._TRANSPORT_COOLDOWN_DONE is True
-    # Result is still failure (retry also got 503s in this mock).
-    assert r.ok is False
-    assert r.reason_class == "transport"
+        reset_rate_limit_budget()
+        # Simulate every candidate returning a 5xx-class transport error
+        # (returncode=1 with "received unexpected HTTP status: 503").
+        mock_cli.return_value = RunOutcome(timed_out=False,
+            returncode=1,
+            stdout="",
+            stderr="received unexpected HTTP status: 503 Service Unavailable",
+        )
+        r = image_resolve(product="solidus", version="2.11", host_arch="arm64")
+        # Cooldown sleep was invoked.
+        assert mock_sleep.called, "transport cooldown should have invoked sleep"
+        # Cooldown flag now set so a second image_resolve in the same CVE
+        # won't fire the cooldown again.
+        assert _state._TRANSPORT_COOLDOWN_DONE is True
+        # Result is still failure (retry also got 503s in this mock).
+        assert r.ok is False
+        assert r.reason_class == "transport"
 
 
-@patch("cve_env.tools.image_resolve.time.sleep")
-@patch("core.container.registry.run_cli")
-def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown(
-    mock_cli: Any,
-    mock_sleep: Any,
-) -> None:
+def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown() -> None:
     """Phase 46.2: if the rate_limit cooldown was already taken this CVE
     (consumed 30s already), the transport cooldown does NOT fire again to
     avoid back-to-back 30s waits. The two cooldowns are meant for distinct
     failure modes on the FIRST attempt, not as a chained backoff.
     """
-    from cve_env.tools import _image_resolve_state as _state
-    from cve_env.tools.image_resolve import reset_rate_limit_budget
+    with (
+        patch('core.container.registry.run_cli') as mock_cli,
+        mock_module_attribute(_mock_owner('cve_env.tools.image_resolve'), 'time', 'sleep') as _mock_sleep,
+    ):
+        from cve_env.tools import _image_resolve_state as _state
+        from cve_env.tools.image_resolve import reset_rate_limit_budget
 
-    reset_rate_limit_budget()
-    # Manually mark rate-limit cooldown as taken (simulating a prior call
-    # in this same CVE that already burned the rate-limit budget).
-    _state._RATE_LIMIT_COOLDOWN_DONE = True
-    mock_cli.return_value = RunOutcome(timed_out=False,
-        returncode=1,
-        stdout="",
-        stderr="received unexpected HTTP status: 503 Service Unavailable",
-    )
-    r = image_resolve(product="solidus", version="2.11", host_arch="arm64")
-    # Transport cooldown should NOT have been taken (rate-limit branch
-    # already consumed wall-time once this CVE).
-    assert _state._TRANSPORT_COOLDOWN_DONE is False, (
-        "transport cooldown must not chain after rate-limit cooldown"
-    )
-    assert r.ok is False
-    assert r.reason_class == "transport"
+        reset_rate_limit_budget()
+        # Manually mark rate-limit cooldown as taken (simulating a prior call
+        # in this same CVE that already burned the rate-limit budget).
+        _state._RATE_LIMIT_COOLDOWN_DONE = True
+        mock_cli.return_value = RunOutcome(timed_out=False,
+            returncode=1,
+            stdout="",
+            stderr="received unexpected HTTP status: 503 Service Unavailable",
+        )
+        r = image_resolve(product="solidus", version="2.11", host_arch="arm64")
+        # Transport cooldown should NOT have been taken (rate-limit branch
+        # already consumed wall-time once this CVE).
+        assert _state._TRANSPORT_COOLDOWN_DONE is False, (
+            "transport cooldown must not chain after rate-limit cooldown"
+        )
+        assert r.ok is False
+        assert r.reason_class == "transport"
 
 
 # ---- Phase 47.2: TDD tests for _attempt_resolve_retry_loop helper ----

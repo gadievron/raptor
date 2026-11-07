@@ -23,7 +23,7 @@ def _calls(file):
     parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     found = {}
     for call in ast.walk(tree):
-        if not isinstance(call, ast.Call) or not isinstance(parents.get(id(call)), ast.withitem):
+        if not isinstance(call, ast.Call):
             continue
         normalized = as_patch_call(call)
         if not normalized.args or not isinstance(normalized.args[0], ast.Constant):

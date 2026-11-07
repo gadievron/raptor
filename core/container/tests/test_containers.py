@@ -5,12 +5,13 @@ All docker traffic is intercepted at the run_cli seam; no daemon needed.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
-from core.testing.module_bindings import patch_module_attribute
 
 from core.container import containers as cc
 from core.container.proc import RunOutcome
@@ -19,9 +20,6 @@ _CID = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 _PORTS_JSON = '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"49000"}]}'
 
 
-@pytest.fixture(autouse=True)
-def _owned_clock_patch_target(monkeypatch):
-    patch_module_attribute(monkeypatch, cc, "time", "sleep", cc.time.sleep)
 
 
 def _fake_run(captured: list[list[str]] | None = None):
@@ -116,7 +114,7 @@ def test_stalled_pull_fails_fast_without_retry() -> None:
                           timed_out=True)
 
     with (patch.object(cc, "run_cli", side_effect=timed_out),
-          patch.object(cc.time, "sleep")):
+          mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep')):
         r = cc.launch_container(image="x:1", container_port=80)
     assert not r.ok and r.reason == "pull_timeout"
     assert r.reason_class == "transport"
@@ -137,7 +135,7 @@ def test_transient_failure_retries_once_with_fresh_name() -> None:
                           timed_out=False)
 
     with (patch.object(cc, "run_cli", side_effect=flaky),
-          patch.object(cc.time, "sleep")):
+          mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep')):
         r = cc.launch_container(image="x:1", container_port=80)
     assert r.ok
     assert len(names) == 2 and names[0] != names[1]
@@ -152,7 +150,7 @@ def test_permanent_failure_does_not_retry() -> None:
                           stderr="manifest unknown", timed_out=False)
 
     with (patch.object(cc, "run_cli", side_effect=denied),
-          patch.object(cc.time, "sleep")):
+          mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep')):
         r = cc.launch_container(image="x:1", container_port=80)
     assert not r.ok and r.reason == "run_failed"
     assert r.reason_class == "manifest_unknown"
@@ -226,7 +224,7 @@ def test_disk_full_retry_prunes_dangling_images_only() -> None:
                           timed_out=False)
 
     with patch.object(cc, "run_cli", side_effect=fake), \
-         patch.object(cc.time, "sleep"):
+         mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep'):
         result = cc.launch_container(image="x:1", container_port=80)
     assert not result.ok and result.reason_class == "disk_full"
     prunes = [c for c in calls if "prune" in c]

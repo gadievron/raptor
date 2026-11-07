@@ -1,5 +1,6 @@
 """Exercise native runner-patch fixtures without running their I/O bodies."""
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from functools import lru_cache
 import importlib
@@ -21,8 +22,6 @@ _SPECS = [('packages/joern/tests/test_server.py', 'packages.joern.server'),
  ('packages/joern/tests/test_heap_ledger.py', 'packages.joern.server'),
  ('core/sandbox/tests/test_spawn_mount_ns.py', 'core.sandbox._spawn'),
  ('core/sandbox/tests/test_pidns_proc_mount.py', 'core.sandbox.probes'),
- ('packages/binary_analysis/tests/test_radare2_understand.py',
-  'packages.binary_analysis.radare2_understand'),
  ('packages/fuzzing/tests/test_raptor_agentic_replay_except.py', 'raptor_agentic')]
 
 
@@ -33,7 +32,8 @@ def _tree(file):
 
 def _patches(file, module):
     calls = []
-    for node in ast.walk(_tree(file)):
+    for original in ast.walk(_tree(file)):
+        node = as_patch_call(original)
         if not isinstance(node, ast.Call) or not node.args:
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")

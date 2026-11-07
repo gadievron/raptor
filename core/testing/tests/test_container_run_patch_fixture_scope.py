@@ -15,11 +15,7 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
-_SPECS = [('packages/cve_env/tests/unit/test_bench_replay_verify.py', 'core.container.proc'),
- ('packages/cve_env/tests/unit/test_docker_build.py', 'core.container.proc'),
- ('packages/cve_env/tests/unit/test_migration_resilience.py', 'core.container.proc'),
- ('packages/cve_env/tests/unit/test_prompt_schemas.py', 'core.container.proc'),
- ('packages/cve_env/tests/unit/test_run_in_container.py', 'core.container.proc'),
+_SPECS = [('packages/cve_env/tests/unit/test_migration_resilience.py', 'core.container.proc'),
  ('packages/cve_env/tests/unit/test_source_build.py', 'core.container.proc'),
  ('packages/cve_env/tests/unit/test_utils_run.py', 'core.container.proc')]
 

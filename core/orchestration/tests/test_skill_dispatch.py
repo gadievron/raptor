@@ -11,6 +11,7 @@ from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
 
+
 import subprocess
 import sys
 import unittest
@@ -19,20 +20,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-from core.testing.module_bindings import patch_module_attribute
 
 
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_run_patches(monkeypatch):
-    """Keep subprocess run mocks on consumer-owned module bindings."""
-    import core.orchestration.skill_dispatch as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
 
 
 # Keep an explicit real runner for the owned child-process fixtures below.
@@ -1421,8 +1413,7 @@ class ParentPinThreadingTests(unittest.TestCase):
                 return SimpleNamespace(name=name, target=project_target)
 
         patches = [
-            patch("core.orchestration.skill_dispatch.subprocess.run",
-                  side_effect=dispatcher),
+            mock_module_attribute(_mock_owner('core.orchestration.skill_dispatch'), 'subprocess', 'run', side_effect=dispatcher),
             # Hermetic pin resolution: the registry probe answers yes
             # for the marker's project, containment inference answers
             # what the test declares — nothing by default (the host

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 from contextlib import ExitStack
 
 import gzip
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -27,17 +30,8 @@ from core.http.urllib_backend import (
 from core.testing.module_bindings import patch_module_attribute
 
 import core.http.urllib_backend as _clock_consumer
-from core.testing.module_bindings import mock_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import core.http.urllib_backend as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -274,23 +268,25 @@ class TestNotModified:
 
 class TestTotalTimeout:
 
-    @patch("core.http.urllib_backend.time.monotonic")
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_deadline_caps_retries(self, _mock_sleep, mock_monotonic):
+    def test_deadline_caps_retries(self):
         """If the wall-clock deadline elapses, raise immediately
         without continuing the backoff schedule. Worst case without
         this: ~1 hour spent in retries; with this, capped to total_timeout."""
-        # Simulate clock jumping forward by 1000s on each call. With
-        # default total_timeout=600, the deadline is exceeded before
-        # the second iteration.
-        ticks = iter([0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000])
-        mock_monotonic.side_effect = lambda: next(ticks)
-        client, _pool = _client_with_mock_pool([
-            _stub_response(b"", status=503),
-            _stub_response(b"", status=503),
-        ])
-        with pytest.raises(HttpError, match="Total timeout"):
-            client.get_json("https://example.com/api", total_timeout=600)
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'monotonic') as mock_monotonic,
+        ):
+            # Simulate clock jumping forward by 1000s on each call. With
+            # default total_timeout=600, the deadline is exceeded before
+            # the second iteration.
+            ticks = iter([0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000])
+            mock_monotonic.side_effect = lambda: next(ticks)
+            client, _pool = _client_with_mock_pool([
+                _stub_response(b"", status=503),
+                _stub_response(b"", status=503),
+            ])
+            with pytest.raises(HttpError, match="Total timeout"):
+                client.get_json("https://example.com/api", total_timeout=600)
 
     def test_short_total_timeout_actually_fires_real_clock(self):
         """REGRESSION TEST. Before the fix, deadline was computed as
@@ -602,41 +598,45 @@ class TestErrors:
         assert ei.value.status == 400
         assert pool.request.call_count == 1
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_429_retries_with_backoff(self, _mock_sleep):
+    def test_429_retries_with_backoff(self):
         # Two 429s, then success. Use a high-threshold breaker so the
         # retry-then-recover path is exercised without tripping the
         # circuit mid-loop.
-        pool = MagicMock()
-        pool.request.side_effect = [
-            _stub_response(b"", status=429, reason="Too Many"),
-            _stub_response(b"", status=429, reason="Too Many"),
-            _stub_response(b'{"ok": true}'),
-        ]
-        client = UrllibClient(
-            _http=pool,
-            circuit_breaker=_HostCircuitBreaker(threshold=10),
-        )
-        result = client.get_json("https://example.com/api")
-        assert result == {"ok": True}
-        assert pool.request.call_count == 3
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            pool = MagicMock()
+            pool.request.side_effect = [
+                _stub_response(b"", status=429, reason="Too Many"),
+                _stub_response(b"", status=429, reason="Too Many"),
+                _stub_response(b'{"ok": true}'),
+            ]
+            client = UrllibClient(
+                _http=pool,
+                circuit_breaker=_HostCircuitBreaker(threshold=10),
+            )
+            result = client.get_json("https://example.com/api")
+            assert result == {"ok": True}
+            assert pool.request.call_count == 3
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_500_retries_then_raises(self, _mock_sleep):
+    def test_500_retries_then_raises(self):
         # Always 500 — circuit breaker trips after 2 failures and
         # aborts the retry loop immediately.
-        pool = MagicMock()
-        pool.request.side_effect = [
-            _stub_response(b"err", status=500, reason="Internal")
-            for _ in range(DEFAULT_RETRIES + 1)
-        ]
-        client = UrllibClient(
-            _http=pool,
-            circuit_breaker=_HostCircuitBreaker(threshold=10),
-        )
-        with pytest.raises(HttpError, match="Exhausted retries"):
-            client.get_json("https://example.com/api")
-        assert pool.request.call_count == DEFAULT_RETRIES + 1
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            pool = MagicMock()
+            pool.request.side_effect = [
+                _stub_response(b"err", status=500, reason="Internal")
+                for _ in range(DEFAULT_RETRIES + 1)
+            ]
+            client = UrllibClient(
+                _http=pool,
+                circuit_breaker=_HostCircuitBreaker(threshold=10),
+            )
+            with pytest.raises(HttpError, match="Exhausted retries"):
+                client.get_json("https://example.com/api")
+            assert pool.request.call_count == DEFAULT_RETRIES + 1
 
     def test_size_limit_enforced(self):
         # Build a stub whose stream() yields 200 bytes; max_bytes=100.
@@ -656,19 +656,21 @@ class TestErrors:
         with pytest.raises(HttpError, match="not valid JSON"):
             client.get_json("https://example.com/api")
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_network_error_retries_then_raises(self, _mock_sleep):
+    def test_network_error_retries_then_raises(self):
         """Connection-level errors (urllib3 MaxRetryError, timeout etc.)
         are retried — same backoff schedule as 5xx."""
-        from urllib3.exceptions import MaxRetryError
-        pool = MagicMock()
-        pool.request.side_effect = MaxRetryError(
-            pool=None, url="https://example.com/api", reason="connection refused",
-        )
-        client = UrllibClient(_http=pool)
-        with pytest.raises(HttpError, match="Exhausted retries"):
-            client.get_json("https://example.com/api")
-        assert pool.request.call_count == DEFAULT_RETRIES + 1
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            from urllib3.exceptions import MaxRetryError
+            pool = MagicMock()
+            pool.request.side_effect = MaxRetryError(
+                pool=None, url="https://example.com/api", reason="connection refused",
+            )
+            client = UrllibClient(_http=pool)
+            with pytest.raises(HttpError, match="Exhausted retries"):
+                client.get_json("https://example.com/api")
+            assert pool.request.call_count == DEFAULT_RETRIES + 1
 
     def test_proxy_403_is_permanent_no_retry(self):
         """When the in-process proxy returns 403 (host not on allowlist),
@@ -688,21 +690,23 @@ class TestErrors:
         # Single attempt — no retry storm.
         assert pool.request.call_count == 1
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_other_proxy_errors_are_retried(self, _mock_sleep):
+    def test_other_proxy_errors_are_retried(self):
         """ProxyError that ISN'T a 403 (e.g., proxy unreachable) is
         transient and should retry like any other connection error."""
-        from urllib3.exceptions import ProxyError
-        pool = MagicMock()
-        # No "403"/"Forbidden" in the message → treated as transient.
-        pool.request.side_effect = ProxyError(
-            "Cannot connect to proxy.",
-            OSError("connection refused"),
-        )
-        client = UrllibClient(_http=pool)
-        with pytest.raises(HttpError, match="Exhausted retries"):
-            client.get_json("https://example.com/api")
-        assert pool.request.call_count == DEFAULT_RETRIES + 1
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            from urllib3.exceptions import ProxyError
+            pool = MagicMock()
+            # No "403"/"Forbidden" in the message → treated as transient.
+            pool.request.side_effect = ProxyError(
+                "Cannot connect to proxy.",
+                OSError("connection refused"),
+            )
+            client = UrllibClient(_http=pool)
+            with pytest.raises(HttpError, match="Exhausted retries"):
+                client.get_json("https://example.com/api")
+            assert pool.request.call_count == DEFAULT_RETRIES + 1
 
 
 # ---------------------------------------------------------------------------
@@ -900,21 +904,23 @@ class TestRetriesOptOut:
             client.get_json("https://example.com/api", retries=0)
         assert pool.request.call_count == 1
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_retries_three_means_four_attempts(self, _mock_sleep):
+    def test_retries_three_means_four_attempts(self):
         """retries=3 → up to 4 total attempts (1 initial + 3 retries).
         High-threshold breaker so all 4 attempts execute."""
-        pool = MagicMock()
-        pool.request.side_effect = [
-            _stub_response(b"", status=503) for _ in range(8)
-        ]
-        client = UrllibClient(
-            _http=pool,
-            circuit_breaker=_HostCircuitBreaker(threshold=10),
-        )
-        with pytest.raises(HttpError, match="Exhausted retries"):
-            client.get_json("https://example.com/api", retries=3)
-        assert pool.request.call_count == 4
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            pool = MagicMock()
+            pool.request.side_effect = [
+                _stub_response(b"", status=503) for _ in range(8)
+            ]
+            client = UrllibClient(
+                _http=pool,
+                circuit_breaker=_HostCircuitBreaker(threshold=10),
+            )
+            with pytest.raises(HttpError, match="Exhausted retries"):
+                client.get_json("https://example.com/api", retries=3)
+            assert pool.request.call_count == 4
 
     def test_no_sleep_after_final_attempt(self, monkeypatch):
         """REGRESSION: each schedule slot owns the sleep AFTER its
@@ -1340,8 +1346,7 @@ class TestHostCircuitBreaker:
 class TestUrllibClientCircuitBreakerWiring:
     """The breaker fires from inside _fetch on real-shaped retries."""
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_two_429s_then_third_request_fails_fast(self, _mock_sleep):
+    def test_two_429s_then_third_request_fails_fast(self):
         """After two 429s on host A, a third request to host A must
         raise immediately without invoking the pool.
 
@@ -1349,38 +1354,41 @@ class TestUrllibClientCircuitBreakerWiring:
         3-attempt 429 sequence whose 1+2=3s of real backoff is wall-clock
         cost only — the assertion is about breaker *state*, not timing —
         matching every other retry test in this file."""
-        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
-        # 6 stub responses (one per backoff slot) — but the third
-        # request should fail fast before the pool is hit again.
-        r429 = _stub_response(b"", status=429, reason="Too Many Requests")
-        pool = MagicMock()
-        pool.request.return_value = r429
-        client = UrllibClient(_http=pool, circuit_breaker=cb)
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+            # 6 stub responses (one per backoff slot) — but the third
+            # request should fail fast before the pool is hit again.
+            r429 = _stub_response(b"", status=429, reason="Too Many Requests")
+            pool = MagicMock()
+            pool.request.return_value = r429
+            client = UrllibClient(_http=pool, circuit_breaker=cb)
 
-        # First request: 3 attempts (retries=2 + initial), every
-        # attempt returns 429, cumulative sleep is 1+2 = 3s under
-        # the default schedule. Each 429 records a failure → circuit
-        # opens at 2nd record. total_timeout=60 leaves plenty of
-        # headroom for the 3s of total backoff.
-        with pytest.raises(HttpError):
-            client.get_json(
-                "https://rate-limited.example.com/x",
-                total_timeout=60, retries=2,
+            # First request: 3 attempts (retries=2 + initial), every
+            # attempt returns 429, cumulative sleep is 1+2 = 3s under
+            # the default schedule. Each 429 records a failure → circuit
+            # opens at 2nd record. total_timeout=60 leaves plenty of
+            # headroom for the 3s of total backoff.
+            with pytest.raises(HttpError):
+                client.get_json(
+                    "https://rate-limited.example.com/x",
+                    total_timeout=60, retries=2,
+                )
+
+            is_open, _ = cb.is_open("rate-limited.example.com", 443)
+            assert is_open is True
+
+            # Second request to the same host: must NOT hit the pool.
+            pool.request.reset_mock()
+            with pytest.raises(HttpError, match="Circuit open"):
+                client.get_json(
+                    "https://rate-limited.example.com/y",
+                    total_timeout=10, retries=2,
+                )
+            assert pool.request.call_count == 0, (
+                "Circuit-open path must not invoke the urllib3 pool"
             )
-
-        is_open, _ = cb.is_open("rate-limited.example.com", 443)
-        assert is_open is True
-
-        # Second request to the same host: must NOT hit the pool.
-        pool.request.reset_mock()
-        with pytest.raises(HttpError, match="Circuit open"):
-            client.get_json(
-                "https://rate-limited.example.com/y",
-                total_timeout=10, retries=2,
-            )
-        assert pool.request.call_count == 0, (
-            "Circuit-open path must not invoke the urllib3 pool"
-        )
 
     def test_other_host_still_succeeds_when_one_host_open(self):
         """Per-host isolation through the wiring path."""
@@ -1419,8 +1427,7 @@ class TestUrllibClientCircuitBreakerWiring:
         cb.record_failure("flaky.example.com", 443)
         assert cb.is_open("flaky.example.com", 443)[0] is False
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_breaker_state_persists_across_default_clients(self, _mock_sleep):
+    def test_breaker_state_persists_across_default_clients(self):
         """The fix for the ~90s-per-sample stress-sweep regression:
         when callers don't pass an explicit ``circuit_breaker``,
         the module-level singleton is used. State persists across
@@ -1428,75 +1435,82 @@ class TestUrllibClientCircuitBreakerWiring:
         callers don't have to re-trip the breaker on every fresh
         client (each ~90s of retry budget burned per sample on a
         rate-limited host)."""
-        # Two CONSECUTIVE clients, each constructed with no explicit
-        # breaker. They should share the singleton.
-        r429 = _stub_response(b"", status=429)
-        pool1 = MagicMock()
-        pool1.request.return_value = r429
-        client1 = UrllibClient(_http=pool1)
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            # Two CONSECUTIVE clients, each constructed with no explicit
+            # breaker. They should share the singleton.
+            r429 = _stub_response(b"", status=429)
+            pool1 = MagicMock()
+            pool1.request.return_value = r429
+            client1 = UrllibClient(_http=pool1)
 
-        # Trip the breaker via client1.
-        with pytest.raises(HttpError):
-            client1.get_json(
-                "https://shared-host.example.com/x",
-                total_timeout=60, retries=2,
-            )
+            # Trip the breaker via client1.
+            with pytest.raises(HttpError):
+                client1.get_json(
+                    "https://shared-host.example.com/x",
+                    total_timeout=60, retries=2,
+                )
 
-        # Now build a fresh client. It MUST see the open circuit.
-        pool2 = MagicMock()
-        pool2.request.return_value = r429
-        client2 = UrllibClient(_http=pool2)
+            # Now build a fresh client. It MUST see the open circuit.
+            pool2 = MagicMock()
+            pool2.request.return_value = r429
+            client2 = UrllibClient(_http=pool2)
 
-        with pytest.raises(HttpError, match="Circuit open"):
-            client2.get_json(
-                "https://shared-host.example.com/y",
-                total_timeout=10, retries=2,
-            )
-        # Confirm pool2 was never invoked — the second client benefits
-        # from the first client's discovery without redoing the work.
-        assert pool2.request.call_count == 0
+            with pytest.raises(HttpError, match="Circuit open"):
+                client2.get_json(
+                    "https://shared-host.example.com/y",
+                    total_timeout=10, retries=2,
+                )
+            # Confirm pool2 was never invoked — the second client benefits
+            # from the first client's discovery without redoing the work.
+            assert pool2.request.call_count == 0
 
-@patch("core.http.urllib_backend.time.sleep")
-def test_circuit_break_attribute_on_pre_request_check(_mock_sleep):
+def test_circuit_break_attribute_on_pre_request_check():
     """When the breaker is already open, the pre-request check
     raises HttpError with circuit_break=True so downstream log
     helpers can demote the noise to DEBUG."""
-    cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
-    cb.record_failure("noisy.example.com", 443)
-    cb.record_failure("noisy.example.com", 443)
+    with (
+        mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+    ):
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("noisy.example.com", 443)
+        cb.record_failure("noisy.example.com", 443)
 
-    pool = MagicMock()
-    client = UrllibClient(_http=pool, circuit_breaker=cb)
-    with pytest.raises(HttpError) as exc_info:
-        client.get_json("https://noisy.example.com/pkg")
-    assert exc_info.value.circuit_break is True
-    assert exc_info.value.status is None
-    assert pool.request.call_count == 0
+        pool = MagicMock()
+        client = UrllibClient(_http=pool, circuit_breaker=cb)
+        with pytest.raises(HttpError) as exc_info:
+            client.get_json("https://noisy.example.com/pkg")
+        assert exc_info.value.circuit_break is True
+        assert exc_info.value.status is None
+        assert pool.request.call_count == 0
 
-@patch("core.http.urllib_backend.time.sleep")
-def test_circuit_break_attribute_belongs_to_next_request(_mock_sleep):
+def test_circuit_break_attribute_belongs_to_next_request():
     """A request whose own failures open the breaker completes its
     retry schedule and raises the ordinary exhausted-retries error —
     the ``circuit_break=True`` marker belongs to the NEXT request's
     entry fail-fast, never to a mid-schedule abort."""
-    cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
-    r429 = _stub_response(b"", status=429, reason="Too Many")
-    pool = MagicMock()
-    pool.request.return_value = r429
-    client = UrllibClient(_http=pool, circuit_breaker=cb)
-    with pytest.raises(HttpError) as exc_info:
-        client.get_json(
-            "https://tripped.example.com/x",
-            total_timeout=60, retries=2,
-        )
-    assert not exc_info.value.circuit_break
+    with (
+        mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+    ):
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        r429 = _stub_response(b"", status=429, reason="Too Many")
+        pool = MagicMock()
+        pool.request.return_value = r429
+        client = UrllibClient(_http=pool, circuit_breaker=cb)
+        with pytest.raises(HttpError) as exc_info:
+            client.get_json(
+                "https://tripped.example.com/x",
+                total_timeout=60, retries=2,
+            )
+        assert not exc_info.value.circuit_break
 
-    with pytest.raises(HttpError) as exc_next:
-        client.get_json(
-            "https://tripped.example.com/y",
-            total_timeout=60, retries=2,
-        )
-    assert exc_next.value.circuit_break is True
+        with pytest.raises(HttpError) as exc_next:
+            client.get_json(
+                "https://tripped.example.com/y",
+                total_timeout=60, retries=2,
+            )
+        assert exc_next.value.circuit_break is True
 
 
 class TestOperatorProxyEnv:
@@ -1834,55 +1848,57 @@ class TestBreakerPerRequestGranularity:
     pinned: schedule reachable for status-driven failures AND hard-down
     hosts still bounded to one request's budget + cooldown."""
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_in_flight_request_completes_schedule_despite_open_breaker(
-        self, _mock_sleep,
-    ):
+    def test_in_flight_request_completes_schedule_despite_open_breaker(self):
         """Default threshold (2) opens the circuit on the 2nd 429 of a
         single request — the in-flight request must still fire every
         remaining schedule slot instead of being capped at one retry."""
-        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
-        r429 = _stub_response(b"", status=429, reason="Too Many Requests")
-        pool = MagicMock()
-        pool.request.return_value = r429
-        client = UrllibClient(_http=pool, circuit_breaker=cb)
-        with pytest.raises(HttpError, match="Exhausted retries"):
-            client.get_json(
-                "https://rate-limited.example.com/x",
-                total_timeout=600, retries=4,
-            )
-        # All 5 attempts (initial + 4 retries) reached the pool.
-        assert pool.request.call_count == 5
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as _mock_sleep,
+        ):
+            cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+            r429 = _stub_response(b"", status=429, reason="Too Many Requests")
+            pool = MagicMock()
+            pool.request.return_value = r429
+            client = UrllibClient(_http=pool, circuit_breaker=cb)
+            with pytest.raises(HttpError, match="Exhausted retries"):
+                client.get_json(
+                    "https://rate-limited.example.com/x",
+                    total_timeout=600, retries=4,
+                )
+            # All 5 attempts (initial + 4 retries) reached the pool.
+            assert pool.request.call_count == 5
 
-        # ...and the breaker still protects the NEXT request.
-        assert cb.is_open("rate-limited.example.com", 443)[0] is True
-        pool.request.reset_mock()
-        with pytest.raises(HttpError, match="Circuit open"):
-            client.get_json("https://rate-limited.example.com/y")
-        assert pool.request.call_count == 0
+            # ...and the breaker still protects the NEXT request.
+            assert cb.is_open("rate-limited.example.com", 443)[0] is True
+            pool.request.reset_mock()
+            with pytest.raises(HttpError, match="Circuit open"):
+                client.get_json("https://rate-limited.example.com/y")
+            assert pool.request.call_count == 0
 
-    @patch("core.http.urllib_backend.time.sleep")
-    def test_retry_after_honoured_beyond_first_retry(self, mock_sleep):
+    def test_retry_after_honoured_beyond_first_retry(self):
         """Retry-After steers EVERY slot's sleep — pre-fix the breaker
         aborted after the second 429, so a host asking for a pause was
         blocklisted instead of retried per its own instruction; a
         mid-schedule success must also close the circuit again."""
-        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
-        r429 = _stub_response(
-            b"", status=429, reason="Too Many Requests",
-            extra_headers={"Retry-After": "7"},
-        )
-        ok = _stub_response(b'{"ok": 1}')
-        pool = MagicMock()
-        pool.request.side_effect = [r429, r429, r429, ok]
-        client = UrllibClient(_http=pool, circuit_breaker=cb)
-        result = client.get_json(
-            "https://flaky.example.com/x", total_timeout=600, retries=3,
-        )
-        assert result == {"ok": 1}
-        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
-        assert sleeps == [7, 7, 7]
-        assert cb.is_open("flaky.example.com", 443)[0] is False
+        with (
+            mock_module_attribute(_mock_owner('core.http.urllib_backend'), 'time', 'sleep') as mock_sleep,
+        ):
+            cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+            r429 = _stub_response(
+                b"", status=429, reason="Too Many Requests",
+                extra_headers={"Retry-After": "7"},
+            )
+            ok = _stub_response(b'{"ok": 1}')
+            pool = MagicMock()
+            pool.request.side_effect = [r429, r429, r429, ok]
+            client = UrllibClient(_http=pool, circuit_breaker=cb)
+            result = client.get_json(
+                "https://flaky.example.com/x", total_timeout=600, retries=3,
+            )
+            assert result == {"ok": 1}
+            sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+            assert sleeps == [7, 7, 7]
+            assert cb.is_open("flaky.example.com", 443)[0] is False
 
 
 class TestStreamErrorBodyReadTranslation:

@@ -17,23 +17,15 @@ from core.testing.module_bindings import patch_module_attribute
 _REPO = Path(__file__).resolve().parents[3]
 _SPECS = [('core/llm/tests/test_bedrock_detection.py', 'core.llm.detection'),
  ('core/startup/tests/test_check_tools.py', 'core.startup.init'),
- ('packages/binary_analysis/tests/test_radare2_understand.py',
-  'packages.binary_analysis.radare2_understand'),
  ('packages/codeql/tests/test_database_manager.py', 'packages.codeql.database_manager'),
- ('packages/cve_diff/tests/unit/test_disk_budget.py', 'cve_diff.infra.disk_budget'),
  ('packages/cve_env/tests/unit/test_migration_resilience.py', 'core.container.compose'),
- ('packages/exploit_feasibility/tests/test_mitigation_facts.py',
-  'packages.exploit_feasibility.api'),
+ ('packages/exploit_feasibility/tests/test_mitigation_facts.py', 'packages.exploit_feasibility.api'),
  ('packages/fuzzing/tests/test_capability.py', 'packages.fuzzing.capability'),
- ('packages/fuzzing/tests/test_cargofuzz_orchestration.py',
-  'packages.fuzzing.target_detector'),
- ('packages/fuzzing/tests/test_cargofuzz_runner.py',
-  'packages.fuzzing.cargofuzz_runner'),
- ('packages/fuzzing/tests/test_jazzer_orchestration.py',
-  'packages.fuzzing.target_detector'),
+ ('packages/fuzzing/tests/test_cargofuzz_orchestration.py', 'packages.fuzzing.target_detector'),
+ ('packages/fuzzing/tests/test_cargofuzz_runner.py', 'packages.fuzzing.cargofuzz_runner'),
+ ('packages/fuzzing/tests/test_jazzer_orchestration.py', 'packages.fuzzing.target_detector'),
  ('packages/fuzzing/tests/test_target_detector.py', 'packages.fuzzing.target_detector'),
- ('packages/fuzzing/tests/test_capability.py',
-  'packages.binary_analysis.radare2_understand')]
+ ('packages/fuzzing/tests/test_capability.py', 'packages.binary_analysis.radare2_understand')]
 
 
 @lru_cache(maxsize=None)
