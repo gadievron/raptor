@@ -50,13 +50,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import platform
 import re
-import shutil
+import stat
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -77,6 +77,7 @@ sys.path.insert(0, str(REPO))
 from core.config import pin_raptor_dir_in_environ  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
 from core.run.scratch import scratch_dir  # noqa: E402
+from core.atomic_fs import rmtree_hardened  # noqa: E402
 
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
@@ -158,30 +159,39 @@ def _tag_refusal_row(tag: str) -> dict:
     }
 
 
-def _contained_cleanup(workdir: Path, archive: Path, tree: Path) -> None:
-    """Delete one tag's artifacts, refusing anything that resolves
-    outside *workdir*.
+def _contained_cleanup(workdir: Path, archive: Path, tree: Path) -> bool:
+    """Remove owned direct children without following their final links.
 
-    Belt-and-braces beneath the ``_TAG_RE`` derivation gate: even a
-    validated-then-tampered path (a tree swapped for a symlink out of
-    the workdir mid-run) must never aim ``unlink``/``rmtree`` outside
-    the matrix's own scratch. Resolve-and-contain, then delete the
-    RESOLVED path only when it sits strictly inside the workdir.
+    Attempt both artifacts independently. Refuse nested/outside paths;
+    removal failures stop the matrix before another large download.
     """
-    root = workdir.resolve()
-    for path, is_tree in ((archive, False), (tree, True)):
+    root = Path(os.path.abspath(workdir))
+    clean = True
+    interrupted = None
+    for path in (archive, tree):
+        node = Path(os.path.abspath(path))
+        if node.parent != root:
+            print("refusing cleanup outside the workdir: " + _sft(str(path)), flush=True)
+            clean = False
+            continue
         try:
-            resolved = path.resolve()
-        except OSError:
-            continue
-        if root not in resolved.parents:
-            print("refusing cleanup outside the workdir: "
-                  f"{_sft(str(path))}", flush=True)
-            continue
-        if is_tree:
-            shutil.rmtree(resolved, ignore_errors=True)
-        else:
-            resolved.unlink(missing_ok=True)
+            try:
+                info = node.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                if not rmtree_hardened(node):
+                    raise OSError(f"could not remove matrix artifact {node}")
+            else:
+                node.unlink(missing_ok=True)
+        except BaseException as exc:
+            clean = False
+            logging.getLogger(__name__).warning("Matrix artifact cleanup failed: %s", node, exc_info=True)
+            if interrupted is None and not isinstance(exc, Exception):
+                interrupted = exc
+    if interrupted is not None:
+        raise interrupted
+    return clean
 
 
 def _newest_tags(count: int) -> list[str]:
@@ -322,80 +332,84 @@ def run_e2e(joern_dir: str) -> dict:
     t0 = time.monotonic()
 
     # Scratch via core.run.scratch: removed when the stack closes in
-    # the finally below, and the joern-matrix- prefix is listed in the
+    # the owning stack exits, and the joern-matrix- prefix is listed in the
     # tmp reaper's static tuple, so a SIGKILLed matrix run strands
     # nothing past the age floor.
-    _scratch = contextlib.ExitStack()
-    fixture_dir = _scratch.enter_context(scratch_dir("joern-matrix-src-"))
-    cpg_dir = _scratch.enter_context(scratch_dir("joern-matrix-cpg-"))
-    srv = None
-    try:
-        (fixture_dir / "vuln.c").write_text(_FIXTURE_C, encoding="utf-8")
+    with contextlib.ExitStack() as _scratch:
+        fixture_dir = _scratch.enter_context(scratch_dir("joern-matrix-src-"))
+        cpg_dir = _scratch.enter_context(scratch_dir("joern-matrix-cpg-"))
+        srv = None
+        failed = False
+        try:
+            (fixture_dir / "vuln.c").write_text(_FIXTURE_C, encoding="utf-8")
 
-        cpg = build_cpg(fixture_dir, output_dir=cpg_dir)
-        if cpg.build_failed or not cpg.exists():
-            raise RuntimeError("Joern parser did not produce a usable graph")
-        results["parse"] = "ok"
+            cpg = build_cpg(fixture_dir, output_dir=cpg_dir)
+            if cpg.build_failed or not cpg.exists():
+                raise RuntimeError("Joern parser did not produce a usable graph")
+            results["parse"] = "ok"
 
-        srv = JoernServer()
-        if not srv.bind_graph(cpg):
-            raise RuntimeError("Joern graph worker failed to bind")
-        results["boot"] = f"ok({time.monotonic() - t0:.0f}s)"
+            srv = JoernServer()
+            if not srv.bind_graph(cpg):
+                raise RuntimeError("Joern graph worker failed to bind")
+            results["boot"] = f"ok({time.monotonic() - t0:.0f}s)"
 
-        results["import"] = "ok"
+            results["import"] = "ok"
 
-        r = srv.query("cpg.method.name.l")
-        body = r.raw_output or ""
-        results["query"] = (
-            "ok" if ("process" in body and "main" in body) else "FAIL"
-        )
-
-        intra = srv.run_taint_query("process", "strcpy")
-        results["taint_intra"] = f"ok({len(intra)})" if intra else "FAIL(0)"
-
-        inter = srv.run_taint_query("main", "strcpy")
-        inter_ok = any(
-            getattr(f, "is_inter_procedural", False) for f in inter
-        )
-        results["taint_inter"] = f"ok({len(inter)})" if inter_ok else "FAIL"
-
-        sweep = srv.run_tiered_sweep(lang_profile=C_CPP)
-        if sweep.errors:
-            results["sweep"] = "FAIL:" + sweep.errors[0][:80]
-        elif not sweep.flows:
-            results["sweep"] = "FAIL(0 flows)"
-        else:
-            results["sweep"] = f"ok({len(sweep.flows)})"
-
-        # Learned flow semantics: a kill row on the pass-through
-        # function must suppress the inter-procedural main→strcpy
-        # flow that the baseline finds. Exercises the FullNameSemantics
-        # / DefaultSemantics().after API this joern release ships —
-        # the exact drift surface this matrix exists to catch.
-        baseline = srv.run_taint_queries_batch([("main", "strcpy")])
-        srv.set_flow_semantics(["process"])
-        killed = srv.run_taint_queries_batch([("main", "strcpy")])
-        srv.set_flow_semantics([])
-        if not baseline:
-            results["semantics_kill"] = "FAIL(0 baseline flows)"
-        elif killed:
-            results["semantics_kill"] = (
-                f"FAIL({len(killed)} flows survived kill)"
+            r = srv.query("cpg.method.name.l")
+            body = r.raw_output or ""
+            results["query"] = (
+                "ok" if ("process" in body and "main" in body) else "FAIL"
             )
-        else:
-            results["semantics_kill"] = f"ok(0 vs {len(baseline)})"
-    except Exception as e:  # noqa: BLE001 — report, don't crash the matrix
-        results["exception"] = f"{type(e).__name__}: {e}"[:200]
-    finally:
-        if srv is not None:
-            try:
-                srv.stop()
-            except (OSError, subprocess.SubprocessError):
-                # Best-effort teardown: stop() can leak OSError from
-                # signalling and TimeoutExpired from the post-SIGKILL
-                # wait; a wiring bug must still crash the matrix.
-                pass
-        _scratch.close()
+
+            intra = srv.run_taint_query("process", "strcpy")
+            results["taint_intra"] = f"ok({len(intra)})" if intra else "FAIL(0)"
+
+            inter = srv.run_taint_query("main", "strcpy")
+            inter_ok = any(
+                getattr(f, "is_inter_procedural", False) for f in inter
+            )
+            results["taint_inter"] = f"ok({len(inter)})" if inter_ok else "FAIL"
+
+            sweep = srv.run_tiered_sweep(lang_profile=C_CPP)
+            if sweep.errors:
+                results["sweep"] = "FAIL:" + sweep.errors[0][:80]
+            elif not sweep.flows:
+                results["sweep"] = "FAIL(0 flows)"
+            else:
+                results["sweep"] = f"ok({len(sweep.flows)})"
+
+            # Learned flow semantics: a kill row on the pass-through
+            # function must suppress the inter-procedural main→strcpy
+            # flow that the baseline finds. Exercises the FullNameSemantics
+            # / DefaultSemantics().after API this joern release ships —
+            # the exact drift surface this matrix exists to catch.
+            baseline = srv.run_taint_queries_batch([("main", "strcpy")])
+            srv.set_flow_semantics(["process"])
+            killed = srv.run_taint_queries_batch([("main", "strcpy")])
+            srv.set_flow_semantics([])
+            if not baseline:
+                results["semantics_kill"] = "FAIL(0 baseline flows)"
+            elif killed:
+                results["semantics_kill"] = (
+                    f"FAIL({len(killed)} flows survived kill)"
+                )
+            else:
+                results["semantics_kill"] = f"ok(0 vs {len(baseline)})"
+        except Exception as e:  # noqa: BLE001 — report, don't crash the matrix
+            results["exception"] = f"{type(e).__name__}: {e}"[:200]
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if srv is not None:
+                try:
+                    srv.stop()
+                except BaseException as exc:
+                    if not failed and not isinstance(exc, (OSError, subprocess.SubprocessError)):
+                        raise
+                    logging.getLogger(__name__).warning("Matrix server teardown failed", exc_info=True)
+                    if not failed:
+                        results["shutdown"] = "FAIL: server teardown failed"
 
     results["total_s"] = round(time.monotonic() - t0)
     results["pass"] = "exception" not in results and not any(
@@ -482,7 +496,7 @@ def main() -> int:
     ap.add_argument("--joern-dir", type=Path, default=None,
                     help="test one already-extracted joern-cli dir; no download")
     ap.add_argument("--workdir", type=Path, default=None,
-                    help="scratch dir for downloads (default: mkdtemp)")
+                    help="parent for a private run workspace (default: system temp)")
     ap.add_argument("--keep", action="store_true",
                     help="keep downloaded archives and extracted trees")
     ap.add_argument("--update-pins", action="store_true",
@@ -511,76 +525,72 @@ def main() -> int:
         print(f"resolving newest {args.versions} release tags...", flush=True)
         tags = _newest_tags(args.versions)
 
-    # Hand-rolled (not scratch_dir): ownership is conditional — the dir
-    # survives on --keep or an operator-supplied --workdir. The
-    # joern-matrix- prefix is listed in the tmp reaper's static tuple,
-    # so an auto-created dir stranded by SIGKILL (or forgotten --keep
-    # output) is reclaimed past the age floor.
-    workdir = args.workdir or Path(tempfile.mkdtemp(prefix="joern-matrix-"))
-    workdir.mkdir(parents=True, exist_ok=True)
+    with scratch_dir("joern-matrix-", dir=args.workdir,
+                     keep=args.keep, keepalive=True) as workdir:
+        if args.keep:
+            print("retaining matrix artifacts in " + _sft(str(workdir)), flush=True)
 
-    pins = _load_pins()
-    if args.require_pinned and not pins:
-        print(
-            "WARNING: --require-pinned with an empty pins file — every "
-            "tag will be refused. Record pins with --update-pins after "
-            "verifying a download out-of-band.", flush=True,
-        )
-    rows: list[tuple[str, dict]] = []
-    for tag in tags:
-        # Shape gate BEFORE any path arithmetic (see _TAG_RE): a
-        # hostile tag must never become an archive/tree path — the
-        # per-tag cleanup below fires on every branch, refusals
-        # included.
-        if not _TAG_RE.fullmatch(tag):
-            rows.append((tag, _tag_refusal_row(tag)))
-            print(_format_row(tag, rows[-1][1]), flush=True)
-            continue
-        archive = workdir / f"{tag}.zip"
-        tree = workdir / tag
-        try:
-            if args.require_pinned and not _tag_has_pin(pins, tag):
-                rows.append((tag, {
-                    "pass": False,
-                    "exception": "unpinned release refused "
-                                 "(--require-pinned)",
-                }))
+        pins = _load_pins()
+        if args.require_pinned and not pins:
+            print(
+                "WARNING: --require-pinned with an empty pins file — every "
+                "tag will be refused. Record pins with --update-pins after "
+                "verifying a download out-of-band.", flush=True,
+            )
+        rows: list[tuple[str, dict]] = []
+        for tag in tags:
+            # Shape gate BEFORE any path arithmetic (see _TAG_RE): a
+            # hostile tag must never become an archive/tree path — the
+            # refusal happens before allocating any tag artifacts.
+            if not _TAG_RE.fullmatch(tag):
+                rows.append((tag, _tag_refusal_row(tag)))
                 print(_format_row(tag, rows[-1][1]), flush=True)
                 continue
-            print(_progress_line(tag, "downloading..."), flush=True)
-            asset_name, digest = _download(tag, archive)
-            pinned = _verify_pin(pins, tag, asset_name, digest)
-            if args.require_pinned and not pinned:
-                # The tag had SOME pin (pre-download gate passed) but
-                # the asset actually served isn't the pinned one.
-                msg = (
-                    f"asset {asset_name} for {tag} has no pin "
-                    f"(--require-pinned); sha256={digest}"
-                )
-                raise RuntimeError(msg)
-            if not pinned:
-                if args.update_pins:
-                    pins[_pin_key(tag, asset_name)] = digest
-                    _save_pins(pins)
-                    print(_pin_line(tag, asset_name, digest),
-                          flush=True)
-                else:
-                    print(_unpinned_warning(tag, asset_name, digest),
-                          flush=True)
-            joern_dir = _extract(archive, tree)
-            print(_progress_line(tag, "running E2E..."), flush=True)
-            result = _run_e2e_subprocess(joern_dir)
-        except Exception as e:  # noqa: BLE001 — one bad tag shouldn't stop the matrix
-            result = {"pass": False,
-                      "exception": f"{type(e).__name__}: {e}"[:200]}
-        finally:
-            if not args.keep:
-                _contained_cleanup(workdir, archive, tree)
-        rows.append((tag, result))
-        print(_format_row(tag, result), flush=True)
-
-    if not args.keep and args.workdir is None:
-        shutil.rmtree(workdir, ignore_errors=True)
+            archive = workdir / f"{tag}.zip"
+            tree = workdir / tag
+            try:
+                if args.require_pinned and not _tag_has_pin(pins, tag):
+                    rows.append((tag, {
+                        "pass": False,
+                        "exception": "unpinned release refused "
+                                     "(--require-pinned)",
+                    }))
+                    print(_format_row(tag, rows[-1][1]), flush=True)
+                    continue
+                print(_progress_line(tag, "downloading..."), flush=True)
+                asset_name, digest = _download(tag, archive)
+                pinned = _verify_pin(pins, tag, asset_name, digest)
+                if args.require_pinned and not pinned:
+                    # The tag had SOME pin (pre-download gate passed) but
+                    # the asset actually served isn't the pinned one.
+                    msg = (
+                        f"asset {asset_name} for {tag} has no pin "
+                        f"(--require-pinned); sha256={digest}"
+                    )
+                    raise RuntimeError(msg)
+                if not pinned:
+                    if args.update_pins:
+                        pins[_pin_key(tag, asset_name)] = digest
+                        _save_pins(pins)
+                        print(_pin_line(tag, asset_name, digest),
+                              flush=True)
+                    else:
+                        print(_unpinned_warning(tag, asset_name, digest),
+                              flush=True)
+                joern_dir = _extract(archive, tree)
+                print(_progress_line(tag, "running E2E..."), flush=True)
+                result = _run_e2e_subprocess(joern_dir)
+            except Exception as e:  # noqa: BLE001 — one bad tag shouldn't stop the matrix
+                result = {"pass": False,
+                          "exception": f"{type(e).__name__}: {e}"[:200]}
+            clean = args.keep or _contained_cleanup(workdir, archive, tree)
+            if not clean:
+                result["pass"] = False
+                result["cleanup"] = "FAIL: release artifacts retained; stopping downloads"
+            rows.append((tag, result))
+            print(_format_row(tag, result), flush=True)
+            if not clean:
+                break
 
     print("\n=== joern compatibility matrix ===")
     for tag, result in rows:
