@@ -121,3 +121,98 @@ class TestNegatives:
             }
         """)
         assert sorted(r["line"] for r in results) == [3, 4]
+
+
+@pytest.mark.parametrize("buffer", ["password", "ctx->password", "item.password"], ids=["local", "pointer-field", "value-field"])
+def test_clear_requests_respect_argument_roles_and_paths(tmp_path, buffer):
+    cases = [
+        ("", True),
+        ("memset(B, 0, 32);", False),
+        ("memset(B, 65, 32);", True),
+        ("memset(B, 0, 0);", True),
+        ("memset(B, 0, 0UL);", True),
+        ("memset_explicit(B, 0, 32);", False),
+        ("memset_explicit(B, 65, 32);", True),
+        ("memset_s(B, 32, 0, 32);", False),
+        ("memset_s(B, 32, 65, 32);", True),
+        ("memset_s(B, 0, 0, 32);", True),
+        ("memset_s(B, 32, 0, 0);", True),
+        ("explicit_bzero(B, 32);", False),
+        ("explicit_bzero(B, 0);", True),
+        ("memzero_explicit(B, 32);", False),
+        ("memzero_explicit(B, 0);", True),
+        ("OPENSSL_cleanse(B, 32);", False),
+        ("OPENSSL_cleanse(B, 0);", True),
+        ("sodium_memzero(B, 32);", False),
+        ("sodium_memzero(B, 0);", True),
+        ("if (stop) explicit_bzero(B, 32);", True),
+        ("if (stop) explicit_bzero(B, 32); else explicit_bzero(B, 32);", False),
+        ("explicit_bzero(B, 32); B[0] = 65;", True),
+        ("explicit_bzero(B, 32); B[0] = 0;", False),
+        ("explicit_bzero(B, 32); B[0] = 65; explicit_bzero(B, 32);", False),
+        ("explicit_bzero(B, 32); memcpy(B, other, 32);", True),
+        ("explicit_bzero(B, 32); memcpy(B, other, 0);", False),
+        ("explicit_bzero(other, 32);", True),
+        ("B = NULL;", False),
+        ("explicit_bzero(B, 32); B = other;", True),
+    ]
+    lines=["struct vault { char *password; };"]
+    expected=set()
+    for index, (before, reports) in enumerate(cases):
+        lines += [f"void case_{index}(char *password, struct vault *ctx, struct vault item, char *other, int stop) {{",
+                  before.replace("B", buffer), f"free({buffer});", "}"]
+        if reports:
+            expected.add(len(lines)-1)
+    if buffer == "ctx->password":
+        lines += ["void rebind(struct vault *ctx, struct vault *next) {",
+                  "explicit_bzero(ctx->password, 32);", "ctx = next;",
+                  "free(ctx->password);", "}"]
+        expected.add(len(lines)-1)
+    elif buffer == "item.password":
+        lines += ["void rebind(struct vault item, struct vault next) {",
+                  "explicit_bzero(item.password, 32);", "item = next;",
+                  "free(item.password);", "}"]
+        expected.add(len(lines)-1)
+    lines += ["void clearing_release(char *password) {", "kfree_sensitive(password);", "}"]
+    rows=_run_rule(tmp_path, "\n".join(lines)+"\n")
+    actual={row["line"] for row in rows}
+    assert actual==expected, {"missing": expected-actual, "unexpected": actual-expected}
+    assert len(rows)==len(expected)
+    assert all(row["message"].startswith("Candidate:") for row in rows)
+
+
+@pytest.mark.integration
+def test_clearing_checks_share_production_invocation(tmp_path, monkeypatch):
+    from packages.coccinelle import runner
+
+    source=tmp_path / "batch.c"
+    source.write_text(
+        'void bare(char *password) { free(password); }\n'
+        'void intrinsic(char *password) { kfree_sensitive(password); }\n'
+        'void explicit_clear(char *password) { explicit_bzero(password, 32); free(password); }\n'
+        'void refill(char *password) { explicit_bzero(password, 32); password[0] = 65; free(password); }\n'
+        'void ordinary_clear(char *password) { memset(password, 0, 32); free(password); }\n'
+        'void empty_clear(char *password) { memset(password, 0, 0); free(password); }\n',
+    )
+    original=runner._confined_default_runner
+    invocations=[]
+
+    def observe(*args, **kwargs):
+        execute=original(*args, **kwargs)
+
+        def invoke(argv, **options):
+            invocations.append(tuple(argv))
+            return execute(argv, **options)
+
+        return invoke
+
+    monkeypatch.setattr(runner, "_confined_default_runner", observe)
+    results=runner.run_rules_batched(
+        source, [_RULE, _RULE.with_name("dead_memset_free.cocci")],
+        allow_scripting=True, no_includes=True, timeout=60,
+    )
+    assert set(results)=={"sensitive_data_leak", "dead_memset_free"}
+    assert all(result.returncode == 0 and not result.errors for result in results.values()), results
+    assert len(results["sensitive_data_leak"].matches)==3
+    assert len(results["dead_memset_free"].matches)==1
+    assert len(invocations)==1, invocations

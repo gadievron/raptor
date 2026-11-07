@@ -1,10 +1,10 @@
 """Fixture tests for the dead_memset_free rule.
 
-Verification-role rule (fires mint confirmed CWE-14 verdicts):
+Detection-role rule (requires sensitivity and compiler evidence):
 a memset immediately before free is a dead store the compiler may
 elide, silently stripping a secret-clearing write. The positive
-pins the clear-then-free pair; the negative pins an intervening
-read of the buffer, which keeps the store observable.
+pins the clear-then-free pair; the negative pins the intervening-read exclusion; it does not prove that
+the compiler retained an erasure.
 """
 
 from __future__ import annotations
@@ -56,3 +56,9 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("length", ["0", "0UL", "0x0"])
+def test_zero_byte_clear_is_not_an_erasure_optimization_candidate(tmp_path, length):
+    rows=_run_rule(tmp_path, f"void f(void *buf) {{ memset(buf, 0, {length}); free(buf); }}")
+    assert rows == []

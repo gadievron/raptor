@@ -311,6 +311,18 @@ They distinguish protection at the dereference from a missing later unlock,
 which is a separate balance issue. Simple nested sections are recognized;
 complex nesting, wrappers and pointer use after unlocking still require review.
 
+The sensitive-buffer release check uses local variable and direct field names
+as hints for review. It recognizes zero-valued clearing requests with their
+standard argument roles, including `memset_s` and `memset_explicit`. Known
+zero-length calls and nonzero fills do not count as clearing requests.
+Conditional wipes and writes or rebinding after a wipe can retain a candidate;
+recognized re-clearing keeps the release quiet. `kfree_sensitive` clears its
+allocation and is excluded from the uncleared-release check.
+A clearing request does not prove that it covers every secret byte or survives
+optimization. The separate ordinary-`memset`-before-`free` check reports a
+compiler-removal candidate. Review sensitivity, ranges, aliases and compiler
+behavior before treating either signal as a security defect.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
