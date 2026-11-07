@@ -67,6 +67,7 @@ from .invariant_outcomes import aggregate_verdicts
 
 from .invariant_expression import (
     IDENTIFIER as _IDENT,
+    MAX_TEXT_CHARS as _MAX_INVARIANT_TEXT,
     ParseError as _ParseError,
     parse_expr as _parse_expr,
     expression_vars as _expr_vars,
@@ -161,33 +162,63 @@ class InvariantPreservationResult:
 # ── expression parsing ──────────────────────────────────────────────
 
 
+def _invariant_candidate_segments(text):
+    """Keep multiline expression context attached to its comparison.
+
+    Newlines can separate prose candidates, but C continuation operators
+    and wrappers cannot be discarded as if they ended a predicate.
+    """
+    for statement in text.split(";"):
+        if len(statement) > _MAX_INVARIANT_TEXT or any(token in statement for token in ("&&", "||", "?")):
+            continue
+        lines = statement.splitlines()
+        significant = [line.strip() for line in lines if line.strip()]
+        if any(left[-1] in "([!~.=<>+*/%&|^-," or right[0] in "()[]!~.=<>+*/%&|^-,"
+               for left, right in zip(significant, significant[1:])):
+            continue
+        yield from lines
+
+
 def extract_invariants(*texts: str) -> list[str]:
-    """Extract candidate invariants (linear comparisons that mention at
-    least one identifier) from hypothesis / counter / rationale text.
-    Returns normalised ``lhs OP rhs`` strings, deduplicated in order."""
+    """Extract complete supported comparisons from bounded prose segments.
+
+    A semicolon/newline segment may contribute one comparison. Compound
+    predicates, external expression wrappers, and partial literal/identifier
+    tokens decline rather than changing the question sent to the solver.
+    Returns normalized strings, deduplicated in discovery order.
+    """
     seen: set[str] = set()
     out: list[str] = []
     for text in texts:
         if not text:
             continue
-        for m in _OP_RE.finditer(text):
-            op = m.group(1)
-            # Sides never cross a line/statement boundary.
-            left = text[max(0, m.start() - _SIDE_WINDOW):m.start()]
-            left = re.split(r"[;\n]", left)[-1]
-            right = text[m.end():m.end() + _SIDE_WINDOW]
-            right = re.split(r"[;\n]", right)[0]
+        for segment in _invariant_candidate_segments(text):
+            comparisons = _OP_RE.finditer(segment)
+            m = next(comparisons, None)
+            if m is None or next(comparisons, None) is not None:
+                continue
+            left_start = max(0, m.start() - _SIDE_WINDOW)
+            left = segment[left_start:m.start()]
+            right = segment[m.end():m.end() + _SIDE_WINDOW]
             lm = _LHS_RE.search(left)
             rm = _RHS_RE.search(right)
             if not lm or not rm:
                 continue
             lhs_raw, rhs_raw = lm.group(1), rm.group(1)
-            # Prose matching must not extract the supported tail of a cast,
-            # unary expression or unsupported surrounding arithmetic.
-            before = left[:lm.start(1)].rstrip()
-            after = right[rm.end(1):].lstrip()
-            if ((before and before[-1] in ")+*/%&|^~!.><-")
-                    or (after and after[0] in "([+*/%&|^><-")):
+            start, end = left_start + lm.start(1), m.end() + rm.end(1)
+            # The bounded matching window must not turn a long source token
+            # or an unsupported literal suffix into a different identifier
+            # or integer. Inspect actual neighbors outside that window too.
+            if ((start and (segment[start - 1].isalnum() or segment[start - 1] == "_"))
+                    or (end < len(segment) and (segment[end].isalnum() or segment[end] == "_"))):
+                continue
+            before, after = segment[:start].rstrip(), segment[end:].lstrip()
+            if ((before and before[-1] in "()[]+*/%&|^~!.><-=,?")
+                    or (after and after[0] in "()[]+*/%&|^><-=!?:,")):
+                continue
+            numeric_tail = re.search(r"(?<![\w.])[0-9]+$", rhs_raw) is not None
+            if ((after.startswith(".") and (numeric_tail or re.match(r"\.\s*\w", after)))
+                    or (end < len(segment) and segment[end] == "'" and numeric_tail)):
                 continue
             try:
                 lhs = _parse_expr(lhs_raw)
@@ -198,7 +229,7 @@ def extract_invariants(*texts: str) -> list[str]:
             if not variables:
                 continue
             norm = re.sub(
-                r"\s+", " ", f"{lhs_raw.strip()} {op} {rhs_raw.strip()}",
+                r"\s+", " ", f"{lhs_raw.strip()} {m.group(1)} {rhs_raw.strip()}",
             )
             if norm not in seen:
                 seen.add(norm)
