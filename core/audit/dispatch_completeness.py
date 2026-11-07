@@ -218,12 +218,20 @@ _IF_ELIF_STR_RE = re.compile(
 )
 
 
+_IF_ELIF_STR_IMPL = _IF_ELIF_STR_RE
+_DISPATCH_LINES_IMPL = split_lines
+
 def _extract_if_elif_tables_from_source(
     source: str,
     file: str,
 ) -> list[DispatchTable]:
     """Find if/elif chains comparing a variable to string literals."""
     tables: list[DispatchTable] = []
+    native_lines = type(source) is str and split_lines is _DISPATCH_LINES_IMPL
+    # Every default-pattern match includes this exact literal. Unknown
+    # line providers or patterns retain their full scan operations.
+    if native_lines and _IF_ELIF_STR_RE is _IF_ELIF_STR_IMPL and "if" not in source:
+        return tables
     lines = split_lines(source)
     i = 0
     while i < len(lines):
@@ -232,6 +240,8 @@ def _extract_if_elif_tables_from_source(
             var_name = m.group(1)
             keys: set[str] = {m.group(2) or m.group(3)}
             start_line = i + 1  # 1-indexed
+            # The native head line is immutable throughout this body scan.
+            head_indent = len(lines[i]) - len(lines[i].lstrip()) if native_lines else None
             j = i + 1
             while j < len(lines):
                 m2 = _IF_ELIF_STR_RE.match(lines[j])
@@ -246,8 +256,9 @@ def _extract_if_elif_tables_from_source(
                         break
                     j += 1
                     continue
-                if_indent = len(lines[i]) - len(lines[i].lstrip())
-                cur_indent = len(lines[j]) - len(lines[j].lstrip())
+                if_indent = (head_indent if head_indent is not None
+                             else len(lines[i]) - len(lines[i].lstrip()))
+                cur_indent = len(lines[j]) - len(stripped if native_lines else lines[j].lstrip())
                 if cur_indent <= if_indent and stripped:
                     break
                 j += 1

@@ -47,6 +47,8 @@ from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
+_SORT_CONTENTS_IMPL = sorted
+
 # rglob scan budget for header-stem sibling directories (entries
 # VISITED, not matched) — bounds directory materialisation on scanned
 # targets. Wide enough for real include trees; a subtree wider than
@@ -867,8 +869,14 @@ def resolve_identifiers(
     matched: dict[str, list[StudyItem]] = {}
     lang_seen: dict[str, str] = {}
     file_items: dict[Path, list] = {}
+    # These immutable native snapshots never change during resolution.
+    # Keep foreign paths/text on their original repeated-sort path.
+    ordered_contents = (sorted(contents.items()) if sorted is _SORT_CONTENTS_IMPL and all(
+        type(path) is type(root) and type(lang) is str and type(content) is str
+        for path, (lang, content) in contents.items()
+    ) else None)
 
-    for path, (lang, content) in sorted(contents.items()):
+    for path, (lang, content) in (ordered_contents if ordered_contents is not None else sorted(contents.items())):
         rel = (
             str(path.relative_to(root))
             if path.is_relative_to(root) else str(path)
@@ -967,7 +975,7 @@ def resolve_identifiers(
         for kind, pattern_fn in _FALLBACK_PASSES:
             if orig in matched:
                 break
-            for path, (lang, content) in sorted(contents.items()):
+            for path, (lang, content) in (ordered_contents if ordered_contents is not None else sorted(contents.items())):
                 if tail not in content:
                     continue
                 pat = pattern_fn(lang, tail)

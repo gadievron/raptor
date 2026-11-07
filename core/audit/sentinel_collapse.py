@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from typing import Any
 from core.source.lines import split_lines
 
+from .run_memo import BoundedMemo
+
 logger = logging.getLogger(__name__)
 
 _SENTINEL_PY_DEF_RE = re.compile(r"\s*(?:async\s+)?def\s+(\w+)\s*\(")
@@ -564,6 +566,23 @@ def _is_inside_error_if(
     return False
 
 
+def _callee_suffix_keys(ambiguous_funcs: dict[str, _ReturnSemantics]) -> tuple[dict[str, str], bool]:
+    """Index the first key for short native names, with bounded storage.
+
+    A name without a colon matches exactly the last colon-delimited key
+    component. Store keys, retaining first-match order and live semantics.
+    An incomplete index cannot prove that an unindexed name is absent.
+    """
+    keys: dict[str, str] = {}
+    for key in ambiguous_funcs:
+        if len(keys) >= 512:
+            return keys, False
+        start = key.rfind(":") + 1
+        if len(key) - start <= 512:
+            keys.setdefault(key[start:], key)
+    return keys, True
+
+
 def _detect_cross_function_collapse(
     source_text: dict[str, str],
     call_graphs: dict[str, Any],
@@ -585,15 +604,27 @@ def _detect_cross_function_collapse(
     if not ambiguous_funcs:
         return results
 
+    # Build only when a native cross-file query needs it; same-file lookups
+    # keep precedence, and incomplete indexes retain the original scan.
+    fallback_keys: dict[str, str] | None = None
+    fallback_complete = False
+
     for caller_file, cg in call_graphs.items():
         if not caller_file.endswith(".py"):
             continue
         source = source_text.get(caller_file, "")
         if not source:
             continue
-
         calls = getattr(cg, "calls", None) or (
             cg.get("calls", []) if isinstance(cg, dict) else []
+        )
+        # Only repeated known call sequences can reuse a source scan. This
+        # memo owns one immutable snapshot and never survives the file pass.
+        coercion_queries: BoundedMemo[int | None] | None = (
+            BoundedMemo(256)
+            if (type(source) is str and len(source) >= 4096
+                and (type(calls) is list or type(calls) is tuple) and len(calls) > 1)
+            else None
         )
         for call_info in calls:
             caller_name = (
@@ -613,16 +644,34 @@ def _detect_cross_function_collapse(
             callee_key_same = f"{caller_file}:{callee_name}"
             sem = ambiguous_funcs.get(callee_key_same)  # type: ignore[assignment]
             if not sem:
-                for key, s in ambiguous_funcs.items():
-                    if key.endswith(f":{callee_name}"):
-                        sem = s
-                        break
+                native_name = (type(callee_name) is str and len(callee_name) <= 512
+                               and ":" not in callee_name)
+                if native_name and fallback_keys is None:
+                    fallback_keys, fallback_complete = _callee_suffix_keys(ambiguous_funcs)
+                resolved_key = (fallback_keys.get(callee_name)
+                                if native_name and fallback_keys is not None else None)
+                if resolved_key is not None:
+                    sem = ambiguous_funcs[resolved_key]
+                elif not (native_name and fallback_complete):
+                    for key, s in ambiguous_funcs.items():
+                        if key.endswith(f":{callee_name}"):
+                            sem = s
+                            break
             if not sem:
                 continue
 
-            coercion_line = _find_coercion_of_call(
-                source, caller_name, callee_name,
-            )
+            if (coercion_queries is not None
+                    and _find_coercion_of_call is _COERCION_LOOKUP_IMPL
+                    and type(caller_name) is str and type(callee_name) is str
+                    and len(caller_name) <= 512 and len(callee_name) <= 512):
+                coercion_line, _ = coercion_queries.get_or_compute(
+                    (caller_name, callee_name),
+                    lambda: _find_coercion_of_call(source, caller_name, callee_name),
+                )
+            else:
+                coercion_line = _find_coercion_of_call(
+                    source, caller_name, callee_name,
+                )
             if coercion_line is None:
                 continue
 
@@ -689,6 +738,10 @@ def _find_coercion_of_call(
                     return check_line_0 + 1
 
     return None
+
+
+# Replaced lookup helpers retain their own per-edge operations.
+_COERCION_LOOKUP_IMPL = _find_coercion_of_call
 
 
 # ---------------------------------------------------------------------------
