@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from packages.describe.report import (
     TargetTypeDefaults,
     DescribeReport,
@@ -254,6 +256,7 @@ class TestFormatJson:
         assert doc["target_path"] == "/home/raptor/targets/monit"
 
 
+@pytest.mark.usefixtures("describe_tool_probes")
 class TestBuildDescribeReport:
     """End-to-end — composes shape + checks + catalog preview
     + estimate against a real catalog-matching target tree."""
@@ -394,6 +397,7 @@ class TestLicenseLinesEscaped:
             assert raw not in out
 
 
+@pytest.mark.usefixtures("describe_tool_probes")
 class TestTargetDerivedLinesEscaped:
     """Target-derived strings beyond the license section: the footer's
     analysis-target path (an archive's top-level dir name is chosen by
@@ -470,6 +474,7 @@ class TestFormatJsonAsciiEncoded:
         assert "x\x9b2J" in doc["target_path"]  # value survives, escaped
 
 
+@pytest.mark.usefixtures("describe_tool_probes")
 class TestFuzzHarnessSection:
     """Shipped fuzz-harness census section — rendering, omission,
     hostile-name egress, and the read-only failure isolation."""
