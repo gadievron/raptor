@@ -51,7 +51,7 @@ def test_path_and_intrinsic_guards_agree(texts, expected, reduce):
 def test_mutation_barriers_preserve_distinct_call_values(barrier, reduce):
     texts = ["probe(Data) == 1", barrier, "probe(Data) == 2"]
     result = verb_query(texts, BV_C_INT8, reduce)
-    assert result.feasible is True
+    assert result.feasible is None
     assert result.unknown == [barrier]
     assert result.unknown_reasons[0].kind is RejectionKind.ASSIGNMENT_SHAPED
     assert list(result.anon_var_map.values()) == ["probe(Data)", "probe(Data)"]
@@ -64,7 +64,7 @@ def test_mutation_barriers_preserve_distinct_call_values(barrier, reduce):
 def test_each_mutation_window_retains_its_own_axioms(reduce):
     texts = ["strlen(Data) == 1", "Data = replacement", "strlen(Data) == 2"]
     result = verb_query(texts, BV_C_INT8, reduce)
-    assert result.feasible is True
+    assert result.feasible is None
     assert result.summary_axioms == ["summary: strlen(Data)"] * 2
     assert len(result.anon_var_map) == 2
 
