@@ -30,6 +30,7 @@ import pytest  # noqa: E402
 
 from core.sandbox import ptrace_probe  # noqa: E402
 from core.sandbox import state  # noqa: E402
+from core.testing.module_bindings import patch_module_attribute  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -177,7 +178,7 @@ class TestEintrSafe:
                 raise InterruptedError("simulated EINTR from unrelated signal")
             return sentinel_status
 
-        monkeypatch.setattr(os, "waitpid", fake_waitpid)
+        patch_module_attribute(monkeypatch, ptrace_probe, "os", "waitpid", fake_waitpid)
 
         result = ptrace_probe._waitpid_eintr_safe(12345, 0)
         assert result == sentinel_status
@@ -189,7 +190,7 @@ class TestEintrSafe:
         def fake_waitpid(pid, options):
             raise ChildProcessError("ECHILD: no child")
 
-        monkeypatch.setattr(os, "waitpid", fake_waitpid)
+        patch_module_attribute(monkeypatch, ptrace_probe, "os", "waitpid", fake_waitpid)
 
         with pytest.raises(ChildProcessError):
             ptrace_probe._waitpid_eintr_safe(12345, 0)
@@ -262,7 +263,7 @@ class _FakeLibc:
 def _run_probe_with(monkeypatch, waitpid_impl):
     reaped = []
     monkeypatch.setattr(ptrace_probe, "_get_libc", lambda: _FakeLibc())
-    monkeypatch.setattr(os, "fork", lambda: _FAKE_PID)
+    patch_module_attribute(monkeypatch, ptrace_probe, "os", "fork", lambda: _FAKE_PID)
     monkeypatch.setattr(
         ptrace_probe, "_waitpid_eintr_safe", waitpid_impl,
     )

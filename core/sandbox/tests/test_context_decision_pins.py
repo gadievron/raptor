@@ -33,6 +33,7 @@ from core.sandbox import probes as probes_mod  # noqa: E402
 from core.sandbox import seccomp as seccomp_mod  # noqa: E402
 from core.sandbox import state  # noqa: E402
 from core.sandbox.errors import SandboxSetupError  # noqa: E402
+from core.testing.module_bindings import patch_module_attribute  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -1474,7 +1475,7 @@ def test_grant_pin_refuses_simulated_inode_recycling(
 
     rec = _RecyclingRecorder()
     _Driver(monkeypatch, rec)
-    monkeypatch.setattr(os, "stat", forger)
+    patch_module_attribute(monkeypatch, context, "os", "stat", forger)
     with pytest.raises(SandboxSetupError, match="pin violation"):
         with context.sandbox(target=str(tmp_path),
                              restrict_reads=True,
