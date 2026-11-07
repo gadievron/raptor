@@ -74,7 +74,7 @@ from pathlib import Path
 
 from core.logging import get_logger
 from core.sandbox.evidence import _unique_evidence_object
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -490,7 +490,7 @@ def _load_or_create_key() -> bytes | None:
                 logger.warning(
                     "telemetry_mac: incomplete key cleanup failed: %s: %s",
                     sanitise_for_terminal(type(exc).__name__, max_len=64),
-                    sanitise_for_terminal(str(exc)),
+                    sanitise_exception_message(exc),
                 )
             raise
         finally:
@@ -502,7 +502,7 @@ def _load_or_create_key() -> bytes | None:
                 logger.warning(
                     "telemetry_mac: key descriptor cleanup failed: %s: %s",
                     sanitise_for_terminal(type(exc).__name__, max_len=64),
-                    sanitise_for_terminal(str(exc)),
+                    sanitise_exception_message(exc),
                 )
         # Creation is not publication: the pathname, bytes or permissions
         # may have changed during write/close. Reuse the same bounded,
