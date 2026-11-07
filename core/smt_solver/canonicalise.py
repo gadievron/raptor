@@ -55,19 +55,19 @@ import re
 #   - ``is non-null`` before ``is null``
 _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Longer phrases first.
-    (re.compile(r'\bis\s+greater\s+than\s+or\s+equal\s+to\b', re.IGNORECASE), ' >= '),
-    (re.compile(r'\bis\s+less\s+than\s+or\s+equal\s+to\b',    re.IGNORECASE), ' <= '),
-    (re.compile(r'\bis\s+not\s+equal\s+to\b',                 re.IGNORECASE), ' != '),
-    (re.compile(r'\bdoes\s+not\s+equal\b',                    re.IGNORECASE), ' != '),
-    (re.compile(r'\bdoes\s+not\s+exceed\b',                   re.IGNORECASE), ' <= '),
-    (re.compile(r'\bis\s+at\s+least\b',                       re.IGNORECASE), ' >= '),
-    (re.compile(r'\bis\s+at\s+most\b',                        re.IGNORECASE), ' <= '),
-    (re.compile(r'\bis\s+greater\s+than\b',                   re.IGNORECASE), ' > '),
-    (re.compile(r'\bis\s+less\s+than\b',                      re.IGNORECASE), ' < '),
-    (re.compile(r'\bis\s+equal\s+to\b',                       re.IGNORECASE), ' == '),
+    (re.compile(r'\bis[ \t]+greater[ \t]+than[ \t]+or[ \t]+equal[ \t]+to\b', re.IGNORECASE), ' >= '),
+    (re.compile(r'\bis[ \t]+less[ \t]+than[ \t]+or[ \t]+equal[ \t]+to\b',    re.IGNORECASE), ' <= '),
+    (re.compile(r'\bis[ \t]+not[ \t]+equal[ \t]+to\b',                 re.IGNORECASE), ' != '),
+    (re.compile(r'\bdoes[ \t]+not[ \t]+equal\b',                    re.IGNORECASE), ' != '),
+    (re.compile(r'\bdoes[ \t]+not[ \t]+exceed\b',                   re.IGNORECASE), ' <= '),
+    (re.compile(r'\bis[ \t]+at[ \t]+least\b',                       re.IGNORECASE), ' >= '),
+    (re.compile(r'\bis[ \t]+at[ \t]+most\b',                        re.IGNORECASE), ' <= '),
+    (re.compile(r'\bis[ \t]+greater[ \t]+than\b',                   re.IGNORECASE), ' > '),
+    (re.compile(r'\bis[ \t]+less[ \t]+than\b',                      re.IGNORECASE), ' < '),
+    (re.compile(r'\bis[ \t]+equal[ \t]+to\b',                       re.IGNORECASE), ' == '),
     # Negative null/zero forms before the positive ones.
-    (re.compile(r'\bis\s+non[-\s]?zero\b',                    re.IGNORECASE), ' != 0 '),
-    (re.compile(r'\bis\s+non[-\s]?null\b',                    re.IGNORECASE), ' != NULL '),
+    (re.compile(r'\bis[ \t]+non[- \t]?zero\b',                    re.IGNORECASE), ' != 0 '),
+    (re.compile(r'\bis[ \t]+non[- \t]?null\b',                    re.IGNORECASE), ' != NULL '),
     # Positive forms — close the asymmetry with the negated counterparts
     # above.  Without these, a writer using ``ptr is null`` got an
     # ``UNRECOGNIZED_FORM`` rejection from the path validator (one_gadget
@@ -86,8 +86,8 @@ _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # `is null` reaches the parser unchanged and the unrecognised-
     # form rejection is keyed to the original token (operator can
     # find it in their source).
-    (re.compile(r'(?<=\S)\s+is\s+null\b',                     re.IGNORECASE), ' == NULL '),
-    (re.compile(r'(?<=\S)\s+is\s+zero\b',                     re.IGNORECASE), ' == 0 '),
+    (re.compile(r'(?<=\S)[ \t]+is[ \t]+null\b',                     re.IGNORECASE), ' == NULL '),
+    (re.compile(r'(?<=\S)[ \t]+is[ \t]+zero\b',                     re.IGNORECASE), ' == 0 '),
     # Single-word synonyms. Tightened to require WHITESPACE
     # (or string boundary) on both sides — `\b` alone matches
     # at any word/non-word transition, including code-form
@@ -97,9 +97,9 @@ _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # world hit: any constraint expression that quotes
     # source-form text with `.equals(`, `.exceeds(`,
     # `.below(` — common in Java/Kotlin/C# audits.
-    (re.compile(r'(?:^|\s)equals(?:\s|$)',                    re.IGNORECASE), ' == '),
-    (re.compile(r'(?:^|\s)exceeds(?:\s|$)',                   re.IGNORECASE), ' > '),
-    (re.compile(r'(?:^|\s)below(?:\s|$)',                     re.IGNORECASE), ' < '),
+    (re.compile(r'(?:^|[ \t])equals(?:[ \t]|$)',                    re.IGNORECASE), ' == '),
+    (re.compile(r'(?:^|[ \t])exceeds(?:[ \t]|$)',                   re.IGNORECASE), ' > '),
+    (re.compile(r'(?:^|[ \t])below(?:[ \t]|$)',                     re.IGNORECASE), ' < '),
     # ``up to N`` is read as inclusive (``<= N``) — the most common
     # convention in maths/CS, though some writers treat it as exclusive.
     # Document the choice rather than guess case-by-case.
@@ -121,14 +121,19 @@ _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # the parser. Loses some legitimate non-numeric cases (`up to N`
     # with `N` as a variable) — those callers should write `<= N`
     # directly.
-    (re.compile(r'\bup\s+to(?=\s+(?:0x[0-9a-f]+|\d))',        re.IGNORECASE), ' <= '),
+    (re.compile(r'\bup[ \t]+to(?=[ \t]+(?:0x[0-9a-f]+|\d))',        re.IGNORECASE), ' <= '),
 )
+
+MAX_CANONICALISE_CHARS = 256 * 1024
 
 _WHITESPACE_RUN = re.compile(r'[ \t]+')
 
 
 def canonicalise(text: str) -> str:
     r"""Rewrite common english operator aliases to canonical syntax.
+
+    Oversized input raises ValueError; no prefix is returned. Rewrites
+    consume horizontal whitespace only, preserving logical line boundaries.
 
     Idempotent: input that's already symbolic passes through unchanged
     (modulo whitespace collapse).
@@ -152,22 +157,11 @@ def canonicalise(text: str) -> str:
     the multi-condition structure intact. Internal multi-space
     runs from rewrite expansion still collapse fine.
     """
-    # Cap input length before the per-pattern loop. Pre-fix the
-    # `for pat, repl in _REWRITES: out = pat.sub(repl, out)` loop
-    # ran ~20 patterns sequentially over the WHOLE input string —
-    # O(20*N) work for an N-byte input. Real condition strings
-    # passed to canonicalise() are short (a single boolean
-    # expression, low-KB at most), but a hostile / corrupt
-    # caller passing a multi-MB blob would burn proportional
-    # wallclock per call. 256 KB cap is two orders of magnitude
-    # beyond any realistic condition; oversized input is
-    # almost certainly an upstream bug rather than legitimate
-    # data, so truncating is the safer mode than chewing through
-    # it. Truncate from the END (keep the head) — the leading
-    # part of a condition is the part the rewrites actually
-    # care about.
-    _CANONICALISE_INPUT_CAP = 256 * 1024
-    out = text if len(text) <= _CANONICALISE_INPUT_CAP else text[:_CANONICALISE_INPUT_CAP]
+    # Refuse the complete input before scanning. A truncated prefix can
+    # accidentally become a valid condition with different semantics.
+    if len(text) > MAX_CANONICALISE_CHARS:
+        raise ValueError(f"condition exceeds canonicalisation limit {MAX_CANONICALISE_CHARS}")
+    out = text
     def rewrite_code(code):
         if code and not code.isspace():
             for pat, repl in _REWRITES:
