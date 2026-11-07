@@ -456,7 +456,7 @@ def export_findings_directory(
                        create_parent=False, subject="findings export"):
         # keep=True lets us retain the previous report if rollback fails.
         # Staging lives next to the output so publication is a same-FS rename.
-        with scratch_dir(prefix=".findings-stage-", dir=output_dir, keep=True) as stage:
+        with scratch_dir(prefix=".findings-stage-", dir=output_dir, keep=True, keepalive=True) as stage:
             backup = stage / "previous"
             published = False
             failed = False

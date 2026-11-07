@@ -698,9 +698,8 @@ def _write_sharded_checklist(
     the instant the staged dir lands). Callers hold the flock.
     """
     import hashlib
-    import tempfile
+    from core.run.scratch import scratch_dir
     from datetime import datetime, timezone
-    from pathlib import Path
 
     from core.artifacts.provenance import stamp_provenance
     from core.atomic_fs import write_text_atomically
@@ -725,8 +724,9 @@ def _write_sharded_checklist(
     plan = _plan_checklist_shards(files, _CHECKLIST_SHARD_TARGET_BYTES)
 
     parent = checklist_path.parent
-    tmp_dir = Path(tempfile.mkdtemp(prefix=".checklist-tmp-", dir=parent))
-    try:
+    with scratch_dir(".checklist-tmp-", dir=parent, keepalive=True) as workspace:
+        tmp_dir = workspace / "next"
+        tmp_dir.mkdir()
         rows: list[dict[str, Any]] = []
         for seq, (label, idxs) in enumerate(plan):
             shard_files = [files[i] for i in idxs]
@@ -788,8 +788,6 @@ def _write_sharded_checklist(
         )
 
         _publish_checklist_form(checklist_path, tmp_dir, sharded=True)
-    finally:
-        _remove_retired_entry(tmp_dir)
     _sweep_retired_dirs(parent)
 
 
@@ -849,7 +847,7 @@ def _write_checklist_locked(
             previous = None
         mode = (stat.S_IMODE(previous.st_mode) if previous is not None
                 and stat.S_ISREG(previous.st_mode) else None)
-        with scratch_dir(".checklist-tmp-", dir=checklist_path.parent) as scratch:
+        with scratch_dir(".checklist-tmp-", dir=checklist_path.parent, keepalive=True) as scratch:
             staged = scratch / "checklist.json"
             write_text_atomically(staged, content, mode=mode,
                                   tmp_prefix=".~savejson-")
