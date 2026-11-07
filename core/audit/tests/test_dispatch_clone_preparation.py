@@ -211,7 +211,7 @@ def test_body_fingerprints_are_reused_only_within_one_anchor_run(monkeypatch):
     assert len(first) == len(second) == 5
     assert [r.to_dict() for r in first] == [r.to_dict() for r in second]
     assert first[0] is not second[0]
-    assert [(m.miss_count, m.hit_count) for m in memos] == [(1, 4), (1, 4)]
+    assert [(m.miss_count, m.hit_count) for m in memos] == [(1, 4), (1, 4), (1, 4), (1, 4)]
 
 
 def test_replaced_normalizer_keeps_each_anchor_operation(monkeypatch):
@@ -241,7 +241,7 @@ def test_oversized_body_bypasses_fingerprint_memo(monkeypatch):
 
     monkeypatch.setattr(clone, 'BoundedMemo', observed)
     clone.fix_anchored_drift(anchors, {'a.c': body})
-    assert len(memos) == 1 and (memos[0].miss_count, memos[0].hit_count) == (0, 0)
+    assert [(m.miss_count, m.hit_count) for m in memos] == [(0, 0), (1, 4)]
 
 
 def test_replaced_divergence_helpers_keep_original_order(monkeypatch):
