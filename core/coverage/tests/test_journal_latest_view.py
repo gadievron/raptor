@@ -1,7 +1,7 @@
 """Cache-maintained latest-per-key view behind ``latest_entries``.
 
-The audit context builder calls ``latest_entries`` per reviewed
-function (twice), and each call used to re-collapse the WHOLE loaded
+The audit context builder queries the latest entry per reviewed
+function (twice). Each call used to re-collapse the WHOLE loaded
 journal — quadratic once the journal itself scales with the reviewed
 set. The view now memoizes on the load-cache record: built once per
 cached parse, carried incrementally across active-shard extensions
@@ -33,6 +33,7 @@ from core.coverage.journal import (
     invalidate_load_cache,
     journal_shard_paths,
     latest_entries,
+    latest_entry,
     load_entries,
     now_iso,
 )
@@ -451,3 +452,105 @@ def _entry(function: str, *, verdict: str = "clean") -> ReviewJournalEntry:
         verdict=verdict,
         source_hash="h",
     )
+
+
+class TestSingleEntry:
+    def test_cold_lookup_builds_shared_view_and_missing_key_is_none(self, tmp_path):
+        (tmp_path / "review-journal.jsonl").write_bytes(_line(0) + _line(1))
+        _age_all(tmp_path)
+        first = latest_entry(tmp_path, "src/f0.c:fn0")
+        assert first is not None and first.verdict == "clean"
+        assert latest_entries(tmp_path)[first.key] is first
+        assert latest_entry(tmp_path, "missing.c:missing") is None
+
+    @pytest.mark.parametrize("change", ["append", "roll", "replace", "tie", "backdated"])
+    def test_lookup_matches_full_view_after_disk_changes(self, tmp_path, change):
+        path = tmp_path / "review-journal.jsonl"
+        path.write_bytes(_line(0) + _line(1))
+        _age_all(tmp_path)
+        assert latest_entry(tmp_path, "src/f0.c:fn0").verdict == "clean"
+        row = _line(2, key=0, verdict="finding",
+                    ts=_ts(0) if change == "tie" else _ts(2))
+        if change == "roll":
+            (tmp_path / "review-journal.002.jsonl").write_bytes(row)
+        elif change == "replace":
+            path.write_bytes(row)
+        elif change == "backdated":
+            path.write_bytes(path.read_bytes() + _line(2, key=0, verdict="finding", ts="2025-01-01T00:00:00Z"))
+        else:
+            path.write_bytes(path.read_bytes() + row)
+        _age_all(tmp_path)
+        expected = _scratch_collapse(tmp_path)
+        for key in ("src/f0.c:fn0", "src/f1.c:fn1", "missing"):
+            assert latest_entry(tmp_path, key) == expected.get(key)
+        _assert_equivalent(latest_entries(tmp_path), expected)
+
+    def test_cached_lookup_reads_one_key_without_copying_view(self, tmp_path):
+        (tmp_path / "review-journal.jsonl").write_bytes(_line(0))
+        _age_all(tmp_path)
+        entry = latest_entry(tmp_path, "src/f0.c:fn0")
+        record = _record(tmp_path)
+        reads = []
+
+        class PointOnly(dict):
+            def get(self, key, default=None):
+                reads.append(key)
+                return super().get(key, default)
+
+            def keys(self):
+                pytest.fail("point lookup copied the full view")
+
+            def __iter__(self):
+                pytest.fail("point lookup traversed the full view")
+
+        class EntriesWithoutCopy(list):
+            def __iter__(self):
+                pytest.fail("latest lookup copied the cached entry list")
+
+        with journal_mod._load_cache_lock:
+            record.latest_view = PointOnly(record.latest_view)
+            record.result_entries = EntriesWithoutCopy(record.result_entries)
+        assert latest_entry(tmp_path, entry.key) is entry
+        assert reads == [entry.key]
+
+    def test_fresh_lookup_bypasses_cached_winner(self, tmp_path):
+        append_entry(tmp_path, _entry("fn0"))
+        _age_all(tmp_path)
+        latest_entry(tmp_path, "src/a.c:fn0")
+        record = _record(tmp_path)
+        with journal_mod._load_cache_lock:
+            record.latest_view["src/a.c:fn0"] = _entry("fn0", verdict="dormant")
+        assert latest_entry(tmp_path, "src/a.c:fn0", fresh=True).verdict == "clean"
+        assert latest_entry(tmp_path, "src/a.c:fn0").verdict == "clean"
+
+    def test_shed_lookup_does_not_pin_a_view(self, tmp_path, monkeypatch):
+        run = TestShedInteraction()._sharded(tmp_path)
+        sizes = [p.stat().st_size for p in journal_shard_paths(run)]
+        monkeypatch.setattr(journal_mod, "_LOAD_CACHE_MAX_BYTES", sum(sizes[1:]) + 5)
+        expected = _scratch_collapse(run)
+        for key in ("src/f0.c:fn0", "src/f9.c:fn9", "missing"):
+            assert latest_entry(run, key) == expected.get(key)
+        record = _record(run)
+        assert record is not None and record.result_entries is None
+        assert record.latest_view is None
+
+
+    def test_public_loads_and_views_still_own_their_containers(self, tmp_path):
+        (tmp_path / "review-journal.jsonl").write_bytes(_line(0))
+        _age_all(tmp_path)
+        entry = latest_entry(tmp_path, "src/f0.c:fn0")
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        full_view = latest_entries(tmp_path)
+        loaded.entries.clear()
+        full_view.clear()
+        assert latest_entry(tmp_path, entry.key) is entry
+        assert journal_mod.load_entries_checked(tmp_path).entries == [entry]
+
+    def test_incomplete_cached_prefix_matches_full_view(self, tmp_path, monkeypatch):
+        (tmp_path / "review-journal.jsonl").write_bytes(_line(0) + _line(1) + _line(2))
+        _age_all(tmp_path)
+        monkeypatch.setattr(journal_mod, "_MAX_RETAINED_ENTRIES", 1)
+        expected = latest_entries(tmp_path, fresh=True)
+        assert not journal_mod.load_entries_checked(tmp_path).complete
+        for key in ("src/f0.c:fn0", "src/f1.c:fn1", "src/f2.c:fn2", "missing"):
+            assert latest_entry(tmp_path, key) == expected.get(key)

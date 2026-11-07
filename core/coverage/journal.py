@@ -1610,13 +1610,17 @@ def _cache_store(cache_key: str, record: _CachedLoad) -> None:
         _load_cache.pop(next(iter(_load_cache)))
 
 
-def _cached_result(cached: _CachedLoad) -> JournalLoad:
+def _cached_result(
+    cached: _CachedLoad, *, copy_entries: bool = True,
+) -> JournalLoad:
     # Shallow copy on every serve: later extensions rebuild the
     # cached result list, and a caller's own list mutations must
     # never leak into the cache (or into another caller's earlier
     # result). The entry OBJECTS are shared — frozen by contract: no
     # journal consumer mutates a loaded entry (audited; corrections
     # are appended as NEW rows, never edited onto loaded ones).
+    # Internal latest-view lookups can borrow the list while holding
+    # _load_cache_lock; no public loader exposes the borrowed list.
     if cached.result_entries is None:
         # A shed record has no memoized result; callers rebuild via
         # _finalize_set instead of serving. Failing loud beats
@@ -1624,7 +1628,7 @@ def _cached_result(cached: _CachedLoad) -> JournalLoad:
         msg = "internal: identity-serve of a shed cache record"
         raise RuntimeError(msg)
     return JournalLoad(
-        entries=list(cached.result_entries),
+        entries=list(cached.result_entries) if copy_entries else cached.result_entries,
         complete=cached.complete,
         pruned=cached.pruned_total,
         reason=cached.reason,
@@ -1694,13 +1698,14 @@ def load_entries_checked(
 
 
 def _load_checked_locked(
-    out_dir: Path, cache_key: str, *, fresh: bool,
+    out_dir: Path, cache_key: str, *, fresh: bool, copy_entries: bool = True,
 ) -> JournalLoad:
     """Cache-aware shard-set load; caller holds ``_load_cache_lock``."""
     if not fresh:
         cached = _load_cache.get(cache_key)
         if cached is not None:
-            served = _serve_or_extend_set(out_dir, cache_key, cached)
+            served = _serve_or_extend_set(
+                out_dir, cache_key, cached, copy_entries=copy_entries)
             if served is not None:
                 return served
     # Cold parse of the whole shard set — ONE directory snapshot
@@ -1715,7 +1720,7 @@ def _load_checked_locked(
 
 
 def _serve_or_extend_set(
-    out_dir: Path, cache_key: str, cached: _CachedLoad,
+    out_dir: Path, cache_key: str, cached: _CachedLoad, *, copy_entries: bool = True,
 ) -> JournalLoad | None:
     """Serve or extend *cached* against the shard set on disk.
     ``None`` means the caller must fall back to a full cold parse.
@@ -1755,7 +1760,7 @@ def _serve_or_extend_set(
                     out_dir, state, check_tail=True):
                 return None
         _cache_store(cache_key, cached)   # refresh LRU recency
-        return _cached_result(cached)
+        return _cached_result(cached, copy_entries=copy_entries)
     sealed = cached.shard_states[:-1]
     active = cached.shard_states[-1]
     for state in sealed:
@@ -1811,7 +1816,7 @@ def _serve_or_extend_set(
                 return None
             if not shed:
                 _cache_store(cache_key, cached)
-                return _cached_result(cached)
+                return _cached_result(cached, copy_entries=copy_entries)
             # Shed record over an unchanged set: the retained shard
             # states are reusable verbatim but the memoized result
             # is gone — fall through to rebuild by re-parsing ONLY
@@ -3017,6 +3022,17 @@ def _latest_collapse(
     return best
 
 
+def _latest_view_locked(record: _CachedLoad) -> dict[str, ReviewJournalEntry]:
+    """Read/build a retained record's view with ``_load_cache_lock`` held."""
+    if record.latest_view is None:
+        assert record.result_entries is not None
+        record.latest_view = _latest_collapse(record.result_entries)
+        record.latest_view_ts_max = max(
+            (e.ts for e in record.latest_view.values()), default="",
+        )
+    return record.latest_view
+
+
 def latest_entries(
     out_dir: Path, *, fresh: bool = False,
 ) -> dict[str, ReviewJournalEntry]:
@@ -3033,9 +3049,9 @@ def latest_entries(
     the run dir's record is current: the collapse runs once per
     cached parse (built lazily here, carried incrementally across
     active-shard extensions by :func:`_carry_latest_view`), so
-    per-function consumers — the audit context builder calls this
-    twice per reviewed function — pay one view-sized dict copy per
-    call instead of re-collapsing the whole journal. The maintained
+    callers pay one view-sized dict copy per call instead of
+    re-collapsing the whole journal. Single-key consumers can use
+    :func:`latest_entry` to avoid that copy. The maintained
     view always equals a from-scratch collapse of the same served
     load (pinned by the differential-equivalence test in
     core/coverage/tests/test_journal_latest_view.py). The returned
@@ -3052,7 +3068,7 @@ def latest_entries(
     out_dir = Path(out_dir)
     cache_key = os.path.realpath(out_dir)
     with _load_cache_lock:
-        loaded = _load_checked_locked(out_dir, cache_key, fresh=False)
+        loaded = _load_checked_locked(out_dir, cache_key, fresh=False, copy_entries=False)
         record = _load_cache.get(cache_key)
         if record is not None and record.result_entries is not None:
             # The record at this key was stored/refreshed by the load
@@ -3060,15 +3076,28 @@ def latest_entries(
             # IS the served view. (A record shed by that store has no
             # memoized result — fall through to a transient collapse
             # that pins nothing.)
-            if record.latest_view is None:
-                record.latest_view = _latest_collapse(
-                    record.result_entries)
-                record.latest_view_ts_max = max(
-                    (e.ts for e in record.latest_view.values()),
-                    default="",
-                )
-            return dict(record.latest_view)
+            return dict(_latest_view_locked(record))
     return _latest_collapse(loaded.entries)
+
+
+def latest_entry(
+    out_dir: Path, key: str, *, fresh: bool = False,
+) -> ReviewJournalEntry | None:
+    """Return ``latest_entries(out_dir, fresh=fresh).get(key)`` without
+    copying the maintained view. Freshness, ties and fallback collapses
+    follow the full-view API. Lookup stays under the load-cache lock;
+    only the entry object, shared and frozen by contract, escapes.
+    """
+    if fresh:
+        return _latest_collapse(load_entries(out_dir, fresh=True)).get(key)
+    out_dir = Path(out_dir)
+    cache_key = os.path.realpath(out_dir)
+    with _load_cache_lock:
+        loaded = _load_checked_locked(out_dir, cache_key, fresh=False, copy_entries=False)
+        record = _load_cache.get(cache_key)
+        if record is not None and record.result_entries is not None:
+            return _latest_view_locked(record).get(key)
+    return _latest_collapse(loaded.entries).get(key)
 
 
 # ── Project-level index ──────────────────────────────────────────────
