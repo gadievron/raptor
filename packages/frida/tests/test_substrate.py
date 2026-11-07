@@ -7,22 +7,41 @@ import json
 import struct
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from packages.frida import available, parse_events
+
+import builtins
+from types import ModuleType
+import pytest
+from core.testing.module_bindings import mock_module_attribute
+from core.testing.module_views import module_function_view
 
 # ── available() ────────────────────────────────────────────────────────
 
 class TestAvailable:
     """available() caches its result; reset between tests."""
 
-    def setup_method(self):
-        import packages.frida as _mod
-        self._mod = _mod
-        _mod._available = None   # reset cache
+    @pytest.fixture(autouse=True)
+    def _owned_availability(self, monkeypatch):
+        """Keep import overrides and cached answers on this fixture's view."""
+        import packages.frida as original
 
-    def teardown_method(self):
+        inherited = vars(original).get("__builtins__", builtins)
+        imports = ModuleType("builtins")
+        vars(imports).update(vars(inherited) if isinstance(inherited, ModuleType) else inherited)
+
+        def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+            return private._imports.__import__(name, globals, locals, fromlist, level)
+
+        private = module_function_view(original, import_hook=import_local)
+        private._imports = imports
+        monkeypatch.setattr(self, "_mod", private, raising=False)
         self._mod._available = None
+        monkeypatch.setitem(globals(), "available", private.available)
+        try:
+            yield private
+        finally:
+            self._mod._available = None
 
     def test_no_frida_python_no_cli(self):
         """Neither frida-python nor CLI → False."""
@@ -34,8 +53,8 @@ class TestAvailable:
                 raise ImportError("no frida")
             return real_import(name, *a, **kw)
 
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("shutil.which", return_value=None):
+        with mock_module_attribute(self._mod, '_imports', '__import__', side_effect=fake_import), \
+             mock_module_attribute(self._mod, 'shutil', 'which', return_value=None):
             assert available() is False
         # Cached after first call.
         assert available() is False
@@ -50,8 +69,8 @@ class TestAvailable:
                 raise ImportError("no frida")
             return real_import(name, *a, **kw)
 
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("shutil.which", return_value="/usr/bin/frida"):
+        with mock_module_attribute(self._mod, '_imports', '__import__', side_effect=fake_import), \
+             mock_module_attribute(self._mod, 'shutil', 'which', return_value='/usr/bin/frida'):
             self._mod._available = None
             assert available() is True
 
@@ -65,8 +84,8 @@ class TestAvailable:
                 return SimpleNamespace(__version__="test")
             return real_import(name, *a, **kw)
 
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("shutil.which", return_value="/usr/local/bin/frida"):
+        with mock_module_attribute(self._mod, '_imports', '__import__', side_effect=fake_import), \
+             mock_module_attribute(self._mod, 'shutil', 'which', return_value='/usr/local/bin/frida'):
             self._mod._available = None
             assert available() is True
         # Cached.
@@ -91,8 +110,8 @@ class TestAvailable:
                 return SimpleNamespace(__version__="test")
             return real_import(name, *a, **kw)
 
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("shutil.which", return_value="/usr/local/bin/frida"):
+        with mock_module_attribute(self._mod, '_imports', '__import__', side_effect=fake_import), \
+             mock_module_attribute(self._mod, 'shutil', 'which', return_value='/usr/local/bin/frida'):
             assert available(force=True) is True
         assert available() is True
 
