@@ -17,6 +17,39 @@ from core.testing.module_bindings import patch_module_attribute
 
 import core.atomic_fs as _storage_fault_consumer
 
+from types import ModuleType
+from core.testing.module_views import module_function_view
+
+_local_imports = ModuleType("sweep_import_fixture")
+
+
+@pytest.fixture(autouse=True)
+def _owned_sweep_imports(monkeypatch):
+    """Take current consumer globals at each call while owning its clock."""
+    imports = ModuleType("checklist_local_imports")
+    imports.time = ModuleType(time.__name__)
+    vars(imports.time).update(vars(time))
+    original = inv._sweep_retired_dirs
+    inherited = original.__builtins__
+    original_import = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name == "time":
+            return imports.time
+        return original_import(name, globals, locals, fromlist, level)
+
+    def sweep(*args, **kwargs):
+        private = module_function_view(
+            inv, bindings={"_sweep_retired_dirs": original}, import_hook=import_local,
+        )
+        return private._sweep_retired_dirs(*args, **kwargs)
+
+    monkeypatch.setattr(inv, "_sweep_retired_dirs", sweep)
+    monkeypatch.setitem(globals(), "_local_imports", imports)
+    return imports
+
+
+
 
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
@@ -200,7 +233,7 @@ def test_failed_reclaims_do_not_consume_successful_removal_quota(cache, monkeypa
 def test_invalid_sweep_clock_preserves_every_entry(cache, monkeypatch, now):
     old = cache / ".checklist-stale-old"
     old.mkdir()
-    monkeypatch.setattr(time, "time", lambda: now)
+    patch_module_attribute(monkeypatch, _local_imports, 'time', 'time', lambda: now)
     inv._sweep_retired_dirs(cache)
     assert old.exists()
 

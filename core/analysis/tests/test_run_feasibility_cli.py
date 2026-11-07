@@ -20,6 +20,12 @@ from unittest.mock import patch
 
 import pytest
 
+from types import ModuleType
+from core.testing.module_views import module_function_view
+import builtins
+from core.testing.module_bindings import patch_module_attribute
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-run-feasibility"
 
@@ -40,10 +46,9 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 @pytest.fixture(scope="module")
 def feasibility_mod():
-    """Import the script as a module for unit-level checks."""
-    prior = os.environ.get("_RAPTOR_TRUSTED")
-    os.environ["_RAPTOR_TRUSTED"] = "1"
-    try:
+    """Import the script with owned local imports and import-only trust."""
+    with pytest.MonkeyPatch.context() as loading:
+        loading.setenv("_RAPTOR_TRUSTED", "1")
         loader = importlib.machinery.SourceFileLoader(
             "raptor_run_feasibility", str(CLI),
         )
@@ -51,12 +56,22 @@ def feasibility_mod():
         mod = importlib.util.module_from_spec(spec)
         with patch.object(sys, "path", sys.path.copy()):
             loader.exec_module(mod)
-        yield mod
-    finally:
-        if prior is None:
-            os.environ.pop("_RAPTOR_TRUSTED", None)
-        else:
-            os.environ["_RAPTOR_TRUSTED"] = prior
+
+    imports = ModuleType("feasibility_local_imports")
+    for name in ("fcntl", "time"):
+        original = __import__(name)
+        private = ModuleType(original.__name__)
+        vars(private).update(vars(original))
+        setattr(imports, name, private)
+    inherited = vars(mod).get("__builtins__", builtins)
+    original_import = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name in ("fcntl", "time"):
+            return getattr(imports, name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    yield module_function_view(mod, bindings={"_local_imports": imports}, import_hook=import_local)
 
 
 class TestArgvParsing:
@@ -282,7 +297,6 @@ class TestFlockFailureIsFailClosed:
             capsys):
         import errno
         import fcntl
-        import time
 
         binary = tmp_path / "bin.elf"
         binary.write_bytes(b"\x7fELF")
@@ -294,8 +308,8 @@ class TestFlockFailureIsFailClosed:
             attempts.append(op)
             raise OSError(errno.ENOLCK, "No locks available")
 
-        monkeypatch.setattr(fcntl, "flock", deny)
-        monkeypatch.setattr(time, "sleep", lambda s: None)
+        patch_module_attribute(monkeypatch, feasibility_mod._local_imports, 'fcntl', 'flock', deny)
+        patch_module_attribute(monkeypatch, feasibility_mod._local_imports, 'time', 'sleep', lambda s: None)
         monkeypatch.setattr(sys, "argv", [
             "raptor-run-feasibility", str(binary), str(findings),
             str(tmp_path / "out"),
@@ -313,7 +327,6 @@ class TestFlockFailureIsFailClosed:
             self, feasibility_mod, monkeypatch, tmp_path: Path):
         import errno
         import fcntl
-        import time
 
         binary = tmp_path / "bin.elf"
         binary.write_bytes(b"\x7fELF")
@@ -330,8 +343,8 @@ class TestFlockFailureIsFailClosed:
                 raise OSError(errno.ENOLCK, "No locks available")
             return real_flock(fd, op)
 
-        monkeypatch.setattr(fcntl, "flock", flaky)
-        monkeypatch.setattr(time, "sleep", lambda s: None)
+        patch_module_attribute(monkeypatch, feasibility_mod._local_imports, 'fcntl', 'flock', flaky)
+        patch_module_attribute(monkeypatch, feasibility_mod._local_imports, 'time', 'sleep', lambda s: None)
         monkeypatch.setattr(sys, "argv", [
             "raptor-run-feasibility", str(binary), str(findings),
             str(tmp_path / "out"),
