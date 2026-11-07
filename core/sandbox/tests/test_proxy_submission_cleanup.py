@@ -16,6 +16,7 @@ def proxy_handle():
     proxy = object.__new__(proxy_mod.EgressProxy)
     proxy._loop = Mock()
     proxy._loop.is_running.return_value = True
+    proxy._loop.is_closed.return_value = False
     proxy._thread = None
     proxy._server = Mock()
     proxy._unix_lock = threading.Lock()
@@ -28,11 +29,15 @@ def proxy_handle():
     proxy._client_tasks = set()
     proxy._summary_emitted = True
     proxy._stopping = False
+    proxy._startup_cancelled = threading.Event()
+    proxy._shutdown_task = None
+    proxy._loop_exiting = False
+    proxy._client_writers = set()
     return proxy
 
 
 @pytest.mark.parametrize("operation", [
-    "bind_unix", "bind_tcp", "close_tcp", "unbind_unix", "stop_graceful", "stop_abrupt",
+    "bind_unix", "bind_tcp", "close_tcp", "unbind_unix",
 ])
 def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, operation):
     proxy = proxy_handle()
@@ -63,8 +68,6 @@ def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, opera
         proxy._unix_servers[path] = Mock()
         proxy._unix_lanes[path] = object()
         proxy.unbind_unix(path)
-    else:
-        proxy.stop(drain_timeout=1 if operation == "stop_graceful" else 0)
     assert len(submitted) == 1
     assert inspect.getcoroutinestate(submitted[0]) == inspect.CORO_CLOSED
 
@@ -138,3 +141,14 @@ def test_unix_lane_is_published_only_after_successful_bind(tmp_path, monkeypatch
         proxy.bind_unix(path)
         assert path in proxy._unix_lanes
         assert proxy._unix_servers[path] is server
+
+
+@pytest.mark.parametrize("drain_timeout", [0, 1], ids=["abrupt", "graceful"])
+def test_stop_shutdown_race_does_not_create_an_unsubmitted_coroutine(drain_timeout):
+    proxy = proxy_handle()
+    proxy._loop.call_soon_threadsafe.side_effect = RuntimeError("loop closed")
+    proxy.stop(drain_timeout=drain_timeout)
+    proxy._loop.call_soon_threadsafe.assert_called_once()
+    proxy._loop.create_task.assert_not_called()
+    assert proxy._shutdown_task is None
+    assert proxy._startup_cancelled.is_set()

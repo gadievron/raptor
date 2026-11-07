@@ -315,34 +315,50 @@ class TestForwarderBounds:
         echo_path = str(short_sock_dir / "echo.sock")
         flood_srv = _unix_flood_server(flood_path, 32 * 1024 * 1024)
         echo_srv = _unix_hold_echo_server(echo_path)
-        flood_port, echo_port = _free_port(), _free_port()
+        from core.sandbox import _proxy_bridge as bridge_mod
+        ready, backpressured = threading.Event(), threading.Event()
+        bound = []
+        original_poll = bridge_mod._poll_ready
+
+        def observe_poll(read_fds, write_fds, timeout):
+            readable, writable = original_poll(read_fds, write_fds, timeout)
+            if write_fds and not set(write_fds).intersection(writable):
+                backpressured.set()
+            return readable, writable
+
+        monkeypatch.setattr(bridge_mod, "_poll_ready", observe_poll)
+
+        def on_ready(bridges):
+            bound.extend(port for port, _ in bridges)
+            ready.set()
+
         death_r, death_w = os.pipe()
         t = threading.Thread(
             target=_run_bridges,
-            args=(((flood_port, flood_path), (echo_port, echo_path)),
-                  death_r),
+            args=(((0, flood_path), (0, echo_path)), death_r),
+            kwargs={"ready_cb": on_ready},
             daemon=True)
         t.start()
         stalled = None
         try:
-            _wait_listening(echo_port)
+            assert ready.wait(5), "forwarder never became ready"
+            flood_port, echo_port = bound
             # The stalling peer: tiny receive buffer, never reads.
             stalled = socket.socket()
             stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
             stalled.connect(("127.0.0.1", flood_port))
-            _time.sleep(0.7)  # let the flood saturate every buffer
+            assert backpressured.wait(5), "flood never reached write backpressure"
 
             # Unrelated pair on the same forwarder must be unaffected.
             with socket.create_connection(("127.0.0.1", echo_port),
                                           timeout=5) as b:
                 b.settimeout(4)
-                t0 = _time.monotonic()
+                # The socket deadline bounds progress and detects the old
+                # 60s blocking write. A tighter stopwatch duplicates it and
+                # confuses host scheduling delays with forwarder blocking.
                 b.sendall(b"ping")
                 assert b.recv(4096) == b"ping", (
                     "roundtrip failed while a sibling pair was stalled"
-                )
-                assert _time.monotonic() - t0 < 2.0, (
-                    "head-of-line blocking: sibling roundtrip stalled"
                 )
 
             # And the stalled pair itself is dropped at the stall

@@ -105,6 +105,7 @@ import errno
 import ipaddress
 import itertools
 import logging
+import math
 import os
 import socket
 import struct
@@ -1904,6 +1905,10 @@ class EgressProxy:
         self._unix_tasks: set = set()
         self._client_tasks: set = set()
         self._stopping = False
+        self._shutdown_task: "asyncio.Task | None" = None
+        self._loop_exiting = False
+        self._shutdown_complete = False
+        self._client_writers: set = set()
         self._startup_cancelled = threading.Event()
         self._startup_task: "asyncio.Task[asyncio.Server] | None" = None
 
@@ -2080,7 +2085,7 @@ class EgressProxy:
             old_umask = _os.umask(0o077)
             try:
                 srv = await asyncio.start_unix_server(
-                    lambda r, w: self._handle_unix_client(r, w, lane=lane),
+                    lambda r, w: self._track_client(r, w, lane=lane),
                     path=path,
                 )
             finally:
@@ -2127,7 +2132,7 @@ class EgressProxy:
             if self._stopping:
                 raise RuntimeError("proxy is stopping")
             srv = await asyncio.start_server(
-                lambda r, w: self._handle_unix_client(r, w, lane=lane),
+                lambda r, w: self._track_client(r, w, lane=lane),
                 host="127.0.0.1", port=0,
             )
             if self._stopping:
@@ -3071,107 +3076,117 @@ class EgressProxy:
                     t.cancel()
 
     def stop(self, *, drain_timeout: float = 5.0) -> None:
-        """Close the server and stop the event loop. Safe to call twice.
+        """Stop accepting, drain all lanes, and join the loop's cleanup.
 
-        Pre-fix `stop()` called `self._loop.stop` immediately, which
-        terminated in-flight CONNECT tunnels mid-stream. Tunnels that
-        had completed their TLS handshake but not yet finished proxying
-        bytes were dropped — clients saw connection-reset mid-request,
-        and the proxy's audit-log entries for those tunnels were
-        truncated.
-
-        With `drain_timeout > 0` we first stop ACCEPTING new connections
-        (close the server socket via `_server.close()`), then wait up to
-        `drain_timeout` seconds for existing tunnels to complete
-        naturally before stopping the event loop. New connections that
-        arrive during the drain window get connection-refused at the
-        OS level, which is the correct behaviour for a graceful
-        shutdown.
-
-        Set `drain_timeout=0` to preserve the legacy abrupt-stop
-        behaviour (callers that need synchronous teardown for tests).
+        One loop-owned shutdown task serves repeated/concurrent callers.
+        Calls from the loop thread request shutdown without joining itself.
+        Final task/transport retirement is also used after unexpected exit.
+        A blocked loop may outlive the bounded join; it remains owned and a
+        later stop can join it. No final stats are emitted before cleanup.
         """
-        if self._loop is None:
-            return
-        # Suppress CLOSE logging during teardown — tunnels completing
-        # during the drain window would otherwise hit "I/O operation on
-        # closed file" when the interpreter has already closed stderr.
+        if (type(drain_timeout) not in (int, float) or drain_timeout < 0):
+            raise ValueError("drain_timeout must be a finite nonnegative number")
+        try:
+            finite = math.isfinite(drain_timeout)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError("drain_timeout must be a finite nonnegative number")
         self._stopping = True
+        self._startup_cancelled.set()
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            def request_stop() -> None:
+                if self._shutdown_task is None and not self._loop_exiting:
+                    self._shutdown_task = loop.create_task(
+                        self._drain_and_stop(drain_timeout))
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(request_stop)
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=min(drain_timeout + 3.0, threading.TIMEOUT_MAX))
+        if loop is not None and loop.is_closed():
+            self._release_unix_paths()
+
+    def _release_unix_paths(self) -> None:
+        """Release explicit-stop path ownership, including after loop death."""
         with self._unix_lock:
-            unix_paths = list(self._unix_servers.keys())
-        for p in unix_paths:
-            # unbind_unix handles its own loop/unlink failures; what
-            # can still escape at teardown is logging to an already-
-            # closed stream (ValueError) or a broken fd (OSError).
-            with contextlib.suppress(OSError, ValueError):
-                self.unbind_unix(p)
-        if drain_timeout > 0 and self._server is not None and self._loop.is_running():
-            async def _graceful() -> None:
-                try:
-                    self._server.close()  # type: ignore[union-attr]
-                    await asyncio.wait_for(
-                        self._server.wait_closed(),  # type: ignore[union-attr]
-                        timeout=drain_timeout,
-                    )
-                except (asyncio.TimeoutError, RuntimeError):
-                    pass
-                stale = [t for t in self._unix_tasks if not t.done()]
-                for t in stale:
-                    t.cancel()
-                if stale:
-                    await asyncio.gather(*stale, return_exceptions=True)
-                stale_clients = [t for t in self._client_tasks if not t.done()]
-                for t in stale_clients:
-                    t.cancel()
-                if stale_clients:
-                    await asyncio.gather(*stale_clients, return_exceptions=True)
-                self._client_tasks.clear()
-                self._loop.stop()  # type: ignore[union-attr]
-            try:
-                _submit_to_loop(_graceful(), self._loop)
-            except RuntimeError:
-                pass
-        elif self._loop is not None and self._loop.is_running():
-            async def _cancel_unix() -> None:
-                stale = [t for t in self._unix_tasks if not t.done()]
-                for t in stale:
-                    t.cancel()
-                if stale:
-                    await asyncio.gather(*stale, return_exceptions=True)
-                self._loop.stop()  # type: ignore[union-attr]
-            try:
-                _submit_to_loop(_cancel_unix(), self._loop)
-            except RuntimeError:
-                pass
-        else:
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except RuntimeError:
-                pass  # loop already stopped
-        # Join the daemon thread so transport _call_connection_lost
-        # callbacks complete before stop() returns.  Without this,
-        # the thread keeps running and may close recycled fd numbers
-        # that belong to the caller's next subprocess.run pipes.
-        if self._thread is not None:
-            self._thread.join(timeout=drain_timeout + 2.0)
-        # One-shot teardown summary — the single proxy-summary line a
-        # run ends with. Emitted AFTER the drain and thread join so
-        # tunnels that complete during the drain window are already
-        # folded into the counters (a pre-drain summary under-reported
-        # their closes and bytes). Needs no loop: snapshot() and the
-        # log call read plain dicts, so a stopped loop is fine.
-        # force=True so an all-zero lifetime still reports. The
-        # _summary_emitted check-then-set keeps repeated sequential
-        # stop() calls to exactly one line; it is NOT atomic, so two
-        # threads calling stop() concurrently could each emit (benign:
-        # one duplicate aggregate line, no counter is written) —
-        # in-repo callers stop a proxy from one place. Logging can hit
-        # an already-closed stream at interpreter exit (atexit path) —
-        # suppressed, never raised.
-        if not self._summary_emitted:
-            self._summary_emitted = True
-            with contextlib.suppress(OSError, ValueError):
-                self._log_stats_line("summary", force=True)
+            paths = list(self._unix_servers)
+            self._unix_servers.clear()
+        with self._lanes_lock:
+            for path in paths:
+                self._unix_lanes.pop(path, None)
+        for path in paths:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+    def _close_listeners(self) -> list:
+        """Close every listener on its owning loop, retaining lane handles.
+
+        A failed close never skips sibling servers. Unix paths retain
+        the existing unbind behavior on explicit stop; unexpected loop
+        exit retains handles for the caller's later explicit release.
+        """
+        servers = set()
+        if self._server is not None:
+            servers.add(self._server)
+        with self._unix_lock:
+            unix = list(self._unix_servers.items())
+            servers.update(server for _, server in unix)
+        with self._lanes_lock:
+            servers.update(self._tcp_lane_servers.values())
+        for server in servers:
+            with contextlib.suppress(RuntimeError, OSError):
+                server.close()
+        if self._startup_cancelled.is_set():
+            self._release_unix_paths()
+        return list(servers)
+
+    async def _drain_and_stop(self, timeout: float) -> None:
+        try:
+            self._close_listeners()
+            # Server.wait_closed can include client transports on newer
+            # Python versions, and the main server says nothing about
+            # lane clients. Wait on the actual owned handlers instead.
+            handlers = {task for task in self._client_tasks | self._unix_tasks
+                        if not task.done()}
+            if handlers and timeout:
+                await asyncio.wait(handlers, timeout=timeout)
+        finally:
+            if not self._loop_exiting:
+                self._loop.stop()
+
+    async def _retire_loop_work(self) -> bool:
+        """Retire all work on this private loop before closing it.
+
+        Include relay/parse child tasks, not just top-level handlers. Keep
+        references until cancellation has executed their finally blocks.
+        A bounded second cancellation plus transport abort handles cleanup
+        suspended in wait_closed without abandoning sibling resources.
+        """
+        current = asyncio.current_task()
+        pending = {task for task in asyncio.all_tasks()
+                   if task is not current and not task.done()}
+        for task in pending:
+            task.cancel()
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=1.0)
+        for writer in tuple(self._client_writers):
+            with contextlib.suppress(OSError, RuntimeError):
+                writer.close()
+                if pending:
+                    writer.transport.abort()
+        for task in pending:
+            task.cancel()
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=1.0)
+        # Run connection_lost and task done callbacks while the loop lives.
+        await asyncio.sleep(0)
+        self._client_tasks.difference_update(
+            task for task in tuple(self._client_tasks) if task.done())
+        self._unix_tasks.difference_update(
+            task for task in tuple(self._unix_tasks) if task.done())
+        return not pending
 
     def _stop_thread_best_effort(self) -> None:
         """Cancel startup even if the worker has not created its loop yet."""
@@ -3363,54 +3378,65 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            if (self._loop is not None and self._startup_task is not None
-                    and not self._startup_task.done()):
-                self._startup_task.cancel()
-                with contextlib.suppress(RuntimeError, OSError, asyncio.CancelledError):
-                    self._loop.run_until_complete(self._startup_task)
             self._stopping = True
-            for task in set(self._client_tasks) | set(self._unix_tasks):
-                task.cancel()
-            self._client_tasks.clear()
-            self._unix_tasks.clear()
-            # Loop exit can bypass public stop()/unbind calls. Closing
-            # the loop itself does not close listening server sockets.
-            servers: set[asyncio.AbstractServer] = set()
-            if self._server is not None:
-                servers.add(self._server)
-            with self._unix_lock:
-                servers.update(self._unix_servers.values())
-            with self._lanes_lock:
-                servers.update(self._tcp_lane_servers.values())
-            for server in servers:
+            self._loop_exiting = True
+            self._close_listeners()
+            loop = self._loop
+            if loop is not None:
+                # run_forever's stop latch is cleared on return. Complete
+                # cancellation on that same loop before releasing transports.
                 with contextlib.suppress(RuntimeError, OSError):
-                    server.close()
-            if self._heartbeat_task is not None:
-                self._heartbeat_task.cancel()
-                # Retire the cancelled task on the still-open loop so
-                # its finalizer never logs "Task was destroyed but it
-                # is pending!" after the loop (and, under pytest, the
-                # capture stream) is gone.
-                with contextlib.suppress(RuntimeError, OSError,
-                                         asyncio.CancelledError):
-                    self._loop.run_until_complete(self._heartbeat_task)  # type: ignore[union-attr]
-            if self._server is not None and self._loop is not None:
-                # run_until_complete on a loop that crashed or was
-                # stopped above raises RuntimeError; socket teardown
-                # can surface OSError.
-                with contextlib.suppress(RuntimeError, OSError):
-                    self._loop.run_until_complete(self._server.wait_closed())
-            if self._loop is not None:
-                self._loop.close()
+                    self._shutdown_complete = loop.run_until_complete(
+                        self._retire_loop_work())
+                loop.close()
+                if not self._shutdown_complete:
+                    with contextlib.suppress(OSError, ValueError):
+                        logger.error("egress proxy: loop cleanup incomplete")
+                elif not self._summary_emitted:
+                    self._summary_emitted = True
+                    with contextlib.suppress(OSError, ValueError):
+                        self._log_stats_line("summary", force=True)
 
     # ----- async CONNECT handler -----
 
     def _on_client_connected(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> None:
-        task = asyncio.ensure_future(self._handle_client(reader, writer))
-        self._client_tasks.add(task)
-        task.add_done_callback(self._client_tasks.discard)
+        self._track_client(reader, writer)
+
+    def _track_client(self, reader, writer, *, lane=None) -> None:
+        """Own accepted sockets before the handler's first scheduler turn.
+
+        Cancellation can precede coroutine entry or occur during the peer
+        check, before _handle_client's tunnel finally exists. The done
+        callback closes the accepted writer on every exit, including those
+        early paths, and retrieves failures from the owned task.
+        """
+        if self._stopping:
+            writer.close()
+            return
+        coroutine = (self._handle_unix_client(reader, writer, lane=lane)
+                     if lane is not None else self._handle_client(reader, writer))
+        try:
+            task = asyncio.ensure_future(coroutine)
+        except BaseException:
+            coroutine.close()
+            writer.close()
+            raise
+        tasks = self._unix_tasks if lane is not None else self._client_tasks
+        self._client_writers.add(writer)
+        tasks.add(task)
+
+        def finished(task):
+            try:
+                with contextlib.suppress(OSError, RuntimeError):
+                    writer.close()
+                if not task.cancelled():
+                    task.exception()
+            finally:
+                tasks.discard(task)
+                self._client_writers.discard(writer)
+        task.add_done_callback(finished)
 
     async def _lookup_peer_uid(self, peer, sockname) -> "int | None":
         """Event-loop-side peer-uid lookup with hot-path protection.
