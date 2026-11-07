@@ -315,6 +315,8 @@ if __name__ == "__main__":
                 publish(session_id, int(seeded[0]))
             except (OSError, ValueError, TypeError):
                 sys.exit("RAPTOR: Codex session initialization failed; no command environment available")
+            from core.startup.codex_session_title import update_title
+            update_title(payload["session_id"])
         write_env_file()
         generate_banner()
         if _CODEX_BOOTSTRAP:

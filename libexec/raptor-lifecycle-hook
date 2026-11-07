@@ -309,6 +309,9 @@ def _main(ending):
             restore(payload.get("session_id"), lifecycle=True)
         except (OSError, ValueError, TypeError):
             sys.exit("RAPTOR: lifecycle hook has no validated Codex session context")
+        if event == "codex-stop":
+            from core.startup.codex_session_title import update_title
+            update_title(payload["session_id"])
         sys.stdin = io.StringIO(raw)
         if event == "codex-end":
             ending.append((int(os.environ["RAPTOR_SESSION_PID"]),

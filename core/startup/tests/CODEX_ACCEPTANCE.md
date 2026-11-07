@@ -34,11 +34,51 @@ separate temporary threads without starting a model turn. It verifies title
 round trips, manual replacement, and that another thread is unchanged.
 This proves the installed app-server's naming API, not lifecycle integration.
 
-Automatic naming still needs an adapter connected to the server hosting the
-firing session, with authenticated RAPTOR context and the shared title policy.
-In particular, a new stdio app-server is not a connection to the active TUI's
-server. Do not infer support from `/rename`, fabricate Claude's `sessionTitle`
-hook output, or edit Codex's database/transcript as a naming mechanism.
+The two-client title test additionally checks a private Unix-socket server:
+one client owns the temporary threads and another applies the shared title
+policy through the production adapter. It asserts that the owner receives
+`thread/name/updated`, native feedback acknowledges a request, manual names
+survive a project change, and the other thread is unchanged. It makes no model calls and never opens a
+user's existing thread. Its WebSocket dependency is optional and guarded;
+install the `codex` extra to include it. The test permits a longer RPC budget
+than production hooks; API acceptance does not establish live hook latency.
+
+```bash
+uv sync --locked --group dev --extra grammars --extra codex
+RAPTOR_CODEX_NATIVE_ACCEPTANCE=1 uv run --extra grammars --extra codex python -m pytest \
+  core/startup/tests/test_codex_native_acceptance.py -m integration -k 'title or names'
+```
+
+Automatic naming runs after SessionStart publication and validated Stop
+restoration. The adapter discovers the authenticated owner's advertised Unix
+listener, or an owner-held native control listener, then checks Linux peer
+credentials before speaking to it. Socket aliases are resolved to a private
+canonical parent; the peer check uses the connected descriptor, so a pathname
+replacement cannot reconnect the client to another server. Unsupported or
+ambiguous discovery skips naming. A new stdio app-server is not a connection
+to the active TUI's server. Do not infer support from `/rename`, fabricate
+Claude's `sessionTitle` hook output, or edit Codex's database/transcript as a naming mechanism.
+
+Do not change the launcher to start an extra app-server merely to make this
+test pass. A lifecycle adapter must establish that its connection reaches the
+server owning the authenticated firing session. A `--no-daemon` session need
+not expose such a connection; missing transport must leave naming optional,
+without changing command approvals, session ownership or launch behavior.
+
+Concurrent instances must select titles by their authenticated native thread
+identity, including when several threads share a server. Never select the
+latest thread, infer a thread from a project bookmark, or use one global
+current-session file. Installation protection is independent of naming:
+runtime sockets and title state belong outside the read-only checkout, with
+private permissions. Sharing the installation must not share title state
+between threads or let one launch clean up another launch's runtime files.
+
+The adapter re-reads the title before a write and preserves a manual change
+observed during that interval. The native naming API has no compare-and-set
+operation, so this cannot make a simultaneous UI rename atomic. A later
+observed custom name latches the shared policy's manual-name preference.
+The 750 ms RPC budget is independent of the native hook timeout; a slow
+update is optional, and only later native feedback confirms a request.
 
 ## Hook failure evidence
 

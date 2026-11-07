@@ -217,10 +217,14 @@ def test_codex_stop_leaves_unknown_running(tmp_path, context, monkeypatch):
     from core.run import metadata
     monkeypatch.setattr(metadata, "_get_session_pid", lambda: 99999)
     from core.startup import codex_environment
+    from core.startup import codex_session_title
+    ordering = []
     def restore(sid, *, lifecycle=False):
         assert sid == "test-session"
         assert lifecycle is True
+        ordering.append('validated')
     monkeypatch.setattr(codex_environment, "restore", restore)
+    monkeypatch.setattr(codex_session_title, "update_title", lambda sid: ordering.append(sid))
     module = runpy.run_path(str(SCRIPT))
     main = module["main"]
     main.__globals__["REPO_ROOT"] = tmp_path
@@ -229,7 +233,22 @@ def test_codex_stop_leaves_unknown_running(tmp_path, context, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(stop_payload))
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), "codex-stop"])
     main()
+    assert ordering == ['validated', 'test-session']
     assert json.loads((out / ".raptor-run.json").read_text())["status"] == "running"
+
+
+def test_unvalidated_codex_stop_cannot_name_a_thread(context, monkeypatch):
+    from core.startup import codex_environment, codex_session_title
+    def refuse(*args, **kwargs):
+        raise ValueError('invalid owner')
+    monkeypatch.setattr(codex_environment, 'restore', refuse)
+    monkeypatch.setattr(codex_session_title, 'update_title', lambda sid: pytest.fail('unvalidated naming'))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({
+        'session_id': 'test-session', 'hook_event_name': 'Stop'})))
+    monkeypatch.setattr(sys, 'argv', [str(SCRIPT), 'codex-stop'])
+    module = runpy.run_path(str(SCRIPT))
+    with pytest.raises(SystemExit, match='no validated Codex session context'):
+        module['main']()
 
 
 def test_errexit_and_existing_parent_trap_preserved(tmp_path, context):
