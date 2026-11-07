@@ -373,6 +373,24 @@ class TestLiveAdjudication:
         assert result.outcome == "confirmed", result.errors
         assert result.matches
 
+    @pytest.mark.parametrize("body, expected", [
+        ('echo "<a title=\'" . "prefix-" . $_GET["x"] . "\'>";', "confirmed"),
+        ('echo "<a title=\'" . "fixed" . "\'>" . $_GET["body"];', "inconclusive"),
+    ], ids=["request-inside-attribute", "request-after-attribute"])
+    def test_raw_attribute_context_does_not_borrow_body_taint(
+        self, body: str, expected: str, tmp_path: Path,
+    ):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text('<?php\nfunction f() {\n  ' + body + '\n}\n')
+        rule = resolve_semgrep_rule_for_cwe("CWE-79", "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == expected, result.errors
+        assert bool(result.matches) == (expected == "confirmed")
+
     def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
         """Live pin of the engine's ACTUAL selection for language:php
         rules: .phtml is scanned, .php5/.php4/.php3 are not — the

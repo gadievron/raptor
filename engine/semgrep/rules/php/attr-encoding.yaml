@@ -243,6 +243,8 @@ rules:
         exact: true
       - pattern: (float) $X
         exact: true
+      - pattern: (bool) $X
+        exact: true
       # Preserve return-only sanitization on engines requiring assignment specs.
       - patterns:
           - pattern: $SAFE = $CONVERTER(...)
@@ -258,6 +260,7 @@ rules:
           - pattern-either:
               - pattern: $SAFE = (int) $X
               - pattern: $SAFE = (float) $X
+              - pattern: $SAFE = (bool) $X
           - metavariable-regex:
               metavariable: $SAFE
               regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
