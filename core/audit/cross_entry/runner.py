@@ -19,6 +19,23 @@ from .slices import build_slices
 from .study import run_studies
 
 
+def _match_reports(index, reports):
+    """Collect report definitions once, retaining function insertion order."""
+    requested = {}
+    matches = {}
+    for function in index.functions.values():
+        key = f"{function.file}:{function.name}"
+        if key not in reports:
+            continue
+        requested[function.id] = reports[key]
+        bucket = matches.get(key)
+        if bucket is None:
+            matches[key] = [function.id]
+        else:
+            bucket.append(function.id)
+    return requested,matches
+
+
 def _terms(index, consumers, depth):
     reachable = set(consumers)
     for _ in range(depth):
@@ -144,10 +161,10 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
             if sep and path.is_relative_to(root):
                 translated.append(f"{path.relative_to(root).as_posix()}:{name}")
         warm,warm_cached = load_or_build_index(sources,out_dir=out_dir,limits=limits,entry_points=translated,include_edges=scope["include_edges"])
-        requested = {f.id:reports[f"{f.file}:{f.name}"] for f in warm.functions.values() if f"{f.file}:{f.name}" in reports}
+        requested,report_matches = _match_reports(warm,reports)
         # Ambiguous bare definitions cannot silently overwrite one another.
         for report in reports:
-            matches = [f.id for f in warm.functions.values() if f"{f.file}:{f.name}" == report]
+            matches = report_matches.get(report,())
             if len(matches) != 1:
                 warm.coverage["unresolved"].append({"report":report,"reason":"ambiguous_or_missing_report_definition"})
                 for fid in matches:
@@ -166,14 +183,15 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
             sources,scope = collect_sources(root,report_files+[view["extra_file"]],limits,include_dirs=include_dirs)
             remember_headers(scope)
             index,cached = load_or_build_index(sources,out_dir=out_dir,limits=limits,entry_points=translated,include_edges=scope["include_edges"])
-            requested = {f.id:reports[f"{f.file}:{f.name}"] for f in index.functions.values() if f"{f.file}:{f.name}" in reports}
+            requested,report_matches = _match_reports(index,reports)
         else:
             index,cached = warm,warm_cached
         for report in reports:
-            matches = [f.id for f in index.functions.values() if f"{f.file}:{f.name}" == report]
+            matches = report_matches.get(report,())
             if len(matches) != 1:
                 for fid in matches:
                     requested.pop(fid,None)
+        del report_matches
         if not requested:
             save_json(out_dir/"cross-entry-index.json",index.to_dict())
             queue.db.execute("UPDATE views SET status='blocked' WHERE namespace=? AND id=?",(namespace,view["id"]))
