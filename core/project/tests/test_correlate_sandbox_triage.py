@@ -21,7 +21,8 @@ def _isolated_mac_key(tmp_path, monkeypatch):
 
 def _write_run(base: Path, name: str, triage: dict, *,
                target: str = "/src/app",
-               ts: str = "2026-09-20T00:00:00") -> Path:
+               ts: str = "2026-09-20T00:00:00",
+               with_triage: bool = True) -> Path:
     d = base / name
     d.mkdir(parents=True, exist_ok=True)
     records = []
@@ -45,7 +46,8 @@ def _write_run(base: Path, name: str, triage: dict, *,
         "started_at": ts,
         "command": "agentic",
     }))
-    triage_run(d, allow_legacy=False)
+    if with_triage:
+        triage_run(d, allow_legacy=False)
     return d
 
 
@@ -234,13 +236,21 @@ class TestSeverityHistory(unittest.TestCase):
             dirs = [
                 _write_run(base, f"r{i:03d}",
                            _triage(severity="routine"),
-                           ts=f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}T00:00:00")
+                           ts=f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}T00:00:00",
+                           with_triage=False)
                 for i in range(60)
             ]
             result = correlate_sandbox_triage(dirs)
-            history = result["targets"]["/src/app"]["severity_history"]
-            self.assertLessEqual(len(history), 50)
-            self.assertEqual(history[-1]["run"], "r059")
+            target = result["targets"]["/src/app"]
+            history = target["severity_history"]
+            # Keep all 60 authenticated summaries. The cap belongs to campaign
+            # correlation; a derived report adds no evidence to this case.
+            self.assertEqual(target["runs_total"], 60)
+            self.assertEqual(target["runs_with_triage"], 60)
+            self.assertEqual(target["runs_unknown"], 0)
+            self.assertEqual(len(history), 50)
+            self.assertEqual([entry["run"] for entry in history],
+                             [f"r{i:03d}" for i in range(10, 60)])
 
 
 if __name__ == "__main__":

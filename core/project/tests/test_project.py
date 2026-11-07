@@ -786,54 +786,60 @@ class TestRenamePinRewriteLocked(unittest.TestCase):
 
     def test_rewrite_blocks_on_the_marker_lock(self):
         import fcntl
-        import os
         import threading
-        import time
+
+        import core.atomic_fs.fs_lock as fs_lock
+        from core.json import load_json
 
         marker = self._project_with_pinned_run()
         lock_path = marker.with_suffix(marker.suffix + ".lock")
         fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
-
+        stamp = os.fstat(fd)
+        identity = (stamp.st_dev, stamp.st_ino)
+        blocked = threading.Event()
+        progressed = threading.Event()
         done = threading.Event()
+        errors = []
+        real_try = fs_lock._try_flock_nb
 
-        def _rename():
-            # force: a status=running marker reads live and this is
-            # exactly the supported --force-past-live-runs path the
-            # unlocked rewrite raced on. Forced rename keeps the
-            # output dir, so the marker path is stable throughout.
-            self.mgr.rename("old", "new", force=True)
-            done.set()
+        def observe_contention(candidate):
+            acquired = real_try(candidate)
+            if not acquired:
+                current = os.fstat(candidate)
+                if (current.st_dev, current.st_ino) == identity:
+                    blocked.set()
+                    progressed.set()
+            return acquired
 
-        moved = marker
+        def rename():
+            try:
+                # Force preserves the output directory of this running pin.
+                self.mgr.rename("old", "new", force=True)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                done.set()
+                progressed.set()
 
-        t = threading.Thread(target=_rename, daemon=True)
-        t.start()
-        try:
-            # While a marker writer holds the lock, the rename loop
-            # must not have re-pointed the pin (an unlocked rewrite
-            # lands within milliseconds).
-            deadline = time.monotonic() + 1.0
-            from core.json import load_json
-            while time.monotonic() < deadline:
-                for candidate in (marker, moved):
-                    meta = load_json(candidate)
-                    if meta is not None:
-                        self.assertEqual(
-                            meta.get("project"), "old",
-                            "pin rewritten while another writer held "
-                            "the marker lock — the RMW is not "
-                            "serialised")
-                if done.is_set():
-                    self.fail("rename completed through a held marker lock")
-                time.sleep(0.05)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        t.join(timeout=10)
+        with patch.object(fs_lock, "_try_flock_nb", observe_contention):
+            thread = threading.Thread(target=rename, name="project-pin-rename-probe", daemon=True)
+            try:
+                thread.start()
+                self.assertTrue(progressed.wait(5), "rename never reached the marker lock")
+                self.assertTrue(blocked.is_set(), f"rename did not encounter marker contention: {errors!r}")
+                self.assertFalse(done.is_set(), "rename completed through a held marker lock")
+                self.assertEqual(load_json(marker).get("project"), "old",
+                                 "pin rewritten through a held marker lock")
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                if thread.ident is not None:
+                    thread.join(timeout=10)
+                    self.assertFalse(thread.is_alive(), "rename worker did not stop")
+        self.assertEqual(errors, [], f"rename worker failed: {errors!r}")
         self.assertTrue(done.is_set(), "rename never completed")
-        from core.json import load_json
-        self.assertEqual(load_json(moved).get("project"), "new")
+        self.assertEqual(load_json(marker).get("project"), "new")
 
     def test_oversize_marker_left_untouched(self):
         # The loop's read carries the metadata budget: an oversize

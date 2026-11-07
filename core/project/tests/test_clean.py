@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from core.project.clean import clean_project
 from core.project.project import Project
 from core.run import start_run, complete_run
+from core.run.metadata import generate_run_metadata, load_run_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -31,11 +32,12 @@ def monkeypatch(_user_state_in_tmp):
         yield patch
 
 
-def _make_project_with_runs(tmpdir, run_specs):
+def _make_project_with_runs(tmpdir, run_specs, *, full_lifecycle=False):
     """Create a project with run directories.
 
     run_specs: list of (command, name) tuples.
-    Returns (project, output_dir).
+    Use production adoption metadata for policy cases; lifecycle integration
+    cases opt into the real start/complete path. Returns the project.
     """
     output_dir = Path(tmpdir) / "project_output"
     output_dir.mkdir()
@@ -47,8 +49,13 @@ def _make_project_with_runs(tmpdir, run_specs):
     import os
     for i, (command, name) in enumerate(run_specs):
         run_dir = output_dir / name
-        start_run(run_dir, command)
-        complete_run(run_dir)
+        if full_lifecycle:
+            start_run(run_dir, command)
+            complete_run(run_dir)
+        else:
+            run_dir.mkdir()
+            generate_run_metadata(run_dir)
+        assert load_run_metadata(run_dir)["command"] == command
         (run_dir / "findings.json").write_text("[]")
         stamp = time.time() - len(run_specs) + i
         os.utime(run_dir, (stamp, stamp))
@@ -102,7 +109,7 @@ class TestClean(unittest.TestCase):
 
     def test_keep_one_preserves_single_run(self):
         with TemporaryDirectory() as d:
-            p = _make_project_with_runs(d, [("scan", "scan-20260401")])
+            p = _make_project_with_runs(d, [("scan", "scan-20260401")], full_lifecycle=True)
             stats = clean_project(p, keep=1)
             self.assertEqual(len(stats["deleted"]), 0)
             self.assertEqual(len(stats["kept"]), 1)
@@ -136,7 +143,7 @@ class TestClean(unittest.TestCase):
             p = _make_project_with_runs(d, [
                 ("scan", "scan-20260401"),
                 ("scan", "scan-20260402"),
-            ])
+            ], full_lifecycle=True)
             # Add some data to the older run
             (p.output_path / "scan-20260401" / "big_file.txt").write_text("x" * 1000)
             stats = clean_project(p, keep=1)
@@ -161,7 +168,7 @@ class TestClean(unittest.TestCase):
                 ("scan", "scan-20260403"),
                 ("validate", "validate-20260401"),
                 ("validate", "validate-20260402"),
-            ])
+            ], full_lifecycle=True)
             from core.project.clean import plan_clean
             plan = plan_clean(p, keep=1)
             self.assertIn("scan", plan["by_type"])
