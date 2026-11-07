@@ -450,9 +450,11 @@ def dispatch_catalogue(index, rows, budget):
     per_function = defaultdict(list)
     per_calls = defaultdict(list)
     for a in index.accesses:
-        per_function[a.function].append(a)
+        if a.function in by_target:
+            per_function[a.function].append(a)
     for call in index.calls:
-        per_calls[call.caller].append(call)
+        if call.caller in by_target:
+            per_calls[call.caller].append(call)
     for fid,bindings in sorted(by_target.items()):
         fn = index.functions[fid]
         accesses = [a for a in per_function[fid] if a.operation != "read"]
@@ -475,6 +477,7 @@ def dispatch_catalogue(index, rows, budget):
         del call_summaries
         seen = set()
         candidates = []
+        candidate_count = 0
         source_bytes = None
         source_lines = None
         for _,a,call in sorted(ranked,key=lambda row:row[0]):
@@ -492,22 +495,29 @@ def dispatch_catalogue(index, rows, budget):
             if not source or (location,source) in seen:
                 continue
             seen.add((location,source))
-            candidates.append({"function":fid,"evidence_id":a.id,"file":fn.file,"line":location,
-                               "origin":a.object_origin,"source":source,"kind":"effect_fragment"})
+            candidate = {"function":fid,"evidence_id":a.id,"file":fn.file,"line":location,
+                         "origin":a.object_origin,"source":source,"kind":"effect_fragment"}
+            candidate_count += 1
+            # Only the first four candidates can enter a packet. Count all
+            # unique sites without retaining their supplemental dictionaries.
+            if len(candidates) < 4:
+                candidates.append(candidate)
         for row in bindings[:1]:
             decl = index.declarations[row["evidence_id"]]
             candidates.insert(0,{"function":fid,"evidence_id":row["evidence_id"],**decl,
                                  "installer":row["installer"],"callback_target":row.get("callback_target",fid),
                                  "kind":"callback_assignment"})
+            candidate_count += 1
         resource_effects = sum(not priority[0] for priority,_,_ in ranked)
         path_depth = min((len(r.get("dispatch_path",[None])) for r in bindings),default=1)
-        fragments.append((path_depth,resource_effects,fid,candidates))
+        fragments.append((path_depth,resource_effects,fid,candidates,candidate_count))
     emitted = []
     used = 0
     seen_evidence = set()
     # Invocation and alias statements carry the resource handoff. Keep the
     # source-backed path, not just the destination implementation's effects.
-    path_fragments = []
+    path_count = 0
+    path_used = 0
     for row in rows:
         steps = row.get("dispatch_path") or [{"caller":row.get("caller",row["target"]),
                   "evidence_id":row["evidence_id"],"invocation_evidence":row.get("invocation_evidence"),
@@ -520,18 +530,17 @@ def dispatch_catalogue(index, rows, budget):
                 decl = index.declarations[evidence]
                 fragment = {"function":step["caller"],"evidence_id":evidence,**decl,"kind":"dispatch_path"}
                 rendered = f"\nCONDITIONAL DISPATCH PATH EVIDENCE {evidence} ({decl['file']}:{decl['line']})\n{decl['source']}\n"
-                path_fragments.append((fragment,rendered))
-    # Leave most of the excerpt budget available for callback side effects.
-    path_used = 0
-    for fragment,rendered in path_fragments:
-        if path_used+len(rendered) <= budget//8:
-            emitted.append((fragment,rendered))
-            used += len(rendered)
-            path_used += len(rendered)
+                path_count += 1
+                # Leave most of the budget for effects. A rejected path still
+                # counts as omitted, but its rendered string need not survive.
+                if path_used+len(rendered) <= budget//8:
+                    emitted.append((fragment,rendered))
+                    used += len(rendered)
+                    path_used += len(rendered)
     # First give each visited implementation its binding and up to three
     # effect sites together. A list of assignments alone gives the study no
     # evidence of what any callback does. Remaining sites stay deferred.
-    for _,_,fid,group in sorted(fragments,key=lambda item:(item[0],-item[1],item[2])):
+    for _,_,fid,group,_ in sorted(fragments,key=lambda item:(item[0],-item[1],item[2])):
         packet = []
         for fragment in group[:4]:
             heading = (f"CALLBACK BINDING in {fragment['installer'] or '<static initializer>'} for {fragment['callback_target']}"
@@ -544,4 +553,4 @@ def dispatch_catalogue(index, rows, budget):
         if used+size <= budget:
             emitted.extend(packet)
             used += size
-    return emitted,sum(len(group) for _,_,_,group in fragments)+len(path_fragments)-len(emitted)
+    return emitted,sum(count for _,_,_,_,count in fragments)+path_count-len(emitted)
