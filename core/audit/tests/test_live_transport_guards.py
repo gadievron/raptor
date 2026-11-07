@@ -1694,6 +1694,8 @@ class TestPhpSurfaceFences:
             "test_vulnerable_snippet_confirms",
             "test_sanitized_snippet_refutes",
             "test_attribute_encoding_miss_on_indirect_flow_stays_inconclusive",
+            "test_encoded_request_in_unquoted_attribute_confirms",
+            "test_raw_attribute_context_does_not_borrow_body_taint",
         }
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_semgrep_php_target_selection_pin",
