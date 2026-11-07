@@ -30,7 +30,7 @@ def _sizeof_symbol(text):
     if re.fullmatch(SIZEOF, text) is None:
         raise ParseError("invalid sizeof expression")
     operand = " ".join(text[text.index("(") + 1 : -1].split())
-    operand = re.sub(r"\s*(->|\.)\s*", r"\1", operand)
+    operand = "".join(part.strip() for part in re.split(r"(->|\.)", operand))
     if (
         re.fullmatch(IDENTIFIER, operand) is None
         and re.fullmatch(r"[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*(?:\s*\*)*", operand) is None
@@ -38,7 +38,9 @@ def _sizeof_symbol(text):
         raise ParseError(
             "sizeof operand requires source/type or runtime-extent modeling"
         )
-    operand = re.sub(r"\s*\*\s*", "*", operand)
+    # split() above has already reduced every whitespace run to one ASCII
+    # space. Validation permits stars only at the end of a type operand.
+    operand = operand.replace(" *", "*").replace("* ", "*")
     return f"sizeof({operand})"
 
 
