@@ -97,3 +97,13 @@ class TestDetectionRoleResolution:
         rule=Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only(f"coccinelle:{rule_name}") is True
+
+
+    def test_usercopy_type_spellings_require_target_layout_review(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/copy_user_size_mismatch.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:copy_user_size_mismatch") is True
