@@ -26,6 +26,9 @@ from core.http.urllib_backend import (
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.http.urllib_backend as _clock_consumer
+from core.testing.module_bindings import mock_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _isolate_clock_patch_targets(monkeypatch):
@@ -1769,7 +1772,7 @@ class TestRaiseOnStatusFalseTransient:
         bad = _stub_response(b"nope", status=503, reason="Unavailable")
         good = _stub_response(b'{"ok": 1}')
         client, pool = _client_with_mock_pool([bad, good])
-        with patch("time.sleep"):
+        with mock_module_attribute(_clock_consumer, 'time', 'sleep'):
             out = client.request(
                 "GET", "https://example.com/x",
                 retries=1, raise_on_status=False,

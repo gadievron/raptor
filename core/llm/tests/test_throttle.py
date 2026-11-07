@@ -12,6 +12,9 @@ from core.llm.throttle import (
     broadcast_rate_limit,
 )
 
+import core.llm.throttle as _clock_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 
 class _FakeMonotonic:
     """Deterministic clock for cooldown choreography — the real-time
@@ -72,7 +75,7 @@ class TestAdaptiveThrottle:
 
     def test_restore_after_cooldown(self, monkeypatch):
         clk = _FakeMonotonic()
-        monkeypatch.setattr(time, "monotonic", clk)
+        patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', clk)
         t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
         t.signal_rate_limit()
         assert t.effective_workers == 4
@@ -82,7 +85,7 @@ class TestAdaptiveThrottle:
 
     def test_signal_resets_cooldown(self, monkeypatch):
         clk = _FakeMonotonic()
-        monkeypatch.setattr(time, "monotonic", clk)
+        patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', clk)
         t = AdaptiveThrottle(8, cooldown_s=0.1, auto_register=False)
         t.signal_rate_limit()
         assert t.effective_workers == 4
@@ -100,7 +103,7 @@ class TestAdaptiveThrottle:
 
     def test_recovery_ramps_one_doubling_per_interval(self, monkeypatch):
         clk = _FakeMonotonic()
-        monkeypatch.setattr(time, "monotonic", clk)
+        patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', clk)
         t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
         for _ in range(3):
             t.signal_rate_limit()
@@ -115,7 +118,7 @@ class TestAdaptiveThrottle:
 
     def test_long_idle_credits_every_quiet_interval(self, monkeypatch):
         clk = _FakeMonotonic()
-        monkeypatch.setattr(time, "monotonic", clk)
+        patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', clk)
         t = AdaptiveThrottle(8, cooldown_s=0.02, auto_register=False)
         for _ in range(3):
             t.signal_rate_limit()
@@ -126,7 +129,7 @@ class TestAdaptiveThrottle:
 
     def test_signal_during_ramp_restarts_the_window(self, monkeypatch):
         clk = _FakeMonotonic()
-        monkeypatch.setattr(time, "monotonic", clk)
+        patch_module_attribute(monkeypatch, _clock_consumer, 'time', 'monotonic', clk)
         t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
         for _ in range(3):
             t.signal_rate_limit()

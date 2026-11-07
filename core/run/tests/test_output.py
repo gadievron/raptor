@@ -19,6 +19,9 @@ from core.run.output import (
 from core.testing.module_bindings import patch_module_attribute
 import pytest
 
+import core.run.output as _clock_consumer
+from core.testing.module_bindings import mock_module_attribute
+
 
 @pytest.fixture(autouse=True)
 def _isolate_os_fault_patches(monkeypatch):
@@ -77,7 +80,7 @@ class TestGetOutputDir(unittest.TestCase):
             with patch("core.run.output._resolve_active_project",
                        return_value=(d, "test", "")):
                 # Pin the timestamp string so both calls see the same second
-                with patch("time.strftime", return_value="20260427-120000"):
+                with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427-120000'):
                     # Simulate sibling process via patched os.getpid
                     with patch('core.run.output.os.getpid', return_value=11111):
                         a = get_output_dir("scan")
@@ -232,7 +235,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
     # time.monotonic_ns. Use prefix + shape assertions instead so
     # the tests survive future tail-format adjustments.
     def test_underscore_separator(self):
-        with patch("time.strftime", return_value="20260427_120000"):
+        with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
             with patch('core.run.output.os.getpid', return_value=12345):
                 suffix = unique_run_suffix("_")
                 self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
@@ -241,7 +244,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
                 self.assertTrue(tail.isdigit())
 
     def test_hyphen_separator(self):
-        with patch("time.strftime", return_value="20260427-120000"):
+        with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427-120000'):
             with patch('core.run.output.os.getpid', return_value=12345):
                 suffix = unique_run_suffix("-")
                 self.assertTrue(suffix.startswith("20260427-120000-pid12345-"))
@@ -251,7 +254,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
 
     def test_default_separator_is_underscore(self):
         # Standalone mode is the more common shape, so default to '_'.
-        with patch("time.strftime", return_value="20260427_120000"):
+        with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
             with patch('core.run.output.os.getpid', return_value=12345):
                 suffix = unique_run_suffix()
                 self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
@@ -264,7 +267,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
         def capture(fmt):
             captured["fmt"] = fmt
             return "20260427-120000"
-        with patch("time.strftime", side_effect=capture):
+        with mock_module_attribute(_clock_consumer, 'time', 'strftime', side_effect=capture):
             with patch('core.run.output.os.getpid', return_value=99):
                 unique_run_suffix("-")
         self.assertEqual(captured["fmt"], "%Y%m%d-%H%M%S")
@@ -283,7 +286,7 @@ class TestUniqueRunSuffix(unittest.TestCase):
         # The fundamental property: two concurrent processes get different
         # PIDs and therefore different suffixes even at the same wall-clock
         # second.
-        with patch("time.strftime", return_value="20260427_120000"):
+        with mock_module_attribute(_clock_consumer, 'time', 'strftime', return_value='20260427_120000'):
             with patch('core.run.output.os.getpid', return_value=11111):
                 a = unique_run_suffix("_")
             with patch('core.run.output.os.getpid', return_value=22222):
