@@ -13,6 +13,46 @@ from .progress import exclusive_session
 from .study import SYSTEM, REFUTE_SYSTEM, STUDY_SCHEMA, REFUTE_SCHEMA, _payload, _validate, _refutation
 
 
+_SYMBOL_GROUP_MIN_NAMES = 4
+_SYMBOL_GROUP_MIN_WORK = 256
+
+
+def _retrieval_candidates(index, names, functions):
+    """Resolve one retrieval round without caching across model calls."""
+    grouped = None
+    if (
+        len(names) >= _SYMBOL_GROUP_MIN_NAMES
+        and len(names) * len(index.functions) > _SYMBOL_GROUP_MIN_WORK
+        and all(type(name) is str for name in names)
+    ):
+        wanted = set(names)
+        longest_name = max(map(len,names))
+        grouped = {}
+        for function in index.functions.values():
+            name = function.name
+            if type(name) is not str:
+                # Preserve equality-based handling of adapters/legacy metadata.
+                grouped = None
+                break
+            # A longer identifier cannot match; avoid hashing large unrelated names.
+            if len(name) > longest_name or name not in wanted:
+                continue
+            bucket = grouped.get(name)
+            if bucket is None:
+                grouped[name] = [function.id]
+            else:
+                bucket.append(function.id)
+    extra = []
+    for name in names:
+        matches = (
+            [f.id for f in index.functions.values() if f.name == name]
+            if grouped is None else grouped.get(name,())
+        )
+        if len(matches) == 1 and matches[0] not in functions:
+            extra.append(matches[0])
+    return extra
+
+
 class _BudgetStop(Exception):
     pass
 
@@ -148,10 +188,7 @@ def _run(index,units,client,out_dir,limits,model_key,should_stop):
                         study = state["study"]
                         extra = []
                         if state["retrieval_rounds_done"] < limits.retrieval_rounds:
-                            for name in study["needed_symbols"]:
-                                matches = [f.id for f in index.functions.values() if f.name == name]
-                                if len(matches) == 1 and matches[0] not in functions:
-                                    extra.append(matches[0])
+                            extra = _retrieval_candidates(index,study["needed_symbols"],functions)
                         extra = sorted(set(extra))[:max(0,min(4,limits.functions_per_slice-1))]
                         if extra:
                             next_functions = ([unit.consumer]+extra+[f for f in functions if f != unit.consumer])[:limits.functions_per_slice]
