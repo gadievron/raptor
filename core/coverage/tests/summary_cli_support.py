@@ -22,7 +22,6 @@ from __future__ import annotations
 import importlib.util
 import io
 import os
-import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
@@ -31,6 +30,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 # parents[3] = core/coverage/tests -> core/coverage -> core -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -98,7 +99,7 @@ def run_cli(*args: str, operator: bool = False, trusted: bool = True):
         env.pop("_RAPTOR_TRUSTED", None)
         env.pop("CLAUDECODE", None)
     env["RAPTOR_DIR"] = str(REPO_ROOT)
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(CLI), *args],
         env=env, capture_output=True, text=True, timeout=60,
     )

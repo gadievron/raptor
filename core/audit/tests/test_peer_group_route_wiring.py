@@ -11,7 +11,6 @@ dimension folds into its ``auth_check`` vote.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -19,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.analysis.peer_groups import (
     GROUP_TYPE_ROUTE_FAMILY,
     ROUTE_AUTH_PROPERTY,
@@ -72,7 +72,7 @@ def prep_with_routes(tmp_path, monkeypatch):
         _RAPTOR_TRUSTED="1",
         PYTHONPATH=str(_RAPTOR_DIR),
     )
-    r = subprocess.run(
+    r = run_standalone_cli(
         [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
         env=env,
         capture_output=True,
