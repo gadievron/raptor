@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from ._util import find_enclosing_function as _find_enclosing_function
@@ -372,6 +373,23 @@ def _extract_dispatch_tables_ts(
     ]
 
 
+def _site_prefixes(
+    sites: list[tuple[str, int]], file: str,
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    """Select 3 same-file and 2 other sites from native file-sorted groups.
+
+    Phase 1 visits sorted native paths, so each producer's site list is
+    grouped in that same order. Lines within a group retain producer order.
+    """
+    lower = bisect_left(sites, file, key=lambda site: site[0])
+    upper = bisect_right(sites, file, key=lambda site: site[0])
+    same = sites[lower:min(lower + 3, upper)]
+    other = sites[:min(2, lower)]
+    if len(other) < 2:
+        other += sites[upper:upper + 2 - len(other)]
+    return same, other
+
+
 def find_dispatch_gaps(
     call_graphs: dict[str, object],
     source_texts: dict[str, str] | None = None,
@@ -400,6 +418,10 @@ def find_dispatch_gaps(
     files = set(call_graphs.keys())
     if source_texts:
         files |= set(source_texts.keys())
+
+    # Native path sorting also orders producer-site groups for binary search.
+    # Foreign path adapters retain the original equality-based scans.
+    native_paths = all(type(path) is str for path in files)
 
     # Phase 1: collect dispatch tables and producer sites.
     all_tables: list[DispatchTable] = []
@@ -474,8 +496,13 @@ def find_dispatch_gaps(
             sites = all_produced[produced_key]
             # Prefer same-file sites (high confidence), cap total sites
             # to avoid combinatorial explosion on repetitive codebases.
-            same_file = [(f, ln) for f, ln in sites if f == table.file]
-            other = [(f, ln) for f, ln in sites if f != table.file]
+            # Direct scans win on tiny lists; larger native groups pay for
+            # binary search without full-list copies or a second site index.
+            if len(sites) >= 32 and native_paths and type(table.file) is str:
+                same_file, other = _site_prefixes(sites, table.file)
+            else:
+                same_file = [(f, ln) for f, ln in sites if f == table.file]
+                other = [(f, ln) for f, ln in sites if f != table.file]
 
             # Cross-file relatedness gate: only emit cross-file gaps when
             # the produced key shares a prefix or suffix (>= 3 chars) with
@@ -526,7 +553,20 @@ def _shares_affix(candidate: str, existing_keys: set[str], min_affix: int = 3) -
     when ``'status_active'`` is) while rejecting unrelated strings from
     different modules (``'mysql_query'`` against an attacker-synthesis table).
     """
+    native_candidate = (type(candidate) is str and type(min_affix) is int
+                        and min_affix > 0)
+    if native_candidate:
+        prefix = candidate[:min_affix]
+        suffix = candidate[-min_affix:]
+        enough_chars = len(candidate) >= min_affix
     for key in existing_keys:
+        if native_candidate and type(key) is str:
+            # Only the required boundary characters establish an affix;
+            # a longer common prefix/suffix cannot change the verdict.
+            if (enough_chars and len(key) >= min_affix
+                    and (key.startswith(prefix) or key.endswith(suffix))):
+                return True
+            continue
         # Shared prefix
         prefix_len = 0
         for a, b in zip(candidate, key):
