@@ -25,7 +25,7 @@ import importlib.metadata
 import importlib.util
 import subprocess
 from types import ModuleType
-from core.testing.module_views import scoped_function_imports
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 from core.testing.module_bindings import mock_module_attribute
@@ -59,6 +59,49 @@ def _owned_probe_imports(monkeypatch):
             yield
         finally:
             monkeypatch.undo()
+
+
+_update_imports = ModuleType("startup_update_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_update_imports(monkeypatch):
+    """Own the update probe's HTTP and missing-dependency seams."""
+    original = startup_init._check_pypi_update
+    inherited = original.__builtins__
+    original_import = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+    imports = ModuleType("update_probe_imports")
+    imports.requests = ModuleType("requests")
+    try:
+        borrowed = original_import("requests")
+    except ImportError:
+        pass
+    else:
+        vars(imports.requests).update(vars(borrowed))
+    imports.builtins = ModuleType("builtins")
+    vars(imports.builtins).update(vars(inherited) if isinstance(inherited, ModuleType) else inherited)
+
+    def import_owned(name, globals=None, locals=None, fromlist=(), level=0):
+        borrowed = original_import(name, globals, locals, fromlist, level)
+        return imports.requests if level == 0 and name == "requests" else borrowed
+
+    imports.builtins.__import__ = import_owned
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        return imports.builtins.__import__(name, globals, locals, fromlist, level)
+
+    def check(*args, **kwargs):
+        private = module_function_view(
+            startup_init, bindings={"_check_pypi_update": original}, import_hook=import_local,
+        )
+        return private._check_pypi_update(*args, **kwargs)
+
+    try:
+        monkeypatch.setitem(vars(startup_init), "_check_pypi_update", check)
+        monkeypatch.setitem(globals(), "_update_imports", imports)
+        yield
+    finally:
+        monkeypatch.undo()
 
 
 _FAKE_DEPS = {
@@ -341,20 +384,20 @@ class TestCheckPypiUpdate:
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
         resp = mock.Mock(status_code=200)
         resp.json.return_value = {"info": {"version": "1.82.0"}}
-        with mock.patch("requests.get", return_value=resp):
+        with mock_module_attribute(_update_imports, "requests", "get", return_value=resp):
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is True
 
     def test_returns_false_when_same(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
         resp = mock.Mock(status_code=200)
         resp.json.return_value = {"info": {"version": "1.79.0"}}
-        with mock.patch("requests.get", return_value=resp):
+        with mock_module_attribute(_update_imports, "requests", "get", return_value=resp):
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is False
 
     def test_returns_false_on_network_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
         import requests as _req
-        with mock.patch("requests.get", side_effect=_req.ConnectionError):
+        with mock_module_attribute(_update_imports, "requests", "get", side_effect=_req.ConnectionError):
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is False
 
     def test_returns_false_when_requests_missing(self, tmp_path, monkeypatch):
@@ -367,7 +410,7 @@ class TestCheckPypiUpdate:
                 raise ImportError("no requests")
             return real_import(name, *a, **kw)
 
-        with mock.patch("builtins.__import__", side_effect=_block_requests):
+        with mock_module_attribute(_update_imports, "builtins", "__import__", side_effect=_block_requests):
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is False
 
     def test_cached_result_avoids_network(self, tmp_path, monkeypatch):
@@ -381,7 +424,7 @@ class TestCheckPypiUpdate:
                 "latest": "1.82.0", "ts": time.time(),
             }}})
         )
-        with mock.patch("requests.get") as get:
+        with mock_module_attribute(_update_imports, "requests", "get") as get:
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is True
         get.assert_not_called()
 
@@ -398,7 +441,7 @@ class TestCheckPypiUpdate:
         )
         resp = mock.Mock(status_code=200)
         resp.json.return_value = {"info": {"version": "1.83.0"}}
-        with mock.patch("requests.get", return_value=resp) as get:
+        with mock_module_attribute(_update_imports, "requests", "get", return_value=resp) as get:
             assert startup_init._check_pypi_update("semgrep", "1.79.0") is True
         get.assert_called_once()
 
