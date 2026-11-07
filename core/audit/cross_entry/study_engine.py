@@ -40,7 +40,8 @@ def _retrieval_candidates(index, names, functions):
             bucket = grouped.get(name)
             if bucket is None:
                 grouped[name] = [function.id]
-            else:
+            elif len(bucket) == 1:
+                # Two definitions prove ambiguity; further IDs cannot change it.
                 bucket.append(function.id)
     extra = []
     for name in names:
