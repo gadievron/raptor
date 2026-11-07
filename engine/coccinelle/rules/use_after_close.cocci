@@ -1,173 +1,173 @@
-// use_after_close.cocci — Detect file descriptor operations after
-// close(fd) without fd reassignment.
+// use_after_close.cocci — Review descriptor operations following close.
+// Closed/invalid descriptors can produce EBADF; the pattern does not prove
+// undefined language behavior, a reused descriptor, or a security impact.
 //
-// After close(fd), the descriptor is invalid. Any subsequent
-// read/write/ioctl/recv/send on that fd is undefined behaviour:
-// the fd may have been reused by another thread, so the operation
-// silently targets an unrelated resource — data corruption, info
-// leak, or privilege escalation.
-//
+// Keep observations and earlier operations visible. Track direct writes,
+// receiver/index changes and address-taking. dup2/dup3 may replace only the
+// destination; a self-duplicate does not reopen the closed descriptor.
+// Replacement ends local tracking without proving syscall success. The
+// caller's resource validity, aliases and implicit numeric reuse need review.
 // CWE-672: Operation on a Resource after Expiration or Release
-// Zero-FP: using a closed fd without reassignment is always wrong.
-// @role: verification
+// @role: detection
+// Descriptor semantics: https://man7.org/linux/man-pages/man2/close.2.html
+// Rebinding semantics: https://man7.org/linux/man-pages/man2/dup.2.html
 
-@close_then_read@
+@uac_fd_self_dup@
 expression FD;
+expression flags;
 position p;
 @@
 
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* read@p(FD, ...)
+(
+  dup2@p(FD, FD)
+|
+  dup2@p((FD), FD)
+|
+  dup2@p(FD, (FD))
+|
+  dup2@p((FD), (FD))
+|
+  dup3@p(FD, FD, flags)
+|
+  dup3@p((FD), FD, flags)
+|
+  dup3@p(FD, (FD), flags)
+|
+  dup3@p((FD), (FD), flags)
+)
 
-@script:python report_read depends on close_then_read@
-p << close_then_read.p;
+@uac_fd_value exists@
+expression VALUE;
+expression CONTEXT =~ "^\([A-Za-z_][A-Za-z0-9_]*\|[0-9][0-9a-fA-FxXuUlL]*\)$";
+identifier FIELD;
+constant OFFSET;
+assignment operator op;
+expression SOURCE, FLAGS;
+position rebind != uac_fd_self_dup.p;
+position p;
+identifier CONSUMER =~ "^\(read\|write\|ioctl\|recv\|send\|recvfrom\|sendto\|pread\|pwrite\|readv\|writev\)$";
+@@
+close(\(CONTEXT@VALUE\|CONTEXT->FIELD@VALUE\|CONTEXT.FIELD@VALUE\|CONTEXT[OFFSET]@VALUE\));
+... when any
+    when != VALUE op ...
+    when != CONTEXT op ...
+    when != &VALUE
+    when != &CONTEXT
+    when != VALUE++
+    when != ++VALUE
+    when != VALUE--
+    when != --VALUE
+    when != CONTEXT++
+    when != ++CONTEXT
+    when != CONTEXT--
+    when != --CONTEXT
+    when != dup2@rebind(SOURCE, VALUE)
+    when != dup2@rebind(SOURCE, (VALUE))
+    when != dup3@rebind(SOURCE, VALUE, FLAGS)
+    when != dup3@rebind(SOURCE, (VALUE), FLAGS)
+CONSUMER@p(VALUE, ...)
+
+@script:python uac_fd_value_report depends on uac_fd_value@
+p << uac_fd_value.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "read() on closed file descriptor — use after close (CWE-672)"
+    "rule": "use_after_close",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@close_then_write@
-expression FD;
+@uac_fd_slot exists@
+identifier SLOT;
+expression FN;
+assignment operator op;
+expression SOURCE, FLAGS;
+position rebind != uac_fd_self_dup.p;
 position p;
+identifier CONSUMER =~ "^\(read\|write\|ioctl\|recv\|send\|recvfrom\|sendto\|pread\|pwrite\|readv\|writev\)$";
 @@
+close(*SLOT);
+... when any
+    when != SLOT op ...
+    when != (*SLOT) op ...
+    when != &SLOT
+    when != &(*SLOT)
+    when != FN(..., SLOT, ...)
+    when != SLOT++
+    when != ++SLOT
+    when != SLOT--
+    when != --SLOT
+    when != (*SLOT)++
+    when != ++(*SLOT)
+    when != (*SLOT)--
+    when != --(*SLOT)
+    when != dup2@rebind(SOURCE, *SLOT)
+    when != dup2@rebind(SOURCE, (*SLOT))
+    when != dup3@rebind(SOURCE, *SLOT, FLAGS)
+    when != dup3@rebind(SOURCE, (*SLOT), FLAGS)
+CONSUMER@p(*SLOT, ...)
 
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* write@p(FD, ...)
-
-@script:python report_write depends on close_then_write@
-p << close_then_write.p;
+@script:python uac_fd_slot_report depends on uac_fd_slot@
+p << uac_fd_slot.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "write() on closed file descriptor — use after close (CWE-672)"
+    "rule": "use_after_close",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@close_then_ioctl@
-expression FD;
+@uac_fd_index exists@
+identifier ARRAY, INDEX;
+expression FN;
+assignment operator op;
+expression SOURCE, FLAGS;
+position rebind != uac_fd_self_dup.p;
 position p;
+identifier CONSUMER =~ "^\(read\|write\|ioctl\|recv\|send\|recvfrom\|sendto\|pread\|pwrite\|readv\|writev\)$";
 @@
+close(ARRAY[INDEX]);
+... when any
+    when != ARRAY op ...
+    when != INDEX op ...
+    when != ARRAY[INDEX] op ...
+    when != &ARRAY
+    when != &INDEX
+    when != &ARRAY[INDEX]
+    when != FN(..., ARRAY, ...)
+    when != ARRAY++
+    when != ++ARRAY
+    when != ARRAY--
+    when != --ARRAY
+    when != INDEX++
+    when != ++INDEX
+    when != INDEX--
+    when != --INDEX
+    when != ARRAY[INDEX]++
+    when != ++ARRAY[INDEX]
+    when != ARRAY[INDEX]--
+    when != --ARRAY[INDEX]
+    when != dup2@rebind(SOURCE, ARRAY[INDEX])
+    when != dup2@rebind(SOURCE, (ARRAY[INDEX]))
+    when != dup3@rebind(SOURCE, ARRAY[INDEX], FLAGS)
+    when != dup3@rebind(SOURCE, (ARRAY[INDEX]), FLAGS)
+CONSUMER@p(ARRAY[INDEX], ...)
 
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* ioctl@p(FD, ...)
-
-@script:python report_ioctl depends on close_then_ioctl@
-p << close_then_ioctl.p;
+@script:python uac_fd_index_report depends on uac_fd_index@
+p << uac_fd_index.p;
 @@
 import json
 msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "ioctl() on closed file descriptor — use after close (CWE-672)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@close_then_recv@
-expression FD;
-position p;
-@@
-
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* recv@p(FD, ...)
-
-@script:python report_recv depends on close_then_recv@
-p << close_then_recv.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "recv() on closed file descriptor — use after close (CWE-672)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@close_then_send@
-expression FD;
-position p;
-@@
-
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* send@p(FD, ...)
-
-@script:python report_send depends on close_then_send@
-p << close_then_send.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "send() on closed file descriptor — use after close (CWE-672)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@close_then_recvfrom@
-expression FD;
-position p;
-@@
-
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* recvfrom@p(FD, ...)
-
-@script:python report_recvfrom depends on close_then_recvfrom@
-p << close_then_recvfrom.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "recvfrom() on closed file descriptor — use after close (CWE-672)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
-
-@close_then_sendto@
-expression FD;
-position p;
-@@
-
-  close(FD);
-  ... when != FD = ...
-      when != FD
-* sendto@p(FD, ...)
-
-@script:python report_sendto depends on close_then_sendto@
-p << close_then_sendto.p;
-@@
-import json
-msg = {
-  "rule":  "use_after_close",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "sendto() on closed file descriptor — use after close (CWE-672)"
+    "rule": "use_after_close",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))

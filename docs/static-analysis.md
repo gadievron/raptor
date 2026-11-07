@@ -81,7 +81,7 @@ positives:
   LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval
   injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure
   TLS, and hardcoded secrets.
-- **Coccinelle (68 rules)** — structural matching for C/C++. Memory safety (double free,
+- **Coccinelle** — structural matching for C/C++. Memory safety (double free,
   use-after-free, free of non-base pointer, free of stack array, mmap'd memory,
   use-after-close), integer bugs (overflow, sign extension, double sizeof), resource
   leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy
@@ -387,6 +387,23 @@ check stream ownership, aliases, helper side effects and the target libc.
 The patterns do not establish a zombie process or a reachable heap exploit.
 Calculated indices and nested/computed receivers are outside this local
 identity model and need separate review.
+
+Descriptor-lifetime checks report repeated `close()` calls and descriptor I/O
+after a close as review candidates. They retain later calls after observations
+and earlier I/O, including positional and vectored reads and writes. Stable
+locals, direct fields, pointer slots and array elements with constant or direct
+variable indices are tracked; recognized writes, address-taking and receiver
+or index changes end a path. Computed receivers and calculated indices need
+separate analysis.
+
+`dup2` and `dup3` can replace their destination descriptor, so an explicit
+replacement ends local tracking. Using the closed value as the source does
+not restore it; direct self-duplication does not reopen it either. Ending
+tracking does not establish that a replacement succeeded. Review syscall
+results, initial validity, aliases, and possible descriptor reuse: a call on
+an invalid descriptor may simply fail with `EBADF`, rather than demonstrate
+undefined behavior or a security impact. Repeated stream-release candidates
+likewise require ownership and lifetime review.
 
 ### Rule Inventory
 

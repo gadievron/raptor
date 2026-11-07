@@ -1,11 +1,4 @@
-"""Fixture tests for the use_after_close rule.
-
-Verification-role rule (fires mint confirmed CWE-672 verdicts):
-fd operations after close() without reassignment target a
-potentially reused descriptor. The positive pins read() on the
-closed fd; the negative pins the fd reassigned (open) before the
-read.
-"""
+"""Native descriptor-lifetime candidate contracts; validity needs review."""
 
 from __future__ import annotations
 
@@ -57,3 +50,21 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("consumer", ["read", "write", "ioctl", "recv", "send", "recvfrom", "sendto", "pread", "pwrite", "readv", "writev"])
+def test_each_later_io_use_is_retained(tmp_path, consumer):
+    lines = ["void f(int fd, int other) {", "close(fd);", "observe(fd);",
+             f"{consumer}(fd, 0, 0);", f"fd = {consumer}(fd, 0, 0);", "}",
+             "void g(int fd, int other) {", "close(fd);", f"{consumer}(other, fd, 0);", "}"]
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {row["line"] for row in rows} == {
+        lines.index(f"{consumer}(fd, 0, 0);") + 1,
+        lines.index(f"fd = {consumer}(fd, 0, 0);") + 1,
+    }
+    assert len(rows) == 2
+
+
+def test_multiple_origins_do_not_duplicate_io_reports(tmp_path):
+    rows = _run_rule(tmp_path, "void f(int fd) { close(fd); close(fd); read(fd, 0, 0); write(fd, 0, 0); }\n")
+    assert len(rows) == 2
