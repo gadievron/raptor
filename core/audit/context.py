@@ -3624,7 +3624,9 @@ def _resolve_types(
     seen: set = set()
 
     for header in _find_headers(target_path, file_path):
-        if len(results) >= max_types:
+        # Once every requested name is resolved, later headers cannot add
+        # context. Do not read them merely to skip every extraction below.
+        if len(results) >= max_types or len(seen) == len(type_names):
             break
         content = _read_target_text(header, target_root=target_path)
         if content is None:
@@ -3748,6 +3750,11 @@ def _extract_type_definition_uncached(
     content: str, type_name: str,
 ) -> dict[str, Any] | None:
     """Extract a struct/typedef/enum definition from file content."""
+    native = type(content) is str and type(type_name) is str
+    # Every declaration alternative includes the exact escaped type name.
+    # An absent name needs neither a file-sized line list nor regex work.
+    if native and type_name not in content:
+        return None
     lines = split_lines(content)  # \n model: shared with the extractors' coordinates
 
     # One search per line; preserve the alternatives and their order.
@@ -3761,6 +3768,8 @@ def _extract_type_definition_uncached(
     )
 
     for i, line in enumerate(lines):
+        if native and type_name not in line:
+            continue
         if line_pattern.search(line):
             end = _find_closing_brace(lines, i)
             snippet = join_lines_prefix(islice(lines, i, end + 1), 801)
