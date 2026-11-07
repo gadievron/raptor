@@ -237,9 +237,22 @@ More complex guards, escaped/interpolated allowlist strings and dynamic
 allowlists are outside this narrow contract; safe code using those forms
 can still report. In scopes containing function imports, use the explicit
 `\in_array` built-in spelling for this guard recognition; an unqualified
-name may refer to an imported application function. The separate map-membership
-model does not yet impose the same constraints, so silence after
-`array_key_exists` or `isset` is not proof of safe validation.
+name may refer to an imported application function.
+
+The map checks `array_key_exists` and `isset` likewise require a negative
+check with an immediate rejecting return/exit or literal fallback before
+participating in taint suppression. Ignoring their results or rejecting
+matching keys does not validate the request value. Function-import scopes
+require the explicit `\array_key_exists` spelling; `isset` is a language
+construct.
+
+This guarded-map handling remains a heuristic: it does not prove that the
+map or its key domain is trustworthy. In particular, a rejecting check
+against an attacker-controlled map is not a safety proof. Taint carried by
+map values continues to propagate. Unknown array-like objects, aliases and
+map mutations require further analysis; absence of a finding does not
+establish safe validation. Index-taint propagation remains enabled, so an
+unchecked lookup into a fixed literal map can still report.
 
 Run `ls engine/semgrep/rules/` for the current file list.
 
