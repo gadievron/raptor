@@ -125,6 +125,20 @@ def test_codex_target_is_data_and_flags_after_separator_are_verbatim(launch):
     assert payload['args'][-1] == 'Loading RAPTOR ...'
 
 
+@pytest.mark.parametrize('settings, expected', [
+    ('', []),
+    ('\n', []),
+    ('first="quoted value"\n\nsecond=""\n', ['-c', 'first="quoted value"', '-c', 'second=""']),
+])
+def test_blank_launch_config_rows_do_not_add_options(launch, tmp_path, settings, expected):
+    formatter = tmp_path / 'install/libexec/raptor-session-init'
+    formatter.write_text('import sys\nsys.stdout.write(' + repr(settings) + ')\n')
+    passthrough = ['--config', 'user_setting=""', '']
+    result, payload = launch(['codex'], ['--codex', 'fixture-target', '--', *passthrough])
+    assert result.returncode == 0, result.stderr
+    assert payload['args'] == passthrough + expected + ['Loading RAPTOR ...']
+
+
 def test_local_only_conflict_is_explicit(launch):
     result,payload=launch(['codex'],['--codex'],{'RAPTOR_NO_CLAUDE':'1'})
     assert result.returncode==1 and payload is None
