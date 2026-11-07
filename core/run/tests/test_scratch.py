@@ -314,7 +314,6 @@ class TestKeepalivePublicAPI:
         """A path left registered with no ticker would be pinned by a
         LATER register's ticker while its owner may be long dead —
         the register must discard it and swallow the failure."""
-        import threading
         from core.run import scratch as scratch_mod
         from core.run.scratch import keepalive_register
 
@@ -328,7 +327,7 @@ class TestKeepalivePublicAPI:
         d = tmp_path / "owned"
         d.mkdir()
         monkeypatch.setattr(scratch_mod, "_keepalive_thread", None)
-        monkeypatch.setattr(threading, "Thread", _BoomThread)
+        patch_module_attribute(monkeypatch, scratch_mod, "threading", "Thread", _BoomThread)
         keepalive_register(d)  # must not raise
         assert str(d) not in scratch_mod._keepalive_paths
         assert scratch_mod._keepalive_thread is None

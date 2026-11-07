@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.sandbox.tests import socket_server
+from core.testing.module_bindings import patch_module_attribute
+
 _HELPERS = [
     ("test_orphan_cancel", "_CaptiveUpstream", "json_quick"),
     ("test_stream_stall_watchdog", "_WedgedUpstream", "head_wedge"),
@@ -63,7 +66,7 @@ def test_raw_upstream_startup_closes_listener(
                     **(vars(socket) | {"socket": create_socket}),
                 ),
             )
-            patcher.setattr(threading, "Thread", create_thread)
+            patch_module_attribute(patcher, socket_server, "threading", "Thread", create_thread)
             with pytest.raises((OSError, RuntimeError), match="injected .* failure"):
                 getattr(module, class_name)(mode)
         assert len(listeners) == 1
@@ -114,7 +117,7 @@ def test_raw_upstream_handler_failure_releases_connection(
         return instance
 
     with monkeypatch.context() as patcher:
-        patcher.setattr(threading, "Thread", create_thread)
+        patch_module_attribute(patcher, socket_server, "threading", "Thread", create_thread)
         upstream = getattr(module, class_name)(mode)
         try:
             with socket.create_connection(upstream._listener.getsockname(), timeout=5):
@@ -170,7 +173,7 @@ def test_wedged_upstream_shutdown_retires_threads(phase, monkeypatch):
             **(vars(time) | {"sleep": release.wait}),
         ),
     )
-    monkeypatch.setattr(threading, "Thread", create_thread)
+    patch_module_attribute(monkeypatch, socket_server, "threading", "Thread", create_thread)
     mode = "sse_wedge" if phase == "sse-wedge" else "slow_body"
     upstream = module._WedgedUpstream(mode, wedge_s=60, quiet_s=60)
     original_handle = upstream._handle
@@ -254,7 +257,7 @@ def test_watchdog_setup_failure_reclaims_upstream(method_name, tmp_path, monkeyp
     creds._keys = {"anthropic": "fixture-key", "openai": None, "gemini": None}
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(threading, "Thread", thread)
+            patch_module_attribute(patcher, socket_server, "threading", "Thread", thread)
             patcher.setattr(module, "_WedgedUpstream", upstream)
             patcher.setattr(module, "_make_dispatcher", fail)
             method = getattr(module.TestWatchdogTrips(), method_name)
