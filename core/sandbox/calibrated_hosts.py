@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 
 from core.json import dumps_canonical
 from core.sandbox.errors import SandboxSetupError
+from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,8 @@ def calibrated_profile(
             if not waiter.ready.wait(timeout=max(timeout, 0)):
                 logger.debug(
                     "%s: calibration of %s still pending; using static policy",
-                    tag, bin_path,
+                    sanitise_for_terminal(str(tag)),
+                    sanitise_for_terminal(str(bin_path)),
                 )
                 return None
             return waiter.result
@@ -148,7 +150,9 @@ def calibrated_profile(
             # advisory and the static fallback stays in place.
             logger.debug(
                 "%s: calibration of %s failed (%s); falling back "
-                "to static policy", tag, bin_path, exc,
+                "to static policy", sanitise_for_terminal(str(tag)),
+                sanitise_for_terminal(str(bin_path)),
+                sanitise_for_terminal(str(exc)),
             )
             result = None
         except SandboxSetupError as exc:
@@ -165,7 +169,9 @@ def calibrated_profile(
             # carry.
             logger.debug(
                 "%s: calibration of %s refused by the sandbox (%s); "
-                "falling back to static policy", tag, bin_path, exc,
+                "falling back to static policy", sanitise_for_terminal(str(tag)),
+                sanitise_for_terminal(str(bin_path)),
+                sanitise_for_terminal(str(exc)),
             )
             result = None
         if result is not None and _memo_identity(bin_path, key[1]) != identity:

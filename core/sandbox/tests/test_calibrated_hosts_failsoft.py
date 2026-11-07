@@ -89,3 +89,61 @@ def test_owner_death_at_plant_window_does_not_wedge_waiters(monkeypatch):
         "sentinel was never set"
     )
     assert done == [None]
+
+
+@pytest.mark.parametrize("kind", ["failed", "refused", "pending"])
+@pytest.mark.parametrize("shape", ["ordinary", "controls", "oversized"])
+def test_calibration_diagnostics_are_bounded_and_inert(
+        monkeypatch, caplog, kind, shape):
+    import logging
+    from core.sandbox import calibrate
+
+    payload = {
+        "ordinary": "plain",
+        "controls": "line\n\r\x1b[0m\x00\u2028\ud800",
+        "oversized": "x" * 10000,
+    }[shape]
+    tag, binary, error_text = "caller:" + payload, "/tool/" + payload, "probe:" + payload
+    identity = ("stable",)
+    monkeypatch.setattr(mod, "_memo_identity", lambda *args: identity)
+    calls = []
+
+    def fail(path, **kwargs):
+        calls.append((path, kwargs))
+        raise (SandboxSetupError(error_text) if kind == "refused"
+               else RuntimeError(error_text))
+
+    monkeypatch.setattr(calibrate, "load_or_calibrate", fail)
+    key = (binary, (), ("--version",))
+    if kind == "pending":
+        pending = mod._CacheEntry(identity)
+        mod._CACHE[key] = pending
+    with caplog.at_level(logging.DEBUG, logger=mod.__name__):
+        assert mod.calibrated_profile(binary, (), timeout=0, tag=tag) is None
+    entry = mod._CACHE[key]
+    if kind == "pending":
+        assert entry is pending and not entry.ready.is_set()
+        assert calls == []
+    else:
+        assert entry.ready.is_set() and entry.result is None
+        assert calls == [(binary, {"probe_args": ("--version",), "env_keys": (), "timeout": 0})]
+        # A logging-only fix must retain the same memoized fallback.
+        assert mod.calibrated_profile(binary, (), timeout=0, tag=tag) is None
+        assert len(calls) == 1
+    records = [record for record in caplog.records if record.name == mod.__name__]
+    assert len(records) == 1
+    record = records[0]
+    message = record.getMessage()
+    assert message.isprintable()
+    assert len(message) < 1000
+    assert record.exc_info is None
+    assert all(str(arg).isprintable() and len(str(arg)) < 320 for arg in record.args)
+    if shape == "oversized":
+        assert "...[+" in message and "chars]" in message
+    if shape == "ordinary":
+        expected = {
+            "failed": "caller:plain: calibration of /tool/plain failed (probe:plain); falling back to static policy",
+            "refused": "caller:plain: calibration of /tool/plain refused by the sandbox (probe:plain); falling back to static policy",
+            "pending": "caller:plain: calibration of /tool/plain still pending; using static policy",
+        }
+        assert message == expected[kind]
