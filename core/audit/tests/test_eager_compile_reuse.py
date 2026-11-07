@@ -188,3 +188,68 @@ def test_missing_controls_are_not_reusable(tmp_path):
     )
     assert not result.success
     assert not result.control_rejected
+
+
+def _successful_engine(monkeypatch):
+    from packages.checker_synthesis import synthesise as synthesis_module
+
+    monkeypatch.setattr(synthesis_module, '_run_engine',
+                        lambda _rule, _path, target: ([SimpleNamespace(line=1)]
+                                                     if target.stem == 'test_positive' else [], []))
+
+
+def test_successful_compilation_survives_unchanged_model_reload(eager_run, monkeypatch):
+    cfg, shared, entry, calls, _mode, _client = eager_run
+    _successful_engine(monkeypatch)
+    _compile_eager_invariants(cfg, shared, {})
+    first = len(calls)
+    assert first == 1
+    rule = shared.domain_model['invariants'][0]['mechanical_rule']
+    assert shared.eager_compile_successes
+    shared.domain_model = {'invariants': [deepcopy(entry)]}
+    _compile_eager_invariants(cfg, shared, {})
+    assert len(calls) == first
+    assert shared.domain_model['invariants'][0]['mechanical_rule'] == rule
+
+
+@pytest.mark.parametrize('change', ['rule_bytes', 'missing_rule', 'knowledge', 'model'])
+def test_success_cache_rejects_changed_inputs(eager_run, monkeypatch, change):
+    cfg, shared, entry, calls, _mode, client = eager_run
+    _successful_engine(monkeypatch)
+    _compile_eager_invariants(cfg, shared, {})
+    first = len(calls)
+    prior, _digest = next(iter(shared.eager_compile_successes.values()))
+    if change == 'rule_bytes':
+        prior.rule_path.write_text('changed rule')
+    elif change == 'missing_rule':
+        prior.rule_path.unlink()
+    elif change == 'knowledge':
+        entry['source_hash'] = 'changed-source'
+    else:
+        client.model_name = 'changed-model'
+    shared.domain_model = {'invariants': [deepcopy(entry)]}
+    _compile_eager_invariants(cfg, shared, {})
+    assert len(calls) > first
+
+
+def test_expired_eager_compile_does_not_start_paid_work(eager_run):
+    cfg, shared, _entry, calls, _mode, _client = eager_run
+    cfg.run_deadline_monotonic = 0
+    _compile_eager_invariants(cfg, shared, {})
+    assert calls == []
+    assert not shared.eager_compile_successes
+
+
+def test_expiry_during_proposal_prevents_fallback_and_retries(eager_run):
+    cfg, shared, _entry, calls, mode, client = eager_run
+    generate = client.generate_structured
+
+    def expire(**kwargs):
+        cfg.run_deadline_monotonic = 0
+        return generate(**kwargs)
+
+    client.generate_structured = expire
+    mode['errors'] = ['scanner timed out']
+    _compile_eager_invariants(cfg, shared, {})
+    assert len(calls) == 1
+    assert not shared.eager_compile_successes

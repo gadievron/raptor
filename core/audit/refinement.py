@@ -136,7 +136,7 @@ def build_refinement_prompt(
     return "\n".join(lines)
 
 
-def merge_outcomes(original: Any, refined: Any) -> Any:
+def merge_outcomes(original: Any, refined: Any, *, source_scope: dict[str, Any] | None = None) -> Any:
     """Merge a refined outcome with the original, keeping stronger evidence.
 
     Rules:
@@ -167,6 +167,16 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     the exact active claim and current source identity before using them.
     """
     from .evidence_grade import is_tool_evidence
+    # Only the caller's original source context may restore location fields
+    # omitted by a replacement model response. Never guess from a name alone.
+    if source_scope is not None:
+        expected = (source_scope.get("file"), source_scope.get("function"))
+        if (isinstance(source_scope.get("line"), int) and source_scope["line"] > 0
+                and expected == (getattr(original, "file", None), getattr(original, "function", None))
+                == (getattr(refined, "file", None), getattr(refined, "function", None))
+                and source_scope.get("line") == getattr(original, "line", None)):
+            refined.line = source_scope["line"]
+            refined.function_qualified = source_scope.get("function_qualified", "")
     refined_tool = getattr(refined, "evidence_tool", "") or ""
     original_tool = getattr(original, "evidence_tool", "") or ""
 

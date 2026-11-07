@@ -74,6 +74,9 @@ FLOW_ENCODING_STAMP = "joern:flow-encoding"
 DETECTION_STAMPS = frozenset({
     "joern:live", "joern:pre_sweep", FLOW_ENCODING_STAMP,
     "joern:xf:caller_constraint",
+    # Reachability plus arithmetic-looking text does not establish overflow,
+    # missing bounds, or the hypothesis's specific allocation mismatch.
+    "joern:xf:taint_to_arithmetic",
 })
 
 

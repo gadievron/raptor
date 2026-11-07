@@ -4272,7 +4272,11 @@ def review_one_function(
                         refined, "cache_write_tokens", 0),
                     wall_time_s=refined.duration_s,
                 )
-                outcome = _merge_refined(outcome, refined)
+                outcome = _merge_refined(outcome, refined, source_scope={
+                    "file": gap["file"], "function": gap["name"],
+                    "line": gap.get("line_start", 0),
+                    "function_qualified": outcome.function_qualified,
+                })
                 logger.debug(
                     "refinement round %d for %s:%s → %s",
                     ref_round,
@@ -12273,6 +12277,7 @@ def _compile_eager_invariants(
         return
 
     from core.concepts.compiler import compile_invariant
+    import hashlib
     from core.json import dumps_canonical
     from core.concepts.model import Invariant
     from core.llm.task_types import TaskType
@@ -12280,8 +12285,14 @@ def _compile_eager_invariants(
 
     client = _run_llm_client(config)
 
+    def _deadline_reached():
+        deadline = config.run_deadline_monotonic
+        return deadline is not None and time.monotonic() >= deadline
+
     def _llm(prompt, schema, system_prompt):
         from core.security.prompt_framing import with_audit_framing
+        if _deadline_reached():
+            return None
         try:
             data, _ = client.generate_structured(
                 prompt=prompt,
@@ -12297,10 +12308,11 @@ def _compile_eager_invariants(
 
     compiled_count = 0
     reused_rejections = 0
+    reused_successes = 0
     fresh_attempts = 0
 
     def _compile(inv, engine, entry):
-        nonlocal reused_rejections, fresh_attempts
+        nonlocal reused_rejections, reused_successes, fresh_attempts
         key = dumps_canonical({
             "invariant": entry,
             "engine": engine,
@@ -12309,13 +12321,33 @@ def _compile_eager_invariants(
         if key in shared.eager_compile_rejections:
             reused_rejections += 1
             return None
+        cached = shared.eager_compile_successes.get(key)
+        if cached is not None:
+            prior, digest = cached
+            try:
+                if prior.rule_path and hashlib.sha256(prior.rule_path.read_bytes()).hexdigest() == digest:
+                    reused_successes += 1
+                    return prior
+            except OSError:
+                pass
+            shared.eager_compile_successes.pop(key, None)
+        if _deadline_reached():
+            return None
         fresh_attempts += 1
         result = compile_invariant(inv, engine, _llm, config.out_dir or Path("."))
         if not result.success and getattr(result, "control_rejected", False):
             shared.eager_compile_rejections.add(key)
+        if result.success and result.rule_path:
+            try:
+                digest = hashlib.sha256(result.rule_path.read_bytes()).hexdigest()
+                shared.eager_compile_successes[key] = (result, digest)
+            except OSError:
+                pass
         return result
 
     for entry in uncompiled:
+        if _deadline_reached():
+            break
         inv = Invariant(
             id=entry.get("id", ""),
             concept=entry.get("concept") or entry.get("id", ""),
@@ -12349,8 +12381,8 @@ def _compile_eager_invariants(
             compiled_count += 1
 
     logger.info(
-        "eager compile attempts: %d fresh, %d reused control rejection(s)",
-        fresh_attempts, reused_rejections,
+        "eager compile attempts: %d fresh, %d reused control rejection(s), %d reused success(es)",
+        fresh_attempts, reused_rejections, reused_successes,
     )
     if not compiled_count:
         return
@@ -12378,6 +12410,8 @@ def _compile_eager_invariants(
     ]
 
     mechanical_findings = shared.mechanical_findings
+    if _deadline_reached():
+        return
     n = _run_invariant_prescreening(dm, config, gaps, mechanical_findings)
     if n:
         logger.info("eager compile prescreening: %d match(es) injected", n)
@@ -25965,6 +25999,7 @@ def _proactive_validate(
                     if _c:
                         _xf_parts.append(_c)
             _xf_counter = "\n".join(_xf_parts)
+            xf_source_identity = capture_source_identity(config.target_path, outcome.file)
             xf_result = cross_function_verify(
                 function_name=outcome.function,
                 file_path=outcome.file,
@@ -25972,6 +26007,29 @@ def _proactive_validate(
                 server=joern_server,
                 counter=_xf_counter,
             )
+            if xf_result is not None:
+                from types import SimpleNamespace
+                from .check_trace import record_check_observation
+
+                xf_rule = f"joern:xf:{xf_result.verifier_name}"
+                xf_effective = (
+                    "confirmed" if xf_result.verified and not _is_detection_only(xf_rule)
+                    else "inconclusive"
+                )
+                record_check_observation(
+                    config.out_dir,
+                    ToolChainResult(file=outcome.file, function=outcome.function,
+                                    line_start=outcome.line, hypothesis=outcome.hypothesis or "",
+                                    source_identity=xf_source_identity),
+                    tool="cross_function", verdict=xf_effective, rule_id=xf_rule,
+                    reason=xf_result.evidence,
+                    result=SimpleNamespace(
+                        outcome="confirmed" if xf_result.verified else "inconclusive",
+                        details={"raw_verified": xf_result.verified, "evidence": xf_result.evidence,
+                                 "observations": xf_result.details},
+                        matches=[], errors=[],
+                    ),
+                )
             if xf_result is None:
                 # Inconclusive — no verifier decided anything.
                 # tool_coverage maps cross_function → joern, so
@@ -25984,8 +26042,10 @@ def _proactive_validate(
                     _increment_tier_dict(tier_counters, "joern_xf", "skipped")
             elif xf_result.verified:
                 confirmed_tools.append(f"joern:xf:{xf_result.verifier_name}")
+                if _is_detection_only(f"joern:xf:{xf_result.verifier_name}"):
+                    inconclusive.add("cross_function")
                 if tier_counters:
-                    _increment_tier_dict(tier_counters, "joern_xf", "confirmed")
+                    _increment_tier_dict(tier_counters, "joern_xf", xf_effective)
                 if discovered_evidence:
                     _inject_discovered_evidence(
                         discovered_evidence,
@@ -25994,8 +26054,10 @@ def _proactive_validate(
                         f"joern:xf:{xf_result.verifier_name}",
                         xf_result.evidence,
                     )
-            elif tier_counters:
-                _increment_tier_dict(tier_counters, "joern_xf", "refuted")
+            else:
+                inconclusive.add("cross_function")
+                if tier_counters:
+                    _increment_tier_dict(tier_counters, "joern_xf", "inconclusive")
         except Exception:
             logger.debug(
                 "cross-function verify failed for %s:%s",

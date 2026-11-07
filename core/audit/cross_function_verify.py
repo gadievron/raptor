@@ -32,7 +32,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CrossFunctionVerdict:
-    """Result of a cross-function verification check."""
+    """Raw query observation; ``verified`` retains the verifier's terminology.
+
+    Receipt roles are classified separately. In particular, caller guard-name
+    absence and arithmetic-looking dataflow are detection leads, not proof.
+    """
 
     verified: bool
     verifier_name: str

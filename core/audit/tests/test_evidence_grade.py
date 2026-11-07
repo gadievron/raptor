@@ -427,6 +427,16 @@ class TestIsToolEvidence:
 
 
 class TestDetectionVariantFirewall:
+    def test_arithmetic_flow_observation_does_not_confirm_a_defect(self, monkeypatch):
+        import core.audit.evidence_grade as owner
+
+        stamp = "joern:xf:taint_to_arithmetic"
+        assert not is_tool_evidence(stamp)
+        assert not is_verification_evidence(stamp)
+        monkeypatch.setattr(owner, "_channel_detection_classifier", lambda namespace: None)
+        assert not is_tool_evidence(stamp)
+        assert not is_verification_evidence(stamp)
+
     """Detection-grade rule-id variants are corroboration, never full
     tool evidence — for EVERY channel, as classified by the channel's
     own is_detection_rule_id."""
