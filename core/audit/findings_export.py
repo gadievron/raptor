@@ -610,6 +610,9 @@ def write_graded_findings(
     out_dir: Path,
 ) -> Path:
     """Write findings-graded.json to the run directory."""
+    from .check_trace import write_check_results
+
+    write_check_results(export, out_dir)
     path = out_dir / "findings-graded.json"
     save_json(path, export)
     return path

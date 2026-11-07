@@ -1,0 +1,7 @@
+[
+  {"outcome":"confirmed","matches":[{"line":1,"message":"fixture match"}],"errors":[],"details":{"reason":"fixture assertion holds in model","assumptions":["unsigned 32-bit operand"]}},
+  {"outcome":"refuted","matches":[],"errors":[],"details":{"reason":"fixture assertion refuted","assumptions":["fixture input range"]}},
+  {"outcome":"inconclusive","matches":[],"errors":[],"details":{"reason":"unsupported fixture expression"}},
+  {"outcome":"error","matches":[],"errors":["fixture timeout"],"details":{"reason":"fixture timeout"}},
+  {"outcome":"skipped","matches":[],"errors":[],"details":{"reason":"fixture substrate unavailable"}}
+]

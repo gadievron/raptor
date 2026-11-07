@@ -22189,7 +22189,19 @@ def _run_tool_chain(
         if source_changed:
             reason = "refutation source changed, was unavailable, or did not match the checker excerpt"
         confirmed.observe(tool_type, verdict, str(rule), str(reason))
+        _trace_check(verdict, str(rule), str(reason), sweep_result)
         return verdict
+
+    def _trace_check(verdict, rule_id, reason="", result=None):
+        try:
+            from .check_trace import record_check_observation
+
+            record_check_observation(
+                config.out_dir, confirmed, tool=tool_type, verdict=verdict,
+                rule_id=rule_id, reason=reason, result=result, request=tool_cfg,
+            )
+        except Exception:
+            logger.warning("verification check reporting failed", exc_info=True)
     # Per-type entry counts for *inconclusive_types*: every leg books
     # its inconclusive branch through _book_inconclusive (pinned by
     # the tripwire in test_silence_admissibility).
@@ -22249,6 +22261,7 @@ def _run_tool_chain(
         if _exit_receipt is not None \
                 and tool_type in _EARLY_EXIT_SKIPPABLE_TYPES:
             _exit_skipped.append(tool_type)
+            _trace_check("skipped", tool_type, "promotion-grade receipt already stands")
             # A chain may carry several entries of one type (binary
             # decompiler rules append extra semgrep entries): a type
             # that already EXECUTED in this call stays dispatched —
@@ -22282,6 +22295,7 @@ def _run_tool_chain(
                 language=_inventory_language_hint(config, file_path),
             )
             if _sub_cov is not None and _sub_cov.covered is False:
+                _trace_check("skipped", tool_type, _sub_cov.reason)
                 if skipped_types is not None and tool_type not in _ran_types:
                     skipped_types.add(tool_type)
                 _note_substrate_skip(
@@ -22325,6 +22339,9 @@ def _run_tool_chain(
                         # never reach the unlink finally below, so
                         # remove it or it leaks on every cache confirm.
                         confirmed.append("sarif_cache:semgrep")
+                        _trace_check("confirmed", "sarif_cache:semgrep", "correlated cached SARIF hits", SimpleNamespace(
+                            outcome="confirmed", matches=correlated, details={"origin": "sarif_cache"},
+                        ))
                         if tier_counters:
                             _increment_tier_dict(
                                 tier_counters, "semgrep", "confirmed",
@@ -24462,6 +24479,7 @@ def _run_tool_chain(
 
             else:
                 confirmed.observe(tool_type, "skipped", tool_type, "no dispatch handler")
+                _trace_check("skipped", tool_type, "no dispatch handler")
                 if skipped_types is not None:
                     skipped_types.add(tool_type)
 
@@ -24473,6 +24491,7 @@ def _run_tool_chain(
                 function_name,
                 exc,
             )
+            _trace_check("error", tool_type, f"{type(exc).__name__}: {exc}")
             if errored_types is not None:
                 errored_types.add(tool_type)
         finally:

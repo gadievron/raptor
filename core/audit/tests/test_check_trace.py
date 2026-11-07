@@ -1,0 +1,192 @@
+"""Recorded checker outputs survive normal JSON export without verdict authority."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from core.audit import check_trace
+from core.audit.findings_export import export_findings, write_graded_findings
+from core.audit.orchestrator import OrchestratorConfig, ReviewOutcome, _run_tool_chain
+from core.audit.refutation_source import SourceIdentity
+from core.audit.sweep import SweepResult
+from core.audit.verification_results import ToolChainResult
+
+FIXTURES = json.loads((Path(__file__).parent / "fixtures/check_trace/observations.json").read_text())
+
+
+def _result(sample):
+    return SweepResult(tool="semgrep", file_path="a.c", function_name="f", rule_id="fixture-rule", **sample)
+
+
+def _record(out, sample, hypothesis="Fixture assertion", line=1):
+    results = ToolChainResult(file="a.c", function="f", line_start=line, hypothesis=hypothesis,
+                              source_identity=SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    check_trace.record_check_observation(out, results, tool="semgrep", verdict=sample["outcome"],
+                                       rule_id="fixture-rule", reason=sample["details"]["reason"], result=_result(sample))
+
+
+@pytest.mark.parametrize("sample", FIXTURES, ids=lambda x: x["outcome"])
+def test_saved_results_export_with_claim_source_and_payload(tmp_path, sample):
+    _record(tmp_path, sample)
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            hypothesis="Fixture assertion")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    exported = json.loads((tmp_path / "findings-graded.json").read_text())
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    check = sidecar["checks"][0]
+    assert check["outcome"] == sample["outcome"]
+    assert check["scope"]["source_identity"]["sha256"] == "a" * 64
+    assert check["result"]["data"]["details"] == sample["details"]
+    assert check["result"]["data"]["errors"] == sample["errors"]
+    link = exported["findings"][0]["verification_trace"]["check_results"]
+    assert link == {"artifact": "verification-checks.json", "status": "recorded",
+                    "references": [{"id": check["id"], "matches_final_claim": True}]}
+    assert sidecar["history_complete"] is False
+    assert finding.status == "suspicious"
+    assert exported["findings"][0]["discovery"]["confirmed_by"] == []
+
+
+def test_old_claims_other_locations_and_clean_functions_remain_distinct(tmp_path):
+    _record(tmp_path, FIXTURES[0], hypothesis="Earlier assertion")
+    _record(tmp_path, FIXTURES[1], line=40)
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            hypothesis="Current assertion")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    refs = graded["findings"][0]["verification_trace"]["check_results"]["references"]
+    assert len(sidecar["checks"]) == 2
+    assert refs == [{"id": sidecar["checks"][0]["id"], "matches_final_claim": False}]
+    write_graded_findings(export_findings([]), tmp_path)
+    assert len(json.loads((tmp_path / "verification-checks.json").read_text())["checks"]) == 2
+
+
+def test_unsigned_tampered_and_replayed_rows_do_not_become_check_results(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    _record(out, FIXTURES[0])
+    path = out / ".audit-log.jsonl"
+    signed = json.loads(path.read_text())
+    modified = {**signed, "outcome": "refuted"}
+    unsigned = {k: v for k, v in signed.items() if k != "integrity"}
+    with path.open("a") as stream:
+        stream.write(json.dumps(modified) + "\n" + json.dumps(unsigned) + "\n")
+    write_graded_findings(export_findings([]), out)
+    assert len(json.loads((out / "verification-checks.json").read_text())["checks"]) == 1
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / ".audit-log.jsonl").write_text(json.dumps(signed) + "\n")
+    write_graded_findings(export_findings([]), other)
+    assert json.loads((other / "verification-checks.json").read_text())["checks"] == []
+
+
+def test_large_and_invalid_payloads_preserve_effective_outcome(tmp_path):
+    for raw in ["x" * (check_trace._PAYLOAD_BYTES + 1), float("nan")]:
+        sample = {**FIXTURES[0], "details": {"reason": "fixture", "data": raw}}
+        _record(tmp_path, sample)
+    write_graded_findings(export_findings([]), tmp_path)
+    checks = json.loads((tmp_path / "verification-checks.json").read_text())["checks"]
+    assert [c["outcome"] for c in checks] == ["confirmed", "confirmed"]
+    assert all(c["result"]["complete"] is False for c in checks)
+    assert checks[0]["result"]["reason"] == "payload_size_limit"
+    assert len(checks[0]["result"]["preview"]) <= check_trace._PREVIEW_CHARS
+    assert checks[1]["result"]["reason"].startswith("payload_serialization:")
+
+
+def test_failed_sidecar_write_does_not_publish_stale_links_or_block_findings(tmp_path, monkeypatch):
+    _record(tmp_path, FIXTURES[0])
+    (tmp_path / "verification-checks.json").write_text('{"checks":["stale"]}')
+
+    def fail(*args, **kwargs):
+        raise OSError("fixture write failure")
+
+    monkeypatch.setattr(check_trace, "save_json", fail)
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    trace = json.loads((tmp_path / "findings-graded.json").read_text())["findings"][0]["verification_trace"]
+    assert trace["check_results"] == {"artifact": None, "references": [], "status": "export_error"}
+
+
+@pytest.mark.parametrize("sample", FIXTURES, ids=lambda x: x["outcome"])
+def test_real_chain_records_classification_without_running_a_tool(tmp_path, monkeypatch, sample):
+    import core.audit.orchestrator as orch
+
+    (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+    rule = tmp_path / "r.yml"
+    rule.write_text("rules: []\n")
+    monkeypatch.setattr(orch, "_memoized_sweep_step", lambda *a, **kw: _result(sample))
+    out = tmp_path / "out"
+    out.mkdir()
+    result = _run_tool_chain(
+        [{"type": "semgrep", "config": {"rule": str(rule)}}],
+        config=OrchestratorConfig(target_path=tmp_path, out_dir=out),
+        file_path="a.c", function_name="f", source="int f(void) { return 0; }\n",
+        line_start=1, hypothesis="Fixture assertion",
+    )
+    write_graded_findings(export_findings([]), out)
+    checks = json.loads((out / "verification-checks.json").read_text())["checks"]
+    assert checks[0]["outcome"] == result.outcomes[0].verdict == sample["outcome"]
+    assert checks[0]["result"]["data"]["request"] == {"rule": str(rule)}
+    assert bool(result) is (sample["outcome"] == "confirmed")
+
+
+def test_reporting_failure_does_not_change_tool_chain_result(tmp_path, monkeypatch):
+    import core.audit.orchestrator as orch
+
+    (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+    rule = tmp_path / "r.yml"
+    rule.write_text("rules: []\n")
+    monkeypatch.setattr(orch, "_memoized_sweep_step", lambda *a, **kw: _result(FIXTURES[0]))
+
+    def fail(*args, **kwargs):
+        raise OSError("fixture telemetry failure")
+
+    monkeypatch.setattr(check_trace, "record_check_observation", fail)
+    result = _run_tool_chain(
+        [{"type": "semgrep", "config": {"rule": str(rule)}}],
+        config=OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out"),
+        file_path="a.c", function_name="f", source="int f(void) { return 0; }\n",
+        line_start=1, hypothesis="Fixture assertion",
+    )
+    assert result == ["semgrep:fixture-rule"]
+    assert result.outcomes[0].verdict == "confirmed"
+
+
+def test_changed_source_keeps_raw_result_separate_from_effective_outcome(tmp_path, monkeypatch):
+    import core.audit.orchestrator as orch
+
+    source = "int f(void) { return 0; }\n"
+    (tmp_path / "a.c").write_text(source)
+    rule = tmp_path / "r.yml"
+    rule.write_text("rules: []\n")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    def changed(*args, **kwargs):
+        (tmp_path / "a.c").write_text("int f(void) { return 1; }\n")
+        return _result(FIXTURES[1])
+
+    monkeypatch.setattr(orch, "_memoized_sweep_step", changed)
+    result = _run_tool_chain(
+        [{"type": "semgrep", "config": {"rule": str(rule)}}],
+        config=OrchestratorConfig(target_path=tmp_path, out_dir=out),
+        file_path="a.c", function_name="f", source=source, line_start=1, hypothesis="Fixture assertion",
+    )
+    write_graded_findings(export_findings([]), out)
+    check = json.loads((out / "verification-checks.json").read_text())["checks"][0]
+    assert result.outcomes[0].verdict == check["outcome"] == "inconclusive"
+    assert check["result"]["data"]["outcome"] == "refuted"
+    assert "source changed" in check["reason"]
+
+
+def test_ambiguous_function_location_does_not_link_unrelated_checks(tmp_path):
+    _record(tmp_path, FIXTURES[0], line=0)
+    findings = [ReviewOutcome(file="a.c", function="f", line=0, status="suspicious", body="Fixture",
+                              hypothesis=h) for h in ["First assertion", "Second assertion"]]
+    write_graded_findings(export_findings(findings), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    for finding in graded["findings"]:
+        assert finding["verification_trace"]["check_results"]["references"] == []
+        assert finding["verification_trace"]["check_results"]["status"] == "ambiguous_scope"
+    assert len(json.loads((tmp_path / "verification-checks.json").read_text())["checks"]) == 1
