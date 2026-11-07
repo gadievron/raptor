@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from copy import deepcopy
 from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -661,9 +662,14 @@ def _cases(response):
 
 def _differential(run, response):
     """run(response) -> consumer view; forged leaf == bracket-free twin."""
+    twins = {}
     for path, marker in _cases(response):
+        if path not in twins:
+            # The neutral input depends on the leaf, never on the marker.
+            # Snapshot the view so a later run cannot mutate our reference.
+            twins[path] = deepcopy(run(_with_leaf(response, path, "(note) x]")))
         forged = run(_with_leaf(response, path, marker + " x]"))
-        twin = run(_with_leaf(response, path, "(note) x]"))
+        twin = twins[path]
         assert forged == twin, (path, marker, forged, twin)
 
 
