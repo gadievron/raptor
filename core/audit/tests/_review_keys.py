@@ -173,19 +173,31 @@ def _qualnames(tree, *, functions=None) -> dict:
     out: dict = {}
 
     def visit(node, owner, prefix):
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef)):
-                if functions is not None and not isinstance(child, ast.ClassDef):
-                    functions.append(child)
-                q = prefix + child.name
-                inner = q + ("." if isinstance(child, ast.ClassDef)
-                             else ".<locals>.")
-                out[id(child)] = q
-                visit(child, q, inner)
+        # Preserve iter_child_nodes order and every node's owner, without
+        # allocating its nested field generators for each visited node.
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                children = value
+            elif isinstance(value, ast.AST):
+                children = (value,)
             else:
-                out[id(child)] = owner
-                visit(child, owner, prefix)
+                continue
+            for child in children:
+                if not isinstance(child, ast.AST):
+                    continue
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef)):
+                    if functions is not None and not isinstance(child, ast.ClassDef):
+                        functions.append(child)
+                    q = prefix + child.name
+                    inner = q + ("." if isinstance(child, ast.ClassDef)
+                                 else ".<locals>.")
+                    out[id(child)] = q
+                    visit(child, q, inner)
+                else:
+                    out[id(child)] = owner
+                    visit(child, owner, prefix)
 
     visit(tree, "<module>", "")
     return out
@@ -210,10 +222,24 @@ def _scan_function(fn, rel, reads, writes, model_dict_names=(),
         aliases.update(
             name for name in map(_capture_name, nodes)
             if name in ALIAS_NAMES)
+    explicit_review = False
     for n in nodes:
         if isinstance(n, ast.Call):
             for v in _keyword_values(n):
+                explicit_review = True
                 aliases.update(_value_names(v))
+            if not aliases and not explicit_review:
+                explicit_review = (
+                    _is_rr_expr(n) or _setattr_value(n) is not None)
+        elif isinstance(n, ast.Attribute) and n.attr == "review_result":
+            explicit_review = True
+
+    # Every modeled access starts from a conventional/model alias, an
+    # attribute, a keyword value, or a recognized getattr/setattr call.
+    # Decide from the parsed AST, so escaped strings and normalized Python
+    # identifiers retain exactly the same reach as the full analysis.
+    if not aliases and not explicit_review:
+        return
 
     def atomic_alias(node):
         return _is_rr_expr(node) or (
