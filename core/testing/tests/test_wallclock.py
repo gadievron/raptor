@@ -37,10 +37,26 @@ class TestCpuBudget:
         result = subprocess.run(
             [sys.executable, "-c", """
 import time
-from core.testing.wallclock import cpu_budget
-with cpu_budget(0.4) as sw:
-    time.sleep(1.0)
-assert sw.wall_s >= 0.9, sw.wall_s
+from pytest import MonkeyPatch
+from core.testing.module_bindings import patch_module_attribute
+import core.testing.wallclock as consumer
+# Preserve the original 2.5x sleep/budget separation.
+with consumer.cpu_budget(0.04) as sw:
+    time.sleep(0.1)
+assert sw.wall_s >= 0.09, sw.wall_s
+shared_cpu_clock = time.process_time
+with MonkeyPatch.context() as scope:
+    patch_module_attribute(scope, consumer, "time", "process_time", time.perf_counter)
+    # A wall-clock substitution must charge the same idle wait and fail.
+    try:
+        with consumer.cpu_budget(0.04):
+            time.sleep(0.1)
+    except AssertionError as error:
+        assert "burned" in str(error), str(error)
+    else:
+        raise AssertionError("wall-clock CPU measurement passed")
+    assert time.process_time is shared_cpu_clock
+assert consumer.time is time
 """],
             capture_output=True, text=True, timeout=15,
         )

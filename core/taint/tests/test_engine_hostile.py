@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import random
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -38,6 +39,7 @@ from core.taint.engine import (
 )
 from core.taint.packs import PackSet, load_packs
 from core.taint.tests import HAND_COMPUTED_PACKS
+from core.testing.module_bindings import patch_module_attribute
 from core.taint.summaries import ModuleIndex, index_module_text
 
 #: Virtual root: the indexer below never touches the filesystem.
@@ -802,7 +804,7 @@ def _assert_wall_stall_immunity(packs) -> None:
         + ", ".join(f"{r:.2f}" for r in ratios))
 
 
-def test_growth_ratio_rail_retry_budget_is_bounded(packs) -> None:
+def test_growth_ratio_rail_retry_budget_is_bounded(packs, monkeypatch) -> None:
     # Raise-direction fence for _RAIL_ATTEMPTS, the churn-prone
     # retry budget: LOOSENING (a raised count, or a retry-until-
     # green rewrite) is what silently dulls the pin, because every
@@ -812,9 +814,10 @@ def test_growth_ratio_rail_retry_budget_is_bounded(packs) -> None:
     # EVERY attempt no matter how many are granted. The tighten
     # direction (back toward 1) is inherently statistical — the
     # noise-tail flake documented on the constant — and deliberately
-    # has no fence. Mechanism: an attempt-indexed engine burns
-    # quadratic-scale CPU for the first three attempts and linear-
-    # scale after. At the pinned budget of three, _rail_verdict
+    # has no fence. Mechanism: an attempt-indexed engine advances a private
+    # CPU clock quadratically for the first three attempts and linearly
+    # after. Real-clock behavior remains covered by the quadratic and
+    # wall-stall controls above. At the pinned budget of three, _rail_verdict
     # exhausts every attempt inside the quadratic phase and stays
     # red; ANY inflated budget reaches the linear phase, collects
     # one within-rail ratio, and flips the verdict green — turning
@@ -826,6 +829,11 @@ def test_growth_ratio_rail_retry_budget_is_bounded(packs) -> None:
     # calls.
     calls: list[int] = [0]
 
+    cpu = [0.0]
+    clock_consumer = sys.modules[__name__]
+    patch_module_attribute(
+        monkeypatch, clock_consumer, "time", "process_time", lambda: cpu[0])
+
     def phased(
         texts: dict[str, str], graph: PackageCallGraph,
         routes: RouteModels, _packs: PackSet,
@@ -833,8 +841,7 @@ def test_growth_ratio_rail_retry_budget_is_bounded(packs) -> None:
         attempt = calls[0] // 6   # 6 run calls per attempt
         calls[0] += 1
         exponent = 2 if attempt < 3 else 1  # fenced budget: 3
-        _burn_cpu(
-            _BURN_BASE_S * (len(graph.nodes) / 600) ** exponent)
+        cpu[0] += _BURN_BASE_S * (len(graph.nodes) / 600) ** exponent
         return _synthetic_result()
 
     ok, ratios = _rail_verdict(packs, run=phased)

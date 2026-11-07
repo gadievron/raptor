@@ -45,6 +45,7 @@ _SPECS = [('core/analysis/tests/test_sanitizer_cut_postpass.py',
  ('core/sandbox/tests/test_telemetry_creator_disappears.py',
   {'mac': 'core.sandbox.telemetry_mac'}),
  ('core/sandbox/tests/test_telemetry_mac.py', {'tmac': 'core.sandbox.telemetry_mac'}),
+ ('core/taint/tests/test_engine_hostile.py', {'clock_consumer': 'core.taint.tests.test_engine_hostile'}),
  ('core/testing/tests/test_expected_crash.py',
   {'helper': 'core.testing.expected_crash'}),
  ('core/witness/tests/test_provenance.py', {'mac_key': 'core.security.mac_key'})]
