@@ -295,13 +295,16 @@ class TestRuleFiles:
 
         assert is_confirm_only_rule(str(_RULES_DIR / rule))
 
-    def test_php_rules_keep_refutation_semantics(self):
-        # The confirm-only marker is per-rule opt-in; the PHP legs
-        # keep their pinned scanned-witness refutations.
+    @pytest.mark.parametrize("name,confirm_only", [
+        ("php/attr-encoding.yaml", True),
+        ("php/crlf-injection.yaml", False),
+    ])
+    def test_php_rules_keep_their_declared_evidence_roles(self, name, confirm_only):
+        # Attribute encoding covers immediate expressions, so a miss cannot
+        # refute indirect flows. The CRLF rule retains scanned-witness semantics.
         from core.audit.sweep import is_confirm_only_rule
 
-        for name in ("php/attr-encoding.yaml", "php/crlf-injection.yaml"):
-            assert not is_confirm_only_rule(str(_RULES_DIR / name))
+        assert is_confirm_only_rule(str(_RULES_DIR / name)) is confirm_only
 
 
 needs_semgrep = pytest.mark.skipif(
