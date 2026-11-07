@@ -119,9 +119,10 @@ class Ctx:
         self.fixture_hostile = scratch / "fixture-hostile"
         self.fixture_manifest_only = scratch / "fixture-manifest-only"
         self.home = scratch / "home"
+        self.child_tmp = scratch / "tmp"
         self.logs = scratch / "logs"
         self.outs = scratch / "outs"
-        for d in (self.home, self.logs, self.outs):
+        for d in (self.home, self.logs, self.outs, self.child_tmp):
             d.mkdir(parents=True, exist_ok=True)
         self.codeql_cli = shutil.which("codeql") or _first_existing(
             Path.home() / "codeql" / "codeql",
@@ -151,7 +152,7 @@ class Ctx:
         # CI/tool settings intact; removing attribution cannot relax either.
         session_keys = {
             "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
-            "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+            "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
             "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET",
         }
         env = {k: v for k, v in os.environ.items()
@@ -159,6 +160,7 @@ class Ctx:
         env["_RAPTOR_TRUSTED"] = "1"
         env["RAPTOR_REGISTRY_HOME"] = str(self.home / ".raptor")
         env["RAPTOR_OUT_DIR"] = str(self.outs)
+        env.update(TMPDIR=str(self.child_tmp), TEMP=str(self.child_tmp), TMP=str(self.child_tmp))
         return env
 
     def env_t0(self, *, isolated_home: bool = False) -> dict[str, str]:

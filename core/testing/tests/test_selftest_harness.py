@@ -34,6 +34,8 @@ from unittest.mock import patch
 import pytest
 
 
+from core.testing.standalone_cli import run_standalone_cli
+
 from core.testing.module_bindings import patch_module_attribute
 
 
@@ -201,6 +203,7 @@ class TestChildSessionIsolation:
             "CLAUDE_SESSION_ID": "foreign-session",
             "RAPTOR_SESSION_PID": str(os.getpid()),
             "RAPTOR_SESSION_TOKEN": "foreign-token",
+            "_RAPTOR_SCRATCH_AUTH": "foreign-scratch-authorization",
             "RAPTOR_REGISTRY_HOME": str(operator),
             "RAPTOR_OUT_DIR": str(operator),
             "RAPTOR_CALLER_DIR": str(operator), "RAPTOR_LAUNCH_TARGET": "target",
@@ -243,7 +246,7 @@ class TestChildSessionIsolation:
         assert (env.get("CI") == "true") == ci
         assert ("ANTHROPIC_API_KEY" in env) == (mode == "llm")
 
-    def test_claude_markers_are_removed_without_changing_temp_root(
+    def test_children_own_temp_root_and_remove_launch_markers(
         self, selftest, tmp_path, monkeypatch,
     ):
         for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID"):
@@ -251,7 +254,8 @@ class TestChildSessionIsolation:
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         ctx = _make_ctx(selftest, tmp_path / "scratch")
         for env in (ctx.env_t0(), ctx.env_llm()):
-            assert env["TMPDIR"] == str(tmp_path)
+            assert env["TMPDIR"] == str(ctx.child_tmp)
+            assert ctx.child_tmp.is_dir()
             assert not any(key in env for key in
                            ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID"))
 
@@ -393,7 +397,7 @@ class TestHelpTextTruthful:
     def test_max_llm_cost_documented_per_case(self) -> None:
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(SCRIPT), "--help"], env=env,
             cwd=str(REPO_ROOT), capture_output=True, text=True,
             timeout=120, check=False,
