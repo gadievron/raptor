@@ -34,3 +34,12 @@ class TestDetectionRoleResolution:
         assert _is_detection_only(
             "coccinelle:hypothesis-generated-nonexistent-rule",
         ) is False
+
+    def test_nonbase_free_requires_independent_origin_evidence(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/free_nonbase_ptr.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:free_nonbase_ptr") is True
