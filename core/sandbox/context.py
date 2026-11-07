@@ -26,6 +26,8 @@ from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from typing import Any, TypeVar
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
 from . import landlock as _landlock
 from . import probes as _probes
 # Module alias (not `from .errors import SandboxSetupError`): run()'s
@@ -544,8 +546,12 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
         _summary_pm.record_proxy_persist_state(
             Path(output), expected_count=int(count),
             flags=flags)
-    except Exception:  # noqa: BLE001 — accounting is best-effort
-        logger.debug("proxy persist accounting failed", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — accounting is best-effort
+        logger.debug(
+            "proxy persist accounting failed: %s: %s",
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
     path = os.path.join(output, _proxy_mod.PROXY_EVENTS_COUNT_FILENAME)
     try:
         token = _tmac.mint(_tmac.proxy_events_count_fields(
@@ -564,8 +570,13 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
         write_text_atomically(
             path, payload, tmp_prefix=".~proxy-count-", mode=0o600,
         )
-    except OSError:
-        logger.warning("Sandbox: could not write %s", path, exc_info=True)
+    except OSError as exc:
+        logger.warning(
+            "Sandbox: could not write %s: %s: %s",
+            sanitise_for_terminal(path),
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
 
 
 def _persist_proxy_events(
@@ -621,7 +632,8 @@ def _persist_proxy_events(
                     "Sandbox: output (%s) lies within target (%s); "
                     "skipping proxy-events.jsonl persistence to "
                     "avoid polluting the scanned tree (in-memory "
-                    "events unaffected)", _norm_out, _norm_tgt,
+                    "events unaffected)", sanitise_for_terminal(_norm_out),
+                    sanitise_for_terminal(_norm_tgt),
                 )
                 return
         except OSError:
@@ -655,7 +667,8 @@ def _persist_proxy_events(
         except OSError as _log_err:
             logger.debug(
                 "Sandbox: could not open %s for proxy-event "
-                "persistence: %s", _log_path, _log_err,
+                "persistence: %s", sanitise_for_terminal(_log_path),
+                sanitise_for_terminal(str(_log_err)),
             )
             # A planted symlink/FIFO at the events path used to suppress
             # evidence with only this DEBUG line. Record it as a
@@ -683,7 +696,7 @@ def _persist_proxy_events(
                 logger.debug(
                     "Sandbox: %s exists but is not a regular file "
                     "(mode=0o%o); skipping proxy event persistence",
-                    _log_path, _log_st.st_mode,
+                    sanitise_for_terminal(_log_path), _log_st.st_mode,
                 )
                 _fd_owned = False
                 os.close(_log_fd)
@@ -786,8 +799,10 @@ def _persist_proxy_events(
             if not isinstance(_persist_exc, Exception):
                 raise
             logger.warning(
-                "Sandbox: could not write proxy events to %s",
-                _log_path, exc_info=True,
+                "Sandbox: could not write proxy events to %s: %s: %s",
+                sanitise_for_terminal(_log_path),
+                sanitise_for_terminal(type(_persist_exc).__name__, max_len=64),
+                sanitise_for_terminal(str(_persist_exc)),
             )
             # Preserve the failure and every acknowledged write across later
             # batches. Recounting alone must not renumber over missing history.
@@ -805,9 +820,12 @@ def _persist_proxy_events(
                 _state["next_seq"] = _count
                 _write_proxy_count_sidecar(
                     output, _count, _state["flags"], _run_binding)
-            except Exception:  # secondary persistence must not break the caller
-                logger.warning("Sandbox: could not persist proxy write-failure state",
-                               exc_info=True)
+            except Exception as exc:  # secondary persistence must not break the caller
+                logger.warning(
+                    "Sandbox: could not persist proxy write-failure state: %s: %s",
+                    sanitise_for_terminal(type(exc).__name__, max_len=64),
+                    sanitise_for_terminal(str(exc)),
+                )
 
 
 def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
