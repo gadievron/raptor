@@ -259,11 +259,24 @@ _FUNC_DEF_RE = re.compile(
 
 
 _FUNC_DEF_IMPL = _FUNC_DEF_RE
+_ENCLOSING_RE_MODULE = re
+_ENCLOSING_MATCH_IMPL = re.match
 
 def find_enclosing_function(lines: list, target_line: int) -> str:
     """Walk backwards from *target_line* (0-indexed) to find the enclosing def."""
+    if type(lines) is not list:
+        # Keep provider lookup before subscription for indexable adapters.
+        for i in range(target_line, -1, -1):
+            m = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", lines[i])
+            if m:
+                return m.group(1)
+        return "<module>"
     for i in range(target_line, -1, -1):
-        m = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", lines[i])
+        line = lines[i]
+        if (type(line) is str and re is _ENCLOSING_RE_MODULE
+                and re.match is _ENCLOSING_MATCH_IMPL and "def" not in line):
+            continue
+        m = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", line)
         if m:
             return m.group(1)
     return "<module>"

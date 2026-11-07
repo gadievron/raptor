@@ -193,6 +193,8 @@ def _detect_extension_synonym_gaps(
     """Find glob/endswith patterns that use one extension but miss synonyms."""
     gaps: list[PatternGap] = []
     source_lower = source.lower()
+    missing_globs: dict[tuple[str, ...], list[str]] = {}
+    missing_suffixes: dict[tuple[str, ...], list[str]] = {}
 
     for line_idx, line in enumerate(lines):
         line_no = line_idx + 1
@@ -204,12 +206,18 @@ def _detect_extension_synonym_gaps(
             if not synonyms:
                 continue
             # Check if ANY synonym is also handled in this file.
-            missing = [
-                s for s in synonyms
-                if f"*{s}" not in source_lower
-                and f'"{s}"' not in source_lower
-                and f"'{s}'" not in source_lower
-            ]
+            cacheable = (type(source_lower) is str and type(synonyms) is tuple
+                         and all(type(s) is str for s in synonyms))
+            missing = missing_globs.get(synonyms) if cacheable else None
+            if missing is None:
+                missing = [
+                    s for s in synonyms
+                    if f"*{s}" not in source_lower
+                    and f'"{s}"' not in source_lower
+                    and f"'{s}'" not in source_lower
+                ]
+                if cacheable and len(missing_globs) < 64:
+                    missing_globs[synonyms] = missing
             gaps.extend(PatternGap(
                     file=filename,
                     function=_find_enclosing_function(lines, line_idx),
@@ -226,11 +234,17 @@ def _detect_extension_synonym_gaps(
             synonyms = _EXTENSION_SYNONYMS.get(ext)
             if not synonyms:
                 continue
-            missing = [
-                s for s in synonyms
-                if f'"{s}"' not in source_lower
-                and f"'{s}'" not in source_lower
-            ]
+            cacheable = (type(source_lower) is str and type(synonyms) is tuple
+                         and all(type(s) is str for s in synonyms))
+            missing = missing_suffixes.get(synonyms) if cacheable else None
+            if missing is None:
+                missing = [
+                    s for s in synonyms
+                    if f'"{s}"' not in source_lower
+                    and f"'{s}'" not in source_lower
+                ]
+                if cacheable and len(missing_suffixes) < 64:
+                    missing_suffixes[synonyms] = missing
             gaps.extend(PatternGap(
                     file=filename,
                     function=_find_enclosing_function(lines, line_idx),
@@ -398,6 +412,7 @@ def _detect_directory_glob_gaps(
 ) -> list[PatternGap]:
     """Flag globs in known directory types that miss expected extensions."""
     gaps: list[PatternGap] = []
+    source_lower = None
 
     for dir_pattern, expected_exts in _DIRECTORY_EXTENSION_EXPECTATIONS.items():
         if dir_pattern not in source:
@@ -405,7 +420,13 @@ def _detect_directory_glob_gaps(
         # Find which expected extensions appear in glob patterns.
         found_exts = set()
         for ext in expected_exts:
-            if f"*{ext}" in source.lower():
+            if type(source) is str:
+                if source_lower is None:
+                    source_lower = source.lower()
+                lowered = source_lower
+            else:
+                lowered = source.lower()
+            if f"*{ext}" in lowered:
                 found_exts.add(ext)
 
         if not found_exts:
