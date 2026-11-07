@@ -144,6 +144,16 @@ _BASH_CMD_PREFIX_KEYWORDS = frozenset(
 _BASH_ASSIGNMENT_WORD_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?="
 )
+_BASH_READ_MENTION = re.compile(r"read\b")
+
+
+def _bash_has_prompt(text: str) -> bool:
+    # Every accepted command has a complete `read` token. A literal prefix
+    # lets the regex skip unrelated source quickly; the existing line
+    # detector still owns command positions and the full option grammar.
+    return _BASH_READ_MENTION.search(text) is not None and any(
+        _bash_read_has_prompt(line) for line in text.splitlines()
+    )
 
 
 def _bash_read_has_prompt(line: str) -> bool:
@@ -519,10 +529,15 @@ REGISTRY: dict[str, Entry] = {
 
 def _git_files() -> list[str]:
     out = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files"],
-        capture_output=True, text=True, check=True,
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+        capture_output=True, check=True,
     )
-    return out.stdout.splitlines()
+    # Git quotes unusual names in line output. Preserve the actual tracked
+    # paths, including embedded newlines and undecodable filename bytes.
+    return [
+        raw.decode("utf-8", errors="surrogateescape")
+        for raw in out.stdout.split(b"\0") if raw
+    ]
 
 
 def _is_test_path(rel: str) -> bool:
@@ -573,6 +588,7 @@ def _md_prompt_instruction(text: str) -> bool:
 # word boundary, whitespace (newlines included — parenthesised
 # continuations), then the argument list.
 _PY_PROMPT_MENTION = re.compile(r"\b(?:input|confirm)\s*\(")
+_PY_PROMPT_NAME = re.compile(r"input|confirm")
 
 
 def _may_carry_python_prompt(text: str) -> bool:
@@ -594,7 +610,13 @@ def _may_carry_python_prompt(text: str) -> bool:
     """
     if "input" not in text and "confirm" not in text:
         return False
-    return _PY_PROMPT_MENTION.search(text) is not None
+    # Keep the original recognizer, but try it only at literal-name hits.
+    # Starting its search with a word boundary makes the regex engine test
+    # every character, including large files with only prose mentions.
+    return any(
+        _PY_PROMPT_MENTION.match(text, match.start()) is not None
+        for match in _PY_PROMPT_NAME.finditer(text)
+    )
 
 
 def _python_prompt_count(tree: ast.AST, *, stop_after_first: bool = False) -> int:
@@ -680,7 +702,7 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            if any(_bash_read_has_prompt(ln) for ln in text.splitlines()):
+            if _bash_has_prompt(text):
                 found.add(rel)
             continue
         try:
@@ -691,8 +713,7 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
         # until the smoke prescreen needs it or Python parsing fails.
         bash_hit = None
         if not full and not _may_carry_python_prompt(text):
-            bash_hit = any(
-                _bash_read_has_prompt(ln) for ln in text.splitlines())
+            bash_hit = _bash_has_prompt(text)
         if bash_hit is False:
             # Neither lane can match: no prompting read line exists,
             # and an honest input()/confirm() call site would have hit
@@ -705,8 +726,7 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
         except SyntaxError:
             # Not Python — bash/other script: any read-with-prompt line.
             if bash_hit is None:
-                bash_hit = any(
-                    _bash_read_has_prompt(ln) for ln in text.splitlines())
+                bash_hit = _bash_has_prompt(text)
             if bash_hit:
                 found.add(rel)
     return found
@@ -957,6 +977,7 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
         )
         for line in prompting:
             self.assertTrue(_bash_read_has_prompt(line), line)
+            self.assertTrue(_bash_has_prompt("heading\n" + line + "\ntrailing"), line)
         promptless = (
             "read -r line",
             "read ans",
@@ -976,6 +997,7 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
         )
         for line in promptless:
             self.assertFalse(_bash_read_has_prompt(line), line)
+            self.assertFalse(_bash_has_prompt("heading\n" + line + "\ntrailing"), line)
 
     def test_shell_lane_spans_the_whole_tree(self):
         """Shell files join the bash lane by suffix or sh-family
@@ -1094,3 +1116,52 @@ def test_python_parse_failure_retains_bash_fallback(tmp_path, monkeypatch, full,
     (tmp_path / "libexec").mkdir()
     (tmp_path / "probe").rename(tmp_path / "libexec/probe")
     assert enumerate_surfaces(full=full) == ({"libexec/probe"} if found else set())
+
+
+@pytest.mark.parametrize("prefix", ["", "word_", "é", "9", "\u0301", "\u2003", "#", ".", "K", "😃"])
+def test_python_name_filter_preserves_original_boundary_and_spacing_rules(prefix):
+    for name in ("input", "confirm", "user_input", "confirmation"):
+        for spacing in ("", " ", "\t", "\n", "\\\n", " # comment\n"):
+            source = prefix + name + spacing + '("Approve?")\n'
+            assert _may_carry_python_prompt(source) == bool(_PY_PROMPT_MENTION.search(source)), source
+    # A rejected occurrence must not hide a later genuine call.
+    source = prefix + 'input_name()\nuser_confirm()\ninput ("Approve?")\n'
+    assert _may_carry_python_prompt(source)
+
+
+@pytest.mark.parametrize("source", [
+    "print('no shell builtin')\n",
+    "payload = read_text(path)\n",
+    "payload = reader(path)\n",
+])
+def test_bash_text_filter_skips_unrelated_line_scans(monkeypatch, source):
+    def unexpected_line_scan(line):
+        pytest.fail("source without a complete read token reached the line detector")
+
+    monkeypatch.setitem(globals(), "_bash_read_has_prompt", unexpected_line_scan)
+    assert not _bash_has_prompt(source)
+
+
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("directory,suffix,source", [
+    ("core", ".py", 'input("Approve?")\n'),
+    ("tools", ".sh", '#!/bin/bash\nread -rp "Approve?" answer\n'),
+    ("docs", ".md", "Offer the user choices with AskUserQuestion.\n"),
+])
+def test_tracked_file_names_survive_git_quoting(tmp_path, monkeypatch, full, directory, suffix, source):
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    expected = {
+        f"{directory}/{name}{suffix}"
+        for name in ("plain", "two words", "tab\tname", "line\nname",
+                     "naïve", 'quote"name', "back\\slash")
+    }
+    for rel in expected:
+        path = repo / rel
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+    git_run(repo, "add", "--all")
+    monkeypatch.setitem(globals(), "REPO_ROOT", repo)
+    assert set(_git_files()) == expected
+    assert enumerate_surfaces(full=full) == expected
