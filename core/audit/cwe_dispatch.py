@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -1316,6 +1317,19 @@ CWE_NOT_TOOL_VERIFIABLE: dict[str, str] = {
 }
 
 
+def _normalize_cwe(cwe: str) -> str:
+    """Normalize a single identifier, optionally followed by a colon title.
+
+    Do not guess an ID from prose or a list of IDs: an ambiguous label must
+    not select a checker or bypass the non-verifiable-class policy.
+    """
+    normalized = (cwe or "").upper().strip()
+    match = re.fullmatch(r"(?:CWE-)?([0-9]+)(?:\s*:\s*[^\r\n]+)?", normalized)
+    if match and not re.search(r"\bCWE-[0-9]+", normalized[match.end(1):]):
+        return f"CWE-{match.group(1)}"
+    return normalized if normalized.startswith("CWE-") else f"CWE-{normalized}"
+
+
 def not_tool_verifiable_reason(cwe: str) -> str:
     """Policy reason a CWE class is not tool-verifiable ('' when it is).
 
@@ -1323,10 +1337,7 @@ def not_tool_verifiable_reason(cwe: str) -> str:
     or synthesized checkers — findings stay at hypothesis/suspicious
     grade with this reason recorded.
     """
-    normalized = (cwe or "").upper().strip()
-    if normalized and not normalized.startswith("CWE-"):
-        normalized = f"CWE-{normalized}"
-    return CWE_NOT_TOOL_VERIFIABLE.get(normalized, "")
+    return CWE_NOT_TOOL_VERIFIABLE.get(_normalize_cwe(cwe), "")
 
 
 def is_placeholder_cwe(cwe: str) -> bool:
@@ -1338,11 +1349,9 @@ def is_placeholder_cwe(cwe: str) -> bool:
     dispatch, inference bypass, or checker synthesis. Empty input is
     "absent", not a placeholder — callers handle it separately.
     """
-    normalized = (cwe or "").upper().strip()
-    if not normalized:
+    if not (cwe or "").strip():
         return False
-    if normalized.startswith("CWE-"):
-        normalized = normalized[4:]
+    normalized = _normalize_cwe(cwe)[4:]
     if not normalized.isdigit():
         return True
     return int(normalized) == 0
@@ -1351,12 +1360,9 @@ def is_placeholder_cwe(cwe: str) -> bool:
 def lookup(cwe: str) -> dict[str, Any] | None:
     """Look up dispatch rules for a CWE identifier.
 
-    Accepts "CWE-78", "cwe-78", "78", etc.
+    Accepts "CWE-78", "cwe-78", "78", and "CWE-78: OS Command Injection".
     """
-    normalized = cwe.upper().strip()
-    if not normalized.startswith("CWE-"):
-        normalized = f"CWE-{normalized}"
-    return CWE_TO_TOOL_DISPATCH.get(normalized)
+    return CWE_TO_TOOL_DISPATCH.get(_normalize_cwe(cwe))
 
 
 def synthesis_owned(cwe: str) -> bool:
@@ -1801,10 +1807,7 @@ def dark_verify_statuses(cwe: str):
 
 def tool_scope_for_cwe(cwe: str) -> dict[str, str] | None:
     """Return {tool_name: scope_description} for *cwe*, or None."""
-    normalized = (cwe or "").upper().strip()
-    if not normalized.startswith("CWE-"):
-        normalized = f"CWE-{normalized}"
-    return _TOOL_SCOPE.get(normalized)
+    return _TOOL_SCOPE.get(_normalize_cwe(cwe))
 
 
 class RoutingResult:
