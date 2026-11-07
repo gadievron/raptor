@@ -75,7 +75,7 @@ from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 from core.logging import log_security_event as _log_security_event
 from core.security.capped_read import path_may_exist, read_capped
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
@@ -240,7 +240,7 @@ def _get_evidence_handle_locked(run_dir: Path):
                 "record_denial: cannot open evidence file under %s: %s: %s",
                 sanitise_for_terminal(str(run_dir)),
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
         return None
     _evidence_open_failed = False
@@ -261,7 +261,7 @@ def _record_evidence_write_failure(run_dir: Path) -> None:
         logger.warning(
             "record_denial: could not retain evidence failure state: %s: %s",
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
     else:
         with _lock:
@@ -420,7 +420,7 @@ def record_denial(cmd_display: str, returncode: int,
             logger.warning(
                 "record_denial: failed to append JSONL: %s: %s",
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
         else:
             logger.warning("record_denial: failed to append JSONL", exc_info=True)
@@ -835,7 +835,7 @@ def record_floor_refusal(run_dir: Path, *, floor: str, achievable: str,
             logger.warning(
                 "record_floor_refusal: failed to append JSONL: %s: %s",
                 sanitise_for_terminal(type(exc).__name__, max_len=64),
-                sanitise_for_terminal(str(exc)),
+                sanitise_exception_message(exc),
             )
         else:
             logger.warning("record_floor_refusal: failed to append JSONL", exc_info=True)
@@ -867,7 +867,7 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         logger.warning(
             "record_audit_degraded: cannot resolve run directory: %s: %s",
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
         return
     with _lock:
@@ -900,7 +900,7 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         logger.warning(
             "record_audit_degraded: marker serialization failed: %s: %s",
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
         return
     with _lock:
@@ -918,7 +918,7 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
             "record_audit_degraded: marker write failed; retaining state for finalization retry under %s: %s: %s",
             sanitise_for_terminal(str(run_dir)),
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
     else:
         with _lock:
@@ -1036,7 +1036,7 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
         except OSError as exc:
             logger.warning(
                 "reassert_audit_degraded: pending marker retry failed under %s: %s: %s",
-                sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+                sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
             )
         else:
             entry["persisted"] = True
@@ -1065,7 +1065,7 @@ def reassert_audit_degraded(run_dir: Path) -> bool:
         # event above) still carries the tamper evidence to triage.
         logger.warning(
             "reassert_audit_degraded: failed to restore marker under %s: %s: %s",
-            sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+            sanitise_for_terminal(str(run_dir)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
         )
     return True
 
@@ -1203,7 +1203,7 @@ def summarize_and_write(
         # retry, but no summary was produced. Surface that distinction.
         logger.warning(
             "summarize_and_write: failed to rename denial evidence %s: %s: %s",
-            sanitise_for_terminal(str(jsonl)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+            sanitise_for_terminal(str(jsonl)), sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
         )
         if raise_on_io_error:
             raise
@@ -1244,7 +1244,7 @@ def summarize_and_write(
             logger.warning(
                 "summarize_and_write: failed to open renamed JSONL "
                 "for reading; evidence retained at %s: %s: %s", sanitise_for_terminal(str(tmp)),
-                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
             )
             if raise_on_io_error:
                 raise
@@ -1280,7 +1280,7 @@ def summarize_and_write(
             logger.warning(
                 "summarize_and_write: failed to read renamed JSONL; "
                 "evidence retained at %s: %s: %s", sanitise_for_terminal(str(tmp)),
-                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+                sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
             )
             if raise_on_io_error:
                 raise
@@ -1697,7 +1697,7 @@ def _assemble_and_write_summary(
         # missing. Mirrors c5a4505 / 8edf0f6 family.
         logger.warning(
             "summarize_and_write: failed to write/replace summary.json: %s: %s",
-            sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_for_terminal(str(exc)),
+            sanitise_for_terminal(type(exc).__name__, max_len=64), sanitise_exception_message(exc),
         )
         if raise_on_io_error:
             raise
@@ -1927,7 +1927,7 @@ def _cli_main(argv: list | None = None) -> int:
     try:
         target_is_dir = target.is_dir()
     except OSError as exc:
-        print(f"error: cannot inspect {_sft(str(target))}: {_sft(str(exc))}",
+        print(f"error: cannot inspect {_sft(str(target))}: {sanitise_exception_message(exc)}",
               file=sys.stderr)
         return 1
     if not target_is_dir:
@@ -1939,7 +1939,7 @@ def _cli_main(argv: list | None = None) -> int:
         try:
             result = summarize_and_write(target, raise_on_io_error=True)
         except OSError as exc:
-            print(f"error: cannot finalize {_sft(str(target))}: {_sft(str(exc))}",
+            print(f"error: cannot finalize {_sft(str(target))}: {sanitise_exception_message(exc)}",
                   file=sys.stderr)
             return 1
         if result is None:
@@ -1957,7 +1957,7 @@ def _cli_main(argv: list | None = None) -> int:
     try:
         children = sorted(target.iterdir())
     except OSError as e:
-        print(f"error: cannot list {_sft(str(target))}: {_sft(str(e))}", file=sys.stderr)
+        print(f"error: cannot list {_sft(str(target))}: {sanitise_exception_message(e)}", file=sys.stderr)
         return 1
     for child in children:
         try:
@@ -1968,7 +1968,7 @@ def _cli_main(argv: list | None = None) -> int:
                 continue
         except OSError as exc:
             failed += 1
-            print(f"error: cannot inspect {_sft(str(child))}: {_sft(str(exc))}",
+            print(f"error: cannot inspect {_sft(str(child))}: {sanitise_exception_message(exc)}",
                   file=sys.stderr)
             continue
         swept += 1
@@ -1976,7 +1976,7 @@ def _cli_main(argv: list | None = None) -> int:
             result = summarize_and_write(child, raise_on_io_error=True)
         except OSError as exc:
             failed += 1
-            print(f"error: cannot finalize {_sft(str(child))}: {_sft(str(exc))}",
+            print(f"error: cannot finalize {_sft(str(child))}: {sanitise_exception_message(exc)}",
                   file=sys.stderr)
             continue
         if result is not None:
