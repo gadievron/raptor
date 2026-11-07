@@ -631,6 +631,10 @@ def _branch_guards(
                         if neg is not None:
                             conditions.append(neg)
                     break
+        if conditions:
+            from .invariant_source import guard_snapshot_supported
+            if not guard_snapshot_supported(source, tail, line):
+                return None
         return conditions
     except Exception:
         logger.debug("protocol_state: branch guard walk failed",
