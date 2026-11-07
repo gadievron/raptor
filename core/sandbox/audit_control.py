@@ -22,7 +22,7 @@ _DROP_MARKERS = frozenset({
 })
 _POSITIVE_STATUS = ("reader_drained", "producer_reaped", "lineage_stopped", "stdout_closed")
 _NEGATIVE_STATUS = ("reader_failed", "lineage_failed")
-_LOSS_COUNTERS = ("append_failures", "parse_ambiguous_records_dropped")
+_LOSS_COUNTERS = ("append_failures", "parse_ambiguous_records_dropped", "sampled_keeps")
 _CAPTURE_FIELDS = frozenset({
     "version", "records", "summaries", "by_type", "capture_incomplete",
     "budget_truncated", "dropped_by_category", "malformed_records",

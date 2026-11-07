@@ -98,7 +98,9 @@ def _read_entry(directory: Path) -> dict:
         entry.update(integrity="key_exposed", reason="run could read telemetry signing key")
         return entry
     try:
-        budget_limited = False
+        capture = raw.get("audit_capture")
+        budget_limited = bool(capture and (
+            capture["capture_incomplete"] or capture["budget_truncated"]))
         enforcement_records = []
         for record in records:
             dtype = record.get("type")
