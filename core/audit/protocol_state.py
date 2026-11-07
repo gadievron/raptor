@@ -520,7 +520,7 @@ def _local_call_sources(source: str, span: tuple[int, int] | None,
             and span[0] > 0 and span[1] >= span[0]):
         # slice_text already applies split_lines' single-CR trimming.
         # Raw LF splitting here avoids trimming a second trailing CR.
-        seg = slice_text(source, span[0], span[1]).split("\n")
+        seg = slice_text(source, span[0], span[1]).split("\n")  # line-model: slice_text already trimmed one trailing CR
     else:
         lines = split_lines(source)
         seg = lines[span[0] - 1:span[1]] if span else lines

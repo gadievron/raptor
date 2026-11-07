@@ -18,10 +18,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
     from pathlib import Path
 
 __all__ = [
+    "iter_splitlines",
     "join_lf_slice",
     "join_lines_prefix",
     "number_lines",
@@ -43,6 +44,39 @@ _SPLITLINES_ONLY_TERMINATORS: tuple[str, ...] = (
 )
 #: Excluded single-char breakers = the exotics plus bare ``\r``.
 _NON_NL_BREAKERS: tuple[str, ...] = ("\r", *_SPLITLINES_ONLY_TERMINATORS)
+
+# Python's display-line model, separate from source-coordinate LF splitting.
+_DISPLAY_LINE_BREAKERS = ("\n", *_NON_NL_BREAKERS)
+_SPLITLINES_CHUNK_CHARS = 4096
+
+
+def iter_splitlines(text: str) -> Iterator[str]:
+    """Yield Python display lines without building the entire line list.
+
+    Match ``str.splitlines()`` including CRLF, Unicode separators and the
+    omitted trailing empty line. Temporary work is chunked, except for a
+    single long line. Source coordinates must use ``split_lines``.
+    String adapters retain their own splitlines operation.
+    """
+    if type(text) is not str:
+        yield from text.splitlines()
+        return
+    start = scan = 0
+    while scan < len(text):
+        stop = min(scan + _SPLITLINES_CHUNK_CHARS, len(text))
+        end = max(text.rfind(c, scan, stop) for c in _DISPLAY_LINE_BREAKERS) + 1
+        if not end:
+            scan = stop
+            continue
+        # A CR at the chunk edge may belong to the next character's CRLF.
+        if text[end - 1] == "\r" and end < len(text) and text[end] == "\n":
+            end += 1
+        # Split complete display lines in C. Retain no partial-line copies;
+        # an unusually long line can span several search chunks.
+        yield from text[start:end].splitlines()
+        start = scan = end
+    if start < len(text):
+        yield text[start:]
 
 
 def split_lines(text: str) -> list[str]:
@@ -223,7 +257,7 @@ def slice_text(
         if not selected:
             return ""
         if "\r" in selected:
-            result = [line.removesuffix("\r") for line in selected.split("\n")]
+            result = [line.removesuffix("\r") for line in selected.split("\n")]  # line-model: exactly one trailing CR is trimmed here
             # Only the file's final empty normalized element is dropped.
             # An empty line inside the requested window must remain.
             if result[-1] == "" and end_line > text.count("\n"):
