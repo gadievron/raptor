@@ -1,81 +1,176 @@
-// rcu_dereference_outside_rcu.cocci — Find rcu_dereference() calls
-// without a surrounding rcu_read_lock()/rcu_read_unlock() pair in
-// the same function.
-//
-// rcu_dereference() is only safe inside an RCU read-side critical
-// section. Using it outside means the referenced object can be freed
-// by a concurrent grace period, causing use-after-free.
-//
-// Also matches rcu_dereference_check() and rcu_dereference_bh()
-// without corresponding rcu_read_lock_bh().
-//
-// Covers CWE-416 (use-after-free) and CWE-362 (race condition).
-// @role: verification
+// Review local RCU read-side protection at dereference sites.
+// Caller-held locks, alternate protection and lifetime require independent
+// review, so these are candidates, not verified use-after-free findings.
+// Check/protected APIs carry explicit assertions and are outside this check.
+// Track matching local lock/unlock APIs. Simple two-level nesting is recognized;
+// complex nesting, wrappers and post-dereference lifetime are not proved.
+// https://www.kernel.org/doc/html/latest/RCU/lockdep.html
+// @role: detection
 
-// rcu_dereference without rcu_read_lock
-@rcu_no_readlock@
-expression E;
-position p;
+// A release known to have at least two mandatory local acquisitions before
+// it does not end the outer section. Conditional nesting is not assumed.
+@rcu_plain_nested_release forall@
+identifier FUNC;
+position release;
 @@
-
-* rcu_dereference@p(E)
-
-@ok_rcu@
-expression E;
-position rcu_no_readlock.p;
-@@
-
+FUNC(...) {
+... when any
 rcu_read_lock();
 ... when any
-rcu_dereference@p(E)
+    when != rcu_read_unlock()
+rcu_read_lock();
 ... when any
-rcu_read_unlock();
+    when != rcu_read_unlock()
+rcu_read_unlock@release();
+... when any
+}
 
-@script:python depends on !ok_rcu@
-p << rcu_no_readlock.p;
-E << rcu_no_readlock.E;
-@@
-
-import json, sys
-for _p in p:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "rcu_dereference_outside_rcu",
-          "message": "rcu_dereference(%s) without surrounding rcu_read_lock/rcu_read_unlock" % E}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// rcu_dereference_check and rcu_dereference_protected carry their own
-// lockdep assertions — they are intentionally used outside rcu_read_lock
-// sections when the caller holds a different lock.  Do NOT flag them.
-
-// rcu_dereference_bh without rcu_read_lock_bh
-@rcu_bh_no_readlock@
+@rcu_plain exists@
 expression E;
 position p;
 @@
+* rcu_dereference@p(E)
 
-* rcu_dereference_bh@p(E)
-
-@ok_rcu_bh@
-expression E;
-position rcu_bh_no_readlock.p;
+@rcu_plain_held exists@
+expression rcu_plain.E;
+position rcu_plain.p;
 @@
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_dereference@p(E)
 
+@rcu_plain_nested_held exists@
+expression rcu_plain.E;
+position rcu_plain.p;
+@@
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_unlock();
+... when any
+    when != rcu_read_unlock()
+rcu_dereference@p(E)
+
+// A possible held path is insufficient when an unprotected path also exists.
+@rcu_plain_entry_path exists@
+identifier FUNC;
+expression rcu_plain.E;
+position rcu_plain.p;
+@@
+FUNC(...) {
+... when any
+    when != rcu_read_lock()
+rcu_dereference@p(E)
+... when any
+}
+
+@rcu_plain_released_path exists@
+expression rcu_plain.E;
+position rcu_plain.p;
+position release != rcu_plain_nested_release.release;
+@@
+rcu_read_unlock@release();
+... when any
+    when != rcu_read_lock()
+rcu_dereference@p(E)
+
+@script:python depends on rcu_plain && ((!rcu_plain_held && !rcu_plain_nested_held) || rcu_plain_entry_path || rcu_plain_released_path)@
+p << rcu_plain.p;
+E << rcu_plain.E;
+@@
+import json, sys
+for pos in p:
+    sys.stderr.write("COCCIRESULT:" + json.dumps({
+        "file": pos.file, "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
+        "rule": "rcu_dereference_outside_rcu",
+        "message": "Candidate: rcu_dereference(%s) lacks established local read-side protection; review caller-held locks, nesting and lifetime (CWE-416)" % E,
+    }) + "\n")
+
+// A release known to have at least two mandatory local acquisitions before
+// it does not end the outer section. Conditional nesting is not assumed.
+@rcu_bh_nested_release forall@
+identifier FUNC;
+position release;
+@@
+FUNC(...) {
+... when any
 rcu_read_lock_bh();
 ... when any
+    when != rcu_read_unlock_bh()
+rcu_read_lock_bh();
+... when any
+    when != rcu_read_unlock_bh()
+rcu_read_unlock_bh@release();
+... when any
+}
+
+@rcu_bh exists@
+expression E;
+position p;
+@@
+* rcu_dereference_bh@p(E)
+
+@rcu_bh_held exists@
+expression rcu_bh.E;
+position rcu_bh.p;
+@@
+rcu_read_lock_bh();
+... when any
+    when != rcu_read_unlock_bh()
+rcu_dereference_bh@p(E)
+
+@rcu_bh_nested_held exists@
+expression rcu_bh.E;
+position rcu_bh.p;
+@@
+rcu_read_lock_bh();
+... when any
+    when != rcu_read_unlock_bh()
+rcu_read_lock_bh();
+... when any
+    when != rcu_read_unlock_bh()
+rcu_read_unlock_bh();
+... when any
+    when != rcu_read_unlock_bh()
+rcu_dereference_bh@p(E)
+
+// A possible held path is insufficient when an unprotected path also exists.
+@rcu_bh_entry_path exists@
+identifier FUNC;
+expression rcu_bh.E;
+position rcu_bh.p;
+@@
+FUNC(...) {
+... when any
+    when != rcu_read_lock_bh()
 rcu_dereference_bh@p(E)
 ... when any
-rcu_read_unlock_bh();
+}
 
-@script:python depends on !ok_rcu_bh@
-p << rcu_bh_no_readlock.p;
-E << rcu_bh_no_readlock.E;
+@rcu_bh_released_path exists@
+expression rcu_bh.E;
+position rcu_bh.p;
+position release != rcu_bh_nested_release.release;
 @@
+rcu_read_unlock_bh@release();
+... when any
+    when != rcu_read_lock_bh()
+rcu_dereference_bh@p(E)
 
+@script:python depends on rcu_bh && ((!rcu_bh_held && !rcu_bh_nested_held) || rcu_bh_entry_path || rcu_bh_released_path)@
+p << rcu_bh.p;
+E << rcu_bh.E;
+@@
 import json, sys
-for _p in p:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "rcu_dereference_outside_rcu",
-          "message": "rcu_dereference_bh(%s) without surrounding rcu_read_lock_bh/rcu_read_unlock_bh" % E}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+for pos in p:
+    sys.stderr.write("COCCIRESULT:" + json.dumps({
+        "file": pos.file, "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
+        "rule": "rcu_dereference_outside_rcu",
+        "message": "Candidate: rcu_dereference_bh(%s) lacks established local read-side protection; review caller-held locks, nesting and lifetime (CWE-416)" % E,
+    }) + "\n")

@@ -302,6 +302,15 @@ unsupported syntax and unknown precision values remain candidates for review.
 Reports remain review candidates: source length, existing NUL bytes, aliases and
 smaller read bounds can determine whether a read is safe.
 
+The RCU checks report missing recognized local read-side protection as review
+candidates. A caller may already hold RCU or use another valid protection
+contract. The checks exclude `rcu_dereference_check` and
+`rcu_dereference_protected`, whose [explicit assertions can describe alternate
+protection](https://www.kernel.org/doc/html/latest/RCU/lockdep.html).
+They distinguish protection at the dereference from a missing later unlock,
+which is a separate balance issue. Simple nested sections are recognized;
+complex nesting, wrappers and pointer use after unlocking still require review.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

@@ -1945,7 +1945,7 @@ class TestRefutedHypothesisDispatch:
 class TestSweepValidateDetectionFilter:
     """Detection-role tools must not stamp evidence in _sweep_validate."""
 
-    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul"])
+    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu"])
     def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch, rule_name):
         from core.audit.orchestrator import (
             OrchestratorConfig,
