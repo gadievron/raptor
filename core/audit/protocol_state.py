@@ -703,10 +703,16 @@ def check_invariant_multi_site(
     ``census-degraded``). Bare-field projection also requires consistent
     scalar/object bindings; ambiguous sites retain an explicit refusal
     receipt and do not enter the solver batch. Source-backed census code
-    must match the selected mutation and cannot add guards absent from it."""
+    must match the selected mutation and cannot add guards absent from it.
+    Preservation also requires no reported collector truncation; a checked
+    counterexample can remain valid without a complete input census."""
     t0 = time.monotonic()
     variables = _invariant_variables(invariant)
     fields = index.get("fields") or {}
+    # The collector can already have dropped fields or sites before this
+    # check's own cap is applied. Only an explicit False establishes that
+    # its completeness marker is clear; retain legacy indexes without it.
+    source_incomplete = index.get("skipped", False) is not False
     sites: list[dict[str, Any]] = []
     capped = False
     for var in sorted(variables):
@@ -725,10 +731,13 @@ def check_invariant_multi_site(
         # so the flag lets the adjudicator keep this away from an
         # authoritative refutation.
         return {
-            "outcome": "preserved",
+            "outcome": "inconclusive" if source_incomplete or capped else "preserved",
             "vacuous": True,
             "sites": [],
             "reason": (
+                "no checked mutation sites in a partial census "
+                "(source index incomplete or analysis cap reached) — not refuting"
+                if source_incomplete or capped else
                 "no census write site mutates an invariant variable "
                 "(vacuously preserved; base case not checked)"
             ),
@@ -804,7 +813,7 @@ def check_invariant_multi_site(
             "(inductive step, dominating guards encoded)"
         )
     elif aggregate == "preserved":
-        if skipped or capped:
+        if skipped or capped or source_incomplete:
             # Budget-skipped or cap-truncated sites were never
             # checked: "every CHECKED site preserves" over a partial
             # census is bounded evidence, not a preservation proof —
@@ -817,7 +826,8 @@ def check_invariant_multi_site(
                 f"{len(per_site)} checked site(s) preserve the "
                 "invariant but the census was truncated "
                 f"({skipped} skipped on budget, cap "
-                f"{'reached' if capped else 'not reached'}) — "
+                f"{'reached' if capped else 'not reached'}, source index "
+                f"{'incomplete' if source_incomplete else 'complete'}) — "
                 "not refuting on a partial census"
             )
         else:
