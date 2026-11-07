@@ -244,6 +244,12 @@ chain when the relevant pointer or descriptor is replaced or passed by address,
 and excludes explicit descriptor rebinding between releases. It follows direct
 uses rather than aliases.
 
+The mapping-release check covers `mmap`, `mmap64` and `mremap`. It reports
+`free` on a mapping-derived pointer, including through C-style pointer casts
+and after `munmap`: unmapping does
+not make that pointer a heap allocation. Reassigning the pointer or passing
+its address to a helper ends tracking. Pointer aliases are outside its scope.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
