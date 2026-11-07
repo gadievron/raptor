@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
@@ -264,7 +266,7 @@ class TestEscalationNeverRaises:
         # caller in the tunnel handler.
         def raising_write(fd, data):
             raise OSError("stderr closed")
-        monkeypatch.setattr(proxy_mod.os, "write", raising_write)
+        patch_module_attribute(monkeypatch, proxy_mod, "os", "write", raising_write)
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
         try:
             proxy._record(_denied_resolved_ip_event())
