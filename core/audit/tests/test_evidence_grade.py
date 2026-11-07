@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+import unicodedata
 
 import pytest
 
@@ -810,7 +811,44 @@ class TestProducerStampClosure:
             parts = path.relative_to(cls._AUDIT_ROOT).parts
             if "tests" in parts or "scripts" in parts:
                 continue
-            yield path, _ast.parse(path.read_text())
+            source = path.read_text()
+            tree = _ast.parse(source)
+            # Keep checking every module's syntax, but avoid walking modules
+            # that cannot contain a producer recognized by either census.
+            # Python normalizes identifiers, including attributes/keywords,
+            # so an ASCII-only prefilter would miss equivalent spellings.
+            normalized = unicodedata.normalize("NFKC", source)
+            if any(name in normalized for name in (
+                "evidence_tool", "_promote_outcome", "_stamp_evidence",
+            )):
+                yield path, tree
+
+    @pytest.mark.parametrize("source", [
+        'outcome.evidence_tool = "semgrep"',
+        'emit(status="finding", evidence_tool="semgrep")',
+        '_promote_outcome(outcome, "semgrep")',
+        '_stamp_evidence(outcome, "semgrep")',
+        'outcome.ｅｖｉｄｅｎｃｅ_ｔｏｏｌ = "semgrep"',
+        'emit(status="finding", ｅｖｉｄｅｎｃｅ_ｔｏｏｌ="semgrep")',
+        '_ｓｔａｍｐ_ｅｖｉｄｅｎｃｅ(outcome, "semgrep")',
+    ], ids=["attribute", "keyword", "promotion", "stamp", "unicode-attribute",
+            "unicode-keyword", "unicode-stamp"])
+    def test_module_filter_retains_producer_spellings(self, tmp_path, monkeypatch, source):
+        path = tmp_path / "producer.py"
+        path.write_text(source)
+        monkeypatch.setattr(type(self), "_AUDIT_ROOT", tmp_path)
+        assert [p for p, _tree in self._modules()] == [path]
+
+    def test_unrelated_modules_do_not_reach_producer_walks(self, tmp_path, monkeypatch):
+        (tmp_path / "unrelated.py").write_text("def unrelated():\n    return 1\n")
+        monkeypatch.setattr(type(self), "_AUDIT_ROOT", tmp_path)
+        assert list(self._modules()) == []
+
+    def test_unrelated_module_syntax_is_still_checked(self, tmp_path, monkeypatch):
+        (tmp_path / "broken.py").write_text("def broken(\n")
+        monkeypatch.setattr(type(self), "_AUDIT_ROOT", tmp_path)
+        with pytest.raises(SyntaxError):
+            list(self._modules())
 
     @staticmethod
     def _scopes(tree):
