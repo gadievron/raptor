@@ -99,3 +99,38 @@ def test_removed_markers_do_not_block_new_formulas_or_grow_the_registry(backend,
     assert old_name not in current
     assert solver.check() == z3.sat
     assert len(solver._raptor_track_labels) == 1
+
+
+@pytest.mark.parametrize("objective_kind", ["max", "min", "soft"])
+def test_tracking_cannot_change_an_optimizer_objective_or_soft_preference(objective_kind):
+    ctx = z3.Context()
+    solver = z3.Optimize(ctx=ctx)
+    source = z3.Bool("_raptor_track!0", ctx=ctx)
+    if objective_kind == "max":
+        solver.maximize(z3.If(source, 0, 1))
+    elif objective_kind == "min":
+        solver.minimize(z3.If(source, 1, 0))
+    else:
+        solver.add_soft(z3.Not(source))
+    reverse = track(solver, [("tautology", True)])
+    assert "_raptor_track!0" not in reverse
+    assert solver.check() == z3.sat
+    assert z3.is_false(solver.model().eval(source))
+
+
+@pytest.mark.parametrize("soft", [False, True])
+def test_later_objectives_cannot_reuse_an_active_tracking_label(soft):
+    ctx = z3.Context()
+    solver = z3.Optimize(ctx=ctx)
+    reverse = track(solver, [("original", True)])
+    marker = z3.Bool(next(iter(reverse)), ctx=ctx)
+    if soft:
+        solver.add_soft(z3.Not(marker))
+    else:
+        solver.maximize(z3.If(marker, 0, 1))
+    before = tuple(solver.assertions())
+    names = dict(reverse)
+    with pytest.raises(ValueError, match="active tracking label"):
+        track(solver, [("new", True)], reverse)
+    assert dict(reverse) == names
+    assert all(a.eq(b) for a, b in zip(before, solver.assertions(), strict=True))
