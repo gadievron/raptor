@@ -226,7 +226,7 @@ def test_failed_live_boot_retains_heap_and_scratch_until_death_is_verified(
     monkeypatch.setattr(server, "_private_java_command", lambda *args: ["joern"])
     monkeypatch.setattr("packages.joern.prereqs.joern_tool_paths", lambda: [])
     process = Mock(pid=2_000_000_000, returncode=0)
-    monkeypatch.setattr(server.subprocess, "Popen", lambda *args, **kwargs: process)
+    patch_module_attribute(monkeypatch, server, 'subprocess', "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(server, "_signal_owned_group", lambda *args: None)
     reservation = Mock(granted_mb=64, pass_fds=())
     monkeypatch.setattr(server, "reserve_heap_mb", lambda *args, **kwargs: reservation)

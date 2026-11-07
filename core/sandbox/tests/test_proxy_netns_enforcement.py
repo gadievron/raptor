@@ -18,6 +18,10 @@ import pytest
 from core.sandbox.tests.capability import requires_landlock
 from core.sandbox.tests.socket_server import SocketServer
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 # Hard-SET (never setdefault): the code under test derives paths from
 # RAPTOR_DIR; an ambient value for another checkout must not win.
@@ -540,8 +544,8 @@ class TestProxyNetnsContextWiring:
         import core.sandbox.context as ctx
         from core.sandbox import sandbox
 
-        with mock.patch.object(
-            ctx.sys, "platform", platform,
+        with mock_module_attribute(
+            ctx, 'sys', "platform", platform,
         ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
@@ -635,7 +639,7 @@ class TestProxyNetnsContextWiring:
         from core.sandbox import sandbox
         if env and monkeypatch:
             monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", env)
-        with mock.patch.object(ctx.sys, "platform", platform), mock.patch(
+        with mock_module_attribute(ctx, 'sys', "platform", platform), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=4,
         ), mock.patch(
             "core.sandbox.context.check_landlock_available", return_value=True,
@@ -699,8 +703,8 @@ class TestProxyNetnsContextWiring:
         from core.sandbox import sandbox
 
         abi = 4
-        with mock.patch.object(
-            ctx.sys, "platform", "linux",
+        with mock_module_attribute(
+            ctx, 'sys', "platform", "linux",
         ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
@@ -738,8 +742,8 @@ class TestProxyNetnsContextWiring:
         from core.sandbox import sandbox
 
         abi = 4
-        with mock.patch.object(
-            ctx.sys, "platform", "linux",
+        with mock_module_attribute(
+            ctx, 'sys', "platform", "linux",
         ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(

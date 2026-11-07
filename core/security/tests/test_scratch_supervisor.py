@@ -334,7 +334,7 @@ def test_stalled_manager_is_reaped_and_late_claim_is_revoked(owned, monkeypatch)
         started.append(process)
         return process
     monkeypatch.setattr(supervisor, '_can_delegate', lambda: True)
-    monkeypatch.setattr(supervisor.subprocess, 'Popen', manager)
+    patch_module_attribute(monkeypatch, supervisor, 'subprocess', 'Popen', manager)
     monkeypatch.setattr(supervisor, '_DELEGATION_START_SECONDS', .05)
     before = time.monotonic()
     assert supervisor._try_delegated(metadata, session_id, ['/never-run']) is None

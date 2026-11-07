@@ -28,6 +28,9 @@ from core.sandbox.tests.capability import requires_landlock, requires_userns
 # other native platforms, deselected under the darwin-emulation gate.
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _poison(flags, reason="unshare: Operation not permitted"):
     """Force a flag-set's engagement verdict to FAILED in the cache."""
     state._unshare_engage_cache[tuple(flags)] = (False, reason)
@@ -176,14 +179,14 @@ class TestSubprocessBoundaryTranslation:
             def communicate(self, timeout=None):
                 return ("", "RAPTOR: sandbox could not engage")
 
-        monkeypatch.setattr(scanner.subprocess, "Popen",
+        patch_module_attribute(monkeypatch, scanner, 'subprocess', "Popen",
                             lambda *a, **k: _FakeProc())
         # run_codeql returns [] early if `codeql` isn't on PATH (the case in
         # CI), never reaching the Popen + exit-code translation under test.
         # Force it "present" so the real path runs regardless of host.
         _real_which = scanner.shutil.which
-        monkeypatch.setattr(
-            scanner.shutil, "which",
+        patch_module_attribute(monkeypatch,
+            scanner, 'shutil', "which",
             lambda name: "/usr/bin/codeql" if name == "codeql" else _real_which(name),
         )
         repo = tmp_path / "repo"

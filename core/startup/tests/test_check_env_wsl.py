@@ -10,7 +10,6 @@ run on any CI host.
 
 from __future__ import annotations
 
-import sys
 from contextlib import ExitStack
 from unittest import mock
 
@@ -18,12 +17,17 @@ import pytest
 
 from core.startup import init as startup_init
 
+
+import core.startup.init as _host_platform_consumer
+from core.testing.module_bindings import mock_module_attribute
+
+
 pytestmark = pytest.mark.wsl
 
 
 def _linux_sandbox_mocks(stack: ExitStack, *, landlock_ok: bool) -> None:
     """Pin the Linux sandbox probe results check_env consumes."""
-    stack.enter_context(mock.patch.object(sys, "platform", "linux"))
+    stack.enter_context(mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"))
     stack.enter_context(mock.patch(
         "core.sandbox.check_net_available", return_value=True))
     stack.enter_context(mock.patch(

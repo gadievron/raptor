@@ -8,6 +8,9 @@ from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher import server
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_compact_socket_uses_captured_service_base_not_later_environment(monkeypatch):
     # Keep physical test paths short on the real host. Darwin's real private
     # directory remains the backing location when this test runs on macOS.
@@ -19,7 +22,7 @@ def test_compact_socket_uses_captured_service_base_not_later_environment(monkeyp
         monkeypatch.setattr(tempfile, 'tempdir', str(deep))
         monkeypatch.setattr(server, '_SERVICE_TMP_BASE', str(selected))
         monkeypatch.setenv('_RAPTOR_SERVICE_TMP_BASE', '/changed-after-startup')
-        monkeypatch.setattr(server.sys, 'platform', 'darwin')
+        patch_module_attribute(monkeypatch, server, 'sys', 'platform', 'darwin')
         creds = CredentialStore.__new__(CredentialStore)
         creds._keys = {}
         dispatcher = server.LLMDispatcher(run_id='compact-service-base', creds=creds)

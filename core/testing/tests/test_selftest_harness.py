@@ -33,6 +33,10 @@ from unittest.mock import patch
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -43,6 +47,8 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-self-test"
 @pytest.fixture(scope="module")
 def selftest() -> Any:
     """Import the raptor-self-test script as a module (trust marker set)."""
+    absent_module = object()
+    prior_module = sys.modules.get("raptor_self_test", absent_module)
     prior = os.environ.get("_RAPTOR_TRUSTED")
     os.environ["_RAPTOR_TRUSTED"] = "1"
     try:
@@ -57,7 +63,10 @@ def selftest() -> Any:
             spec.loader.exec_module(mod)
         yield mod
     finally:
-        sys.modules.pop("raptor_self_test", None)
+        if prior_module is absent_module:
+            sys.modules.pop("raptor_self_test", None)
+        else:
+            sys.modules["raptor_self_test"] = prior_module
         if prior is None:
             os.environ.pop("_RAPTOR_TRUSTED", None)
         else:
@@ -317,8 +326,8 @@ class TestToolMatrixSkip:
         stub = tmp_path / "afl-clang-fast"
         stub.write_text("#!/bin/sh\necho 'no such target' >&2\nexit 1\n")
         stub.chmod(0o755)
-        monkeypatch.setattr(
-            selftest.shutil, "which",
+        patch_module_attribute(monkeypatch,
+            selftest, 'shutil', "which",
             lambda name, *a, **k: (
                 str(stub) if name in ("afl-clang-fast", "afl-gcc") else None
             ),
@@ -407,7 +416,7 @@ def test_joern_matrix_resolves_host_launcher_symlink(selftest, tmp_path, monkeyp
     alias = tmp_path / "user-bin" / "joern-parse"
     alias.parent.mkdir()
     alias.symlink_to(launcher)
-    monkeypatch.setattr(selftest.shutil, "which",
+    patch_module_attribute(monkeypatch, selftest, 'shutil', "which",
                         lambda name: str(alias) if name == "joern-parse" else None)
     monkeypatch.setattr(prereqs, "_joern_parse_resolved", False)
     monkeypatch.setattr(prereqs, "_resolved_joern_parse", None)
@@ -419,3 +428,16 @@ def test_joern_matrix_resolves_host_launcher_symlink(selftest, tmp_path, monkeyp
     assert entry["require"] == str(launcher)
     assert str(alias) not in entry["argv"]
     assert entry["kwargs"]["tool_paths"] == [str(installation)]
+
+
+@pytest.fixture(autouse=True)
+def _forward_selftest_tool_lookup(selftest, monkeypatch):
+    """Own resolver state and forward the matrix's delegated Joern lookup."""
+    from packages.joern import prereqs
+
+    for name in ("_resolved_joern", "_joern_resolved", "_resolved_joern_parse",
+                 "_joern_parse_resolved", "_resolved_java", "_java_resolved"):
+        monkeypatch.setattr(prereqs, name, getattr(prereqs, name))
+    prereqs.reset_path_cache()
+    patch_module_attribute(monkeypatch, prereqs, "shutil", "which",
+                           lambda *args, **kwargs: selftest.shutil.which(*args, **kwargs))

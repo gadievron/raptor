@@ -19,6 +19,9 @@ from core.audit.corpus.run_corpus import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _history_store_in_tmp(tmp_path: Path,
                           monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +291,6 @@ class TestLabelPinning:
         # coverage state must not turn a labeled function into a
         # non-gap
         assert opts.force is True
-
 
 
 class TestScopeAndExcerptPrep:
@@ -972,7 +974,7 @@ class TestFetchSourceEnv:
             out = "curr" if "HEAD" in cmd else "want"
             return real_subprocess.CompletedProcess(cmd, 0, out, "")
 
-        monkeypatch.setattr(run_corpus.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, run_corpus, 'subprocess', "run", fake_run)
         run_corpus._fetch_source("test", "v1.0.0")
 
         fetch_calls = [
@@ -2193,7 +2195,6 @@ class TestCheckpointModelGuard:
         assert results[0]["cost_usd"] == 0.5
 
 
-
 class TestGroupHeartbeat:
     """The runner signals every completed group so the caller's
     wall-segment accounting stays accurate to the last group even
@@ -2305,7 +2306,6 @@ class TestWallSegments:
         meta = _meta_of(out)
         assert len(meta["wall_segments"]) == 1
         assert meta["wall_s"] < 100.0
-
 
 
 class TestLabelOverlayHash:

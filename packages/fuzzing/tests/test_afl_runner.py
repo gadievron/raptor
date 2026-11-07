@@ -511,7 +511,7 @@ class TestSandboxedCampaign:
                 "afl-fuzz must not run via plain subprocess.Popen"
             )
 
-        monkeypatch.setattr(mod.subprocess, "Popen", popen_tripwire)
+        patch_module_attribute(monkeypatch, mod, 'subprocess', "Popen", popen_tripwire)
 
         runner = self._make_runner(tmp_path)
         crashes, _crashes_dir = runner.run_fuzzing(duration=0, parallel_jobs=2)

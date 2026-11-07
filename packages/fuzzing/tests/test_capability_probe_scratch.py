@@ -16,6 +16,9 @@ import pytest
 from packages.fuzzing import capability
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(capability, "exec_workdir", lambda: tmp_path)
@@ -40,7 +43,7 @@ def _fake_run(record: dict, *, returncode: int = 0,
 def test_probe_success_leaves_no_scratch(workdir: Path,
                                          monkeypatch: pytest.MonkeyPatch):
     record: dict = {}
-    monkeypatch.setattr(capability.subprocess, "run", _fake_run(record))
+    patch_module_attribute(monkeypatch, capability, 'subprocess', "run", _fake_run(record))
     assert capability._probe_clang_sanitiser("clang", "address") is True
     # The compiler ran with TMPDIR inside the probe's doomed dir...
     probe_dir = Path(record["tmpdir"])
@@ -53,8 +56,8 @@ def test_probe_success_leaves_no_scratch(workdir: Path,
 def test_probe_compile_failure_leaves_no_scratch(
         workdir: Path, monkeypatch: pytest.MonkeyPatch):
     record: dict = {}
-    monkeypatch.setattr(
-        capability.subprocess, "run", _fake_run(record, returncode=1),
+    patch_module_attribute(monkeypatch,
+        capability, 'subprocess', "run", _fake_run(record, returncode=1),
     )
     assert capability._probe_clang_sanitiser("clang", "memory") is False
     assert list(workdir.iterdir()) == []
@@ -63,8 +66,8 @@ def test_probe_compile_failure_leaves_no_scratch(
 def test_probe_timeout_leaves_no_scratch(workdir: Path,
                                          monkeypatch: pytest.MonkeyPatch):
     record: dict = {}
-    monkeypatch.setattr(
-        capability.subprocess, "run",
+    patch_module_attribute(monkeypatch,
+        capability, 'subprocess', "run",
         _fake_run(record, raise_timeout=True),
     )
     assert capability._probe_clang_sanitiser("clang", "fuzzer") is False
@@ -74,7 +77,7 @@ def test_probe_timeout_leaves_no_scratch(workdir: Path,
 def test_probe_source_matches_sanitizer_mode(workdir: Path,
                                              monkeypatch: pytest.MonkeyPatch):
     record: dict = {}
-    monkeypatch.setattr(capability.subprocess, "run", _fake_run(record))
+    patch_module_attribute(monkeypatch, capability, 'subprocess', "run", _fake_run(record))
     capability._probe_clang_sanitiser("clang", "fuzzer")
     cmd = record["cmd"]
     assert "-fsanitize=fuzzer" in cmd

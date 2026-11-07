@@ -23,6 +23,10 @@ from packages.web.tests.http_server import start_http_server
 import urllib3
 
 # core/http/tests/test_egress_backend.py -> repo root
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -176,7 +180,7 @@ class TestSeatbeltParentProxy:
     def child_env(self, monkeypatch):
         from core.http import egress_backend
         from core.sandbox.seatbelt import PARENT_EGRESS_PROXY_ENV
-        monkeypatch.setattr(egress_backend.sys, "platform", "darwin")
+        patch_module_attribute(monkeypatch, egress_backend, 'sys', "platform", "darwin")
         monkeypatch.setattr(egress_backend, "_process_is_sandboxed",
                             lambda: True)
         monkeypatch.setenv(PARENT_EGRESS_PROXY_ENV, self.URL)
@@ -202,7 +206,7 @@ class TestSeatbeltParentProxy:
         from core.http import egress_backend
         from core.sandbox.seatbelt import PARENT_EGRESS_PROXY_ENV
         if mutate == "not_darwin":
-            child_env.setattr(egress_backend.sys, "platform", "linux")
+            patch_module_attribute(child_env, egress_backend, 'sys', "platform", "linux")
         elif mutate == "not_sandboxed":
             child_env.setattr(egress_backend, "_process_is_sandboxed",
                               lambda: False)

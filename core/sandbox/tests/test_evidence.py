@@ -23,6 +23,10 @@ import pytest
 
 from core.sandbox import evidence as ev
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     not _sys.platform.startswith(("linux", "darwin")),
     reason="POSIX fd semantics required",
@@ -312,7 +316,7 @@ class TestAnonymousFd:
         # (any concurrent test's scratch file lands in the diff), and
         # the private dir also strengthens the positive property: the
         # unlinked file provably went to the observed directory.
-        monkeypatch.setattr(ev.sys, "platform", "darwin")
+        patch_module_attribute(monkeypatch, ev, 'sys', "platform", "darwin")
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
         fd = ev.anonymous_fd(b"macos-branch")
         monkeypatch.undo()

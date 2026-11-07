@@ -30,6 +30,9 @@ from packages.sca.calibration.stress import (
 from packages.sca.pipeline import RunResult
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _sample(name: str = "proj") -> ProjectSample:
     return ProjectSample(
         name=name, ecosystem="PyPI",
@@ -84,7 +87,7 @@ def test_breakdown_comes_from_run_result_not_findings_json_reread(
     # Patches the stdlib subprocess module (stress.py imports it at
     # module level) — broad, but bounded by monkeypatch teardown and
     # the only subprocess call on this test's path is the git clone.
-    monkeypatch.setattr(stress_mod.subprocess, "run", fake_clone)
+    patch_module_attribute(monkeypatch, stress_mod, 'subprocess', "run", fake_clone)
     monkeypatch.setattr(pipeline_mod, "run_sca", fake_run_sca)
 
     result = stress_mod._scan_one(_sample(), tmp_path,

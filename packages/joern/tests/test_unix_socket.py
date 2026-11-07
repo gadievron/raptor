@@ -9,6 +9,9 @@ from packages.joern.netns_forwarder import create_listener
 from packages.joern.unix_socket import socket_address
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="procfs directory alias")
 def test_long_socket_path_binds_and_connects_in_selected_directory(tmp_path):
     root = tmp_path / ("é" * 60)
@@ -27,7 +30,7 @@ def test_macos_long_path_refuses_without_falling_back(tmp_path, monkeypatch):
     from packages.joern import unix_socket
     root = tmp_path / ("x" * 120)
     root.mkdir(mode=0o700)
-    monkeypatch.setattr(unix_socket.sys, "platform", "darwin")
+    patch_module_attribute(monkeypatch, unix_socket, 'sys', "platform", "darwin")
     with pytest.raises(ValueError, match="shorter private runtime"):
         with socket_address(root / "joern.sock"):
             pytest.fail("overlong socket was admitted")

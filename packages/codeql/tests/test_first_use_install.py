@@ -15,6 +15,10 @@ from unittest.mock import patch
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 ROOT = Path(__file__).resolve().parents[3]
 INSTALLER = ROOT / '.devcontainer/codeql-bootstrap.py'
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux container installer')
@@ -199,7 +203,7 @@ def test_resolves_distribution_before_sandbox_and_aborts_on_failure(tmp_path, mo
 def test_regular_cli_never_invokes_bootstrap(tmp_path, monkeypatch):
     from packages.codeql import _bootstrap
 
-    monkeypatch.setattr(_bootstrap.subprocess, 'run', lambda *a, **k: pytest.fail('unexpected subprocess'))
+    patch_module_attribute(monkeypatch, _bootstrap, 'subprocess', 'run', lambda *a, **k: pytest.fail('unexpected subprocess'))
     assert _bootstrap.resolve_bootstrap('/opt/custom/codeql') == '/opt/custom/codeql'
 
 

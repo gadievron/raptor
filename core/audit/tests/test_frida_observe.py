@@ -275,7 +275,7 @@ class TestRunFridaSession:
             created.append(Path(path))
             return fd, path
 
-        monkeypatch.setattr(fo.tempfile, "mkstemp", _tracking_mkstemp)
+        patch_module_attribute(monkeypatch, fo, 'tempfile', "mkstemp", _tracking_mkstemp)
         patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
         with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
             fo._run_frida_session(1234, "// script", log_fd,

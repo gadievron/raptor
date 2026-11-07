@@ -12,6 +12,9 @@ from packages.codeql.database_manager import DatabaseManager
 from packages.codeql.query_runner import QueryRunner
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('stdout,stderr,expected', [
     pytest.param('CodeQL command-line toolchain release 2.20.1.\n', '', '2.20.1', id='stdout'),
     pytest.param('', 'CodeQL command-line toolchain release 2.20.1.\n', '2.20.1', id='stderr'),
@@ -86,7 +89,7 @@ def test_shared_probe_keeps_resolved_path_safe_env_root_cwd_and_temporary_wrappe
         return subprocess.CompletedProcess(command, 0,
             stdout='CodeQL command-line toolchain release 2.20.1.\n', stderr='')
     monkeypatch.setattr(version_probe, 'temporary_command', wrapper)
-    monkeypatch.setattr(toolprobe.subprocess, 'run', run)
+    patch_module_attribute(monkeypatch, toolprobe, 'subprocess', 'run', run)
     monkeypatch.setenv('LD_PRELOAD', '/hostile/inject.so')
     assert version_probe.read_codeql_version(str(binary)) == '2.20.1'
     assert wrapped == [[str(binary), 'version']]
@@ -97,7 +100,7 @@ def test_shared_probe_keeps_resolved_path_safe_env_root_cwd_and_temporary_wrappe
 
 
 def test_failed_probe_banner_is_not_a_usable_version(binary, monkeypatch):
-    monkeypatch.setattr(toolprobe.subprocess, 'run', lambda command, **kwargs:
+    patch_module_attribute(monkeypatch, toolprobe, 'subprocess', 'run', lambda command, **kwargs:
         subprocess.CompletedProcess(command, 1,
             stdout='CodeQL command-line toolchain release 9.0.0.\n', stderr='failed'))
     assert version_probe.read_codeql_version(str(binary)) is None

@@ -24,6 +24,9 @@ from core.llm.cc_proxy_hosts import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _hostname_in(hosts: list[str], target: str) -> bool:
     """List-membership for exact hostnames.
 
@@ -498,7 +501,7 @@ class TestReadablePathsForCCDispatch:
         self, isolated_env, no_override_config, no_calibrate,
         monkeypatch,
     ):
-        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+        patch_module_attribute(monkeypatch, mod, 'shutil', "which", lambda _name: None)
         paths = readable_paths_for_cc_dispatch()
         # No binary found — floor is just the default layout.
         home = str(Path.home())

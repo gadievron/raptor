@@ -8,6 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 with patch.object(sys, "path", sys.path.copy()), patch.dict(sys.modules):
     sys.path.insert(0, str(SCRIPTS))
@@ -112,7 +116,7 @@ def test_unknown_history_builds(repo, base):
 def test_missing_history_and_fetch_failure_build(repo, monkeypatch):
     def failed(*args, **kwargs):
         raise subprocess.CalledProcessError(1, args[0])
-    monkeypatch.setattr(changes.subprocess, 'run', failed)
+    patch_module_attribute(monkeypatch, changes, 'subprocess', 'run', failed)
     assert changes.changed_paths(repo, 'f' * 40) is None
     assert image.should_build(repo, 'push', None)
 
@@ -262,7 +266,6 @@ def test_workflow_does_not_publish_on_supersession_or_failed_main_lookup(tmp_pat
     assert not marker.exists()
 
 
-
 def _reference_fingerprint(repo, ref='HEAD'):
     """Original per-path Git protocol: published fingerprint compatibility."""
     import hashlib
@@ -366,7 +369,6 @@ def test_large_pathspec_list_keeps_bounded_git_commands(repo, monkeypatch):
     with pytest.raises(ValueError, match='missing image input'):
         image.fingerprint(repo, 'HEAD')
     assert all(len(command) == 7 for command in calls if command[1] == 'ls-tree')
-
 
 
 def test_case_insensitive_pathspec_setting_retains_git_selection(repo, monkeypatch):

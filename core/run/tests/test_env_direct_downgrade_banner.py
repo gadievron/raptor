@@ -16,6 +16,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -125,7 +129,7 @@ class TestRunScriptFallback:
 
         with patch.object(raptor, "_get_or_start_dispatcher",
                           return_value=None), \
-             patch.object(raptor.subprocess, "run", fake_run):
+             mock_module_attribute(raptor, 'subprocess', "run", fake_run):
             rc = raptor._run_script(
                 Path("scanner.py"), ["--repo", "/x"], out_dir=tmp_path,
             )

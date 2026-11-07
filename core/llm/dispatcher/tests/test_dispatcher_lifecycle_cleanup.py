@@ -149,7 +149,7 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
         # Pin/finalizer faults exercise the Linux descriptor-address branch.
         # A zero budget deliberately forces that branch; on Darwin it would
         # reject even the compact path before reaching the injected fault.
-        fault.setattr(server.sys, "platform", "linux")
+        patch_module_attribute(fault, server, 'sys', "platform", "linux")
         fault.setattr(server, "_SUN_PATH_BUDGET", 0)
         real_open = os.open
         failed_open = False
@@ -173,7 +173,7 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
         if stage in ("mac-base", "compact-allocation"):
             base = tmp_path / "mac-base"
             base.mkdir(mode=0o700)
-            fault.setattr(server.sys, "platform", "darwin")
+            patch_module_attribute(fault, server, 'sys', "platform", "darwin")
             fault.setattr(server, "_SERVICE_TMP_BASE", str(base))
             if stage == "mac-base":
                 stat = Path.stat

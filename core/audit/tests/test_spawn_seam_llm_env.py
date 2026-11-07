@@ -17,6 +17,9 @@ from __future__ import annotations
 import pytest
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 _LLM_AMBIENT = {
     "ANTHROPIC_API_KEY": "sk-ant-seam-test",
     "AWS_BEARER_TOKEN_BEDROCK": "bearer-seam-test",
@@ -97,7 +100,7 @@ class TestBinaryActivePhaseEnv:
                 stderr = ""
             return R()
 
-        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        patch_module_attribute(monkeypatch, cli, 'subprocess', "run", fake_run)
         cli._run_active_phase(
             kind="test", cmd=["/bin/true"], output_dir=tmp_path / "p",
             trusted=True, llm=llm,
@@ -163,8 +166,8 @@ class TestAgenticPhase3Overlay:
 
         set_pdeathsig()
 
-        monkeypatch.setattr(
-            raptor_agentic.subprocess, "Popen", FakeProc,
+        patch_module_attribute(monkeypatch,
+            raptor_agentic, 'subprocess', "Popen", FakeProc,
         )
         # The Popen patch above is on the GLOBAL subprocess module, so
         # it also reaches ctypes.util.find_library's ldconfig probe —

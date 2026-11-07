@@ -34,6 +34,9 @@ from core.testing.module_state import isolated_module_state
 # baseline-pack assertion below would fail. Pin the cached path with
 # the stub registry cache so pack resolution is local and
 # deterministic on every host (see conftest.py).
+
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.usefixtures("stub_semgrep_registry_cache")
 
 
@@ -450,7 +453,7 @@ class TestCleanEnvironment:
 
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif", return_value=True)
-    @patch("shutil.which", return_value="/usr/bin/semgrep")
+    @patch('_raptor_scanner_semgrep_parallel_mock_target.shutil.which', return_value="/usr/bin/semgrep")
     def test_virtual_env_stripped_from_env(self, mock_which, mock_validate, mock_run, tmp_path):
         """VIRTUAL_ENV and PYTHONPATH must not be forwarded to semgrep."""
         run_single_semgrep = _scanner_mod.run_single_semgrep
@@ -470,7 +473,7 @@ class TestCleanEnvironment:
 
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif", return_value=True)
-    @patch("shutil.which", return_value="/usr/bin/semgrep")
+    @patch('_raptor_scanner_semgrep_parallel_mock_target.shutil.which', return_value="/usr/bin/semgrep")
     def test_venv_paths_stripped_from_PATH(self, mock_which, mock_validate, mock_run, tmp_path):
         """venv directories must be stripped from PATH before calling semgrep."""
         run_single_semgrep = _scanner_mod.run_single_semgrep
@@ -848,3 +851,10 @@ def test_parallel_scanner_and_runner_share_one_scope_warning(tmp_path, monkeypat
     message, version, _floor = log.warning.call_args.args
     assert "--x-ignore-semgrepignore-files unavailable" in message
     assert version == "1.79.0"
+
+
+@pytest.fixture(autouse=True)
+def _private_discovery_patch_target(monkeypatch):
+    """Resolve unittest decorators late against this test's private scanner view."""
+    monkeypatch.setitem(sys.modules, "_raptor_scanner_semgrep_parallel_mock_target", _scanner_mod)
+    patch_module_attribute(monkeypatch, _scanner_mod, "shutil", "which", _scanner_mod.shutil.which)

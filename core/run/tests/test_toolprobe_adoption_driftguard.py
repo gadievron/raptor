@@ -87,7 +87,7 @@ def test_probe_retention_is_capped(monkeypatch):
             stderr="B" * (2 * 1024 * 1024))
 
     patch_module_attribute(monkeypatch, toolprobe, "shutil", "which", lambda name: "/usr/bin/faketool")
-    monkeypatch.setattr(toolprobe.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, toolprobe, 'subprocess', "run", fake_run)
     info = toolprobe.probe("faketool")
     assert info is not None
     assert len(info.stdout) <= toolprobe._CAPTURE_RETAIN_CHARS

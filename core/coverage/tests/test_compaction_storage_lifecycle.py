@@ -9,6 +9,9 @@ from core.coverage.journal import JOURNAL_FILENAME, append_entry
 from core.coverage.tests.test_journal_compact import _entry, _reemission_run
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("mode", ["dedup", "supersede", "slim"])
 def test_unchanged_second_pass_preserves_inode_and_creates_no_archive(tmp_path, mode):
     _reemission_run(tmp_path, n_functions=2, n_segments=3)
@@ -95,7 +98,7 @@ def test_unchanged_journal_allocates_no_rewrite_temp(
     def forbidden(*args, **kwargs):
         pytest.fail("unchanged journal should not allocate another full copy")
 
-    monkeypatch.setattr(compact.tempfile, "mkstemp", forbidden)
+    patch_module_attribute(monkeypatch, compact, 'tempfile', "mkstemp", forbidden)
     result = compact.compact_journal(
         tmp_path, supersede=mode == "supersede", slim_clean=mode == "slim"
     )
@@ -171,7 +174,7 @@ def test_global_writer_lock_prevents_active_temp_reaping_and_redundant_generatio
         return result
 
     monkeypatch.setattr(compact, "artifact_lock", tracked_lock)
-    monkeypatch.setattr(compact.tempfile, "mkstemp", held_temp)
+    patch_module_attribute(monkeypatch, compact, 'tempfile', "mkstemp", held_temp)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(compact.compact_journal, tmp_path)
         try:

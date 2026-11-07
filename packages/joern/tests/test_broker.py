@@ -22,6 +22,9 @@ from packages.joern.tests.test_graph_services import Worker
 from packages.joern.tunables import JoernTunables
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def tmp_path():
     # Exercise the pathname transport on macOS rather than its path-length
@@ -268,7 +271,7 @@ def test_explicit_release_acknowledges_last_worker_teardown(controller):
 
 def test_macos_peer_pid_reuse_does_not_reuse_controller(tmp_path, monkeypatch):
     from unittest.mock import Mock
-    monkeypatch.setattr(broker.sys, "platform", "darwin")
+    patch_module_attribute(monkeypatch, broker, 'sys', "platform", "darwin")
     owner = broker.Controller(tmp_path, "token", owner_pid=321, owner_birth=1234)
     with controller_server(owner):
         connection = Mock(spec=socket.socket)
