@@ -119,10 +119,12 @@ def binary_integer_abi(target_path: Path) -> IntegerABI | None:
     Ambiguous formats/platforms and universal Mach-O stay unknown rather
     than borrowing the analysis host's layout.
     """
+    from core.source.gated import open_regular_gated
+
     try:
-        with target_path.open("rb") as handle:
+        with open_regular_gated(target_path) as handle:
             header = handle.read(64)
-    except OSError:
+    except (OSError, ValueError):
         return None
     profile = None
     binary_format = ""

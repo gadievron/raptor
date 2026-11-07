@@ -1,6 +1,10 @@
 """Binary platform selection takes precedence over host analysis assumptions."""
 
 import struct
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -75,3 +79,28 @@ def test_explicit_override_precedes_binary_platform(tmp_path, monkeypatch):
                         lambda *args: pytest.fail("explicit override must not rederive ABI"))
     assert integer_abi.select_integer_abi("ilp32", target_path=target) == "ilp32"
     assert integer_abi.select_integer_abi("unknown", target_path=target) == "unknown"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO")
+def test_binary_abi_refuses_fifo_without_waiting_for_a_writer(tmp_path):
+    fifo = tmp_path / "target"
+    os.mkfifo(fifo)
+    root = Path(__file__).resolve().parents[3]
+    program = (f"import sys; sys.path.insert(0, {str(root)!r}); "
+               "from pathlib import Path; "
+               "from core.audit.integer_abi import binary_integer_abi; "
+               "assert binary_integer_abi(Path(sys.argv[1])) is None")
+    result = subprocess.run([sys.executable, "-I", "-c", program, str(fifo)],
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="requires symlink privilege")
+def test_binary_abi_preserves_operator_selected_symlink(tmp_path):
+    target = tmp_path / "program"
+    target.write_bytes(_elf(64, 62))
+    link = tmp_path / "selected-program"
+    link.symlink_to(target)
+    expected = integer_abi.binary_integer_abi(target)
+    assert expected is not None
+    assert integer_abi.binary_integer_abi(link) == expected
