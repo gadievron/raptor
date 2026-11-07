@@ -385,6 +385,7 @@ concerns or incomplete coverage.
 | `audit-report.json` | Run summary, coverage, and costs |
 | `findings.json` | Findings for review and `/validate` |
 | `findings-graded.json` | Graded findings with a per-finding `verification_trace`: claim, scope, evidence markers, recorded tool states, scoped checks, assumptions, and evidence limitations |
+| `verification-checks.json` | Retained tool-chain check observations: original claim and source identity, effective outcome, rule, reason, parameters, and checker payload |
 | `review-journal.jsonl` | Per-function decisions, hypotheses, tools, and costs |
 | `gaps.json` | Functions selected for review in this run |
 | `.audit-log.jsonl` | Detailed event trail; large logs may have numbered sibling files |
@@ -400,6 +401,14 @@ not automatically confirmations. Evidence markers identify recorded provenance,
 not complete proofs. Assumptions from a review remain unverified, and missing
 check details are reported as unavailable. Journal-derived exports identify
 their source and may retain less detail than the live audit.
+
+The trace's `check_results` links to observations in `verification-checks.json`.
+Each link says whether the checked claim matches the final claim. Checker
+payloads preserve supplied assumptions and diagnostic details; oversized or
+unserializable payloads are marked incomplete. These are recorded observations,
+not an exhaustive check history or a fresh validation of the source. Checks
+outside the recorded tool-chain path and results from older runs can remain
+unavailable.
 
 
 ## Integration
