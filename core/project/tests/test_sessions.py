@@ -745,6 +745,26 @@ class UseCommandAwarenessTest(unittest.TestCase):
 class _LauncherMixin:
     """Share the real launcher helper without inheriting test cases."""
 
+    _projectless_cases = None
+
+    def _launch_projectless_at(self, root: Path):
+        home = root / "home"
+        home.mkdir()
+        tmpdir = root / "tmp"
+        tmpdir.mkdir()
+        return self._launch(home, tmpdir), home
+
+    def _projectless_launch(self):
+        if self._projectless_cases is None:
+            # Direct unittest-method callers retain independently owned state.
+            directory = TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+            return self._launch_projectless_at(Path(directory.name))
+        root, cases = self._projectless_cases
+        if "projectless" not in cases:
+            cases["projectless"] = self._launch_projectless_at(root)
+        return cases["projectless"]
+
     def _launch(self, home: Path, tmpdir: Path):
         path_dirs = [str(Path(sys.executable).resolve().parent)]
         path_dirs += [d for d in ("/usr/bin", "/bin") if os.path.isdir(d)]
@@ -988,6 +1008,16 @@ class LauncherSeedV2Test(_LauncherMixin, unittest.TestCase):
     """The v2 mandatory seed: identity-stamped entry,
     exported env credential, seed even with an empty bookmark."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        owned = contextlib.ExitStack()
+        cls.addClassCleanup(owned.close)
+        # Allocate before function fixtures can select a shorter-lived TMPDIR.
+        # The subprocess remains lazy when only bookmark coverage is selected.
+        root = Path(owned.enter_context(TemporaryDirectory()))
+        owned.enter_context(patch.object(cls, "_projectless_cases", (root, {}), create=True))
+
     def test_seed_is_v2_with_identity_and_credential(self):
         with TemporaryDirectory() as d:
             root = Path(d)
@@ -1018,34 +1048,24 @@ class LauncherSeedV2Test(_LauncherMixin, unittest.TestCase):
         """a review finding: a launch with NO active project still writes an
         entry — 'project=-' — so the session is insulated from later
         bookmark moves by other sessions."""
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            home = root / "home"
-            home.mkdir()
-            tmpdir = root / "tmp"
-            tmpdir.mkdir()
-            r = self._launch(home, tmpdir)
-            self.assertIn("STUB_CLAUDE_RAN", r.stdout,
-                          (r.stdout, r.stderr))
-            sessions_dir = home / ".local" / "share" / "raptor" / "sessions.d"
-            own = [f for f in sessions_dir.iterdir() if f.name.isdigit()]
-            self.assertEqual(len(own), 1)
-            text = own[0].read_text(encoding="utf-8")
-            self.assertIn("project=-", text)
-            self.assertIn("v=2", text)
+        r, home = self._projectless_launch()
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertIn("STUB_CLAUDE_RAN", r.stdout, (r.stdout, r.stderr))
+        sessions_dir = home / ".local" / "share" / "raptor" / "sessions.d"
+        own = [f for f in sessions_dir.iterdir() if f.name.isdigit()]
+        self.assertEqual(len(own), 1)
+        text = own[0].read_text(encoding="utf-8")
+        self.assertIn("project=-", text)
+        self.assertIn("v=2", text)
 
     def test_startup_check_sentinel_never_reaches_terminal_stdout(self):
         """The launcher consumes startup-check stdout — the sentinel
         line must not leak into what the operator sees."""
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            home = root / "home"
-            home.mkdir()
-            tmpdir = root / "tmp"
-            tmpdir.mkdir()
-            r = self._launch(home, tmpdir)
-            self.assertNotIn("RAPTOR_RESOLVED_PROJECT", r.stdout)
-            self.assertNotIn("RAPTOR_RESOLVED_PROJECT", r.stderr)
+        r, _ = self._projectless_launch()
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertIn("STUB_CLAUDE_RAN", r.stdout, (r.stdout, r.stderr))
+        self.assertNotIn("RAPTOR_RESOLVED_PROJECT", r.stdout)
+        self.assertNotIn("RAPTOR_RESOLVED_PROJECT", r.stderr)
 
 
 class SessionsSubcommandTest(unittest.TestCase):
