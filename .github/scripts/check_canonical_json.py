@@ -71,6 +71,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ast_census import CensusVisitor  # noqa: E402
 from runtime_universe import runtime_file_universe  # noqa: E402
 
 # Universe: the shared runtime-source derivation (see
@@ -186,7 +187,7 @@ def _json_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
     return aliases, bare
 
 
-class _FunctionScanner(ast.NodeVisitor):
+class _FunctionScanner(CensusVisitor):
     """Per-function scan: raw dumps calls + dumps-into-hash flows."""
 
     def __init__(self, json_aliases: set[str],
@@ -204,26 +205,10 @@ class _FunctionScanner(ast.NodeVisitor):
         self._tainted_stack: list[set[str]] = [set()]
         self._display_tainted_stack: list[set[str]] = [set()]
         self._hash_obj_stack: list[set[str]] = [set()]
-        self._visitor_methods = {}
-
-    def visit(self, node: ast.AST):
-        # Cache unbound handlers per node type without retaining this visitor.
-        node_type = type(node)
-        visitor = self._visitor_methods.get(node_type)
-        if visitor is None:
-            visitor = getattr(
-                type(self), "visit_" + node_type.__name__, type(self).generic_visit,
-            )
-            self._visitor_methods[node_type] = visitor
-        return visitor(self, node)
-
-    def visit_Name(self, node: ast.Name) -> None:
-        """Enclosing handlers inspect names; contexts contain no sites."""
-
-    def visit_Constant(self, node: ast.Constant) -> None:
-        """Literal values contain no AST descendants to inspect."""
+        super().__init__()
 
     # -- scope handling ---------------------------------------------------
+
     def _enter(self, name: str, node: ast.AST) -> None:
         self.qual_stack.append(name)
         self._tainted_stack.append(set())

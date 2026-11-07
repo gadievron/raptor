@@ -54,6 +54,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ast_census import CensusVisitor  # noqa: E402
 from runtime_universe import runtime_file_universe  # noqa: E402
 
 # Seed-set policy: census/operator guidance allows curated seed sets
@@ -158,28 +159,14 @@ def _literal_names(node: ast.AST) -> list[str]:
     return names
 
 
-class _Scanner(ast.NodeVisitor):
+class _Scanner(CensusVisitor):
     def __init__(self, rel: str) -> None:
         self.rel = rel
         self.scope: list[str] = []
         self.assign: list[str] = []
         self.findings: list[_Finding] = []
-        self._visitor_methods = {}
+        super().__init__()
 
-    def visit(self, node: ast.AST) -> None:
-        kind = type(node)
-        method = self._visitor_methods.get(kind)
-        if method is None:
-            method = getattr(type(self), "visit_" + kind.__name__, type(self).generic_visit)
-            self._visitor_methods[kind] = method
-        method(self, node)
-
-    def visit_Name(self, node: ast.Name) -> None:
-        # Names have only scalar/context fields; all detections happen
-        # at containers or string constants.
-        pass
-
-    # -- scope tracking ------------------------------------------------
     def _walk_scoped(self, node, label) -> None:
         self.scope.append(label)
         self.generic_visit(node)
