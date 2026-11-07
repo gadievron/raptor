@@ -85,6 +85,7 @@ import argparse
 import ast
 import json
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -301,6 +302,7 @@ def census(root: Path) -> dict[str, int]:
     provider_names = derive_provider_names(root)
     provider_targets = frozenset({PROVIDER_FACTORY_NAME} | provider_names)
     alias_targets = provider_targets | {CLIENT_NAME}
+    site_spellings = alias_targets | CLIENT_BASE_NAMES
     observed: dict[str, int] = {}
     factory_pin_seen = False
     for path in runtime_file_universe(root, include_dev_scripts=True):
@@ -308,10 +310,18 @@ def census(root: Path) -> dict[str, int]:
         if rel.startswith(EXCLUDED_PATH_PREFIXES):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            source = path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source)
         except SyntaxError as exc:
             msg = f"cannot parse runtime file {rel}: {exc}"
             raise ValueError(msg) from exc
+        # Keep parsing every file so syntax failures remain fatal. A site
+        # must spell a canonical construction/base name or import it under
+        # an alias; absent those names, scope/alias discovery adds no sites.
+        # Match Python's identifier normalization without changing source.
+        spelling = unicodedata.normalize("NFKC", source)
+        if not any(name in spelling for name in site_spellings):
+            continue
         aliases = _symbol_aliases_by_target(tree, alias_targets)
         client_names = frozenset({CLIENT_NAME} | aliases[CLIENT_NAME])
         provider_call_names = frozenset(
