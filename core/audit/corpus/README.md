@@ -317,6 +317,10 @@ Recorded expected-status differences are listed separately, including revisions
 with no actual-verdict change. Missing expectations remain distinguishable from
 explicit nulls. These notices explain another source of match-count movement;
 they do not regrade saved verdicts or change flip classifications.
+History listings and comparisons distinguish label-attributed cost from recorded
+total spend. Missing or invalid totals stay unknown; a total-spend delta requires
+valid recorded totals on both sides. Whole-run costs are not allocated to shared
+labels, and splice records retain their existing cost scopes.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history

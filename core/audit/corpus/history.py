@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -163,6 +164,15 @@ def _timestamp_for_run(run_tag: str | None, output: Path) -> str:
         return ""
 
 
+def _recorded_total_spend(record: dict[str, Any]) -> int | float | None:
+    """Read a usable saved total, without inferring it from label costs."""
+    value = record.get("total_spend_usd")
+    try:
+        return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+    except OverflowError:
+        return None
+
+
 def build_run_record(
     results: list[dict[str, Any]],
     meta: dict[str, Any],
@@ -234,6 +244,7 @@ def build_run_record(
             "cost_usd",
             round(sum(r.get("cost_usd", 0.0) for r in results), 4),
         ),
+        "total_spend_usd": _recorded_total_spend(meta),
         "imported": imported,
     }
 
@@ -569,6 +580,8 @@ def compare_runs(
 
     cost_a = float(run_a.get("cost_usd") or 0.0)
     cost_b = float(run_b.get("cost_usd") or 0.0)
+    total_spend_a = _recorded_total_spend(run_a)
+    total_spend_b = _recorded_total_spend(run_b)
     matched_a, reviewed_a = _matched(labels_a)
     matched_b, reviewed_b = _matched(labels_b)
     common_matched_a, common_reviewed_a = _matched({fid: labels_a[fid] for fid in common})
@@ -602,6 +615,10 @@ def compare_runs(
         "cost_a": cost_a,
         "cost_b": cost_b,
         "cost_delta": cost_b - cost_a,
+        "total_spend_a": total_spend_a,
+        "total_spend_b": total_spend_b,
+        "total_spend_delta": (total_spend_b - total_spend_a
+                              if total_spend_a is not None and total_spend_b is not None else None),
         "configuration_changes": configuration_changes,
         "expectation_changes": expectation_changes,
     }
@@ -679,9 +696,14 @@ def format_compare(diff: dict[str, Any]) -> str:
         f" -> {diff['matched_b']}/{diff['reviewed_b']} ({delta:+d})"
     )
     lines.append(
-        f"  Cost: ${diff['cost_a']:.4f} -> ${diff['cost_b']:.4f} "
+        f"  Label-attributed cost: ${diff['cost_a']:.4f} -> ${diff['cost_b']:.4f} "
         f"({diff['cost_delta']:+.4f})"
     )
+    total_a, total_b, total_delta = (diff.get(key) for key in ("total_spend_a", "total_spend_b", "total_spend_delta"))
+    before_total = f"${total_a:.4f}" if total_a is not None else "unknown"
+    after_total = f"${total_b:.4f}" if total_b is not None else "unknown"
+    delta_total = f"${total_delta:+.4f}" if total_delta is not None else "unknown"
+    lines.append(f"  Recorded total spend: {before_total} -> {after_total} (delta {delta_total})")
     for run, tag in ((a, "  Gates"), (b, "      ->")):
         gates = run.get("gates") or {}
         passed = gates.get("passed")
@@ -741,9 +763,9 @@ def format_runs(runs: list[dict[str, Any]]) -> str:
     lines = [
         f"{'Run':<28} {'Timestamp':<26} {'Tree':<12} {'Profile':<9} "
         f"{'Mode':<10} "
-        f"{'Labels':>6} {'Match':>6} {'Cost':>9} {'Gates':<9} "
+        f"{'Labels':>6} {'Match':>6} {'Label $':>9} {'Total $':>9} {'Gates':<9} "
         f"{'Imported':<9} Kind",
-        "-" * 128,
+        "-" * 138,
     ]
     for r in runs:
         totals = r.get("totals") or {}
@@ -755,6 +777,8 @@ def format_runs(runs: list[dict[str, Any]]) -> str:
             else f"fail({len(gates.get('failures', []))})"
         )
         config = r.get("config") or {}
+        total_spend = _recorded_total_spend(r)
+        total_text = f"${total_spend:.4f}" if total_spend is not None else "unknown"
         lines.append(
             f"{r.get('run_id', '')[:27]:<28} "
             f"{(r.get('timestamp') or '')[:25]:<26} "
@@ -764,6 +788,7 @@ def format_runs(runs: list[dict[str, Any]]) -> str:
             f"{totals.get('labels', 0):>6} "
             f"{totals.get('matched', 0):>6} "
             f"${float(r.get('cost_usd') or 0.0):>8.4f} "
+            f"{total_text:>9} "
             f"{gate_str:<9} "
             f"{'yes' if r.get('imported') else 'no':<9} "
             f"{run_label_kind(r)}"
