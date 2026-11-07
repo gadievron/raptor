@@ -9,7 +9,6 @@ import pytest
 
 from core.project import clean, cli, merge
 from core.run import pin, scratch
-from core.testing.module_bindings import patch_module_attribute
 from core.testing.module_state import isolated_module_state
 from core.testing.state_isolation import pin_user_state_dirs
 
@@ -78,19 +77,21 @@ def test_failure_reclaims_unpublished_artifacts(merge_case, monkeypatch, capsys,
     final = root / "scan-merged"
     observed = []
     if phase == "copy":
-        original = merge.shutil.copy2
+        factory = merge._regular_copier
+        original = factory()
 
         def copy(source, destination, *a, **kw):
             path = Path(destination)
             assert str(path.parent.parent) in scratch._keepalive_paths
-            assert path.parent.parent.parent == root
+            assert str(path.parent.parent.parent) in scratch._keepalive_paths
+            assert path.parent.parent.parent.parent == root
             assert not final.exists()
             original(source, destination, *a, **kw)
             path.parent.chmod(0o500)
             observed.append(path)
             raise error("copy fault")
 
-        patch_module_attribute(monkeypatch, merge, "shutil", "copy2", copy)
+        monkeypatch.setattr(merge, "_regular_copier", lambda: copy)
     elif phase == "metadata":
         from core import json as json_module
         original = json_module.save_json

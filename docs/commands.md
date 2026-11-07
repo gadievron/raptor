@@ -1025,6 +1025,17 @@ Named workspaces that corral analysis runs into a shared directory.
 | `unset` | Remove a setting |
 | `get` | Print one setting's bare value (exit 1 when unset — script-friendly) |
 
+`/project merge` replaces the source runs after the merged result is ready.
+If RAPTOR cannot finish building that result, it keeps the source runs.
+
+Stop active runs before moving them. For `/project remove`, choose a destination
+that does not already contain a run with the same name. If a move, rename or
+import reports retained files, inspect the reported paths before deleting either
+copy.
+
+Project archives can contain up to 10,000 files and 10 GiB of uncompressed data.
+If an export fails, an existing archive at the destination is left intact.
+
 Persisted binaries are auto-loaded by `/agentic`, `/codeql`, and `/validate`
 runs.  See [architecture](architecture.md) for run lifecycle and output
 directory conventions.
@@ -1205,31 +1216,6 @@ weight in readers.  Adds made under `script -c` or from inside an agent
 session record demoting corroboration; re-run from a plain interactive
 shell to earn human grade.  LLM review outcomes are recorded in the
 review journal instead.
-
-Project run moves refuse an occupied destination instead of nesting inside
-it. Moves on the same filesystem rename the directory without copying its
-data. Across filesystems, RAPTOR stages a complete copy before publishing it,
-preserving symlinks and hardlinks within the run. Copy failures leave the source
-in place; if source cleanup fails after publication, RAPTOR warns with both
-paths for inspection. Keep runs idle while moving them: relocation does not
-snapshot concurrent file changes.
-
-Project rename prepares its registration before moving output and rolls back
-failures and cancellation where possible. A failed rollback reports the
-retained paths for recovery; inspect those before deleting any data.
-
-Project archive exports stream regular files and omit symlinks and special
-nodes. Exports enforce the import limits: 10,000 members, 10 GiB of expanded
-data, and 1 MiB for root project metadata. An unreadable source subtree fails
-the export rather than silently omitting its data. Nested `.project.json` data
-files remain ordinary archive content.
-
-Forced project imports preserve the previous output and registration until
-publication can complete. They retain the active bookmark and session bindings,
-refuse live runs and overlapping project outputs, and restore the old project
-on failure where possible. If recovery or post-import cleanup cannot finish,
-RAPTOR reports the retained recovery paths; do not delete those backups until
-you have checked which project data they contain.
 
 **Imported archives and human-grade notes.**  `/project import` demotes
 every annotation restored from an archive to `provenance=imported`

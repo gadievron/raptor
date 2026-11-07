@@ -7,6 +7,8 @@ latest wins.
 
 import hashlib as _hashlib
 import re
+import os
+import stat
 import shutil
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,9 @@ from core.project.findings_utils import (
 from core.project.findings_utils import run_is_imported as _run_is_imported
 from core.run.findings import is_canonical_ref_shape as _is_canonical_ref_shape
 from core.sarif.parser import merge_sarif
+from .export import _is_transient_artefact
+from .relocate import _regular_copier
+from .merge_transaction import publish_merge
 
 logger = get_logger()
 
@@ -115,13 +120,13 @@ def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
     earlier-renamed entry.
     """
     base = f"{stem}-{date_tag}"
-    candidate = parent / f"{base}{suffix}"
-    if not candidate.exists():
+    candidate = parent / _collision_name(parent, stem, date_tag, "", suffix)
+    if not os.path.lexists(candidate):
         return candidate
     n = 1
     while True:
-        candidate = parent / f"{base}.{n}{suffix}"
-        if not candidate.exists():
+        candidate = parent / _collision_name(parent, stem, date_tag, f".{n}", suffix)
+        if not os.path.lexists(candidate):
             return candidate
         n += 1
         if n > 1000:
@@ -130,6 +135,49 @@ def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
             # rather than spinning.
             msg = f"_uniquify: 1000 collisions on {base!r} — refusing to spin"
             raise RuntimeError(msg)
+
+
+def _trim_component(text: str, budget: int) -> str:
+    pieces = []
+    used = 0
+    for character in text:
+        size = len(os.fsencode(character))
+        if used + size > budget:
+            break
+        pieces.append(character)
+        used += size
+    return ''.join(pieces)
+
+
+def _collision_name(parent, stem, date, counter, suffix):
+    """Fit encoded filename bytes while retaining a deterministic identity."""
+    try:
+        limit = os.pathconf(parent, 'PC_NAME_MAX')
+    except (OSError, ValueError):
+        limit = 255
+    if limit <= 0:
+        limit = 255
+    candidate = f'{stem}-{date}{counter}{suffix}'
+    if len(os.fsencode(candidate)) <= limit:
+        return candidate
+    digest = _hashlib.sha256(os.fsencode(candidate)).hexdigest()[:12]
+    tail = f'-{date}{counter}-{digest}' + _trim_component(suffix, limit // 4)
+    available = limit - len(os.fsencode(tail))
+    if available < 1:
+        raise ValueError('filesystem filename limit is too small for merge collision names')
+    return _trim_component(stem, available) + tail
+
+
+def _ignore_copy_nodes(directory, names):
+    """Keep symbolic links, but omit special nodes and disposable lock/temp files."""
+    ignored = []
+    for name in names:
+        item = Path(directory) / name
+        mode = item.lstat().st_mode
+        if (not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode))
+                or (stat.S_ISREG(mode) and _is_transient_artefact(item))):
+            ignored.append(name)
+    return ignored
 
 
 def _resolves_inside(item: Path, run_root: Path) -> bool:
@@ -345,19 +393,26 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     Returns:
         Stats dict with merge summary.
     """
-    run_dirs = [Path(d) for d in run_dirs]
-    output_dir = Path(output_dir)
+    # A repeated path or alias is one source, not another full artifact copy.
+    sources = []
+    seen = set()
+    for directory in run_dirs:
+        path = Path(directory)
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f'Source run directory cannot be resolved: {path}') from exc
+        if not resolved.is_dir():
+            raise ValueError(f'Source run must be an existing directory: {path}')
+        if resolved not in seen:
+            sources.append(path)
+            seen.add(resolved)
+    return publish_merge(sources, Path(output_dir), _merge_runs)
 
-    # Safety: don't merge into an existing run directory
-    if output_dir.exists() and any((output_dir / f).exists() for f in ("findings.json", ".raptor-run.json")):
-        msg = f"Output directory {output_dir} already contains data. Use an empty directory."
-        raise ValueError(msg)
 
-    if output_dir.resolve() in {d.resolve() for d in run_dirs}:
-        msg = "output_dir cannot be one of the source run directories"
-        raise ValueError(msg)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
+    """Build under caller-owned private staging; public callers use merge_runs."""
+    output_dir.mkdir(parents=True)
 
     # --- Merge findings ---
     total_findings = 0
@@ -453,8 +508,8 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
         if sca_dir.is_dir() and not sca_dir.is_symlink():
             candidates.extend(sca_dir.glob("*.sarif"))
         for sarif_file in candidates:
-            if sarif_file.is_symlink():
-                logger.debug("Skipping symlinked SARIF in merge: %s",
+            if not stat.S_ISREG(sarif_file.lstat().st_mode):
+                logger.debug("Skipping non-regular SARIF in merge: %s",
                              sarif_file)
                 continue
             if not _resolves_inside(sarif_file, run_root):
@@ -476,6 +531,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     # (core/project/export.py) so merge cannot pull content from
     # outside the run directory into the merged output.
     artefacts_preserved = 0
+    copy_file = _regular_copier()
     # Preserve frozen report histories separately from merged-domain evidence.
     # Root mirrors cannot identify which source snapshot they belong to, and
     # copying them over one another would destroy the only regeneration input.
@@ -488,11 +544,12 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
         if bundle.exists():
             continue
         bundle.mkdir(parents=True)
-        shutil.copytree(history, bundle / ".reporting", symlinks=True)
+        shutil.copytree(history, bundle / ".reporting", symlinks=True,
+                        copy_function=copy_file, ignore=_ignore_copy_nodes)
         for name in ("reporting-manifest.json", ".raptor-imported.json"):
             source = run_dir / name
             if source.is_file() and not source.is_symlink():
-                shutil.copy2(source, bundle / name)
+                copy_file(source, bundle / name)
         save_json(bundle / "source.json", {"source_run": str(run_dir), "imported": _run_is_imported(run_dir),
                                            "note": "Copied report claims; digests do not authenticate verdicts"})
         artefacts_preserved += 1
@@ -504,7 +561,9 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
             if item.is_symlink():
                 logger.debug("Skipping symlink in merge: %s", item)
                 continue
-            if item.is_dir():
+            if not stat.S_ISREG(item.lstat().st_mode):
+                continue
+            if _is_transient_artefact(item):
                 continue
             if _is_known_file(item.name):
                 continue
@@ -523,7 +582,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
                 continue
 
             dest = output_dir / item.name
-            if dest.exists():
+            if os.path.lexists(dest):
                 # Rename on collision: append source date, then a
                 # numeric counter if the date-tagged path itself
                 # collides. Pre-fix the date-only rename collided
@@ -538,7 +597,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
                 date_tag = _extract_date_from_dir(run_dir)
                 dest = _uniquify(output_dir, stem, date_tag, suffix)
 
-            shutil.copy2(str(item), str(dest))
+            copy_file(item, dest)
             artefacts_preserved += 1
 
     # Copy unknown subdirectories
@@ -567,7 +626,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
                 )
                 continue
             dest = output_dir / item.name
-            if dest.exists():
+            if os.path.lexists(dest):
                 # Rename on collision: same date-tag-then-counter
                 # uniquifier as the file path above. Pre-fix the
                 # date-only rename collided with the previous
@@ -584,6 +643,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
             shutil.copytree(
                 str(item), str(dest),
                 symlinks=True, ignore_dangling_symlinks=True,
+                copy_function=copy_file, ignore=_ignore_copy_nodes,
             )
             artefacts_preserved += 1
 
