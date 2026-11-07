@@ -271,3 +271,62 @@ def test_summary_reports_partial_payloads_and_unavailable_source_identity(tmp_pa
     assert summary["checker_assumptions"] == {"reported": 1, "unavailable": 1}
     assert graded["verification_summary"]["findings"]["total"] == 0
     assert graded["verification_summary"]["observations"]["not_linked_to_findings"]["records"] == 2
+
+
+@pytest.mark.parametrize("status", ["clean", "suspicious"])
+def test_each_hypothesis_links_its_own_recorded_observations(tmp_path, status):
+    from core.json import load_json
+
+    _record(tmp_path, FIXTURES[1], hypothesis="First claim")
+    _record(tmp_path, FIXTURES[0], hypothesis="Independent claim")
+    _record(tmp_path, FIXTURES[0], hypothesis="Unrelated claim", line=40)
+    outcome = ReviewOutcome(file="a.c", function="f", line=1, status=status, body="Review",
+                            hypothesis="First claim", hypotheses=[
+                                {"mechanism": "First claim", "confidence": "refuted", "counter": "Caller validates"},
+                                {"mechanism": "Independent claim", "confidence": "medium"},
+                                {"mechanism": "Missing claim", "confidence": "low"},
+                            ])
+    write_graded_findings(export_findings([outcome]), tmp_path)
+    saved = load_json(tmp_path / "findings-graded.json")
+    checks = load_json(tmp_path / "verification-checks.json")["checks"]
+    trace = (saved["clean_review_traces"][0] if status == "clean"
+             else saved["findings"][0]["verification_trace"])
+    reviews = trace["hypothesis_reviews"]
+    assert reviews[0]["check_results"]["references"] == [{"id": checks[0]["id"]}]
+    assert reviews[1]["check_results"]["references"] == [{"id": checks[1]["id"]}]
+    assert reviews[2]["check_results"]["status"] == "unavailable"
+    assert reviews[2]["check_results"]["references"] == []
+    assert all(review["support_status"] == "not_assessed" for review in reviews)
+    assert trace["check_results"]["references"] == [
+        {"id": checks[0]["id"], "matches_final_claim": True},
+        {"id": checks[1]["id"], "matches_final_claim": False},
+    ]
+    assert outcome.status == status
+    if status == "clean":
+        assert saved["findings"] == []
+        assert saved["verification_summary"]["clean_reviews"] == {
+            "total": 1, "with_matching_observations": 1, "without_matching_observations": 0,
+        }
+        assert saved["verification_summary"]["findings"]["total"] == 0
+
+
+@pytest.mark.parametrize("fail_export", [False, True])
+def test_clean_hypothesis_links_fail_closed_on_ambiguity_or_export_error(tmp_path, monkeypatch, fail_export):
+    from core.json import load_json
+
+    _record(tmp_path, FIXTURES[1], hypothesis="Claim")
+    if fail_export:
+        def fail(*args, **kwargs):
+            raise OSError("fixture export failure")
+        monkeypatch.setattr(check_trace, "save_json", fail)
+    outcomes = [ReviewOutcome(file="a.c", function="f", line=1, status=status, body="Review",
+                              hypothesis="Claim", hypotheses=[{"mechanism": "Claim", "confidence": "refuted"}])
+                for status in ["clean", "suspicious"]]
+    write_graded_findings(export_findings(outcomes), tmp_path)
+    saved = load_json(tmp_path / "findings-graded.json")
+    traces = [saved["clean_review_traces"][0], saved["findings"][0]["verification_trace"]]
+    for trace in traces:
+        for link in [trace["check_results"], trace["hypothesis_reviews"][0]["check_results"]]:
+            assert link["references"] == []
+            assert link["status"] == ("export_error" if fail_export else "ambiguous_scope")
+        assert trace["hypothesis_reviews"][0]["support_status"] == "not_assessed"

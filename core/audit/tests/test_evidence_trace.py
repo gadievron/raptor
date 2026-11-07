@@ -90,10 +90,12 @@ def test_counterarguments_survive_normal_export_without_acquiring_support(tmp_pa
         {"index": 0, "hypothesis": "First claim", "model_confidence": "refuted",
          "counterargument": "Caller bounds input", "counter_scope": "cross_function",
          "assumed_property": "Input is bounded", "origin": "review",
-         "support_status": "not_assessed", "candidate_claim_check_indices": []},
+         "support_status": "not_assessed", "candidate_claim_check_indices": [],
+         "check_results": {"artifact": "verification-checks.json", "references": [], "status": "unavailable"}},
         {"index": 1, "hypothesis": "Independent claim", "model_confidence": "medium",
          "counterargument": None, "counter_scope": None, "assumed_property": None,
-         "origin": "review", "support_status": "not_assessed", "candidate_claim_check_indices": []},
+         "origin": "review", "support_status": "not_assessed", "candidate_claim_check_indices": [],
+         "check_results": {"artifact": "verification-checks.json", "references": [], "status": "unavailable"}},
     ]
     assert trace["final_status"] == outcome.status == "clean"
     assert saved["findings"] == []
