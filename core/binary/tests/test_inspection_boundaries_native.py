@@ -1,6 +1,7 @@
 """Native parser read boundaries using disposable inputs and owned probes."""
 
 import os
+import select
 from pathlib import Path
 import shutil
 import subprocess
@@ -75,11 +76,17 @@ def outside_owner(tmp_path):
     marker = 'RAPTOR_OWNED_ENV_' + uuid.uuid4().hex
     environment = dict(PATH=os.defpath, HOME=str(tmp_path), **{marker: 'owned'})
     process = subprocess.Popen(
-        [sys.executable, '-I', '-S', '-c', 'import sys; sys.stdin.buffer.read()'],
-        env=environment, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        [sys.executable, '-I', '-S', '-c',
+         'import os,sys; os.write(1,b"R"); sys.stdin.buffer.read()'],
+        env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     try:
+        # Popen returning does not establish that the child's environment image
+        # is ready for procfs inspection. Wait for its own post-exec handshake.
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        assert ready, 'owned environment probe did not become ready'
+        assert process.stdout.read(1) == b'R', 'owned environment probe exited before readiness'
         assert process.poll() is None, 'owned environment probe exited before inspection'
         namespace = os.readlink('/proc/self/ns/pid') if sys.platform == 'linux' else ''
         if sys.platform == 'linux':
@@ -87,6 +94,7 @@ def outside_owner(tmp_path):
         yield process.pid, marker, namespace
     finally:
         process.stdin.close()
+        process.stdout.close()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
