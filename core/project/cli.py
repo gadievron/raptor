@@ -3696,14 +3696,15 @@ def _apply_clean_coverage(project, plan, consequences) -> None:
 
 
 def _do_merge(project, merge_type, yes) -> None:
-    """Merge runs per command type."""
-    import shutil
+    """Publish complete merged runs before reclaiming unchanged sources."""
     from datetime import datetime, timezone
 
+    from core.atomic_fs import publish_new_directory
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
+    from core.run.scratch import scratch_dir
 
-    from .clean import run_is_live, split_live_runs
+    from .clean import _directory_identity, execute_clean, split_live_runs
     from .merge import merge_runs
 
     groups = project.get_run_dirs_by_type()
@@ -3764,6 +3765,26 @@ def _do_merge(project, merge_type, yes) -> None:
         print("Nothing to merge.")
         return
 
+    # Pin the actual source directories before confirmation/copying. A
+    # replacement under the same name must never become a cleanup victim.
+    root = project.output_path.resolve()
+    source_identities = {}
+    for cmd_type, dirs in list(mergeable.items()):
+        valid = True
+        for directory in dirs:
+            path = Path(directory)
+            identity = _directory_identity(path)
+            if path.parent.resolve() != root or identity is None:
+                valid = False
+                break
+            source_identities[path] = identity
+        if not valid:
+            print(f"  {sanitise_for_terminal(cmd_type, max_len=120)}: "
+                  "merge refused — source is not a direct run directory")
+            del mergeable[cmd_type]
+    if not mergeable:
+        return
+
     # Show plan
     for cmd_type, dirs in mergeable.items():
         print(f"  {sanitise_for_terminal(cmd_type, max_len=120)}: "
@@ -3780,79 +3801,73 @@ def _do_merge(project, merge_type, yes) -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         merged_dir = project.output_path / f"{cmd_type}-{unique_run_suffix('-')}"
 
+        phase = "merge"
+        published = False
         try:
-            # get_run_dirs_by_type groups NEWEST-first; merge_runs takes
-            # later-overrides-earlier order — pass oldest-first so the
-            # newest run wins ties (the documented latest-wins contract).
-            stats = merge_runs(list(reversed(dirs)), merged_dir)
-        except Exception as e:  # noqa: BLE001 — abort merge, keep sources
-            print(f"  {shown_type}: merge failed — {sanitise_for_terminal(str(e), max_len=300)}")
-            print("  Source runs preserved.")
-            continue
-
-        try:
-            save_json(merged_dir / RUN_METADATA_FILE, {
-                "version": 1,
-                "command": cmd_type,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "status": "completed",
-                "project": project.name,
-                "project_source": "merged",
-                # Recorded so merged runs keep passing the
-                # recorded-target gates (adoption refusal, sibling
-                # discovery, the one-target write gate).
-                "target_path": project.target,
-                "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
-            })
+            # Keep potentially large copies on the project filesystem. Only
+            # a complete run (including metadata) gets a visible run name.
+            with scratch_dir(".raptor-merge-", dir=root, keepalive=True) as workspace:
+                staged = workspace / "merged"
+                # Groups are newest-first; the fold takes oldest-first.
+                stats = merge_runs(list(reversed(dirs)), staged)
+                phase = "metadata"
+                save_json(staged / RUN_METADATA_FILE, {
+                    "version": 1,
+                    "command": cmd_type,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "status": "completed",
+                    "project": project.name,
+                    "project_source": "merged",
+                    "target_path": project.target,
+                    "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
+                })
+                merged_identity = _directory_identity(staged)
+                phase = "publication"
+                publish_new_directory(staged, merged_dir)
+                published = True
+            # Freeze the published path, never the temporary workspace name.
             from core.run.pin import freeze_run_pin
+            phase = "pin"
             freeze_run_pin(merged_dir, project.name, "merged")
         except Exception as e:  # noqa: BLE001 — abort delete, keep sources
-            # Pre-fix this printed a warning and PROCEEDED to delete
-            # source runs. The merged output then existed without
-            # `RUN_METADATA_FILE`, which downstream consumers
-            # (`load_run_metadata`, `get_run_dirs_by_type`) treat as
-            # "not a completed run" and silently skip — so the
-            # operator's merged data became invisible while the
-            # source runs were already gone. Net data loss with no
-            # error message after the warning.
-            #
-            # Abort the delete step instead. Merged dir stays on
-            # disk (operator can inspect / retry the metadata
-            # write); source dirs stay on disk (no data lost). The
-            # operator sees both the warning AND a clear "source
-            # runs preserved" line so they know to re-run.
-            print(f"  {shown_type}: ERROR — metadata write failed ({sanitise_for_terminal(str(e), max_len=300)})")
-            print(f"  {shown_type}: source runs PRESERVED (merged output left at {merged_dir})")
+            print(f"  {shown_type}: {phase} failed — {sanitise_for_terminal(str(e), max_len=300)}")
+            if published:
+                print(f"  {shown_type}: source runs PRESERVED (merged output left at "
+                      f"{sanitise_for_terminal(str(merged_dir), max_len=500)})")
+            else:
+                print("  Source runs preserved.")
             continue
 
-        # Delete source runs (continue on individual failures)
+        # Reuse clean's containment, registry, identity, liveness and
+        # permission-repair checks. One plan per source keeps a failed
+        # removal from preventing reclamation of the remaining duplicates.
+        def require_merged_output(_source):
+            if merged_identity is None or _directory_identity(merged_dir) != merged_identity:
+                raise OSError("merged output changed; source runs preserved")
+
         failed_deletes = []
         for d in dirs:
-            # Liveness re-check immediately before the delete, exactly
-            # as execute_clean does: the plan-time split is arbitrarily
-            # stale by now (an unbounded operator confirm sits between
-            # plan and delete, and a planned run can be RESUMED in that
-            # gap) — a plan-time check alone rmtree'd in-flight runs.
-            # The merged copy already exists, so skipping only leaves a
-            # duplicate source dir behind, never loses data.
-            if run_is_live(Path(d)):
-                print(f"  {shown_type}: skipped delete (resumed while "
-                      f"merging): "
-                      f"{sanitise_for_terminal(d.name, max_len=120)}")
-                continue
+            if merged_identity is None or _directory_identity(merged_dir) != merged_identity:
+                print(f"  {shown_type}: skipped delete — merged output changed; source runs preserved")
+                break
+            path = Path(d)
+            plan = {"delete_dirs": [path],
+                    "_delete_meta": {str(path): source_identities[path]}}
             try:
-                shutil.rmtree(d)
+                execute_clean(plan, output_path=root, before_delete=require_merged_output)
             except Exception as e:  # noqa: BLE001 — continue past one failure
-                # rmtree exception text embeds child-writable file
-                # names from inside the run dir — escape at
-                # construction (the list-mediated print below relays
-                # it verbatim).
                 failed_deletes.append(
-                    f"{sanitise_for_terminal(d.name, max_len=120)}: "
+                    f"{sanitise_for_terminal(path.name, max_len=120)}: "
                     f"{sanitise_for_terminal(str(e), max_len=300)}")
-        if failed_deletes:
-            for msg in failed_deletes:
-                print(f"  {shown_type}: warning — failed to delete {msg}")
+                continue
+            if plan.get("skipped_live"):
+                print(f"  {shown_type}: skipped delete (resumed while merging): "
+                      f"{sanitise_for_terminal(path.name, max_len=120)}")
+            elif plan.get("skipped_changed"):
+                print(f"  {shown_type}: skipped delete (source directory changed): "
+                      f"{sanitise_for_terminal(path.name, max_len=120)}")
+        for msg in failed_deletes:
+            print(f"  {shown_type}: warning — failed to delete {msg}")
 
         # Documented convention (merge.py `_finding_key`): "N findings
         # (M vulns)". Pre-fix the override relabelled the LOGICAL-vuln

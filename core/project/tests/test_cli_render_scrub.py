@@ -238,8 +238,6 @@ def test_merge_live_skip_and_failed_delete_lines_escaped(
     {e} lanes but left d.name raw in the still-running skip line and
     relayed rmtree exception text through the failed_deletes list
     unescaped."""
-    import shutil
-
     from core.project import cli as project_cli
 
     d1 = _hostile_run_dir(tmp_path, name=f"scan-a{HOSTILE}")
@@ -268,7 +266,7 @@ def test_merge_live_skip_and_failed_delete_lines_escaped(
     def _boom(path, *a, **k):
         raise OSError(f"unlink failed: {HOSTILE}")
 
-    monkeypatch.setattr(shutil, "rmtree", _boom)
+    monkeypatch.setattr("core.project.clean.rmtree_hardened", _boom)
     project_cli._do_merge(proj, "all", yes=True)
     out = capsys.readouterr().out
     assert "failed to delete" in out
