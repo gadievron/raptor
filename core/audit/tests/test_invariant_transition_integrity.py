@@ -184,7 +184,10 @@ def test_all_mutation_sites_share_one_query_budget(monkeypatch):
     assert checks == [1]
 
 
-@pytest.mark.parametrize("code", ["Count=0;", "Count=min(Value,Limit);"])
+@pytest.mark.parametrize(
+    "code", ["if(Limit>=0)Count=0;", "Count=min(Value,Limit);"],
+    ids=["guarded-reset", "clamp"],
+)
 def test_ordinary_mathematical_preservation_still_works(code):
     result = inv.check_invariant_preservation("Count <= Limit", code)
     assert result.outcome == "preserved"

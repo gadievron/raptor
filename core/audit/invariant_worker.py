@@ -6,6 +6,7 @@ import math
 
 from core.json import dumps_canonical
 from core.smt_solver import session
+from .invariant_outcomes import aggregate_verdicts
 
 _MAX_SOURCE = 65536
 _MAX_TEXT = 8192
@@ -59,7 +60,7 @@ def _request(mode, invariant, source, line, pre_conditions, timeout_ms, deadline
 
 def _binding(request):
     return {
-        "query_contract": "mathematical-invariant-worker-v5",
+        "query_contract": "mathematical-invariant-worker-v6",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8")
         ).hexdigest(),
@@ -124,13 +125,7 @@ def _result(raw, request):
     if any(site is None for site in sites):
         return None
     if sites:
-        expected = (
-            "violable"
-            if any(site.verdict == "violable" for site in sites)
-            else "preserved"
-            if all(site.verdict in {"preserved", "preserved_nonneg"} for site in sites)
-            else "inconclusive"
-        )
+        expected = aggregate_verdicts(site.verdict for site in sites)
         if raw["outcome"] != expected:
             return None
     elif raw["outcome"] == "violable":

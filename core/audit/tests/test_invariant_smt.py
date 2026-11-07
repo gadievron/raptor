@@ -76,14 +76,14 @@ class TestFindMutationSites:
 
 
 class TestPreservation:
-    def test_clamped_writes_preserve_invariant(self):
-        # The linebuffer shape: every mutation keeps len <= size.
+    def test_reset_needs_a_nonnegative_bound_even_when_other_writes_clamp(self):
+        # Clamping alone does not justify the reset's nonnegative premise.
         src = (
             "len = 0;\n"
             "len = min(n, size);\n"
         )
         res = check_invariant_preservation("len <= size", src)
-        assert res.outcome == "preserved", res.to_dict()
+        assert res.outcome == "inconclusive", res.to_dict()
         # The reset site (len = 0) is preserved in the non-negative
         # regime and carries its negative-operand counterexample as a
         # receipt; the clamped site is preserved unconditionally.

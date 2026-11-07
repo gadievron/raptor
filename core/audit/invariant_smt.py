@@ -20,7 +20,9 @@ one inductive preservation step::
   ``violable`` with the non-negative model as receipt; unsat in the
   second regime → the site is ``preserved_nonneg`` (breakable only by
   a negative operand — the negative counterexample stays in the
-  receipt, the two-regime split is never a hidden assumption).
+  receipt). This conditional result makes aggregation inconclusive;
+  it cannot support refutation or clean conversion. Source guards that
+  establish the needed bounds already participate in the first query.
 * **unknown / unparseable** — ``inconclusive`` with a per-site reason,
   never a guess.
 
@@ -56,6 +58,7 @@ from core.source.lines import split_lines
 from typing import Any
 
 from core.smt_solver.session import check_solver, new_solver, query_budget, scoped, solver_reason_unknown
+from .invariant_outcomes import aggregate_verdicts
 
 from .invariant_expression import (
     IDENTIFIER as _IDENT,
@@ -433,33 +436,19 @@ def _check_invariant_preservation(
     site_results.extend(SiteResult(line=effect.line, code=effect.code, verdict="out_of_scope", reason=effect.reason)
                         for effect in effects)
 
-    if any(s.verdict == "violable" for s in site_results):
-        outcome = "violable"
+    outcome = aggregate_verdicts(s.verdict for s in site_results)
+    if outcome == "violable":
         reason = "at least one mutation site can break the invariant"
-    elif all(
-        s.verdict in ("preserved", "preserved_nonneg")
-        for s in site_results
-    ):
-        outcome = "preserved"
-        caveats = [s for s in site_results
-                   if s.verdict == "preserved_nonneg"]
+    elif outcome == "preserved":
         reason = (
             "every mutation site preserves the invariant "
             "(inductive step; base case not checked)"
         )
-        if caveats:
-            reason += (
-                "; sites "
-                + ",".join(f"L{s.line}" for s in caveats[:4])
-                + " rely on non-negative operands (negative-value "
-                "counterexamples in the receipt)"
-            )
     else:
-        outcome = "inconclusive"
         undecided = [
             f"line {s.line}: {s.reason or s.verdict}"
             for s in site_results
-            if s.verdict in ("unknown", "out_of_scope")
+            if s.verdict in ("unknown", "out_of_scope", "preserved_nonneg")
         ]
         reason = "undecided sites — " + "; ".join(undecided[:4])
 
