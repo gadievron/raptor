@@ -13,7 +13,7 @@ from core.json import save_json, load_json
 from .cache import load_or_build_index
 from .catalogue import Catalogue
 from .integration import collect_sources, json_text
-from .model import Limits, VERSION, digest
+from .model import Limits, StudySlice, VERSION, digest
 from .progress import WorkQueue, exclusive_session
 from .slices import build_slices
 from .study import run_studies
@@ -109,6 +109,46 @@ def _reused_terms(index, reachable):
             symbols.add("symbol:"+name)
     terms |= symbols
     return terms
+
+
+def _delivery_lookup(available, units, requested, jobs_by_unit):
+    """Index eligible native packet receipts with first-match semantics."""
+    if len(units) < 4 or len(requested) < 4 or len(available)*len(units) <= 256:
+        return None
+    report_keys = set()
+    job_ids = []
+    for unit in units:
+        if type(unit) is not StudySlice or type(unit.consumer) is not str:
+            return None
+        key = requested.get(unit.consumer)
+        if key is None:
+            continue
+        if type(key) is not str:
+            return None
+        if key in report_keys:
+            continue
+        report_keys.add(key)
+        if type(unit.id) is not str:
+            return None
+        job = jobs_by_unit.get(unit.id)
+        if type(job) is not dict or type(job.get("id")) is not str:
+            return None
+        job_ids.append(job["id"])
+    if len(job_ids) < 4 or len(available)*len(job_ids) <= 256:
+        return None
+    wanted = set(job_ids)
+    found = {}
+    for row in available:
+        # Keep legacy/adapted rows on the equality-based scan. Once all
+        # wanted IDs have matched, later rows cannot change any first match.
+        if type(row) is not dict or "id" not in row or type(row["id"]) is not str:
+            return None
+        job_id = row["id"]
+        if job_id in wanted and job_id not in found:
+            found[job_id] = row
+            if len(found) == len(wanted):
+                break
+    return found
 
 
 def _header_signature(path, include_dirs):
@@ -331,6 +371,16 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
         contexts = {}
         available = queue.undelivered(view["id"])
         repository = None
+        ready_by_id = (_delivery_lookup(available,units,requested,jobs_by_unit)
+                       if mode in {"context","study"} else None)
+        shadow_acknowledged = False
+        # NULL legacy keys do not conflict in SQLite's composite primary key.
+        # Only native, stable packet keys make repeated passes idempotent.
+        shadow_single_pass = (mode == "shadow" and type(view["id"]) is str
+            and all(type(unit) is StudySlice and type(unit.consumer) is str and type(unit.id) is str
+                    for unit in units)
+            and all(type(row) is dict and type(row.get("id")) is str and type(row.get("evidence")) is str
+                    for row in available))
         for unit in units:
             key = requested.get(unit.consumer)
             if key is None or key in contexts:
@@ -349,13 +399,15 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
                 if result:
                     text += "\nConditional semantic study (including refutation):\n"+json_text(result)
                 contexts[key] = text
-                ready = next((r for r in available if r["id"] == job["id"]),None)
+                ready = (next((r for r in available if r["id"] == job["id"]),None)
+                         if ready_by_id is None else ready_by_id.get(job["id"]))
                 if ready:
                     receipts[key] = {"namespace":namespace,"view":view["id"],"job":job["id"],"evidence":ready["evidence"]}
-            elif mode == "shadow":
+            elif mode == "shadow" and not shadow_acknowledged:
                 # Artifact-only mode has no review delivery obligation.
                 for ready in available:
                     queue.acknowledge(view["id"],ready["id"],ready["evidence"])
+                shadow_acknowledged = shadow_single_pass
         queue.complete_view_if_finished(view["id"])
         progress({"typed_index_cache_hit":cached},repository=repository)
         save_json(out_dir/"cross-entry-delivery.json",{"version":VERSION,"mode":mode,
