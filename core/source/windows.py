@@ -46,6 +46,37 @@ def _after_newlines(chunk: bytes, count: int, offset: int = 0) -> int:
     return offset
 
 
+def read_bytes_prefix_capped(
+    path: Path, prefix_bytes: int, *, max_bytes: int,
+) -> tuple[bytes, bool] | None:
+    """Retain a byte prefix while probing the whole-file byte budget.
+
+    Read through EOF or cap+1 even after retaining the requested prefix,
+    so late read errors and oversized files cannot become early successes.
+    Oversize input returns an empty prefix and True; unreadable/nonregular
+    paths return None. Temporary buffers stay bounded by prefix plus chunks.
+    """
+    if prefix_bytes < 0 or max_bytes < 0:
+        raise ValueError("prefix length and byte cap must be nonnegative")
+    stream = open_regular(path, "rb")
+    if stream is None:
+        return None
+    selected = bytearray()
+    consumed = 0
+    try:
+        with stream:
+            while chunk := stream.read(min(_CHUNK_BYTES, max_bytes + 1 - consumed)):
+                consumed += len(chunk)
+                if consumed > max_bytes:
+                    return b"", True
+                remaining = prefix_bytes - len(selected)
+                if remaining > 0:
+                    selected.extend(chunk[:remaining])
+    except OSError:
+        return None
+    return bytes(selected), False
+
+
 def read_line_window_capped(
     path: Path, start: int, end: int, *, max_bytes: int,
 ) -> tuple[list[str], bool] | None:
