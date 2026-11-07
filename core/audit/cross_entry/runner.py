@@ -36,10 +36,16 @@ def _match_reports(index, reports):
     return requested,matches
 
 
+_TERM_REUSE_LIMIT = 256
+
+
 def _terms(index, consumers, depth):
     reachable = set(consumers)
     for _ in range(depth):
         reachable |= {r.target for r in index.relations if r.kind == "call" and r.source in reachable}
+    if (type(index.accesses) is list and type(index.calls) is list
+            and len(index.accesses)+len(index.calls) > _TERM_REUSE_LIMIT):
+        return _reused_terms(index, reachable)
     terms = set()
     for a in index.accesses:
         if a.function not in reachable:
@@ -50,6 +56,58 @@ def _terms(index, consumers, depth):
         for member in re.findall(r"[A-Za-z_]\w*",a.member_path):
             terms.add("field:"+member)
     terms |= {"symbol:"+c.name for c in index.calls if c.caller in reachable and re.fullmatch(r"[A-Za-z_]\w*",c.name)}
+    return terms
+
+
+def _reused_terms(index, reachable):
+    """Bound native-string reuse to this traversal; disable on diverse inputs."""
+    terms = set()
+    seen_types: set[str] | None = set()
+    seen_members: set[str] | None = set()
+    seen_symbols: set[str] | None = set()
+    for a in index.accesses:
+        if a.function not in reachable:
+            continue
+        type_id = a.type_id
+        parse_type = True
+        if seen_types is not None and type(type_id) is str:
+            if type_id in seen_types:
+                parse_type = False
+            elif len(seen_types) < _TERM_REUSE_LIMIT:
+                seen_types.add(type_id)
+            else:
+                seen_types = None
+        if parse_type:
+            match = re.search(r"(?:struct|class|union) ([A-Za-z_]\w*)$",type_id)
+            if match:
+                terms.add("type:"+match[1])
+        member_path = a.member_path
+        parse_member = True
+        if seen_members is not None and type(member_path) is str:
+            if member_path in seen_members:
+                parse_member = False
+            elif len(seen_members) < _TERM_REUSE_LIMIT:
+                seen_members.add(member_path)
+            else:
+                seen_members = None
+        if parse_member:
+            for member in re.findall(r"[A-Za-z_]\w*",member_path):
+                terms.add("field:"+member)
+    symbols = set()
+    for call in index.calls:
+        if call.caller not in reachable:
+            continue
+        name = call.name
+        if seen_symbols is not None and type(name) is str:
+            if name in seen_symbols:
+                continue
+            if len(seen_symbols) < _TERM_REUSE_LIMIT:
+                seen_symbols.add(name)
+            else:
+                seen_symbols = None
+        if re.fullmatch(r"[A-Za-z_]\w*",name):
+            symbols.add("symbol:"+name)
+    terms |= symbols
     return terms
 
 
@@ -118,13 +176,14 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
                 break
             indexing = catalogue.advance(limits,should_stop)
 
-        def progress(extra=None):
+        def progress(extra=None, repository=None):
             state = queue.summary()
+            repository = catalogue.summary() if repository is None else repository
             value = {"version":VERSION,"namespace":namespace,"mode":mode,"report_requests":gaps,
                      "selection_key":model_key,"target":str(target),
-                     **state,"indexing":catalogue.summary(),
+                     **state,"indexing":repository,
                      "work_remaining":bool(state["remaining_jobs"] or state["remaining_views"] or
-                                           state["undelivered_results"] or not catalogue.summary()["index_complete"]),
+                                           state["undelivered_results"] or not repository["index_complete"]),
                      "queue_exhausted_is_not_a_safety_proof":True}
             if extra:
                 value.update(extra)
@@ -271,6 +330,7 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
 
         contexts = {}
         available = queue.undelivered(view["id"])
+        repository = None
         for unit in units:
             key = requested.get(unit.consumer)
             if key is None or key in contexts:
@@ -278,9 +338,13 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
             job = jobs_by_unit[unit.id]
             result = semantic.get(unit.id) or job.get("outcome")
             if mode in {"context","study"}:
+                # Catalogue writes ended before study dispatch. Reuse this
+                # read-only assembly phase's snapshot across context packets.
+                if repository is None:
+                    repository = catalogue.summary()
                 text = ("Shared-state investigation context; no verified finding.\nCoverage: "
                         +json_text({"complete":index.coverage["complete"],"unresolved":unit.unresolved,
-                                    "truncated":unit.truncated,"repository":catalogue.summary()})
+                                    "truncated":unit.truncated,"repository":repository})
                         +"\nEntry/helper paths: "+json_text(unit.entry_paths)+"\n"+unit.source)
                 if result:
                     text += "\nConditional semantic study (including refutation):\n"+json_text(result)
@@ -293,7 +357,7 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
                 for ready in available:
                     queue.acknowledge(view["id"],ready["id"],ready["evidence"])
         queue.complete_view_if_finished(view["id"])
-        progress({"typed_index_cache_hit":cached})
+        progress({"typed_index_cache_hit":cached},repository=repository)
         save_json(out_dir/"cross-entry-delivery.json",{"version":VERSION,"mode":mode,
                   "available_to_review":sorted(contexts),"semantic_results":len(semantic),
                   "receipts":receipts,"deferred":queue.summary()["remaining_jobs"]})
