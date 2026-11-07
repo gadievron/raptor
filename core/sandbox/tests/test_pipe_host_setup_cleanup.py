@@ -6,9 +6,11 @@ import importlib
 import os
 import sys
 import threading
-from types import SimpleNamespace
 
 import pytest
+
+from core.testing import pipes as pipe_support
+from core.testing.module_bindings import patch_module_attribute
 
 
 def _owned(fd, identity):
@@ -90,13 +92,22 @@ def test_fake_host_setup_releases_all_resources(kind, fault, error, monkeypatch)
             instance.start = after_start
         return instance
 
-    proxy = SimpleNamespace(Thread=thread, Lock=fail if fault == "lock" else real_lock)
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(os, "pipe", pipe)
-            patcher.setattr(module, "threading", proxy, raising=False)
+            patch_module_attribute(patcher, pipe_support, "os", "pipe", pipe)
+            # Match the helper's mapping undo stack, including an absent binding.
+            patcher.setitem(vars(module), "threading", threading)
+            patch_module_attribute(patcher, module, "threading", "Thread", thread)
+            patch_module_attribute(
+                patcher, module, "threading", "Lock",
+                fail if fault == "lock" else real_lock,
+            )
             if support is not None:
-                patcher.setattr(support, "threading", proxy)
+                patch_module_attribute(patcher, support, "threading", "Thread", thread)
+                patch_module_attribute(
+                    patcher, support, "threading", "Lock",
+                    fail if fault == "lock" else real_lock,
+                )
             if fault == "host":
                 patcher.setattr(module.host_mod, "SandboxHost", fail)
             with pytest.raises(error, match="injected pipe-host setup failure"):
@@ -156,15 +167,13 @@ def test_high_descriptor_fixture_restores_limits_after_close_failure(
         instance.close = fail_close
         return instance, thread, errors
 
-    proxy = SimpleNamespace(
-        RLIMIT_NOFILE=module.resource.RLIMIT_NOFILE,
-        RLIM_INFINITY=module.resource.RLIM_INFINITY,
-        getrlimit=lambda _: (1024, 4096),
-        setrlimit=lambda _, limits: changes.append(limits),
-    )
     with monkeypatch.context() as patcher:
         patcher.setattr(module, "fake_host", host)
-        patcher.setattr(module, "resource", proxy)
+        patch_module_attribute(patcher, module, "resource", "getrlimit", lambda _: (1024, 4096))
+        patch_module_attribute(
+            patcher, module, "resource", "setrlimit",
+            lambda _, limits: changes.append(limits),
+        )
         with pytest.raises(error, match="injected host close failure"):
             module.test_high_numbered_reply_descriptor_is_supported()
     assert changes == [(2049, 4096), (1024, 4096)], (
@@ -194,7 +203,7 @@ def test_eof_fixture_setup_releases_pipes(error, monkeypatch):
 
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(os, "pipe", pipe)
+            patch_module_attribute(patcher, pipe_support, "os", "pipe", pipe)
             patcher.setattr(module.host_mod, "SandboxHost", Host)
             with pytest.raises(error, match="injected EOF host setup failure"):
                 module.test_reply_eof_wakes_poll_without_waiting_for_deadline()
@@ -226,7 +235,7 @@ def test_pipe_host_stops_at_first_request_eof(prefix, monkeypatch):
         return data
 
     with monkeypatch.context() as patcher:
-        patcher.setattr(pipe_host, "os", SimpleNamespace(**(vars(os) | {"read": read})))
+        patch_module_attribute(patcher, pipe_host, "os", "read", read)
         host, thread, errors = pipe_host.fake_host(lambda request: {"ok": True})
         try:
             if prefix:
@@ -253,9 +262,7 @@ def test_pipe_host_completes_fragmented_response_writes(monkeypatch):
         return written
 
     with monkeypatch.context() as patcher:
-        patcher.setattr(
-            pipe_host, "os", SimpleNamespace(**(vars(os) | {"write": write}))
-        )
+        patch_module_attribute(patcher, pipe_host, "os", "write", write)
         host, thread, errors = pipe_host.fake_host(
             lambda request: {"ok": True, "rid": request["rid"], "payload": "small"},
         )
