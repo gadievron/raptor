@@ -101,7 +101,7 @@ def test_runner_reclaims_process_and_pipes(runner, fault, tmp_path, monkeypatch)
         # that forgot to create its own session; check the requested flag below.
         process = real_popen(
             [sys.executable, "-I", "-c", code],
-            **(options | {"start_new_session": True}),
+            **(options | {"start_new_session": True, "process_group": None}),
         )
         started.append(process)
         deadline = time.monotonic() + 5
