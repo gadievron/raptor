@@ -353,6 +353,18 @@ target widths, reachable value range and identity/compatibility contract.
 Range-checked or intentional legacy conversions can still match. Implicit
 conversions and arbitrary provenance through aliases are outside its scope.
 
+The literal-shift check covers both directions, suffixed and radix-spelled
+integer counts, and simple parenthesized counts. Literal-one width checks
+retain conventional thresholds of 32 for `int` and 64 for `long`/`long long`;
+these are review candidates, not measurements of your target ABI. In
+particular, 32–63 counts on a 32-bit `long` need target-aware compiler review.
+Negative counts are covered for integer-literal left operands when the count
+is guaranteed signed. Unsigned negation can wrap, so its spelling alone is
+not treated as a negative value. Variable operands, arbitrary constant
+expressions and overloaded C++ operators are outside this check. Verify the
+promoted left-operand width before changing the operation; widening alone
+cannot make every reported count valid.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

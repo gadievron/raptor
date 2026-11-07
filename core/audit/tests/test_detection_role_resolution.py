@@ -117,3 +117,13 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/uid_truncation.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only("coccinelle:uid_truncation") is True
+
+
+    def test_literal_shift_widths_require_target_abi_review(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/shift_overflow.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:shift_overflow") is True

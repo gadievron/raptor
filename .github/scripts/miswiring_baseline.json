@@ -139,9 +139,6 @@
   "artifacts:orphan_reader::probe-dump.txt": {
    "note": "written by the embedded EbpfProbeDump Ghidra post-script (Java source lives as a string in packages/ghidra/ebpf_probe.py), not by repo Python; ghidra_decode builds the path, hands it to the sandboxed analyzeHeadless invocation, and reads the dump back for ground-truth comparison, so the indexer only ever sees the read"
   },
-  "artifacts:orphan_reader::project.json": {
-   "note": "legacy in-run-dir project marker: nothing in the repo writes a literal project.json today (the registry stores <name>.json; exports embed .project.json) \u2014 the readers are the pin-less legacy-dir shape probes (core/concepts/study.py, libexec/raptor-study-prep) kept so pre-pin operator dirs still promote. Previously suppressed as ambiguous only because the study-prep probe shared a function with a tempfile writer; the merge-promote refactor made that function read-only and surfaced the pre-existing orphan-reader shape."
-  },
   "artifacts:orphan_reader::raptor-audit-cfg-*.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -210,9 +207,6 @@
   },
   "artifacts:write_only_artifact::.osv.json": {
    "note": "f\"{cve_id}.osv.json\" writer key (packages/cve_diff cli via save_json) normalised without its prefix; the reader is cross_check.py's load_json_bounded on the same f-string name \u2014 twin of the baselined orphan_reader::*.osv.json glob entry"
-  },
-  "artifacts:write_only_artifact::.project.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
   "artifacts:write_only_artifact::.reason.json": {
    "note": "durable operator/audit record by design: <part>.reason.json preserves the quarantine reason next to the quarantined part for operator triage; no production reader intended"
