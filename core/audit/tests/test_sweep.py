@@ -1945,12 +1945,14 @@ class TestRefutedHypothesisDispatch:
 class TestSweepValidateDetectionFilter:
     """Detection-role tools must not stamp evidence in _sweep_validate."""
 
-    def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err"])
+    def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch, rule_name):
         from core.audit.orchestrator import (
             OrchestratorConfig,
             ReviewOutcome,
             _sweep_validate,
         )
+        monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         outcome = ReviewOutcome(
             file="net/ipv4/esp4.c",
             function="esp_output_head",
@@ -1967,7 +1969,7 @@ class TestSweepValidateDetectionFilter:
 
         monkeypatch.setattr(
             "core.audit.orchestrator._run_tool_chain",
-            lambda *a, **kw: ["coccinelle:missing_bounds_check"],
+            lambda *a, **kw: [f"coccinelle:{rule_name}"],
         )
         monkeypatch.setattr(
             "core.audit.orchestrator._read_raw_source",
@@ -1979,7 +1981,7 @@ class TestSweepValidateDetectionFilter:
         )
 
         result = _sweep_validate(outcome, config)
-        assert "coccinelle:missing_bounds_check" not in (result.evidence_tool or "")
+        assert f"coccinelle:{rule_name}" not in (result.evidence_tool or "")
 
     def test_verification_tools_still_stamped(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import (

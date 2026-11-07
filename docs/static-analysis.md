@@ -250,6 +250,11 @@ and after `munmap`: unmapping does
 not make that pointer a heap allocation. Reassigning the pointer or passing
 its address to a helper ends tracking. Pointer aliases are outside its scope.
 
+The kernel error-return check highlights suspicious `IS_ERR` return values
+for review. It excludes explicit `bool`/`_Bool` predicates and checks that an
+assigned value actually reaches the return. Matches remain review candidates
+in `/audit`; check the expected errno contract before reporting a defect.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
