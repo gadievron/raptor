@@ -108,41 +108,16 @@ def _bypass_git_sandbox(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_retry_backoff(monkeypatch):
-    """No-op ``time.sleep`` for unit tests.
+    """Skip client retry delays without changing unrelated clocks.
 
-    ResilientLLMClient (``llm/client.py``) retries with
-    ``time.sleep(backoff_factor ** attempt)`` and AgentLoop adds an
-    in-loop 0/5/15s backoff. Tests that drive the retry path with a
-    mocked-failing provider otherwise sit through the REAL backoff —
-    measured at 14s for ``test_provider_error_raises_llm_call_failed``
-    and ~9-11s each for the pipeline retry tests on the 2-core CI
-    runner (they were the entire cve_diff tier's wall-clock). The retry
-    COUNT and error-propagation behaviour is independent of how long
-    the backoff sleeps, so no-op the sleep.
-
-    Safe across the unit tree: the only timing-sensitive tests
-    (``infra/test_rate_limit.py``) drive an INJECTED fake clock
-    (``clk.sleep``), not the global ``time.sleep``, so their assertions
-    are unaffected.
+    Retry counts and error propagation stay real. Tests of backoff itself
+    can replace the client's private sleep binding with a recording clock.
+    Rate-limit tests continue to use their injected clocks.
     """
-    import time
-    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+    from cve_diff.llm import client
+    from core.testing.module_bindings import patch_module_attribute
 
-
-@pytest.fixture(autouse=True)
-def _no_retry_backoff_sleep(monkeypatch):
-    """Neutralise the LLM client's retry backoff for unit tests.
-
-    cve_diff/llm/client.py retries a failed provider.generate with
-    time.sleep(backoff_factor ** attempt) (factor 2.0 -> 2+4+8s...). Any
-    test that drives the pipeline into retries or the meta-retry path
-    otherwise pays real backoff seconds -- the dominant cost behind the
-    slow cve_diff pipeline tests. No-op the sleep: retry *logic* is
-    unchanged, only the wall-clock delay is removed. The infra rate-limit
-    tests inject their own fake clock, so they are unaffected by this
-    global patch.
-    """
-    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    patch_module_attribute(monkeypatch, client, "time", "sleep", lambda _s: None)
 
 
 @pytest.fixture(autouse=True)
