@@ -1,45 +1,169 @@
-// sensitive_data_leak.cocci — Detect sensitive buffers freed without
-// being zeroed first.
-//
-// Cryptographic keys, passwords, and session tokens remain in freed
-// memory until the allocator reuses the page. An information
-// disclosure primitive (e.g. uninitialised read, /proc/kcore) can
-// recover the secret. Always use memset_s/explicit_bzero/memzero_explicit
-// before freeing.
-//
-// CWE-244: Improper Clearing of Heap Data Before Release
-// Matching heuristic: variable or field name carries a secret-bearing
-// word (key/pass/secret/token/cred/master) at the start of the name or
-// of an underscore-separated component. Anchoring matters: substring
-// matching turned every driver-private-data pointer (`priv` — the
-// single most common context-pointer name in driver code) and every
-// benign carrier of an embedded word (bypass, monkey) into a CWE-244
-// finding. Bare `priv`/`*_priv` never matches now; only the explicit
-// private-key spellings do. A small deny-set in the report script
-// drops full English words that legitimately start with an anchored
-// component (keyboard, passthrough, ...), applied per
-// underscore-separated component so compounds (keyboard_state) are
-// absorbed while a real secret component beside a benign one
-// (keyboard_master_key) still reports.
+// sensitive_data_leak.cocci — Review secret-named buffers at release.
+// Names are sensitivity hints, not evidence that secret bytes are present.
+// Recognize clearing requests with the standard argument roles, excluding
+// known zero-length calls. Size coverage and compiler retention need review.
+// kfree_sensitive clears the allocation itself and is not an uncleared release.
+// memset_s uses (destination, capacity, value, count); memset_explicit
+// follows the ordinary memset signature.
+// https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3220.pdf
+// https://www.kernel.org/doc/html/latest/core-api/mm-api.html
 // @role: detection
 
-@sensitive_free@
+@sensitive_zero_length@
+expression BUF, VALUE, SIZE, LENGTH;
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position zero_pos;
+@@
+(
+  \(memset\|memset_explicit\)(BUF, VALUE, ZERO)@zero_pos;
+|
+  memset_s(BUF, SIZE, VALUE, ZERO)@zero_pos;
+|
+  memset_s(BUF, ZERO, VALUE, LENGTH)@zero_pos;
+|
+  \(explicit_bzero\|memzero_explicit\|OPENSSL_cleanse\|sodium_memzero\)(BUF, ZERO)@zero_pos;
+)
+
+// Zero stores and zero-byte operations cannot introduce new buffer contents.
+@sensitive_zero_only@
+expression BUF, INDEX, SIZE, LENGTH;
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position zero_store;
+@@
+(
+BUF =@zero_store \( ZERO \| NULL \);
+|
+BUF[INDEX] =@zero_store \( ZERO \| '\0' \);
+|
+  (*BUF) =@zero_store \( ZERO \| '\0' \);
+|
+  \(memset\|memset_explicit\)(BUF, \( ZERO \| '\0' \), LENGTH)@zero_store;
+|
+memset_s(BUF, SIZE, \( ZERO \| '\0' \), LENGTH)@zero_store;
+|
+  \(memcpy\|memmove\|memset\|memset_explicit\)(BUF, ..., ZERO)@zero_store;
+|
+memset_s(BUF, SIZE, ..., ZERO)@zero_store;
+)
+
+@sensitive_free exists@
 identifier V =~ "\(^\|_\)\(key\|pass\|secret\|token\|cred\|master\)\|privkey\|priv_key\|private_key";
+identifier CONTEXT;
+expression BUFFER;
 position p;
 @@
+(
+* \(free\|kfree\|vfree\)(V@BUFFER)@p;
+|
+* \(free\|kfree\|vfree\)(CONTEXT->V@BUFFER)@p;
+|
+* \(free\|kfree\|vfree\)(CONTEXT.V@BUFFER)@p;
+)
 
-* \(free\|kfree\|kfree_sensitive\|vfree\)(V)@p;
-
-@ok_cleared@
-identifier sensitive_free.V;
+@uncleared_entry exists@
+identifier FUNC;
+expression sensitive_free.BUFFER;
 position sensitive_free.p;
+expression RELEASE;
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position wipe != sensitive_zero_length.zero_pos;
 @@
+FUNC(...) {
+... when any
+    when != \(memset\|memset_explicit\)(BUFFER, \( ZERO \| '\0' \), ...)@wipe
+    when != memset_s(BUFFER, ..., \( ZERO \| '\0' \), ...)@wipe
+    when != \(explicit_bzero\|memzero_explicit\|OPENSSL_cleanse\|sodium_memzero\)(BUFFER, ...)@wipe
+    when != BUFFER = NULL
+    when != BUFFER = ZERO
+RELEASE(BUFFER)@p;
+... when any
+}
 
-  \(memset\|memset_s\|explicit_bzero\|memzero_explicit\|OPENSSL_cleanse\|sodium_memzero\)(V, ...);
-  ... when != V = ...
-  \(free\|kfree\|kfree_sensitive\|vfree\)(V)@p;
+@contents_changed exists@
+expression sensitive_free.BUFFER;
+position sensitive_free.p;
+expression RELEASE;
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position wipe != sensitive_zero_length.zero_pos;
+expression FN, ALIAS;
+identifier NAME;
+type T;
+assignment operator op;
+position changed != sensitive_zero_only.zero_store;
+@@
+(
+BUFFER op@changed ...;
+|
+BUFFER++;
+|
+  ++BUFFER;
+|
+BUFFER--;
+|
+  --BUFFER;
+|
+BUFFER[...] op@changed ...;
+|
+BUFFER[...]++;
+|
+  ++BUFFER[...];
+|
+BUFFER[...]--;
+|
+  --BUFFER[...];
+|
+  (*BUFFER) op@changed ...;
+|
+FN(..., &BUFFER, ...);
+|
+FN(..., &BUFFER[...], ...);
+|
+ALIAS = &BUFFER;
+|
+T NAME = &BUFFER;
+|
+  \(memset\|memset_explicit\|memset_s\|memcpy\|memmove\)(BUFFER, ...)@changed;
+)
+... when any
+    when != \(memset\|memset_explicit\)(BUFFER, \( ZERO \| '\0' \), ...)@wipe
+    when != memset_s(BUFFER, ..., \( ZERO \| '\0' \), ...)@wipe
+    when != \(explicit_bzero\|memzero_explicit\|OPENSSL_cleanse\|sodium_memzero\)(BUFFER, ...)@wipe
+    when != BUFFER = NULL
+    when != BUFFER = ZERO
+RELEASE(BUFFER)@p;
 
-@script:python sensitive_report depends on sensitive_free && !ok_cleared@
+@field_context_changed exists@
+identifier sensitive_free.CONTEXT;
+expression sensitive_free.BUFFER;
+position sensitive_free.p;
+expression RELEASE;
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position wipe != sensitive_zero_length.zero_pos;
+assignment operator op;
+expression FN;
+@@
+(
+CONTEXT op ...;
+|
+CONTEXT++;
+|
+  ++CONTEXT;
+|
+CONTEXT--;
+|
+  --CONTEXT;
+|
+FN(..., &CONTEXT, ...);
+)
+... when any
+    when != \(memset\|memset_explicit\)(BUFFER, \( ZERO \| '\0' \), ...)@wipe
+    when != memset_s(BUFFER, ..., \( ZERO \| '\0' \), ...)@wipe
+    when != \(explicit_bzero\|memzero_explicit\|OPENSSL_cleanse\|sodium_memzero\)(BUFFER, ...)@wipe
+    when != BUFFER = NULL
+    when != BUFFER = ZERO
+RELEASE(BUFFER)@p;
+
+@script:python sensitive_report depends on sensitive_free && (uncleared_entry || contents_changed || field_context_changed)@
 p << sensitive_free.p;
 V << sensitive_free.V;
 @@
@@ -66,6 +190,6 @@ if not (_carriers and all(any(c.startswith(b) for b in _benign)
       "file":  p[0].file,
       "line":  int(p[0].line),
       "col":   int(p[0].column),
-      "message":   "Sensitive buffer freed without clearing — secret data persists in freed memory (CWE-244). Use memset_s/explicit_bzero before free."
+      "message":   "Candidate: secret-named buffer released without an uninterrupted recognized clearing request; review sensitivity, wipe range, aliases and compiler retention (CWE-244)."
     }
     print("COCCIRESULT:" + json.dumps(msg))

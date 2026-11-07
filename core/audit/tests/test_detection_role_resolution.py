@@ -86,3 +86,14 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only(f"coccinelle:{rule_name}") is True
+
+
+    @pytest.mark.parametrize("rule_name", ["sensitive_data_leak", "dead_memset_free"])
+    def test_clear_requests_require_sensitivity_and_compiler_context(self, monkeypatch, tmp_path, rule_name):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule=Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only(f"coccinelle:{rule_name}") is True
