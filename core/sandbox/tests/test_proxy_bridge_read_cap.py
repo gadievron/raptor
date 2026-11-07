@@ -4,6 +4,8 @@ import os
 import socket
 import threading
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
 
@@ -45,7 +47,7 @@ def test_small_buffer_cap_preserves_large_roundtrip(short_sock_dir, monkeypatch)
             errors.append(exc)
 
     monkeypatch.setattr(bridge, "_MAX_PENDING_BYTES", cap)
-    monkeypatch.setattr(bridge.os, "read", tracked_read)
+    patch_module_attribute(monkeypatch, bridge, 'os', "read", tracked_read)
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     try:

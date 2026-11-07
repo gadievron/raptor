@@ -5,6 +5,8 @@ import os
 import socket
 import threading
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
 
@@ -47,7 +49,7 @@ def test_upstream_socket_exhaustion_allows_later_connection(
         except BaseException as exc:
             errors.append(exc)
 
-    monkeypatch.setattr(bridge.socket, "socket", socket_with_one_failure)
+    patch_module_attribute(monkeypatch, bridge, 'socket', "socket", socket_with_one_failure)
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     try:

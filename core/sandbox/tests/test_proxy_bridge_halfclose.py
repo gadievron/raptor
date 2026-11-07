@@ -8,6 +8,8 @@ import threading
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
 
@@ -88,8 +90,8 @@ def test_request_eof_is_delivered_before_reply(short_sock_dir, monkeypatch, forc
             return real_write(fd, data)
 
         if force_pending:
-            monkeypatch.setattr(bridge.os, "read", read)
-            monkeypatch.setattr(bridge.os, "write", write)
+            patch_module_attribute(monkeypatch, bridge, 'os', "read", read)
+            patch_module_attribute(monkeypatch, bridge, 'os', "write", write)
         with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
             client.sendall(payload)
             client.shutdown(socket.SHUT_WR)
