@@ -20,6 +20,7 @@ probes — the same verdicts the production degradation lattice keys on,
 so a test skips exactly where production refuses.
 """
 
+import os
 import sys
 
 import pytest
@@ -119,7 +120,6 @@ def own_pid_collides_with_sandbox_pidns() -> bool:
     Lazy: the pid must be the RUNTIME pid of the process executing the
     test (xdist workers fork after import).
     """
-    import os
     return os.getpid() <= SANDBOX_PIDNS_PID_COLLISION_CEILING
 
 
