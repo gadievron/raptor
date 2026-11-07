@@ -541,3 +541,42 @@ value = factory([Client() for item in items])
         "LLMClient": {"Client"}, "create_provider": {"factory"},
         "AlphaProvider": {"Provider"},
     }
+
+
+
+def test_irrelevant_module_skips_alias_discovery(det, tmp_path, monkeypatch):
+    root = _seeded_tree(tmp_path)
+    _plant(root, "core/unrelated.py", "unrelated_sentinel = make_value()\n")
+    original = det._symbol_aliases_by_target
+
+    def observed_aliases(tree, targets):
+        first = tree.body[0]
+        if isinstance(first, det.ast.Assign):
+            assert first.targets[0].id != "unrelated_sentinel", "unrelated module reached alias discovery"
+        return original(tree, targets)
+
+    monkeypatch.setattr(det, "_symbol_aliases_by_target", observed_aliases)
+    assert det.census(root) == {}
+
+
+def test_irrelevant_module_still_fails_on_invalid_syntax(det, tmp_path):
+    root = _seeded_tree(tmp_path)
+    _plant(root, "core/unrelated.py", "def broken(\n")
+    with pytest.raises(ValueError, match="cannot parse runtime file core/unrelated.py"):
+        det.census(root)
+
+
+@pytest.mark.parametrize("source,key", [
+    ("def run(): return ＬＬＭＣｌｉｅｎｔ()\n", "llm_client:core/example.py::run"),
+    ("from somewhere import ＬＬＭＣｌｉｅｎｔ as Client\ndef run(): return Client()\n",
+     "llm_client:core/example.py::run"),
+    ("class Wrapped(ＴｒａｎｓｃｒｉｐｔＬＬＭＣｌｉｅｎｔ): pass\n",
+     "llm_client:core/example.py::Wrapped"),
+    ("from somewhere import ＡｌｐｈａＰｒｏｖｉｄｅｒ as Provider\nclass Wrapped(Provider): pass\n",
+     "provider:core/example.py::Wrapped"),
+    ("def run(): return ｃｒｅａｔｅ＿ｐｒｏｖｉｄｅｒ()\n", "provider:core/example.py::run"),
+])
+def test_source_screen_preserves_normalized_constructions(det, tmp_path, source, key):
+    root = _seeded_tree(tmp_path)
+    _plant(root, "core/example.py", source)
+    assert det.census(root) == {key: 1}

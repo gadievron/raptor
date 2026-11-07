@@ -282,6 +282,20 @@ def _scope_binding_counts(scope: ast.AST, own: list[ast.AST]):
     return counts
 
 
+def _verdict_assignment(node: ast.AST) -> tuple[str, str] | None:
+    """A name-bound read that can participate in the single-binding pass."""
+    if (isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)):
+        target, value = node.targets[0], node.value
+    elif (isinstance(node, ast.AnnAssign) and node.value is not None
+            and isinstance(node.target, ast.Name)):
+        target, value = node.target, node.value
+    else:
+        return None
+    key = _read_key(value, VERDICT_KEYS) or _alias_get_key(value)
+    return (target.id, key) if key is not None else None
+
+
 def _tracked_verdict_names(scope: ast.AST,
                            own: list[ast.AST]) -> dict[str, str]:
     """Names bound EXACTLY ONCE in *scope*, by a plain single-target
@@ -291,21 +305,8 @@ def _tracked_verdict_names(scope: ast.AST,
     shape-checked ladders are the audited legal alternative to
     ``read_verdict`` and the scan cannot adjudicate branch
     placement."""
-    candidates: list[tuple[str, str]] = []
-    for n in own:
-        target = None
-        value = None
-        if (isinstance(n, ast.Assign) and len(n.targets) == 1
-                and isinstance(n.targets[0], ast.Name)):
-            target, value = n.targets[0], n.value
-        elif (isinstance(n, ast.AnnAssign) and n.value is not None
-                and isinstance(n.target, ast.Name)):
-            target, value = n.target, n.value
-        if target is None:
-            continue
-        key = _read_key(value, VERDICT_KEYS) or _alias_get_key(value)
-        if key is not None:
-            candidates.append((target.id, key))
+    candidates = [candidate for n in own
+                  if (candidate := _verdict_assignment(n)) is not None]
     if not candidates:
         return {}
     # Most runtime scopes have no verdict assignments. Count every binding
@@ -367,9 +368,20 @@ def _violations_in(path: Path) -> list[str]:
         return tests
 
     scopes: list[ast.AST] = [tree]
+    has_verdict_assignment = False
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             scopes.append(node)
+        if not has_verdict_assignment and _verdict_assignment(node) is not None:
+            has_verdict_assignment = True
+        # The direct-read rules inspect only these parent expressions and
+        # truth-testing statements. Leaves and other wrappers remain visited
+        # by ast.walk but need none of the rule checks below.
+        if not isinstance(node, (
+            ast.Call, ast.UnaryOp, ast.Compare, ast.Attribute,
+            ast.If, ast.While, ast.IfExp, ast.Assert, ast.BoolOp, ast.comprehension,
+        )):
+            continue
         # Verdict-fabricating .get defaults. Bool keys: only an
         # explicit None default preserves the abstention (and equals
         # the no-default read). Graded keys: only None/"unknown" do.
@@ -487,6 +499,10 @@ def _violations_in(path: Path) -> list[str]:
     # ``not v``, and ``v == w`` between two tracked raw reads (the
     # junk==junk agreement mint). See the module docstring for the
     # tracking and laundering rules.
+    # A module without a candidate binding cannot produce name-bound hits.
+    # Decide from parsed nodes, preserving folded/escaped key spellings.
+    if not has_verdict_assignment:
+        return out
     for scope in scopes:
         own = _scope_own_nodes(scope)
         tracked = _tracked_verdict_names(scope, own)
@@ -799,3 +815,31 @@ class TestVerdictIdiomClosure:
             "bind graded keys to a name with an explicit unknown "
             "arm:\n" + "\n".join(violations)
         )
+
+
+@pytest.mark.parametrize("source,expected_hits", [
+    ("def clean():\n    return 42\n", 0),
+    ("def direct(record):\n    if record.get('is_exploitable'):\n        pass\n", 1),
+    ("def annotated():\n    value: bool\n", 0),
+])
+def test_no_candidate_assignment_skips_binding_walks(monkeypatch, tmp_path, source, expected_hits):
+    def unexpected_scope_walk(*args):
+        pytest.fail("module without candidate assignments reached name-binding analysis")
+
+    monkeypatch.setitem(globals(), "_scope_own_nodes", unexpected_scope_walk)
+    path = tmp_path / "fixture.py"
+    path.write_text(source)
+    assert len(_violations_in(path)) == expected_hits
+
+
+@pytest.mark.parametrize("binding", [
+    "value = record.get('is_exploitable')",
+    "value: bool = record['is_' 'exploitable']",
+    "value = record.get('exploitable')",
+])
+def test_candidate_assignment_keeps_name_bound_checks(tmp_path, binding):
+    path = tmp_path / "fixture.py"
+    path.write_text(f"def run(record):\n    {binding}\n    if value:\n        pass\n")
+    hits = _violations_in(path)
+    assert len(hits) == 1
+    assert "name-bound raw verdict read" in hits[0]
