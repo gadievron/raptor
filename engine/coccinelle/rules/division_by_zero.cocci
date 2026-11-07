@@ -1,87 +1,355 @@
-// division_by_zero.cocci — Detect division or modulo by a function
-// parameter that the SAME function later tests against zero.
+// division_by_zero.cocci — Review integer parameter use before a zero test.
+// A later test is a contradiction hint, not proof that the earlier value
+// can be zero under the caller's contract. Bare divisions stay outside
+// this rule. Division and modulo candidates require independent review.
 //
-// Catches the use-then-check contradiction: x / y followed (with no
-// intervening reassignment of y) by `if (y == 0)` / `if (!y)`. The
-// later test proves the author considers zero a reachable value for
-// the parameter, so the earlier unguarded division can fault.
-//
-// A bare unguarded division (no zero test anywhere) is NOT reported:
-// whether the divisor can be zero is a caller-side invariant that a
-// single-function pattern cannot see, and flagging every helper that
-// divides by a parameter buries the real findings. The in-function
-// contradiction is the shape this rule can actually decide.
-//
+// Recognize direct rejecting guards and nonzero branches. Logging alone
+// does not protect a use. Writes or address escapes end the relationship
+// between an operation and a later test; writes before an operation can
+// invalidate earlier protection. Aliases and complex guards need review.
 // CWE-369: Divide By Zero
-// Guards: any relational/equality check on the divisor before use.
-// @role: verification
+// @role: detection
 
-@div_then_check@
+@use_then_zero_check exists@
 typedef uint32_t, uint64_t, int32_t, int64_t;
 identifier FUNC, PARAM;
 expression X;
 statement S;
+assignment operator op;
 position p;
 @@
-
-FUNC(..., \(int\|unsigned\|unsigned int\|long\|unsigned long\|size_t\|ssize_t\|uint32_t\|uint64_t\|int32_t\|int64_t\) PARAM, ...)
+FUNC(..., \(char\|signed char\|unsigned char\|short\|unsigned short\|int\|unsigned\|unsigned int\|long\|unsigned long\|long long\|unsigned long long\|size_t\|ssize_t\|uint32_t\|uint64_t\|int32_t\|int64_t\) PARAM, ...)
 {
-  ... when != PARAM != 0
-      when != PARAM > 0
-      when != PARAM >= 1
-      when != !PARAM
-      when != PARAM == 0
-      when != PARAM < 1
-*X / PARAM@p
-  ... when != PARAM = ...
-  if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) S
-  ...
+... when any
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+    when != PARAM op ...
+    when != PARAM++
+    when != ++PARAM
+    when != PARAM--
+    when != --PARAM
+    when != &PARAM
+if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) S
+... when any
 }
 
-@script:python div_report depends on div_then_check@
-p << div_then_check.p;
+// A write containing the operation changes the value seen by the later
+// test. In particular, count /= count does not preserve the divisor.
+@divisor_rebound_by_use exists@
+identifier use_then_zero_check.FUNC, use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+assignment operator op;
+@@
+FUNC(...) {
+... when any
+(
+PARAM op <+... \(X / PARAM@p\|X % PARAM@p\) ...+>;
+|
+PARAM /= PARAM@p;
+|
+PARAM %= PARAM@p;
+)
+... when any
+}
+
+@divisor_one exists@
+identifier use_then_zero_check.PARAM;
+position reset;
+identifier use_then_zero_check.FUNC;
+@@
+FUNC(...) {
+... when any
+PARAM =@reset 1;
+... when any
+}
+
+@divisor_entry_unprotected exists@
+identifier use_then_zero_check.FUNC;
+identifier use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+@@
+FUNC(...) {
+... when any
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) return ...;
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) PARAM = 1;
+    when != PARAM = 1
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+
+@divisor_changed_before_use exists@
+identifier use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+assignment operator op;
+expression FN, ALIAS;
+type T;
+identifier NAME;
+position changed != divisor_one.reset;
+identifier use_then_zero_check.FUNC;
+@@
+FUNC(...) {
+... when any
+(
+PARAM op@changed ...;
+|
+PARAM++;
+|
+  ++PARAM;
+|
+PARAM--;
+|
+  --PARAM;
+|
+FN(..., &PARAM, ...);
+|
+ALIAS = &PARAM;
+|
+T NAME = &PARAM;
+)... when any
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) return ...;
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) PARAM = 1;
+    when != PARAM = 1
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+
+@divisor_nonzero_branch exists@
+identifier use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+statement S;
+identifier use_then_zero_check.FUNC;
+@@
+FUNC(...) {
+... when any
+(
+if (\(PARAM\|PARAM != 0\|PARAM > 0\|PARAM >= 1\)) {
+... when any
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+|
+if (\(PARAM\|PARAM != 0\|PARAM > 0\|PARAM >= 1\)) {
+... when any
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+} else S
+|
+if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) S else {
+... when any
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+)
+... when any
+}
+
+@divisor_changed_in_nonzero_branch exists@
+identifier use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+assignment operator op;
+expression FN, ALIAS;
+type T;
+identifier NAME;
+position changed != divisor_one.reset;
+statement S;
+identifier use_then_zero_check.FUNC;
+@@
+FUNC(...) {
+... when any
+(
+if (\(PARAM\|PARAM != 0\|PARAM > 0\|PARAM >= 1\)) {
+... when any
+(
+PARAM op@changed ...;
+|
+PARAM++;
+|
+  ++PARAM;
+|
+PARAM--;
+|
+  --PARAM;
+|
+FN(..., &PARAM, ...);
+|
+ALIAS = &PARAM;
+|
+T NAME = &PARAM;
+)... when any
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) return ...;
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) PARAM = 1;
+    when != PARAM = 1
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+|
+if (\(PARAM\|PARAM != 0\|PARAM > 0\|PARAM >= 1\)) {
+... when any
+(
+PARAM op@changed ...;
+|
+PARAM++;
+|
+  ++PARAM;
+|
+PARAM--;
+|
+  --PARAM;
+|
+FN(..., &PARAM, ...);
+|
+ALIAS = &PARAM;
+|
+T NAME = &PARAM;
+)... when any
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) return ...;
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) PARAM = 1;
+    when != PARAM = 1
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+} else S
+|
+if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) S else {
+... when any
+(
+PARAM op@changed ...;
+|
+PARAM++;
+|
+  ++PARAM;
+|
+PARAM--;
+|
+  --PARAM;
+|
+FN(..., &PARAM, ...);
+|
+ALIAS = &PARAM;
+|
+T NAME = &PARAM;
+)... when any
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) return ...;
+    when != if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) PARAM = 1;
+    when != PARAM = 1
+(
+X / PARAM@p
+|
+X % PARAM@p
+|
+X /= PARAM@p
+|
+X %= PARAM@p
+)
+... when any
+}
+)
+... when any
+}
+
+@divisor_modulo@
+identifier use_then_zero_check.PARAM;
+position use_then_zero_check.p;
+expression X;
+@@
+(
+X % PARAM@p
+|
+X %= PARAM@p
+)
+
+@script:python divisor_div_report depends on use_then_zero_check && !divisor_rebound_by_use && (divisor_entry_unprotected || divisor_changed_before_use) && (!divisor_nonzero_branch || divisor_changed_in_nonzero_branch) && !divisor_modulo@
+p << use_then_zero_check.p;
+PARAM << use_then_zero_check.PARAM;
 @@
 import json
 msg = {
-  "rule":  "division_by_zero_param",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message":   "Parameter is tested against zero only AFTER being used as a divisor — the unguarded division can fault (CWE-369)"
+    "rule": "division_by_zero_param",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: parameter '%s' is used as a divisor before a later zero test without recognized uninterrupted protection; review its range and caller contract (CWE-369)" % PARAM,
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@mod_then_check@
-typedef uint32_t, uint64_t, int32_t, int64_t;
-identifier FUNC, PARAM;
-expression X;
-statement S;
-position p;
-@@
-
-FUNC(..., \(int\|unsigned\|unsigned int\|long\|unsigned long\|size_t\|ssize_t\|uint32_t\|uint64_t\|int32_t\|int64_t\) PARAM, ...)
-{
-  ... when != PARAM != 0
-      when != PARAM > 0
-      when != PARAM >= 1
-      when != !PARAM
-      when != PARAM == 0
-      when != PARAM < 1
-*X % PARAM@p
-  ... when != PARAM = ...
-  if (\(PARAM == 0\|!PARAM\|PARAM < 1\|PARAM <= 0\)) S
-  ...
-}
-
-@script:python mod_report depends on mod_then_check@
-p << mod_then_check.p;
+@script:python divisor_mod_report depends on use_then_zero_check && !divisor_rebound_by_use && (divisor_entry_unprotected || divisor_changed_before_use) && (!divisor_nonzero_branch || divisor_changed_in_nonzero_branch) && divisor_modulo@
+p << use_then_zero_check.p;
+PARAM << use_then_zero_check.PARAM;
 @@
 import json
 msg = {
-  "rule":  "modulo_by_zero_param",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message":   "Parameter is tested against zero only AFTER being used as a modulo divisor — the unguarded operation can fault (CWE-369)"
+    "rule": "modulo_by_zero_param",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "message": "Candidate: parameter '%s' is used as a divisor before a later zero test without recognized uninterrupted protection; review its range and caller contract (CWE-369)" % PARAM,
 }
 print("COCCIRESULT:" + json.dumps(msg))
