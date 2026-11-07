@@ -13,6 +13,11 @@
 // Known limitations:
 // - Division-based guards (SIZE_MAX / b) are only matched in a few
 //   common forms; unusual guard idioms may not be recognised.
+// - Guards must reject overflow with a direct return, on every path to
+//   the allocation, before recognized operand writes or address escapes.
+//   Ignored check results and log-only branches do not protect a product.
+//   Alias writes, caller ranges, operand types and complex cleanup/control
+//   flow still require review; this rule is not a whole-program proof.
 // - Products with a sizeof() factor are excluded wholesale:
 //   `malloc(n * sizeof(T))` is the idiomatic C array allocation, and
 //   whether n is attacker-controlled or already range-limited by the
@@ -51,24 +56,35 @@ position p;
   krealloc@p(..., E1 * E2, ...)
 )
 
-// --- Exclude when preceded by a checked-multiply intrinsic ---
+// A check is protective only when overflow exits before allocation.
+// Require the same operands to remain unchanged along the path.
+// https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html
 
-@guarded exists@
+@alloc_check_overwrites_operand@
+expression alloc_mul.E1, alloc_mul.E2;
+position overwritten;
+@@
+\(check_mul_overflow\|__builtin_mul_overflow\)(..., &\(E1\|E2\))@overwritten
+
+// Returning an allocation from the overflow arm is not a rejecting exit.
+@alloc_returning_target@
+position alloc_mul.p;
+position branch;
+@@
+if@branch (...) return <+... \(malloc@p(...)\|kmalloc@p(...)\|kzalloc@p(...)\|vmalloc@p(...)\|realloc@p(...)\|krealloc@p(...)\) ...+>;
+
+@alloc_unguarded_entry exists@
 expression alloc_mul.E1, alloc_mul.E2;
 expression res;
 position alloc_mul.p;
+position checked != alloc_check_overwrites_operand.overwritten;
+position barrier != alloc_returning_target.branch;
+identifier FUNC;
 @@
-
-(
-  check_mul_overflow(E1, E2, &res)
-|
-  check_mul_overflow(E2, E1, &res)
-|
-  __builtin_mul_overflow(E1, E2, &res)
-|
-  __builtin_mul_overflow(E2, E1, &res)
-)
-...
+FUNC(...) {
+... when any
+    when != if@barrier (\(\(check_mul_overflow\|__builtin_mul_overflow\)(E1, E2, &res)@checked\|\(check_mul_overflow\|__builtin_mul_overflow\)(E2, E1, &res)@checked\)) return ...;
+    when != if@barrier (\(E1 > SIZE_MAX / E2\|E2 > SIZE_MAX / E1\|E1 != 0 && E2 > SIZE_MAX / E1\|E2 != 0 && E1 > SIZE_MAX / E2\)) return ...;
 (
   malloc@p(...)
 |
@@ -82,25 +98,46 @@ position alloc_mul.p;
 |
   krealloc@p(...)
 )
+... when any
+}
 
-// --- Exclude when preceded by a SIZE_MAX division guard ---
-
-@div_guarded exists@
+@alloc_operands_changed exists@
 expression alloc_mul.E1, alloc_mul.E2;
+expression res;
 position alloc_mul.p;
-statement S;
+position checked != alloc_check_overwrites_operand.overwritten;
+position barrier != alloc_returning_target.branch;
+assignment operator op;
+expression FN;
 @@
-
 (
-  if (E1 > SIZE_MAX / E2) S
+E1 op ...;
 |
-  if (E2 > SIZE_MAX / E1) S
+E2 op ...;
 |
-  if (E1 != 0 && E2 > SIZE_MAX / E1) S
+E1++;
 |
-  if (E2 != 0 && E1 > SIZE_MAX / E2) S
+E2++;
+|
+  ++E1;
+|
+  ++E2;
+|
+E1--;
+|
+E2--;
+|
+  --E1;
+|
+  --E2;
+|
+FN(..., &E1, ...);
+|
+FN(..., &E2, ...);
 )
-...
+... when any
+    when != if@barrier (\(\(check_mul_overflow\|__builtin_mul_overflow\)(E1, E2, &res)@checked\|\(check_mul_overflow\|__builtin_mul_overflow\)(E2, E1, &res)@checked\)) return ...;
+    when != if@barrier (\(E1 > SIZE_MAX / E2\|E2 > SIZE_MAX / E1\|E1 != 0 && E2 > SIZE_MAX / E1\|E2 != 0 && E1 > SIZE_MAX / E2\)) return ...;
 (
   malloc@p(...)
 |
@@ -200,7 +237,7 @@ position alloc_mul.p;
 
 // --- Report unguarded multiplicative allocations ---
 
-@script:python depends on alloc_mul && !guarded && !div_guarded && !const_product && !sizeof_const_product@
+@script:python depends on alloc_mul && (alloc_unguarded_entry || alloc_operands_changed) && !const_product && !sizeof_const_product@
 p << alloc_mul.p;
 E1 << alloc_mul.E1;
 E2 << alloc_mul.E2;
@@ -211,5 +248,5 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "integer_overflow_alloc",
-          "message": "Unchecked multiplication '%s * %s' in allocation — use calloc() or validate product before alloc" % (E1, E2)}
+          "message": "Candidate: unchecked multiplication '%s * %s' in allocation — use calloc() or validate product before alloc" % (E1, E2)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
