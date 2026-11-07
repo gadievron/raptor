@@ -24,6 +24,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_bindings import mock_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
@@ -164,7 +166,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -195,7 +197,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -228,7 +230,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -277,7 +279,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -314,7 +316,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -349,7 +351,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )
@@ -384,7 +386,7 @@ class TestHappyEyeballs:
             ]
 
             async def driver():
-                with patch("asyncio.open_connection", fake_open):
+                with mock_module_attribute(proxy_mod, "asyncio", "open_connection", fake_open):
                     return await proxy._happy_eyeballs_connect(
                         addrinfo, 443,
                     )

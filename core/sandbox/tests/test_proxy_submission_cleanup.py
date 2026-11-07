@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import proxy as proxy_mod
 
 
@@ -42,7 +44,7 @@ def test_loop_shutdown_race_closes_actual_coroutine(tmp_path, monkeypatch, opera
         submitted.append(coroutine)
         raise failure
 
-    monkeypatch.setattr(proxy_mod.asyncio, "run_coroutine_threadsafe", reject)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "run_coroutine_threadsafe", reject)
     if operation == "bind_unix":
         with pytest.raises(RuntimeError) as raised:
             proxy.bind_unix(path)
@@ -100,10 +102,7 @@ def test_failed_unix_bind_keeps_existing_lane(tmp_path, monkeypatch):
     existing = object()
     proxy._unix_lanes[path] = existing
     proxy._unix_servers[path] = Mock()
-    monkeypatch.setattr(
-        proxy_mod.asyncio, "run_coroutine_threadsafe",
-        Mock(side_effect=RuntimeError("loop closed")),
-    )
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "run_coroutine_threadsafe", Mock(side_effect=RuntimeError("loop closed")))
     with pytest.raises(RuntimeError):
         proxy.bind_unix(path)
     assert proxy._unix_lanes[path] is existing
@@ -128,8 +127,8 @@ def test_unix_lane_is_published_only_after_successful_bind(tmp_path, monkeypatch
         future.result.side_effect = result
         return future
 
-    monkeypatch.setattr(proxy_mod.asyncio, "run_coroutine_threadsafe", submit)
-    monkeypatch.setattr(proxy_mod.asyncio, "start_unix_server", binding)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "run_coroutine_threadsafe", submit)
+    patch_module_attribute(monkeypatch, proxy_mod, "asyncio", "start_unix_server", binding)
     if fails:
         with pytest.raises(OSError, match="bind failed"):
             proxy.bind_unix(path)
