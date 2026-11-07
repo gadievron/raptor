@@ -39,6 +39,10 @@ from cve_env.tools.web_fetch import (
     web_fetch_payload,
 )
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 PUBLIC_ADDRINFO = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 PRIVATE_ADDRINFO = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
 METADATA_ADDRINFO = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))]
@@ -80,7 +84,7 @@ class _FakeClient:
 def _fetch(fake, url="https://example.com/x", addrinfo=PUBLIC_ADDRINFO, **kw):
     with (
         patch.object(wf, "_client", lambda: fake),
-        patch.object(wf.socket, "getaddrinfo", return_value=addrinfo),
+        mock_module_attribute(wf, 'socket', "getaddrinfo", return_value=addrinfo),
     ):
         return web_fetch(url=url, **kw)
 
@@ -152,21 +156,21 @@ def test_ssrf_public_ip_still_works() -> None:
 
 
 def test_resolve_hostname_safe_resolution_failure_blocks() -> None:
-    with patch.object(wf.socket, "getaddrinfo", side_effect=OSError("no dns")):
+    with mock_module_attribute(wf, 'socket', "getaddrinfo", side_effect=OSError("no dns")):
         reason = _resolve_hostname_safe("cannot-resolve.example")
     assert reason is not None
     assert "fail closed" in reason
 
 
 def test_resolve_hostname_safe_unicode_error_blocks() -> None:
-    with patch.object(wf.socket, "getaddrinfo",
+    with mock_module_attribute(wf, 'socket', "getaddrinfo",
                       side_effect=UnicodeError("label too long")):
         assert _resolve_hostname_safe("x" * 300) is not None
 
 
 def test_resolve_hostname_safe_empty_sockaddr_skipped() -> None:
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ()), *PUBLIC_ADDRINFO]
-    with patch.object(wf.socket, "getaddrinfo", return_value=infos):
+    with mock_module_attribute(wf, 'socket', "getaddrinfo", return_value=infos):
         assert _resolve_hostname_safe("example.com") is None
 
 
@@ -176,7 +180,7 @@ def test_resolve_hostname_safe_unparseable_ip_fails_closed() -> None:
     transport connect to an address the guard never classified."""
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not-an-ip", 0)),
              *PUBLIC_ADDRINFO]
-    with patch.object(wf.socket, "getaddrinfo", return_value=infos):
+    with mock_module_attribute(wf, 'socket', "getaddrinfo", return_value=infos):
         assert _resolve_hostname_safe("example.com") is not None
 
 
@@ -292,7 +296,7 @@ def test_fetch_post_redirect_to_private_hostname_rejected() -> None:
 
     with (
         patch.object(wf, "_client", lambda: fake),
-        patch.object(wf.socket, "getaddrinfo", side_effect=per_host),
+        mock_module_attribute(wf, 'socket', "getaddrinfo", side_effect=per_host),
     ):
         r = web_fetch(url="https://example.com/x")
     assert r.ok is False
@@ -357,7 +361,7 @@ def test_payload_includes_reason_class_field() -> None:
     fake = _FakeClient([_resp(body=b"x")])
     with (
         patch.object(wf, "_client", lambda: fake),
-        patch.object(wf.socket, "getaddrinfo", return_value=PUBLIC_ADDRINFO),
+        mock_module_attribute(wf, 'socket', "getaddrinfo", return_value=PUBLIC_ADDRINFO),
     ):
         payload = web_fetch_payload(url="https://example.com/x")
     assert set(payload.keys()) == {
@@ -555,7 +559,7 @@ def test_vet_hostname_unparseable_resolved_address_fails_closed() -> None:
     fake_infos = [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not-an-ip", 80)),
     ]
-    with patch.object(wf.socket, "getaddrinfo", return_value=fake_infos):
+    with mock_module_attribute(wf, 'socket', "getaddrinfo", return_value=fake_infos):
         reason, infos = wf._vet_hostname("weird.example.com", 80)
     assert reason is not None and "fail closed" in reason
     assert infos == []

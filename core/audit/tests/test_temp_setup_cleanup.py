@@ -6,11 +6,14 @@ from core.audit import orchestrator, hypothesis_mapping, sweep
 import tempfile
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_decompilation_write_failure_removes_directory(tmp_path, monkeypatch, error):
     allocated = tmp_path / "decomp"
     allocated.mkdir()
-    monkeypatch.setattr(orchestrator.tempfile, "mkdtemp", lambda **kw: str(allocated))
+    patch_module_attribute(monkeypatch, orchestrator, 'tempfile', "mkdtemp", lambda **kw: str(allocated))
 
     def fail(*args, **kw):
         raise error

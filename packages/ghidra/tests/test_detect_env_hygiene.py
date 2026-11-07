@@ -9,6 +9,9 @@ import subprocess
 from types import SimpleNamespace
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_version_probe_uses_sanitised_env(monkeypatch):
     from packages.ghidra import detect
 
@@ -20,8 +23,8 @@ def test_version_probe_uses_sanitised_env(monkeypatch):
                                stderr="Ghidra 11.1.2 banner\n")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        detect.shutil, "which", lambda _n: "/opt/ghidra/analyzeHeadless",
+    patch_module_attribute(monkeypatch,
+        detect, 'shutil', "which", lambda _n: "/opt/ghidra/analyzeHeadless",
     )
     monkeypatch.setenv("JAVA_TOOL_OPTIONS", "-javaagent:/evil/a.jar")
     monkeypatch.setenv("LD_PRELOAD", "/evil/lib.so")

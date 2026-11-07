@@ -78,7 +78,7 @@ def test_stream_closes_owned_descriptor_and_scratch(monkeypatch, mode):
         if mode == 'timeout':
             raise subprocess.TimeoutExpired(command, 5)
         return subprocess.CompletedProcess(command, 1 if mode == 'nonzero' else 0, '', '')
-    monkeypatch.setattr(oracle.tempfile, 'NamedTemporaryFile', temporary)
+    patch_module_attribute(monkeypatch, oracle, 'tempfile', 'NamedTemporaryFile', temporary)
     monkeypatch.setattr(sandbox, 'run', run)
     iterator = oracle._stream(['objdump', 'owned'], timeout=5)
     if mode == 'early-close':

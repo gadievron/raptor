@@ -13,6 +13,10 @@ import zipfile
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("prune_windows_helpers", ROOT / ".devcontainer/prune-windows-helpers.py")
 PRUNE = importlib.util.module_from_spec(SPEC)
@@ -253,7 +257,7 @@ def test_corrupt_original_virtualenv_seed_is_not_relabelled(tmp_path):
 def test_native_windows_cleanup_is_refused_before_any_mutation(tmp_path, monkeypatch):
     path = put(tmp_path, "usr/local/lib/python3.14/site-packages/distlib/t32.exe")
     with monkeypatch.context() as context:
-        context.setattr(PRUNE.sys, "platform", "win32")
+        context.setattr(PRUNE.sys, 'platform', 'win32')
         with pytest.raises(ValueError, match="Linux images only"):
             PRUNE.prune(tmp_path)
     assert path.read_bytes() == pe()
@@ -269,7 +273,7 @@ def test_wheel_inspection_scratch_is_contained_and_cleaned(tmp_path, monkeypatch
         assert kwargs.get("dir") == path.parent
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(PRUNE.tempfile, "TemporaryDirectory", contained)
+    patch_module_attribute(monkeypatch, PRUNE, 'tempfile', "TemporaryDirectory", contained)
     PRUNE.wheel_helpers(path)
     assert parents
     assert not list(path.parent.glob("wheel-pe-*"))

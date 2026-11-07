@@ -17,6 +17,10 @@ from unittest.mock import patch
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -43,7 +47,7 @@ class TestScratchLifetime:
             made.append(path)
             return path
 
-        monkeypatch.setattr(mod.tempfile, "mkdtemp", recording_mkdtemp)
+        patch_module_attribute(monkeypatch, mod, 'tempfile', "mkdtemp", recording_mkdtemp)
 
         def interrupt(ctx, args, selected):
             raise KeyboardInterrupt

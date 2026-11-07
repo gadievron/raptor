@@ -4,12 +4,15 @@ import pytest
 from packages.ghidra import server
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_copy_failure_cleans_server_and_allows_retry(tmp_path, monkeypatch, error):
     monkeypatch.setattr(server, "pyghidra_available", lambda: True)
     work = tmp_path / "work"
     work.mkdir()
-    monkeypatch.setattr(server.tempfile, "mkdtemp", lambda **kw: str(work))
+    patch_module_attribute(monkeypatch, server, 'tempfile', "mkdtemp", lambda **kw: str(work))
 
     def copy(source, destination):
         (destination / "partial.rep").write_bytes(b"partial database")

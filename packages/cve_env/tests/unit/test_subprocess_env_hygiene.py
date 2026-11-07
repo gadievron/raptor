@@ -52,6 +52,10 @@ import pytest
 
 from core.testing.module_bindings import patch_module_attribute
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 _LEAK_SENTINEL = "http://leak-detect.invalid:9999"
 
 
@@ -138,7 +142,7 @@ def test_docker_run_strips_dangerous_env(proxy_set: str) -> None:
     # REC-2 env-stripping holds for every site via that single-point default.
     with (
         patch.object(cc, "run_cli", side_effect=mock_rwt),
-        patch.object(cc.time, "sleep"),
+        mock_module_attribute(cc, 'time', "sleep"),
     ):
         dr.docker_run(
             image="busybox:latest",

@@ -114,7 +114,7 @@ def test_direct_worker_refuses_before_target_or_output_work(backends, monkeypatc
     monkeypatch.setattr(sys, 'argv', ['scanner.py', '--repo', '/unused', '--sandbox=strict'])
     monkeypatch.setattr(scanner, 'clone_repository',
                         lambda *a, **kw: pytest.fail('target clone started'))
-    monkeypatch.setattr(scanner.tempfile, 'mkdtemp',
+    patch_module_attribute(monkeypatch, scanner, 'tempfile', 'mkdtemp',
                         lambda *a, **kw: pytest.fail('scan scratch allocated'))
     monkeypatch.setattr(scanner, 'maybe_start_orphan_watchdog',
                         lambda *a, **kw: pytest.fail('worker work started'))

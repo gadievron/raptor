@@ -7,6 +7,9 @@ import pytest
 from core.container import compose, export
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("stage", ["keepalive", "copy", "prune", "rewrite"])
 @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
 def test_compose_setup_failure_cleans_tree(tmp_path, monkeypatch, stage, error):
@@ -18,7 +21,7 @@ def test_compose_setup_failure_cleans_tree(tmp_path, monkeypatch, stage, error):
     staging.mkdir()
     (staging / "partial").write_text("partial copied data")
     live = set()
-    monkeypatch.setattr(compose.tempfile, "mkdtemp", lambda **kw: str(staging))
+    patch_module_attribute(monkeypatch, compose, 'tempfile', "mkdtemp", lambda **kw: str(staging))
 
     def register(path):
         live.add(path)
@@ -48,7 +51,7 @@ def test_compose_setup_failure_cleans_tree(tmp_path, monkeypatch, stage, error):
 def test_resolver_home_mkdir_failure_cleans_tree(tmp_path, monkeypatch):
     scratch = tmp_path / "resolver"
     scratch.mkdir()
-    monkeypatch.setattr(compose.tempfile, "mkdtemp", lambda **kw: str(scratch))
+    patch_module_attribute(monkeypatch, compose, 'tempfile', "mkdtemp", lambda **kw: str(scratch))
     original = Path.mkdir
 
     def mkdir(path, *args, **kw):
@@ -88,3 +91,13 @@ def test_export_tar_removed_even_when_container_removal_raises(tmp_path, monkeyp
     with pytest.raises(OSError, match="docker unavailable"):
         export.export_rootfs("image", tmp_path / "rootfs")
     assert tars and all(not path.exists() for path in tars)
+
+
+@pytest.fixture(autouse=True)
+def _forward_host_interface_mock(monkeypatch):
+    """Observe both direct allocation and delegated staging without global mocks."""
+    import core.container.compose as primary
+    import core.run.scratch as delegated
+
+    patch_module_attribute(monkeypatch, delegated, "tempfile", "mkdtemp",
+                           lambda *args, **kwargs: primary.tempfile.mkdtemp(*args, **kwargs))

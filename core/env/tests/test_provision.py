@@ -206,7 +206,7 @@ def test_launch_failure_removes_labeled_artifacts_and_workdir(
 
     owned = tmp_path / "owned-work"
     owned.mkdir()
-    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp",
                         lambda prefix="": str(owned))
 
     removed: list[tuple[str, str, str]] = []
@@ -260,7 +260,7 @@ def test_caller_workdir_survives_launch_failure(tmp_path, monkeypatch) -> None:
 def test_validation_refusals_leave_no_workdir(monkeypatch) -> None:
     """Refusals that precede any artifact creation never call mkdtemp."""
     calls: list[str] = []
-    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp",
                         lambda prefix="": calls.append(prefix) or "/nonexistent")
     out = pv.provision(EnvironmentSpec(name="x", source=SourceSpec(kind="image")))
     assert not out.ok and out.reason == "unsupported_source"
@@ -270,7 +270,7 @@ def test_validation_refusals_leave_no_workdir(monkeypatch) -> None:
 def test_teardown_removes_owned_workdir(tmp_path, monkeypatch) -> None:
     owned = tmp_path / "owned-work"
     owned.mkdir()
-    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp",
                         lambda prefix="": str(owned))
     with patch("core.container.containers.run_cli", side_effect=_docker_ok), \
          patch("core.container.lifecycle.run_cli", side_effect=_docker_ok):
@@ -298,7 +298,7 @@ def test_owned_workdir_keepalive_live_then_released_on_fail(
     monkeypatch.setattr(scratch_mod, "_keepalive_paths", set())
     owned = tmp_path / "owned-work"
     owned.mkdir()
-    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp",
                         lambda prefix="": str(owned))
     monkeypatch.setattr(pv, "remove_labeled_containers", lambda *a: 0)
     monkeypatch.setattr(pv, "remove_labeled_networks", lambda *a: 0)
@@ -392,7 +392,7 @@ def test_verify_plan_exception_tears_down_and_reraises(
 
     owned = tmp_path / "owned-work"
     owned.mkdir()
-    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+    patch_module_attribute(monkeypatch, pv, 'tempfile', "mkdtemp",
                         lambda prefix="": str(owned))
 
     removed: list[str] = []
@@ -421,3 +421,26 @@ def test_verify_plan_exception_tears_down_and_reraises(
         pv.provision(spec)  # no workdir → provisioner-owned
     assert set(removed) == {"containers", "networks", "images"}
     assert not owned.exists()  # keepalive-pinned work dir released
+
+
+@pytest.fixture(autouse=True)
+def _owned_container_cleanup(monkeypatch):
+    """Keep failure and post-context teardown away from the operator's daemon."""
+    from core.container import containers, lifecycle
+    import core.container.exec as container_exec
+
+    def cleanup_only(cmd, **kwargs):
+        allowed = cmd[:2] in (["docker", "ps"], ["docker", "images"],
+                             ["docker", "stop"], ["docker", "rm"], ["docker", "rmi"])
+        if cmd[:2] == ["docker", "network"]:
+            allowed = len(cmd) > 2 and cmd[2] in ("ls", "rm", "inspect")
+        assert allowed, f"unexpected unmocked container operation: {cmd!r}"
+        return _docker_ok(cmd, **kwargs)
+
+    def owned_label(container_id, key, value):
+        assert container_id == _CID and key == pv.OWNER_LABEL and value
+        return True
+
+    monkeypatch.setattr(container_exec, "container_has_label", owned_label)
+    monkeypatch.setattr(containers, "run_cli", cleanup_only)
+    monkeypatch.setattr(lifecycle, "run_cli", cleanup_only)

@@ -47,6 +47,10 @@ from core.testing.pipes import fork_with_pipes
 
 from packages.joern import netns_forwarder as nf
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "netns_forwarder.py"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -135,8 +139,8 @@ class TestPidnsRefusalFailsClosed:
 
         monkeypatch.setattr(nf, "enter_private_netns", _refuse)
         spawned: list[list[str]] = []
-        monkeypatch.setattr(
-            nf.subprocess, "Popen",
+        patch_module_attribute(monkeypatch,
+            nf, 'subprocess', "Popen",
             lambda cmd: spawned.append(list(cmd)),
         )
         sock = tmp_path / "fwd.sock"

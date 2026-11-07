@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from types import ModuleType
 
 
-def patch_module_attribute(monkeypatch, consumer, binding, name, value):
+def patch_module_attribute(monkeypatch, consumer, binding, name, value, *, raising=True):
     """Patch an attribute through a fresh consumer-local module namespace.
 
     Shallow copies retain real constants, exception classes and unmodified
@@ -16,7 +16,7 @@ def patch_module_attribute(monkeypatch, consumer, binding, name, value):
         raise TypeError("consumer and borrowed binding must be modules")
     private = ModuleType(original.__name__)
     vars(private).update(vars(original))
-    monkeypatch.setattr(private, name, value)
+    monkeypatch.setattr(private, name, value, raising=raising)
     # setitem registers the borrowed namespace entry before publication and
     # preserves raw absence rather than freezing a lazy __getattr__ result.
     monkeypatch.setitem(vars(consumer), binding, private)

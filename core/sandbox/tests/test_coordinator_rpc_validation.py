@@ -18,6 +18,9 @@ import json
 from core.sandbox import netns_coordinator as _nc
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_run_child_malformed_spec_sets_structured_error_not_raise():
     for field, bad in (
         ("writable_paths", "/tmp/not-a-list"),
@@ -125,8 +128,8 @@ def _drive_main_hermetic(request, monkeypatch):
             join_timeouts.append(timeout)
 
     monkeypatch.setattr(_nc, "_setup_namespaces", lambda: "test")
-    monkeypatch.setattr(_nc.sys, "stdin", io.StringIO(json.dumps(request)))
-    monkeypatch.setattr(_nc.threading, "Thread", FakeThread)
+    patch_module_attribute(monkeypatch, _nc, 'sys', "stdin", io.StringIO(json.dumps(request)))
+    patch_module_attribute(monkeypatch, _nc, 'threading', "Thread", FakeThread)
     monkeypatch.setattr(_nc, "_run_child", lambda *a, **k: None)
     monkeypatch.setattr(_nc, "_emit_response", responses.append)
     monkeypatch.setattr(

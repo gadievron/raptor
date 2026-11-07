@@ -15,6 +15,9 @@ from core.sandbox import context
 from core.sandbox.errors import SandboxSetupError
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def fallback(monkeypatch):
     from core.sandbox import _spawn, probes
@@ -34,8 +37,8 @@ def fallback(monkeypatch):
         return None
 
     monkeypatch.setattr(context, "_make_preexec_fn", build)
-    monkeypatch.setattr(
-        context.subprocess, "run",
+    patch_module_attribute(monkeypatch,
+        context, 'subprocess', "run",
         lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""),
     )
     return built

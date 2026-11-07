@@ -7,6 +7,10 @@ from typing import ClassVar
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
 
 import core.audit.sweep as sweep_mod
@@ -1493,6 +1497,8 @@ class TestMechanicalCheckToSemgrep:
 
 
 class TestPromoteCleanRefuted:
+
+
     """Tests for _promote_clean_refuted — SMT-only promotion of clean
     outcomes where the LLM generated then refuted an arithmetic hypothesis."""
 
@@ -2208,8 +2214,8 @@ class TestRunSmtSweepVacuityPolicy:
             stdout = payload
             stderr = ""
 
-        monkeypatch.setattr(
-            sweep_mod.subprocess, "run", lambda *a, **kw: _Proc(),
+        patch_module_attribute(monkeypatch,
+            sweep_mod, 'subprocess', "run", lambda *a, **kw: _Proc(),
         )
 
     def test_sat_without_guards_is_inconclusive(self, monkeypatch):
@@ -2820,3 +2826,24 @@ def test_direct_cache_ingest_rejects_conflicting_candidate_identity():
     cache = SarifCache()
     assert cache.ingest("a.c", {"ruleId": "other", "rule_id": "-Wstrict-aliasing"}) is None
     assert not cache.lookup("a.c")
+
+
+@pytest.fixture(autouse=True)
+def _owned_codeql_pack_discovery():
+    """Sweep unit tests own pack metadata and never inspect installed tools."""
+    from contextlib import ExitStack
+
+    from core.audit import codeql_query_resolver as resolver, orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    with pytest.MonkeyPatch.context() as patch, ExitStack() as state:
+        state.enter_context(isolated_module_state(
+            resolver, {"_PACK_INDEX_CACHE": {}, "_PACK_LOCKS": {}},
+            lock=resolver._CACHE_LOCK,
+        ))
+        state.enter_context(isolated_module_state(
+            orchestrator, {"_CODEQL_UNSUPPORTED_IDS_LOGGED": set()},
+            lock=orchestrator._CODEQL_UNSUPPORTED_IDS_LOCK,
+        ))
+        patch.setattr(resolver, "_pack_roots", lambda pack: [])
+        yield

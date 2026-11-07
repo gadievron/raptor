@@ -26,6 +26,10 @@ import pytest
 from core.sandbox import _landlock_audit as mod
 from core.testing.wallclock import check_wall_deadline
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="Landlock audit path is Linux-only",
 )
@@ -45,7 +49,7 @@ def test_wedged_tracer_is_killed_not_awaited(tmp_path, monkeypatch):
     # Short ready deadline for test speed — the pin is the kill-first
     # MECHANISM at the deadline, not the production budget.
     monkeypatch.setattr(mod, "_TRACER_READY_TIMEOUT_S", 0.5)
-    monkeypatch.setattr(mod.sys, "executable", str(wedge))
+    patch_module_attribute(monkeypatch, mod, 'sys', "executable", str(wedge))
 
     t0 = time.monotonic()
     with pytest.raises(RuntimeError, match="did not signal ready"):

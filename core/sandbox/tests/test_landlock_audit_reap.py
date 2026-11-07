@@ -19,8 +19,8 @@ PID = 1 << 30
 
 @pytest.fixture
 def pid_fallback(monkeypatch):
-    monkeypatch.setattr(
-        audit.os, "pidfd_open",
+    patch_module_attribute(monkeypatch,
+        audit, 'os', "pidfd_open",
         Mock(side_effect=OSError(errno.ENOSYS, "no pidfd")), raising=False,
     )
 
@@ -28,7 +28,7 @@ def pid_fallback(monkeypatch):
 @pytest.mark.parametrize("pid", [-1, 0])
 def test_invalid_pid_never_signals(pid, monkeypatch):
     kill = Mock(side_effect=AssertionError("must not signal"))
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(pid)
     kill.assert_not_called()
 
@@ -44,16 +44,16 @@ def test_reaped_or_lost_child_is_not_signaled(pid_fallback, monkeypatch, outcome
     else:
         wait.return_value = outcome
     kill = Mock()
-    monkeypatch.setattr(audit.os, "waitpid", wait)
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(PID)
     kill.assert_not_called()
 
 
 def test_signal_race_still_collects_terminal_status(pid_fallback, monkeypatch):
     wait = Mock(side_effect=[(0, 0), (PID, 0)])
-    monkeypatch.setattr(audit.os, "waitpid", wait)
-    monkeypatch.setattr(audit.os, "kill", Mock(side_effect=ProcessLookupError()))
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", Mock(side_effect=ProcessLookupError()))
     audit._kill_and_reap(PID)
     assert wait.call_count == 2
     assert all(call.args[1] == os.WNOHANG for call in wait.call_args_list)
@@ -62,8 +62,8 @@ def test_signal_race_still_collects_terminal_status(pid_fallback, monkeypatch):
 def test_interrupted_ownership_check_retries_before_signaling(pid_fallback, monkeypatch):
     wait = Mock(side_effect=[InterruptedError(), (0, 0), (PID, 0)])
     kill = Mock()
-    monkeypatch.setattr(audit.os, "waitpid", wait)
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(PID)
     kill.assert_called_once_with(PID, signal.SIGTERM)
 
@@ -74,8 +74,8 @@ def test_unreapable_child_stops_after_both_budgets(pid_fallback, monkeypatch, ca
     kill = Mock()
     patch_module_attribute(monkeypatch, audit, "time", "monotonic", lambda: next(clock))
     patch_module_attribute(monkeypatch, audit, "time", "sleep", lambda delay: None)
-    monkeypatch.setattr(audit.os, "waitpid", wait)
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(PID, timeout_s=0.02)
     assert [call.args[1] for call in kill.call_args_list] == [
         signal.SIGTERM, signal.SIGKILL,
@@ -95,13 +95,13 @@ def test_pidfd_is_used_and_closed(monkeypatch, cancel):
         closed.append(fd)
         real_close(fd)
 
-    monkeypatch.setattr(audit.os, "pidfd_open", lambda pid: read_fd, raising=False)
-    monkeypatch.setattr(audit.signal, "pidfd_send_signal", send, raising=False)
-    monkeypatch.setattr(
-        audit.os, "waitpid",
+    patch_module_attribute(monkeypatch, audit, 'os', "pidfd_open", lambda pid: read_fd, raising=False)
+    patch_module_attribute(monkeypatch, audit, 'signal', "pidfd_send_signal", send, raising=False)
+    patch_module_attribute(monkeypatch,
+        audit, 'os', "waitpid",
         Mock(side_effect=KeyboardInterrupt() if cancel else [(0, 0), (PID, 0)]),
     )
-    monkeypatch.setattr(audit.os, "kill", Mock(side_effect=AssertionError("use pinned handle")))
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", Mock(side_effect=AssertionError("use pinned handle")))
     monkeypatch.setattr(audit, "_close_safely", close)
     try:
         if cancel:
@@ -141,15 +141,14 @@ def test_real_child_ignoring_term_is_killed_and_reaped():
         proc.stdout.close()
 
 
-
 def test_repeated_interruptions_are_bounded_without_signaling(
     pid_fallback, monkeypatch, caplog,
 ):
     clock = iter(i / 100 for i in range(100))
     kill = Mock()
     patch_module_attribute(monkeypatch, audit, "time", "monotonic", lambda: next(clock))
-    monkeypatch.setattr(audit.os, "waitpid", Mock(side_effect=InterruptedError()))
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", Mock(side_effect=InterruptedError()))
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(PID, timeout_s=0.02)
     kill.assert_not_called()
     assert "could not verify child" in caplog.text
@@ -158,7 +157,7 @@ def test_repeated_interruptions_are_bounded_without_signaling(
 def test_stopped_child_is_not_mistaken_for_a_terminal_status(pid_fallback, monkeypatch):
     stopped = (signal.SIGSTOP << 8) | 0x7f
     kill = Mock()
-    monkeypatch.setattr(audit.os, "waitpid", Mock(side_effect=[(PID, stopped), (PID, 0)]))
-    monkeypatch.setattr(audit.os, "kill", kill)
+    patch_module_attribute(monkeypatch, audit, 'os', "waitpid", Mock(side_effect=[(PID, stopped), (PID, 0)]))
+    patch_module_attribute(monkeypatch, audit, 'os', "kill", kill)
     audit._kill_and_reap(PID)
     kill.assert_called_once_with(PID, signal.SIGTERM)

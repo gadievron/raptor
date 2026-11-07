@@ -26,7 +26,7 @@ def synthetic_pid_never_opens_a_real_pidfd(monkeypatch):
             raise OSError(errno.ENOSYS, "synthetic test child")
         return real_open(pid)
 
-    monkeypatch.setattr(probes.os, "pidfd_open", open_pidfd, raising=False)
+    patch_module_attribute(monkeypatch, probes, 'os', "pidfd_open", open_pidfd, raising=False)
 
 
 @pytest.fixture
@@ -42,8 +42,8 @@ def clock(monkeypatch):
 @pytest.mark.parametrize("status", [0, 1 << 8, signal.SIGKILL])
 def test_terminal_status_is_collected_without_signalling(monkeypatch, status):
     kills = []
-    monkeypatch.setattr(probes.os, "waitpid", lambda pid, options: (pid, status))
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", lambda pid, options: (pid, status))
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     assert probes._wait_for_probe_child(PID, "test") == status
     assert kills == []
 
@@ -54,8 +54,8 @@ def test_echild_is_unavailable_without_signalling(monkeypatch):
     def reaped(*args):
         raise ChildProcessError(errno.ECHILD, "already reaped")
 
-    monkeypatch.setattr(probes.os, "waitpid", reaped)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", reaped)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     assert probes._wait_for_probe_child(PID, "test") is None
     assert kills == []
 
@@ -70,8 +70,8 @@ def test_timeout_kills_and_reaps_child(monkeypatch, clock):
             return pid, signal.SIGKILL
         return 0, 0
 
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: killed.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: killed.append(args))
     assert probes._wait_for_probe_child(PID, "test") is None
     assert killed == [(PID, signal.SIGKILL)]
     assert reaped == [PID]
@@ -91,8 +91,8 @@ def test_cancellation_cleans_up_and_propagates(monkeypatch):
             return pid, signal.SIGKILL
         return 0, 0
 
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: killed.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: killed.append(args))
     with pytest.raises(KeyboardInterrupt) as raised:
         probes._wait_for_probe_child(PID, "test")
     assert raised.value is failure
@@ -113,8 +113,8 @@ def test_cleanup_rechecks_terminal_status_hidden_by_cancellation(monkeypatch, ow
             raise ChildProcessError(errno.ECHILD, "already reaped")
         return pid, 0
 
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     with pytest.raises(KeyboardInterrupt):
         probes._wait_for_probe_child(PID, "test")
     assert kills == []
@@ -123,8 +123,8 @@ def test_cleanup_rechecks_terminal_status_hidden_by_cancellation(monkeypatch, ow
 
 def test_wait_and_cleanup_have_separate_bounded_budgets(monkeypatch, clock, caplog):
     kills = []
-    monkeypatch.setattr(probes.os, "waitpid", lambda *args: (0, 0))
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", lambda *args: (0, 0))
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     assert probes._wait_for_probe_child(PID, "test") is None
     assert kills == [(PID, signal.SIGKILL)]
     assert clock[0] == pytest.approx(0.06)
@@ -139,7 +139,7 @@ def test_eintr_retries_cannot_extend_probe_deadline(monkeypatch, clock):
         clock[0] += 0.01
         raise InterruptedError()
 
-    monkeypatch.setattr(probes.os, "waitpid", interrupted)
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", interrupted)
     with pytest.raises(TimeoutError):
         probes._poll_probe_child_exit(PID, 0.03)
     assert len(calls) == 3
@@ -152,8 +152,8 @@ def test_cleanup_does_not_signal_when_ownership_cannot_be_verified(monkeypatch, 
         clock[0] += 0.01
         raise InterruptedError()
 
-    monkeypatch.setattr(probes.os, "waitpid", interrupted)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", interrupted)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     probes._cleanup_probe_child(PID, "test")
     assert kills == []
     assert clock[0] == pytest.approx(0.03)
@@ -165,7 +165,7 @@ def test_fork_failure_returns_unavailable(monkeypatch, name):
     def exhausted():
         raise OSError(errno.EAGAIN, "fork unavailable")
 
-    monkeypatch.setattr(probes.os, "fork", exhausted)
+    patch_module_attribute(monkeypatch, probes, 'os', "fork", exhausted)
     monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(mount=lambda *a: -1))
     assert getattr(probes, name)() is False
 
@@ -189,8 +189,8 @@ def test_real_stalled_namespace_probe_is_killed_and_reaped(monkeypatch, name):
         # Never let a test-only wakeup fall through to actual mounts.
         raise OSError(errno.EPERM, "test-only unshare refusal")
 
-    monkeypatch.setattr(probes.os, "fork", fork)
-    monkeypatch.setattr(probes.os, "unshare", stalled_unshare)
+    patch_module_attribute(monkeypatch, probes, 'os', "fork", fork)
+    patch_module_attribute(monkeypatch, probes, 'os', "unshare", stalled_unshare)
     monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(mount=lambda *a: -1))
     monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.1)
     try:
@@ -219,8 +219,8 @@ def test_cleanup_wait_errors_remain_visible(monkeypatch, caplog):
             return 0, 0
         raise OSError(errno.EIO, "injected cleanup failure")
 
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     probes._cleanup_probe_child(PID, "test")
     assert kills == [(PID, signal.SIGKILL)]
     assert "cleanup wait failed" in caplog.text
@@ -238,9 +238,9 @@ def test_pidfd_is_released_and_binds_cleanup_signal(monkeypatch, outcome):
             raise failure
         return pid, signal.SIGKILL
 
-    monkeypatch.setattr(probes.os, "pidfd_open", lambda pid: read_fd)
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.signal, "pidfd_send_signal", lambda fd, sig: signals.append((fd, sig)), raising=False)
+    patch_module_attribute(monkeypatch, probes, 'os', "pidfd_open", lambda pid: read_fd)
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'signal', "pidfd_send_signal", lambda fd, sig: signals.append((fd, sig)), raising=False)
     try:
         if outcome == "cancel":
             with pytest.raises(KeyboardInterrupt) as raised:
@@ -274,10 +274,10 @@ def test_missing_pidfd_signal_api_uses_verified_pid_fallback(monkeypatch):
     def unusable_pidfd(*args):
         raise AssertionError("opened pidfd without a signal API")
 
-    monkeypatch.delattr(probes.signal, "pidfd_send_signal", raising=False)
-    monkeypatch.setattr(probes.os, "pidfd_open", unusable_pidfd)
-    monkeypatch.setattr(probes.os, "waitpid", wait)
-    monkeypatch.setattr(probes.os, "kill", lambda *args: kills.append(args))
+    monkeypatch.delattr(patch_module_attribute(monkeypatch, probes, 'signal', "__name__", probes.signal.__name__), "pidfd_send_signal", raising=False)
+    patch_module_attribute(monkeypatch, probes, 'os', "pidfd_open", unusable_pidfd)
+    patch_module_attribute(monkeypatch, probes, 'os', "waitpid", wait)
+    patch_module_attribute(monkeypatch, probes, 'os', "kill", lambda *args: kills.append(args))
     with pytest.raises(KeyboardInterrupt) as raised:
         probes._wait_for_probe_child(PID, "test")
     assert raised.value is failure

@@ -29,6 +29,9 @@ from core.audit.sweep import (
 from core.audit.sweep_memo import SweepMemo
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _fresh_caches():
     from contextlib import ExitStack
@@ -385,7 +388,7 @@ def test_vocab_memo_hits_create_no_additional_rule_files(tmp_path, monkeypatch):
     def forbidden(*a, **kw):
         raise AssertionError("memo hit must not materialize a rendered rule")
 
-    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", forbidden)
+    patch_module_attribute(monkeypatch, renderer, 'tempfile', "NamedTemporaryFile", forbidden)
     assert _dispatch(cfg, rule, function_name="first", line_start=1, domain_vocab=vocab)
     assert _dispatch(cfg, rule, function_name="later", line_start=100, domain_vocab=vocab) == []
     assert len(calls) == 1
@@ -409,7 +412,7 @@ def test_cold_materialization_failure_keeps_unmemoized_render_retry(tmp_path, mo
             raise OSError("temporary write failure")
         return create(*a, **kw)
 
-    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", fail_first)
+    patch_module_attribute(monkeypatch, renderer, 'tempfile', "NamedTemporaryFile", fail_first)
     assert _dispatch(cfg, rule, function_name="f", line_start=1, domain_vocab=case._vocab("custom_free"))
     assert len(attempts) == 2
     assert ("custom_free" in calls[0]["rule_text"]) == (failures == 1)
@@ -436,6 +439,6 @@ def test_vocab_checkpoint_replay_needs_no_temporary_rule(tmp_path, monkeypatch):
     def forbidden(*a, **kw):
         raise AssertionError("checkpoint replay must not materialize a rule")
 
-    monkeypatch.setattr(renderer.tempfile, "NamedTemporaryFile", forbidden)
+    patch_module_attribute(monkeypatch, renderer, 'tempfile', "NamedTemporaryFile", forbidden)
     assert _dispatch(resumed, rule, function_name="f", line_start=1, domain_vocab=vocab)
     assert len(calls) == 1

@@ -47,7 +47,7 @@ def tracked_listeners(monkeypatch):
     with monkeypatch.context() as fault:
         fault.setattr(socketserver.TCPServer, "__init__", initialize)
         fault.setattr(threading, "Thread", thread)
-        fault.setattr(server.tempfile, "mkdtemp", directory)
+        patch_module_attribute(fault, server, 'tempfile', "mkdtemp", directory)
         try:
             yield servers, threads, directories
         finally:
@@ -192,7 +192,7 @@ def test_early_allocation_failure_reclaims_directory_and_pin(
                         raise failure
                     return mkdtemp(*args, **kwargs)
 
-                fault.setattr(server.tempfile, "mkdtemp", failed_compact)
+                patch_module_attribute(fault, server, 'tempfile', "mkdtemp", failed_compact)
         elif stage == "marker":
 
             def failed_marker(*args):
