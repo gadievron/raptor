@@ -1,4 +1,4 @@
-// double_close.cocci — Detect double close of a file descriptor.
+// double_close.cocci — Detect repeated fd or FILE* closure.
 //
 // Closing an fd twice is undefined behaviour: the fd may have been
 // reused by another thread between closes, so the second close
@@ -6,7 +6,8 @@
 // corruption.
 //
 // CWE-675: Multiple Operations on Resource in Single-Operation Context
-// Guards: fd reassignment between closes (fd = open(...)) is safe.
+// FILE* checks include fclose/pclose combinations. Reassignment between
+// releases suppresses the report for both descriptors and stream pointers.
 // @role: verification
 
 @double_close_fd@
@@ -38,10 +39,10 @@ expression F;
 position p1, p2;
 @@
 
-* fclose(F)@p1;
+* \(fclose\|pclose\)(F)@p1;
   ... when != F = ...
       when != F
-* fclose(F)@p2;
+* \(fclose\|pclose\)(F)@p2;
 
 @script:python double_fclose_report depends on double_fclose@
 p1 << double_fclose.p1;
@@ -53,6 +54,6 @@ msg = {
   "file":  p2[0].file,
   "line":  int(p2[0].line),
   "col":   int(p2[0].column),
-  "message":   "FILE* closed twice without reassignment (first fclose at line %s) — UB / race on reused fd (CWE-675)" % p1[0].line
+  "message":   "FILE* closed twice without reassignment (first stream close at line %s) — UB / race on reused fd (CWE-675)" % p1[0].line
 }
 print("COCCIRESULT:" + json.dumps(msg))

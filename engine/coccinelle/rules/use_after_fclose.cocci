@@ -3,7 +3,8 @@
 //
 // After fclose(fp) or pclose(fp), the FILE object is deallocated. Any subsequent
 // stdio operation (fprintf, fread, fwrite, fgets, fputs, fputc, fgetc,
-// fscanf, fflush, fseek, ftell, rewind) on that pointer is
+// fscanf, fflush, fseek, ftell, rewind and their modeled variants) on
+// that pointer is
 // use-after-free — reads/writes freed heap memory.
 //
 // CWE-416: Use After Free
@@ -289,5 +290,100 @@ msg = {
   "line":  int(p[0].line),
   "col":   int(p[0].column),
   "message": "rewind() on closed FILE* — use-after-free (CWE-416)"
+}
+print("COCCIRESULT:" + json.dumps(msg))
+
+@fclose_then_getc@
+expression FP;
+position p;
+@@
+
+  \(fclose\|pclose\)(FP);
+  ... when != FP = ...
+      when != FP
+* getc@p(FP)
+
+@script:python report_getc depends on fclose_then_getc@
+p << fclose_then_getc.p;
+@@
+import json
+msg = {
+  "rule":  "use_after_fclose",
+  "file":  p[0].file,
+  "line":  int(p[0].line),
+  "col":   int(p[0].column),
+  "message": "getc() on closed FILE* — use-after-free (CWE-416)"
+}
+print("COCCIRESULT:" + json.dumps(msg))
+
+
+@fclose_then_putc@
+expression FP;
+position p;
+@@
+
+  \(fclose\|pclose\)(FP);
+  ... when != FP = ...
+      when != FP
+* putc@p(..., FP)
+
+@script:python report_putc depends on fclose_then_putc@
+p << fclose_then_putc.p;
+@@
+import json
+msg = {
+  "rule":  "use_after_fclose",
+  "file":  p[0].file,
+  "line":  int(p[0].line),
+  "col":   int(p[0].column),
+  "message": "putc() on closed FILE* — use-after-free (CWE-416)"
+}
+print("COCCIRESULT:" + json.dumps(msg))
+
+
+@fclose_then_vfprintf@
+expression FP;
+position p;
+@@
+
+  \(fclose\|pclose\)(FP);
+  ... when != FP = ...
+      when != FP
+* vfprintf@p(FP, ...)
+
+@script:python report_vfprintf depends on fclose_then_vfprintf@
+p << fclose_then_vfprintf.p;
+@@
+import json
+msg = {
+  "rule":  "use_after_fclose",
+  "file":  p[0].file,
+  "line":  int(p[0].line),
+  "col":   int(p[0].column),
+  "message": "vfprintf() on closed FILE* — use-after-free (CWE-416)"
+}
+print("COCCIRESULT:" + json.dumps(msg))
+
+
+@fclose_then_vfscanf@
+expression FP;
+position p;
+@@
+
+  \(fclose\|pclose\)(FP);
+  ... when != FP = ...
+      when != FP
+* vfscanf@p(FP, ...)
+
+@script:python report_vfscanf depends on fclose_then_vfscanf@
+p << fclose_then_vfscanf.p;
+@@
+import json
+msg = {
+  "rule":  "use_after_fclose",
+  "file":  p[0].file,
+  "line":  int(p[0].line),
+  "col":   int(p[0].column),
+  "message": "vfscanf() on closed FILE* — use-after-free (CWE-416)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
