@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from itertools import chain, groupby
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,7 @@ from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
 from core.security.log_sanitisation import escape_nonprintable
 from core.source import ReadBudgetExceededError, read_text_gated
+from core.source.lines import iter_splitlines
 
 from .models import SpatchMatch, SpatchResult
 
@@ -1662,6 +1663,18 @@ for _p in {pos_var}:
     return rule_text + harness
 
 
+def _output_lines(output: str) -> Iterable[str]:
+    """Bound large multiline output without changing adapter operations.
+
+    Small and sparse streams retain the direct C splitter; dense native
+    streams use shared display-line iteration with bounded temporary lists.
+    """
+    if (type(output) is str and len(output) >= 16 * 1024
+            and output.count("\n", 0, 16 * 1024) >= 32):
+        return iter_splitlines(output)
+    return output.splitlines()
+
+
 def _parse_results(
     output: str, rule_name: str, nonce: str | None = None,
     *, diagnostics: list[str] | None = None,
@@ -1679,9 +1692,12 @@ def _parse_results(
     rows; raw malformed content is never copied into execution errors.
     """
     prefix = _nonced_prefix(nonce) if nonce else RESULT_PREFIX
+    # Stripping a display line cannot create an absent literal prefix.
+    if type(output) is str and type(prefix) is str and prefix not in output:
+        return []
     matches = []
     malformed = 0
-    for line in output.splitlines():
+    for line in _output_lines(output):
         line = line.strip()
         if line.startswith(prefix):
             json_str = line[len(prefix):]
@@ -1728,7 +1744,9 @@ def _forged_marker_lines(output: str, nonce: str) -> Iterator[str]:
     match set by _parse_results; surfaced here as an attack signal.
     """
     prefix = _nonced_prefix(nonce)
-    for line in output.splitlines():
+    if type(output) is str and "COCCIRESULT" not in output:
+        return
+    for line in _output_lines(output):
         s = line.strip()
         if not s.startswith("COCCIRESULT"):
             continue
@@ -1767,7 +1785,7 @@ _ERROR_PATTERNS = (
 def _parse_errors(stderr: str) -> list[str]:
     """Extract error messages from spatch stderr, ignoring info lines."""
     errors = []
-    for line in stderr.splitlines():
+    for line in _output_lines(stderr):
         line = line.strip()
         if not line:
             continue
