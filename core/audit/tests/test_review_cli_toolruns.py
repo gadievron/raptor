@@ -14,11 +14,14 @@ import argparse
 import json
 import os
 from unittest.mock import patch
-import subprocess
 import sys
 import types
 from pathlib import Path
 from typing import Any
+
+import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -190,18 +193,23 @@ class TestToolsCommand:
         out = capsys.readouterr().out
         assert "No tool/gate engagement records" in out
 
-    def test_subcommand_registered_in_cli(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_subcommand_registered_in_cli(self, tmp_path: Path, monkeypatch, stale_launch) -> None:
         # End-to-end through the real parser: "tools" must be a known
         # command (not swallowed by the bare-path → show fallback).
         _seed_toolrun_records(tmp_path)
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-parent-authorization")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-parent-scratch"))
         env = dict(os.environ)
         for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
             env.pop(name, None)
         env["_RAPTOR_TRUSTED"] = "1"
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(REPO_ROOT / "libexec" / "raptor-review"),
              "tools", "--out", str(tmp_path)],
-            capture_output=True, text=True, env=env, timeout=60,
+            capture_output=True, text=True, env=env,
+            data_home=os.environ["XDG_DATA_HOME"], timeout=60,
         )
         assert proc.returncode == 0, proc.stderr
         assert "smt-refutation" in proc.stdout
