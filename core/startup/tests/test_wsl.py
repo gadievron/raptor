@@ -20,12 +20,44 @@ from core.startup import wsl
 import core.startup.wsl as _host_platform_consumer
 from core.testing.module_bindings import mock_module_attribute
 
+import builtins
+import shutil
+import tempfile
+from types import ModuleType
+from core.testing.module_views import module_function_view
+from core.testing.tempdirs import private_tempfile_module
+
 
 pytestmark = pytest.mark.wsl
 
 
 @pytest.fixture(autouse=True)
-def reset_wsl_cache(monkeypatch):
+def _owned_wsl_namespace(monkeypatch):
+    """Own local imports and probe caches without changing their caller."""
+    inherited = vars(wsl).get("__builtins__", builtins)
+    original_import = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+    tools = getattr(wsl, "shutil", shutil)
+    private_tools = ModuleType(tools.__name__)
+    vars(private_tools).update(vars(tools))
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name in ("shutil", "tempfile"):
+            return getattr(private, name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    private = module_function_view(
+        wsl,
+        bindings={"shutil": private_tools,
+                  "tempfile": private_tempfile_module(getattr(wsl, "tempfile", tempfile))},
+        import_hook=import_local,
+    )
+    monkeypatch.setitem(globals(), "wsl", private)
+    monkeypatch.setitem(globals(), "_host_platform_consumer", private)
+    return private
+
+
+@pytest.fixture(autouse=True)
+def reset_wsl_cache(monkeypatch, _owned_wsl_namespace):
     """Pin fresh detection caches and restore the caller's answers."""
     monkeypatch.setattr(wsl, "_is_wsl_cache", None)
     monkeypatch.setattr(wsl, "_is_wsl2_cache", None)
@@ -256,7 +288,7 @@ class TestWslAdvisories:
     def test_landlock_missing_names_the_remedies(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value=None), \
+             mock_module_attribute(wsl, 'shutil', 'which', return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=None):
             lines = wsl.wsl_advisories(landlock_ok=False)
@@ -277,7 +309,7 @@ class TestWslAdvisories:
             kernel_identity="5.15.167.4-microsoft-standard-WSL2")
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value=None), \
+             mock_module_attribute(wsl, 'shutil', 'which', return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=consent):
             lines = wsl.wsl_advisories(landlock_ok=False)
@@ -299,7 +331,7 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value=None), \
+             mock_module_attribute(wsl, 'shutil', 'which', return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         _boom):
             lines = wsl.wsl_advisories(landlock_ok=False)
@@ -314,7 +346,7 @@ class TestWslAdvisories:
             kernel_identity="5.15.167.4-microsoft-standard-WSL2")
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value="/usr/bin/tool"), \
+             mock_module_attribute(wsl, 'shutil', 'which', return_value='/usr/bin/tool'), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=consent):
             lines = wsl.wsl_advisories(landlock_ok=True)
@@ -323,7 +355,7 @@ class TestWslAdvisories:
     def test_landlock_present_no_landlock_line(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value="/usr/bin/tool"):
+             mock_module_attribute(wsl, 'shutil', 'which', return_value='/usr/bin/tool'):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert not any("Landlock" in ln for ln in lines)
 
@@ -333,7 +365,7 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", which), \
+             mock_module_attribute(wsl, 'shutil', 'which', which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
             lines = wsl.wsl_advisories(landlock_ok=True)
@@ -346,7 +378,7 @@ class TestWslAdvisories:
     def test_docker_absent_gets_desktop_integration_hint(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value=None), \
+             mock_module_attribute(wsl, 'shutil', 'which', return_value=None), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
             lines = wsl.wsl_advisories(landlock_ok=True)
@@ -359,7 +391,7 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", which), \
+             mock_module_attribute(wsl, 'shutil', 'which', which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
             assert wsl.wsl_advisories(landlock_ok=True) == []
@@ -370,11 +402,10 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", which), \
+             mock_module_attribute(wsl, 'shutil', 'which', which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True), \
-             mock.patch("tempfile.gettempdir",
-                        return_value="/mnt/c/Temp"):
+             mock_module_attribute(wsl, 'tempfile', 'gettempdir', return_value='/mnt/c/Temp'):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert len(lines) == 1
         assert "temp root" in lines[0]
@@ -389,11 +420,10 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", which), \
+             mock_module_attribute(wsl, 'shutil', 'which', which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True), \
-             mock.patch("tempfile.gettempdir",
-                        return_value="/mnt/c/\x1b]0;pwned\x07tmp"):
+             mock_module_attribute(wsl, 'tempfile', 'gettempdir', return_value='/mnt/c/\x1b]0;pwned\x07tmp'):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert len(lines) == 1
         assert "\x1b" not in lines[0]
@@ -409,7 +439,7 @@ class TestWslAdvisories:
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=False), \
-             mock.patch("shutil.which", which):
+             mock_module_attribute(wsl, 'shutil', 'which', which):
             lines = wsl.wsl_advisories(landlock_ok=False)
         assert len(lines) == 1
         assert "WSL1" in lines[0]
@@ -420,7 +450,7 @@ class TestWslAdvisories:
     def test_wsl1_line_absent_on_wsl2(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "is_wsl2", return_value=True), \
-             mock.patch("shutil.which", return_value=None):
+             mock_module_attribute(wsl, 'shutil', 'which', return_value=None):
             lines = wsl.wsl_advisories(landlock_ok=False)
         assert not any("WSL1" in ln for ln in lines)
 
@@ -490,7 +520,7 @@ class TestWarnWindowsInteropMount:
 
 class TestWarnTmpdirWindowsInterop:
     @pytest.fixture(autouse=True)
-    def reset_tmpdir_latch(self, monkeypatch):
+    def reset_tmpdir_latch(self, monkeypatch, _owned_wsl_namespace):
         """Exercise a fresh advisory latch and restore its borrowed value."""
         monkeypatch.setattr(wsl, "_tmpdir_warned", False)
 
@@ -498,8 +528,7 @@ class TestWarnTmpdirWindowsInterop:
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True), \
-             mock.patch("tempfile.gettempdir",
-                        return_value="/mnt/c/Temp"):
+             mock_module_attribute(wsl, 'tempfile', 'gettempdir', return_value='/mnt/c/Temp'):
             wsl.warn_tmpdir_windows_interop()
             wsl.warn_tmpdir_windows_interop()
             wsl.warn_tmpdir_windows_interop()
