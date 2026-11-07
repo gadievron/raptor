@@ -22,6 +22,10 @@ end, and a clean ``close()`` with no leaked fds.
 Run: python3 -m pytest -m integration core/sandbox/tests/test_host_rpc.py -v
 """
 
+import core.sandbox.host as _mock_consumer_os
+from core.testing.module_bindings import mock_module_attribute
+
+
 import sys as _sys
 
 import pytest as _pytest
@@ -342,7 +346,7 @@ class TestWriteFrameCompletes(unittest.TestCase):
                 return real_write(fd, bytes(data)[:7])
             return real_write(fd, data)
 
-        with patch("core.sandbox.host.os.write", side_effect=_dribble):
+        with mock_module_attribute(_mock_consumer_os, 'os', 'write', side_effect=_dribble):
             host_obj._write_frame(payload)
         os.close(w)
 

@@ -1,5 +1,9 @@
 """Tests for core.sandbox — namespace isolation, resource limits, fallback."""
 
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import subprocess
 import sys
@@ -1862,7 +1866,7 @@ class TestNetProbeLockDiscipline(unittest.TestCase):
         # DISCIPLINE, not host shape, and on restricted-userns hosts
         # the real self-test correctly reports the backend unavailable
         # even when the mocked CLI probe "succeeds".
-        with mock.patch.object(probes.subprocess, "run", fake_run), \
+        with mock_module_attribute(probes, 'subprocess', 'run', fake_run), \
                 mock.patch.object(probes, "_staged_pidns_selftest",
                                   return_value=True):
             result = probes.check_net_available()
@@ -2666,7 +2670,7 @@ class TestSeccompFilterLostWarning(unittest.TestCase):
         from core.sandbox import seccomp as seccomp_mod
         self._reset()
         try:
-            with patch.object(seccomp_mod.sys, "platform", "linux"), \
+            with mock_module_attribute(seccomp_mod, 'sys', 'platform', 'linux'), \
                  patch.object(seccomp_mod, "check_seccomp_available",
                               return_value=False):
                 with self.assertLogs("core.sandbox.seccomp",
@@ -2688,7 +2692,7 @@ class TestSeccompFilterLostWarning(unittest.TestCase):
         from core.sandbox import seccomp as seccomp_mod
         self._reset()
         try:
-            with patch.object(seccomp_mod.sys, "platform", "linux"), \
+            with mock_module_attribute(seccomp_mod, 'sys', 'platform', 'linux'), \
                  patch.object(seccomp_mod, "check_seccomp_available",
                               return_value=False), \
                  self.assertNoLogs("core.sandbox.seccomp",
@@ -2703,7 +2707,7 @@ class TestSeccompFilterLostWarning(unittest.TestCase):
         from core.sandbox import seccomp as seccomp_mod, state
         self._reset()
         try:
-            with patch.object(seccomp_mod.sys, "platform", "darwin"), \
+            with mock_module_attribute(seccomp_mod, 'sys', 'platform', 'darwin'), \
                  patch.object(seccomp_mod, "check_seccomp_available") as probe, \
                  patch.object(state, "warn_once") as warn_once, \
                  self.assertNoLogs("core.sandbox.seccomp", level="WARNING"):
@@ -2904,7 +2908,7 @@ class TestSeccompProbeCompleteness:
                          ids=['linux-seccomp', 'darwin-seatbelt'])
 def test_eperm_is_not_misattributed_to_seccomp_on_darwin(monkeypatch, caplog, platform, should_report):
     from core.sandbox import observe
-    monkeypatch.setattr(observe.sys, 'platform', platform)
+    patch_module_attribute(monkeypatch, observe, 'sys', 'platform', platform)
     info = {}
     with caplog.at_level('INFO', logger='core.sandbox.observe'):
         observe._check_blocked('Operation not permitted @ rb_sysopen - /etc/resolv.conf',

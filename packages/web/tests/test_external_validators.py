@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import packages.web.external_validators as _mock_consumer_shutil
+from core.testing.module_bindings import patch_module_attribute
+
+
 import json
 import subprocess
 from pathlib import Path
@@ -56,9 +60,7 @@ def templates_dir(tmp_path: Path) -> Path:
 
 
 def test_missing_binary_reports_unavailable(tmp_path, templates_dir, monkeypatch):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which", lambda _b: None
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: None)
     results = _runner(tmp_path, templates_dir).run(
         [_finding("https://example.test/a")], ["nuclei"]
     )
@@ -74,10 +76,7 @@ def test_missing_binary_reports_unavailable(tmp_path, templates_dir, monkeypatch
 def test_missing_pinned_templates_refuses_to_run(tmp_path, monkeypatch):
     """No pinned templates dir means no run — nuclei must never fall back
     to fetched or auto-updated templates."""
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     called = []
     monkeypatch.setattr(
         "packages.web.external_validators.run_untrusted_networked",
@@ -94,10 +93,7 @@ def test_missing_pinned_templates_refuses_to_run(tmp_path, monkeypatch):
 
 
 def test_batch_invocation_shape_and_scope(tmp_path, templates_dir, monkeypatch):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -143,10 +139,7 @@ def test_batch_invocation_shape_and_scope(tmp_path, templates_dir, monkeypatch):
 
 
 def test_loopback_target_skips_lna(tmp_path, templates_dir, monkeypatch):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -172,10 +165,7 @@ def test_loopback_target_skips_lna(tmp_path, templates_dir, monkeypatch):
 def test_policy_denied_target_is_recorded_and_excluded(
     tmp_path, templates_dir, monkeypatch
 ):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -203,10 +193,7 @@ def test_policy_denied_target_is_recorded_and_excluded(
 def test_credential_headers_ride_a_private_file_not_argv(
     tmp_path, templates_dir, monkeypatch
 ):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -233,10 +220,7 @@ def test_credential_headers_ride_a_private_file_not_argv(
 
 
 def test_jsonl_matches_attributed_per_target(tmp_path, templates_dir, monkeypatch):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     stdout = "\n".join(
         [
             json.dumps(
@@ -278,10 +262,7 @@ def test_jsonl_matches_attributed_per_target(tmp_path, templates_dir, monkeypatc
 
 
 def test_backstop_timeout_keeps_partial_output(tmp_path, templates_dir, monkeypatch):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     partial = json.dumps(
         {
             "template-id": "xss-probe",
@@ -318,10 +299,7 @@ def test_non_external_adapter_is_skipped(tmp_path, templates_dir):
 def test_denied_target_yields_one_row_across_many_findings(
     tmp_path, templates_dir, monkeypatch,
 ):
-    monkeypatch.setattr(
-        "packages.web.external_validators.shutil.which",
-        lambda _b: "/usr/bin/nuclei",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     monkeypatch.setattr(
         "packages.web.external_validators.run_untrusted_networked",
         lambda cmd, **kwargs: SimpleNamespace(

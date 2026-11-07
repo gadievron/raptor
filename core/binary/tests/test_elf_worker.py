@@ -1,4 +1,7 @@
 """A compromised ELF worker cannot send objects or unbounded facts to its parent."""
+
+
+
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -211,7 +214,7 @@ def test_dependency_failure_is_distinct_from_parser_failure(monkeypatch, capsys,
     def fail(*args):
         raise error
     monkeypatch.setattr(child, '_collect', fail)
-    monkeypatch.setattr(child.sys, 'argv', ['worker', 'fixture', '', '1024'])
+    patch_module_attribute(monkeypatch, child, 'sys', 'argv', ['worker', 'fixture', '', '1024'])
     assert child.main() == 1
     captured = capsys.readouterr()
     assert not captured.out
@@ -223,7 +226,7 @@ def test_parser_failure_does_not_claim_missing_dependency(monkeypatch, capsys):
     def fail(*args):
         raise ValueError('owned parser failure')
     monkeypatch.setattr(child, '_collect', fail)
-    monkeypatch.setattr(child.sys, 'argv', ['worker', 'fixture', '', '1024'])
+    patch_module_attribute(monkeypatch, child, 'sys', 'argv', ['worker', 'fixture', '', '1024'])
     assert child.main() == 1
     captured = capsys.readouterr()
     assert not captured.out

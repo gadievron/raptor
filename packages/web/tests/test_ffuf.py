@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import packages.web.ffuf as _mock_consumer_shutil
+from core.testing.module_bindings import patch_module_attribute
+
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -257,7 +261,7 @@ def test_redact_body_passes_through_when_secrets_revealed(tmp_path: Path):
 def test_run_redacts_body_in_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -719,7 +723,7 @@ def test_run_grants_file_granular_read_scope_to_wordlists(
     params = tmp_path / "extra" / "params.txt"
     params.parent.mkdir()
     params.write_text("id\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     captured = {}
 
@@ -761,7 +765,7 @@ def test_run_resolves_symlinked_wordlists_for_argv_and_scope(
     link = tmp_path / "lists" / "words.txt"
     link.parent.mkdir()
     link.symlink_to(real)
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     captured = {}
 
@@ -836,7 +840,7 @@ def test_run_warns_when_wordlist_symlink_escapes_its_directory(
     link = tmp_path / "repo" / "wordlist.txt"
     link.parent.mkdir()
     link.symlink_to(outside)
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1172,7 +1176,7 @@ def test_run_removes_stale_report_before_spawning(
 
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     stale = tmp_path / "ffuf" / "ffuf_results.json"
     stale.parent.mkdir(exist_ok=True)
@@ -1200,7 +1204,7 @@ def test_run_refuses_to_parse_oversized_report(
 ):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
     monkeypatch.setattr("packages.web.ffuf._MAX_FFUF_OUTPUT_BYTES", 64)
 
     def fake_run(cmd, **kwargs):
@@ -1232,7 +1236,7 @@ def test_run_scrubs_ffuf_config_block_from_kept_report(
     guarantee theater."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1272,7 +1276,7 @@ def test_run_keeps_report_config_block_with_reveal_secrets(
 ):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1298,7 +1302,7 @@ def test_run_redacts_ffuf_banner_values_in_stderr(
     even in noninteractive mode; names stay, values go."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     banner = (
         " :: Method           : POST\n"
@@ -1542,7 +1546,7 @@ def test_run_delivers_credentials_via_config_file_not_argv(
     must not outlive the run."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     seen: dict = {}
 
@@ -1589,7 +1593,7 @@ def test_run_refuses_preplanted_symlink_at_config_path(
     write must refuse to follow it instead of exfiltrating through it."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     exfil = tmp_path / "EXFIL"
     out_dir = tmp_path / "run"
@@ -1632,7 +1636,7 @@ def test_run_keeps_config_file_only_with_reveal_secrets(
 ):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1655,7 +1659,7 @@ def test_run_removes_config_file_on_backstop_timeout(
 
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
@@ -1674,7 +1678,7 @@ def test_run_grants_grace_beyond_ffuf_maxtime(tmp_path: Path, monkeypatch: pytes
     shutdown (which flushes the JSON report) always wins the race."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     captured = {}
 
@@ -1707,7 +1711,7 @@ def test_run_survives_backstop_timeout_and_keeps_partial_results(
 
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1736,7 +1740,7 @@ def test_run_warns_once_on_extreme_thread_counts(
     preflight's validation pass doesn't duplicate it."""
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1820,7 +1824,7 @@ def test_run_redacts_authenticated_ffuf_options_from_logs(
 ):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -1878,7 +1882,7 @@ def test_cookie_redaction_preserves_separator_spacing(tmp_path: Path):
 def test_run_requires_explicit_ffuf_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: None)
 
     runner = FfufRunner("https://example.test", tmp_path)
 
@@ -1889,7 +1893,7 @@ def test_run_requires_explicit_ffuf_binary(tmp_path: Path, monkeypatch: pytest.M
 def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     captured = {}
 
@@ -1952,7 +1956,7 @@ def test_run_limits_embedded_report_results_but_keeps_raw_count(
 ):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -2123,8 +2127,7 @@ def test_run_execs_realpath_and_binds_resolved_tool_dir(
     link = tmp_path / "bin" / "ffuf"
     link.parent.mkdir()
     link.symlink_to(real)
-    monkeypatch.setattr(
-        "packages.web.ffuf.shutil.which", lambda _binary: str(link))
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: str(link))
 
     seen: dict = {}
 
@@ -2154,9 +2157,7 @@ def test_run_refuses_oversize_results_file(
 
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf",
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
 
     def fake_run(cmd, **kwargs):
         output_path = Path(cmd[cmd.index("-o") + 1])
@@ -2297,7 +2298,7 @@ def test_run_grants_read_scope_to_request_file(
     request.write_text(
         "GET /x HTTP/1.1\nHost: example.test\n\nFUZZ", encoding="utf-8",
     )
-    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _b: "/usr/bin/ffuf")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/ffuf')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):

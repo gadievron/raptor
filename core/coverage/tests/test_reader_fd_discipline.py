@@ -12,6 +12,10 @@ line-granular budget enforcement.
 
 from __future__ import annotations
 
+import core.coverage.journal as _mock_consumer_os
+from core.testing.module_bindings import patch_module_attribute
+
+
 import os
 import threading
 import time
@@ -241,9 +245,7 @@ class TestJournalReader:
             return os.stat_result(fields)
 
         real_fstat = os.fstat
-        monkeypatch.setattr(
-            "core.coverage.journal.os.fstat",
-            lambda fd: _shrink(real_fstat(fd)))
+        patch_module_attribute(monkeypatch, _mock_consumer_os, 'os', 'fstat', lambda fd: _shrink(real_fstat(fd)))
         # The size gate must under-report through EVERY stat spelling
         # a reader generation used (fd-based fstat and by-name
         # Path.stat), so the pin measures the line-materialisation

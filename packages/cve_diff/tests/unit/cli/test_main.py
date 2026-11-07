@@ -10,6 +10,10 @@ flag.").
 """
 from __future__ import annotations
 
+import cve_diff.infra.disk_budget as _mock_consumer_shutil
+from core.testing.module_bindings import patch_module_attribute
+
+
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -155,14 +159,7 @@ def test_run_distinguishes_default_policy_from_explicit_limit(
         rationale="stub",
     ))
     gib = 1024**3
-    monkeypatch.setattr(
-        "cve_diff.infra.disk_budget.shutil.disk_usage",
-        lambda _path: SimpleNamespace(
-            total=100 * gib,
-            used=80 * gib,
-            free=20 * gib,
-        ),
-    )
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'disk_usage', lambda _path: SimpleNamespace(total=100 * gib, used=80 * gib, free=20 * gib))
 
     result = CliRunner().invoke(app, [
         "run", "CVE-2024-99008",
