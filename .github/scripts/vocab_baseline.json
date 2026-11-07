@@ -1228,8 +1228,9 @@
     "kind": "literal"
   },
   "core/concepts/compiler.py::to_dict": {
-    "count": 11,
-    "kind": "literal"
+    "count": 12,
+    "kind": "literal",
+    "note": "CompilationResult.to_dict serializes the fixed 12-field compiled-invariants.json result schema written by compile_model and checked by core/concepts/tests/test_compiler.py. Includes control_rejected to distinguish completed control rejection from retryable transport/parser/tool failure; report fields, not a learned function-name vocabulary. Reviewed 2026-11-07."
   },
   "core/concepts/contract_pairs.py::_CONTRACT_SPECS": {
     "count": 16,
