@@ -1,5 +1,6 @@
 """Loop exit must release every proxy listener, not only the main one."""
 
+import asyncio
 import tempfile
 from unittest.mock import Mock
 
@@ -73,10 +74,25 @@ def test_one_close_error_does_not_skip_other_listeners(proxy, monkeypatch):
 
 
 def test_tracked_unix_handlers_are_cancelled_on_unexpected_exit(proxy):
-    handler = Mock()
-    proxy._unix_tasks.add(handler)
+    finalized = []
+
+    async def handler():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            finalized.append(True)
+
+    async def install():
+        task = asyncio.create_task(handler())
+        proxy._unix_tasks.add(task)
+        await asyncio.sleep(0)
+        return task
+
+    task = asyncio.run_coroutine_threadsafe(install(), proxy._loop).result(5)
     stop_loop(proxy)
-    handler.cancel.assert_called_once()
+    assert task.cancelled()
+    assert finalized == [True]
     assert proxy._unix_tasks == set()
 
 
