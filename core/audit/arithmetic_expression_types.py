@@ -6,7 +6,7 @@ from .arithmetic_types import IntegerType, common_integer_type, integer_type
 from .integer_literals import source_integer_atom, integer_literal_value
 
 MAX_PREFIX_DEPTH = 64
-_ARITHMETIC = frozenset({'+', '-', '*', '/', '%', '<<', '>>'})
+_ARITHMETIC = frozenset({'+', '-', '*', '/', '%', '<<', '>>', '&', '|', '^'})
 _COMPARISONS = frozenset({'<', '<=', '>', '>=', '==', '!=', '&&', '||'})
 
 
