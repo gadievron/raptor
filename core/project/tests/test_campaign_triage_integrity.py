@@ -368,3 +368,17 @@ def test_authenticated_proxy_erasure_warning_prevents_clean_campaign_history(tmp
     report = triage_run(second, allow_legacy=False)
     assert report['inputs']['integrity']['proxy_events'] == 'tampered'
     assert _signatures(_target([first, second]))['ptrace']['trend'] == 'unknown'
+
+
+def test_retained_samples_with_zero_drops_keep_campaign_absence_complete(tmp_path):
+    first = _run(tmp_path, 0, [_escape("ptrace")])
+    second = _run(tmp_path, 1, [{
+        "type": "global_budget_exceeded",
+    }, {
+        "type": "audit_summary", "sampled_keeps": 1,
+        "reader_drained": True, "dropped_by_category": {},
+    }])
+    result = _target([first, second])
+    assert result["integrity"] == "verified"
+    assert _signatures(result)["ptrace"]["trend"] != "unknown"
+    assert len(result["signatures"]) == 1

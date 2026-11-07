@@ -99,11 +99,14 @@ def test_digest_is_canonical_and_handles_escaped_unicode():
 
 
 @pytest.mark.parametrize("sampled", [0, 1, -1, True, "1"])
-def test_sampled_observations_cannot_prove_complete_absence(sampled):
-    events, capture = partition_audit_records([
-        {"type": "audit_summary", "reader_drained": True, "sampled_keeps": sampled},
-    ])
+@pytest.mark.parametrize("drop_accounting", [False, True])
+def test_sampled_keeps_need_valid_drop_accounting_to_confirm_absence(sampled, drop_accounting):
+    record = {"type": "audit_summary", "reader_drained": True, "sampled_keeps": sampled}
+    if drop_accounting:
+        record["dropped_by_category"] = {}
+    events, capture = partition_audit_records([record])
     assert events == []
-    assert capture["capture_incomplete"] is (type(sampled) is not int or sampled != 0)
+    assert capture["capture_incomplete"] is (
+        type(sampled) is not int or sampled < 0 or (bool(sampled) and not drop_accounting))
     assert capture["budget_truncated"] is False
     assert valid_audit_capture(capture)
