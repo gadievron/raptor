@@ -35,7 +35,7 @@ class FakeProcess:
 
 @pytest.mark.parametrize("stage", [
     "socketpair", "spawn", "spawn_close", "ready_timeout", "roundtrip_timeout",
-    "protocol", "refused", "cancelled", "success",
+    "protocol", "refused", "cancelled", "success", "parent_close_error",
 ])
 def test_startup_owns_resources_until_commit(monkeypatch, stage):
     jail = jail_mod.ParserJail()
@@ -58,6 +58,8 @@ def test_startup_owns_resources_until_commit(monkeypatch, stage):
 
         def close(self):
             self.sock.close()
+            if stage == "parent_close_error":
+                raise RuntimeError("secondary parent socket close failed")
 
     class ChildSocket:
         def __init__(self, sock):
@@ -84,7 +86,7 @@ def test_startup_owns_resources_until_commit(monkeypatch, stage):
         return process
 
     def ready(_):
-        if stage == "protocol":
+        if stage in ("protocol", "parent_close_error"):
             raise jail_mod._ProtocolError("injected protocol failure")
         if stage == "refused":
             return {"ready": False, "error": "injected refusal"}

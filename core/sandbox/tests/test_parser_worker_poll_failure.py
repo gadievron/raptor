@@ -15,7 +15,7 @@ def unhealthy_worker(monkeypatch):
     process.poll.side_effect = OSError(errno.EIO, 'status unavailable')
     socket = Mock()
     owner._proc, owner._sock = process, socket
-    reap = Mock()
+    reap = Mock(return_value=True)
     monkeypatch.setattr(owner, '_reap_locked', reap)
     return owner, process, socket, reap
 

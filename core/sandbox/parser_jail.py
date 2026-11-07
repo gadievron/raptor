@@ -221,6 +221,10 @@ class ParserJail:
         self._landlocked: "bool | None" = None
         self._degraded_warned = False
         self._stopped = False
+        # A failed wait does not release ownership. Keep the Popen handle
+        # until wait confirms exit, and never reuse its transport or spawn
+        # a replacement while cleanup is unresolved.
+        self._reap_pending = False
 
     # ---- public API ----
 
@@ -237,8 +241,10 @@ class ParserJail:
     def parse(self, raw: bytes) -> "ParsedRequestLine | ParseRefusal":
         """One raw request line in, one re-validated verdict out.
 
-        Blocking (mutex-serialised round-trip) — proxy callers wrap it
-        in ``asyncio.to_thread``. Raises ``ParserJailUnavailable`` when
+        Mutex-serialised — proxy callers wrap it in ``asyncio.to_thread``.
+        Queueing and transport share a bounded request deadline. Startup
+        and reaping have their own bounded budgets. A busy queue refuses
+        without disturbing the worker serving another caller. Raises ``ParserJailUnavailable`` when
         no confined worker can be obtained; returns a ``ParseRefusal``
         (never raises) when the worker dies on or mangles THIS request
         — poison input costs the attacker their request and us one
@@ -250,17 +256,31 @@ class ParserJail:
             # if a future caller widens the cap without widening the
             # frame.
             return ParseRefusal(reason="empty/overlong CONNECT line")
-        with self._lock:
+        queued_at = time.monotonic()
+        if not self._lock.acquire(timeout=_ROUNDTRIP_TIMEOUT_S):
+            # A queued caller owns no worker or transaction; it must not
+            # kill the worker currently serving another caller.
+            raise ParserJailUnavailable("parser request queue deadline exceeded")
+        try:
+            remaining = _ROUNDTRIP_TIMEOUT_S - (time.monotonic() - queued_at)
+            if remaining <= 0:
+                raise ParserJailUnavailable("parser request deadline exceeded before send")
+            # Startup/reaping are separately bounded lifecycle operations.
+            # Do not charge a cold worker's ready handshake against its
+            # first transaction, or replace the transport budget afterward.
             self._ensure_worker_locked()
+            deadline = time.monotonic() + remaining
             try:
-                return self._roundtrip_locked(raw)
+                return self._roundtrip_locked(raw, deadline=deadline)
             except _ProtocolError as exc:
+                # Dispose before reporting: a handler failure/cancellation
+                # must not leave a protocol-invalid worker reusable.
+                self._kill_worker_locked()
                 logger.warning(
                     "parser-jail: worker protocol violation (%s) — "
                     "killed; denying this request and respawning on "
                     "the next", exc,
                 )
-                self._kill_worker_locked()
                 return ParseRefusal(
                     reason="request-line parser protocol violation "
                            "(worker respawned)")
@@ -268,17 +288,34 @@ class ParserJail:
                 # Worker died mid-request (poison input, SIGXCPU/AS
                 # kill, external kill) or the socket errored. Deny THIS
                 # request; the next request respawns.
+                self._kill_worker_locked()
                 logger.warning(
                     "parser-jail: worker died mid-request — denying "
                     "this request; respawning on the next",
                 )
-                self._kill_worker_locked()
                 return ParseRefusal(
                     reason="request-line parser crashed on this input "
                            "(worker respawned)")
+            except BaseException:
+                # Cancellation or an unexpected parent failure can interrupt
+                # send/receive at any byte boundary. That channel cannot be
+                # reused for the next request, even if the worker is alive.
+                try:
+                    self._kill_worker_locked()
+                except BaseException:
+                    # Keep the original exception primary. An unreaped
+                    # worker remains owned and blocks future spawns.
+                    logger.error("parser-jail: interrupted request cleanup incomplete")
+                raise
+        finally:
+            self._lock.release()
 
     def stop(self) -> None:
-        """Kill the worker and refuse further spawns (atexit/teardown)."""
+        """Refuse future spawns and kill/reap the owned worker.
+
+        Raises ParserJailUnavailable if exit cannot be confirmed. The
+        process remains owned; a subsequent stop retries its bounded reap.
+        """
         with self._lock:
             self._stopped = True
             self._kill_worker_locked()
@@ -294,7 +331,7 @@ class ParserJail:
             logger.warning("parser-jail: worker status check failed; replacing worker",
                            exc_info=True)
             worker_alive = False
-        if worker_alive and self._sock is not None:
+        if worker_alive and self._sock is not None and not self._reap_pending:
             return
         self._kill_worker_locked()
         now = time.monotonic()
@@ -450,13 +487,17 @@ class ParserJail:
                 f"parser worker startup failed: {exc}") from exc
         finally:
             if not committed:
-                if parent_sock is not None:
-                    try:
-                        parent_sock.close()
-                    except OSError:
-                        pass
-                if proc is not None:
-                    self._reap_locked(proc)
+                # Publish ownership before any close can be interrupted.
+                # One cleanup path owns both uncommitted startup resources
+                # and established workers, including a failed/timed-out wait.
+                self._proc, self._sock = proc, parent_sock
+                self._reap_pending = proc is not None
+                try:
+                    self._kill_worker_locked()
+                except BaseException:
+                    # Preserve the startup failure or cancellation while
+                    # retaining the only handle to an unconfirmed child.
+                    logger.error("parser-jail: startup worker cleanup incomplete")
 
     def _read_ready_frame(self, sock: socket.socket) -> dict:
         deadline = time.monotonic() + _READY_TIMEOUT_S
@@ -527,48 +568,54 @@ class ParserJail:
             if req_id != READY_FRAME_ID:
                 return req_id
 
-    def _roundtrip_locked(self, raw: bytes) -> "ParsedRequestLine | ParseRefusal":
+    def _roundtrip_locked(
+        self, raw: bytes, *, deadline: float | None = None,
+    ) -> "ParsedRequestLine | ParseRefusal":
         sock = self._sock
         assert sock is not None  # _ensure_worker_locked guarantees it
-        # Belt two against queued-frame desync: the socket must be
-        # SILENT before a request is sent — one frame in, one frame
-        # out. Any already-buffered bytes are unsolicited worker output
-        # (a pre-queued frame or stream garbage): kill, deny, respawn.
-        # Zero-timeout readability probe, then a peek to distinguish
-        # data from EOF (a worker that died between requests).
-        poller = select.poll()
-        poller.register(sock, select.POLLIN)
-        if poller.poll(0):
-            if sock.recv(1, socket.MSG_PEEK):
-                raise _ProtocolError(
-                    "unsolicited bytes from worker before request")
-            raise OSError("parser worker closed the socket")
-        req_id = self._new_req_id()
-        deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
+        if deadline is None:
+            deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
+        timeout = sock.gettimeout()
         try:
+            # One deadline covers queueing, sendall, header and payload.
+            # A previous socket timeout is not a fresh per-stage budget.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("parser worker request deadline exceeded")
+            sock.settimeout(remaining)
+            poller = select.poll()
+            poller.register(sock, select.POLLIN)
+            if poller.poll(0):
+                if sock.recv(1, socket.MSG_PEEK):
+                    raise _ProtocolError("unsolicited bytes from worker before request")
+                raise OSError("parser worker closed the socket")
+            req_id = self._new_req_id()
+            # Preparing the id/checking readiness also consumes the budget.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("parser worker request deadline exceeded")
+            sock.settimeout(remaining)
             sock.sendall(FRAME_HEADER.pack(len(raw), req_id) + raw)
             header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline)
-        except socket.timeout as exc:
-            # Wedged worker: kill via the OSError path in parse().
-            raise OSError("parser worker round-trip timed out") from exc
-        length, resp_id = FRAME_HEADER.unpack(header)
-        if length > MAX_FRAME_PAYLOAD:
-            raise _ProtocolError("oversized verdict frame")
-        if resp_id != req_id:
-            # Desync: a response for some other request means the
-            # correlation is gone — nothing further from this worker
-            # can be attributed safely.
-            raise _ProtocolError("verdict frame id desync")
-        try:
+            length, resp_id = FRAME_HEADER.unpack(header)
+            if length > MAX_FRAME_PAYLOAD:
+                raise _ProtocolError("oversized verdict frame")
+            if resp_id != req_id:
+                raise _ProtocolError("verdict frame id desync")
             payload = self._recv_exact(sock, length, deadline=deadline)
+            return _validate_verdict(payload)
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
-        return _validate_verdict(payload)
+        finally:
+            try:
+                sock.settimeout(timeout)
+            except OSError:
+                pass
 
     def _kill_worker_locked(self) -> None:
         sock, proc = self._sock, self._proc
         self._sock = None
-        self._proc = None
+        self._reap_pending = proc is not None
         try:
             if sock is not None:
                 try:
@@ -576,12 +623,19 @@ class ParserJail:
                 except OSError:
                     pass
         finally:
-            if proc is not None:
-                self._reap_locked(proc)
+            if proc is not None and self._reap_locked(proc) is True:
+                self._proc = None
+                self._reap_pending = False
+        if self._proc is not None:
+            raise ParserJailUnavailable("parser worker cleanup is unconfirmed; retry stop")
 
     @staticmethod
-    def _reap_locked(proc: subprocess.Popen) -> None:
-        """Kill + wait one worker we spawned (verified-pid: our handle)."""
+    def _reap_locked(proc: subprocess.Popen) -> bool:
+        """Kill + bounded wait; True only when wait confirms child exit.
+
+        Poll/kill errors do not skip wait: exit may race the signal. A
+        failed or timed-out wait is not evidence that the child is gone.
+        """
         running = True
         try:
             running = proc.poll() is None
@@ -601,19 +655,20 @@ class ParserJail:
                 )
         try:
             proc.wait(timeout=_READY_TIMEOUT_S)
+            return True
         except OSError:
             logger.error(
                 "parser-jail: could not reap worker pid %d",
                 proc.pid, exc_info=True,
             )
         except subprocess.TimeoutExpired:
-            # SIGKILL is unblockable; a non-reaped zombie here means
-            # the host is in serious trouble — log and move on rather
-            # than wedging the proxy behind a wait.
+            # A stuck child may not have exited yet. Keep the wait bounded
+            # and retain ownership; the caller must not spawn another.
             logger.error(
                 "parser-jail: worker pid %d did not reap after "
                 "SIGKILL", proc.pid,
             )
+        return False
 
 
 # ---- module-level singleton ----
@@ -626,17 +681,26 @@ def get_parser_jail() -> ParserJail:
     """Return the process-wide parser jail, spawning it on first call.
 
     Fail-closed: if the worker cannot be spawned AND confined, this
-    raises (``ParserJailUnavailable``) and no singleton is installed —
-    the caller (EgressProxy construction) must refuse to serve. A later
-    call retries from scratch.
+    raises (``ParserJailUnavailable``); the proxy must refuse to serve.
+    A later call retries. If a failed startup cannot confirm child exit,
+    its singleton stays owned and cannot spawn a replacement until reaped.
     """
     global _jail
     with _jail_lock:
         if _jail is None:
             jail = ParserJail()
-            jail.start()  # raises on failure — nothing half-installed
+            # Register before creating a child. Registration failure then
+            # leaves no process behind; failed startup keeps its cleanup
+            # registration while a retained child still needs a wait.
             atexit.register(jail.stop)
             _jail = jail
+        try:
+            _jail.start()
+        except BaseException:
+            if _jail._proc is None:
+                atexit.unregister(_jail.stop)
+                _jail = None
+            raise
         return _jail
 
 
@@ -645,6 +709,6 @@ def _reset_for_tests() -> None:
     global _jail
     with _jail_lock:
         if _jail is not None:
-            atexit.unregister(_jail.stop)
             _jail.stop()
+            atexit.unregister(_jail.stop)
             _jail = None

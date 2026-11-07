@@ -18,7 +18,7 @@ class TestParserWorkerTeardown:
         proc = Mock(pid=1234)
         proc.poll.return_value = None
         getattr(proc, stage).side_effect = OSError("cleanup failed")
-        parser.ParserJail._reap_locked(proc)
+        assert parser.ParserJail._reap_locked(proc) is (stage != "wait")
         proc.wait.assert_called_once_with(timeout=parser._READY_TIMEOUT_S)
         assert "worker pid 1234" in caplog.text
 
@@ -46,12 +46,16 @@ class TestParserWorkerTeardown:
         sock = Mock()
         sock.close.side_effect = OSError("close failed")
         jail._proc, jail._sock = proc, sock
-        jail.stop()
-        jail.stop()
-        assert jail._proc is None and jail._sock is None
+        for _ in range(2):
+            with pytest.raises(parser.ParserJailUnavailable, match="cleanup"):
+                jail.stop()
+            assert jail._proc is proc and jail._sock is None
+            assert jail._reap_pending
         sock.close.assert_called_once()
-        proc.kill.assert_called_once()
-        proc.wait.assert_called_once()
+        assert proc.kill.call_count == proc.wait.call_count == 2
+        proc.wait.side_effect = None
+        jail.stop()
+        assert jail._proc is None and not jail._reap_pending
 
     @pytest.mark.parametrize("failure", [OSError("broken pipe"), parser._ProtocolError("bad frame")])
     @pytest.mark.parametrize("cleanup_stage", ["poll", "kill", "wait"])
@@ -63,10 +67,18 @@ class TestParserWorkerTeardown:
         jail._proc, jail._sock = proc, Mock()
         monkeypatch.setattr(jail, "_ensure_worker_locked", lambda: None)
         monkeypatch.setattr(jail, "_roundtrip_locked", Mock(side_effect=failure))
-        verdict = jail.parse(b"request")
-        assert isinstance(verdict, parser.ParseRefusal)
-        assert jail._proc is None and jail._sock is None
-        proc.wait.assert_called_once()
+        if cleanup_stage == "wait":
+            with pytest.raises(parser.ParserJailUnavailable, match="cleanup"):
+                jail.parse(b"request")
+            assert jail._proc is proc and jail._sock is None
+            assert jail._reap_pending
+            proc.wait.side_effect = None
+            jail.stop()
+        else:
+            verdict = jail.parse(b"request")
+            assert isinstance(verdict, parser.ParseRefusal)
+            assert jail._proc is None and jail._sock is None
+            proc.wait.assert_called_once()
 
     def test_close_cancellation_still_reaps_and_clears_state(self):
         jail = parser.ParserJail()
@@ -96,9 +108,13 @@ class TestParserWorkerTeardown:
         with pytest.raises(parser.ParserJailUnavailable, match="bad ready frame") as raised:
             jail.start()
         assert "exit status unavailable" in str(raised.value)
-        assert jail._proc is None and jail._sock is None
+        assert jail._proc is proc and jail._sock is None
+        assert jail._reap_pending
         assert jail._spawn_failures == 1
         assert jail._next_spawn_attempt > 0
+        proc.wait.side_effect = None
+        jail.stop()
+        assert jail._proc is None
 
 
     def test_signal_error_still_reaps_real_child(self, monkeypatch):
