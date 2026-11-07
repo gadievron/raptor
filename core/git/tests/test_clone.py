@@ -826,6 +826,13 @@ class TestSafeGitCommandExecutes:
     These tests pin both halves of that contract with a live git.
     """
 
+    @pytest.fixture(autouse=True)
+    def _owned_git_temp(self, tmp_path, monkeypatch):
+        scratch = tmp_path / "git-tmp"
+        scratch.mkdir()
+        for name in ("TMPDIR", "TEMP", "TMP"):
+            monkeypatch.setenv(name, str(scratch))
+
     @staticmethod
     def _two_commit_repo(tmp_path: Path) -> Path:
         repo = tmp_path / "repo"
