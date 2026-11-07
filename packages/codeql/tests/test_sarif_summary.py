@@ -122,7 +122,8 @@ def test_summary_does_not_retain_unused_finding_payloads(runner, tmp_path):
     data = {'runs': [{'results': [{'ruleId': 'r', 'level': 'warning', 'unused': payload}]}]}
     summary = runner.get_sarif_summary(tmp_path / 'unused', sarif_data=data)
     del data, payload
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert reference() is None
     assert summary['total_findings'] == 1
 

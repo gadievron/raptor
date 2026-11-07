@@ -92,6 +92,7 @@ def test_diagnostic_counts_do_not_retain_unused_notification_payloads():
     run = {'invocations': [{'toolConfigurationNotifications': [{'level': 'error', 'unused': payload}]}]}
     counts = get_run_execution_diagnostics(run)
     del run, payload
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert reference() is None
     assert counts['tool_execution_failures'] == 1

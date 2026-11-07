@@ -55,6 +55,7 @@ def test_source_text_is_not_retained_by_matchers(searches):
     ref = weakref.ref(source)
     assert searches.strcpy_call(source) is not None
     del source
-    gc.collect()
+    # These acyclic fixture objects need no scan of unrelated old generations.
+    gc.collect(0)
     assert ref() is None
     assert list(vars(searches)) == ["strcpy_call"]
