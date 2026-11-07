@@ -413,11 +413,22 @@ def build_state_field_index(
             for m in chain(_FIELD_CHAIN_RE.finditer(code),
                            _FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):
                 idents = _CHAIN_IDENT_RE.findall(code, m.start(), m.end())
-                wm = _WRITE_TAIL_RE.match(code, m.end())
+                # Parentheses preserve a C lvalue. Scan their closing
+                # delimiters before testing the assignment/update tail;
+                # leaving these as reads can hide a violating mutation.
+                # A linear scan avoids overlapping whitespace regexes.
+                tail_start = m.end()
+                while tail_start < len(code) and (
+                    code[tail_start].isspace() or code[tail_start] == ")"
+                ):
+                    tail_start += 1
+                wm = _WRITE_TAIL_RE.match(code, tail_start)
                 # Prefix increment/decrement writes the terminal field
                 # with no assignment tail (``++conn->pkt_count;``).
                 prefix_end = m.start()
-                while prefix_end > 0 and code[prefix_end - 1].isspace():
+                while prefix_end > 0 and (
+                    code[prefix_end - 1].isspace() or code[prefix_end - 1] == "("
+                ):
                     prefix_end -= 1
                 prefix_incdec = code.endswith(("++", "--"), 0, prefix_end)
                 func, _params = _function_at(line_no)
