@@ -247,7 +247,7 @@ def invariant_unit_worker(monkeypatch, request):
     original = condition_smt._run_z3_child
 
     def dispatch(tag, args, **kwargs):
-        if tag == "invariant_preservation":
+        if tag in {"invariant_preservation", "invariant_site_batch"}:
             return condition_smt._z3_dispatch_json({"tag": tag, "args": args})
         return original(tag, args, **kwargs)
 
