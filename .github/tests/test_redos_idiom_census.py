@@ -1836,6 +1836,7 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
                  timeout_s: float = 14.0) -> tuple[float | None, str]:
     """One hard-killed oracle lane: (exponent | None, status)."""
     import json
+    import math
     import subprocess
     import sys
 
@@ -1849,27 +1850,45 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
             input=request, capture_output=True, text=True,
             timeout=timeout_s,
         )
-        lines = proc.stdout.strip().splitlines()
-        killed = False
-    except subprocess.TimeoutExpired as exc:
-        lines = (exc.stdout or "").strip().splitlines()
-        killed = True
+    except subprocess.TimeoutExpired:
+        # subprocess.run has killed and reaped the worker. Partial timeout
+        # output can be bytes (even with text=True), or end mid-number;
+        # neither changes this conservative wall-budget verdict.
+        return (99.0, "wall")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"oracle worker {kind}[{index}] exited {proc.returncode}: "
+            f"{proc.stderr[-2000:]!r}")
+    lines = proc.stdout.strip().splitlines()
     probes: list[tuple[int, float]] = []
-    status = "ok"
+    status = None
     for line in lines:
         parts = line.split()
+        if not parts:
+            continue
+        if status is not None:
+            raise RuntimeError("oracle worker emitted output after a terminal status")
         if len(parts) == 2 and parts[0].isdigit():
-            probes.append((int(parts[0]), float(parts[1])))
-        elif parts:
+            try:
+                size, seconds = int(parts[0]), float(parts[1])
+            except ValueError as exc:
+                raise RuntimeError("oracle worker emitted a malformed probe") from exc
+            if (size <= 0 or not math.isfinite(seconds) or seconds < 0
+                    or (probes and size <= probes[-1][0])):
+                raise RuntimeError("oracle worker emitted an invalid probe ladder")
+            probes.append((size, seconds))
+        elif len(parts) == 1 and parts[0] in ("NOATTACK", "NOPARSE", "NOLANE", "DEGEN"):
             status = parts[0]
-    if killed:
-        return (99.0, "wall")
-    if status in ("NOATTACK", "NOPARSE", "NOLANE", "DEGEN"):
+        else:
+            raise RuntimeError(f"oracle worker emitted malformed output: {line[:200]!r}")
+    if status is not None:
         return (None, status)
-    if len(probes) == 1 and probes[0][1] > 1.0:
-        return (99.0, "wall")  # first probe already over the CPU budget
+    if len(probes) == 1 and probes[0][1] >= 1.0:
+        # The worker stops above 1s, but prints six decimal places: a
+        # just-over-budget first sample can round back down to 1.000000.
+        return (99.0, "wall")
     if len(probes) < 2:
-        return (None, "short")
+        raise RuntimeError("oracle worker exited without a complete measurement")
     return _ladder_exponent(probes)
 
 
