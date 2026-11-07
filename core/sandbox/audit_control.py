@@ -22,7 +22,7 @@ _DROP_MARKERS = frozenset({
 })
 _POSITIVE_STATUS = ("reader_drained", "producer_reaped", "lineage_stopped", "stdout_closed")
 _NEGATIVE_STATUS = ("reader_failed", "lineage_failed")
-_LOSS_COUNTERS = ("append_failures", "parse_ambiguous_records_dropped", "sampled_keeps")
+_LOSS_COUNTERS = ("append_failures", "parse_ambiguous_records_dropped")
 _CAPTURE_FIELDS = frozenset({
     "version", "records", "summaries", "by_type", "capture_incomplete",
     "budget_truncated", "dropped_by_category", "malformed_records",
@@ -52,6 +52,14 @@ def capture_loss_status(record: dict) -> tuple[bool, bool]:
         if type(value) is not int or value < 0:
             malformed = incomplete = True
         elif value:
+            incomplete = True
+    if "sampled_keeps" in record:
+        kept = record["sampled_keeps"]
+        if type(kept) is not int or kept < 0:
+            malformed = incomplete = True
+        elif kept and "dropped_by_category" not in record:
+            # Retained samples do not establish loss. Without the producer's
+            # drop accounting, however, complete absence remains unconfirmed.
             incomplete = True
     return incomplete, malformed
 
