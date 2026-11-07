@@ -140,7 +140,7 @@ def source_for_function(source: str, file_path: str, function_name: str):
         parser = _get_parser(language) if language else None
         data = source.encode("utf-8")
         root = parser.parse(data).root_node if parser is not None else None
-        scope = select_function(root, data, function_name, language)
+        scope = select_function(root, data, function_name, language or "")
         return scope, scope.source_span(source) if scope.status == "selected" else None
     except Exception:
         return FunctionScope("unavailable"), None

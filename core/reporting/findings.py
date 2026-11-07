@@ -410,7 +410,8 @@ def build_finding_detail(finding: dict[str, Any], index: int) -> ReportSection:
 
     from .document import Block
     from .results import result_blocks
-    portable: list[Block] | None = [Block("table", columns=["Attribute", "Value"], rows=[["Final Status", get_display_status(finding)]])]
+    portable: list[Block] | None
+    portable = [Block("table", columns=["Attribute", "Value"], rows=[["Final Status", get_display_status(finding)]])]
     ruling = finding.get("ruling")
     if isinstance(ruling, dict) and ruling.get("reason"):
         portable.append(Block("list", items=["Ruling: " + str(ruling["reason"])]))

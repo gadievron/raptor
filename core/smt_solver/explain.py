@@ -16,6 +16,7 @@ Usage::
 from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
+from collections.abc import Mapping
 
 from .availability import z3
 
@@ -85,7 +86,7 @@ def track(
     return rev
 
 
-def core_names(solver: Any, rev: dict[str, str]) -> list[str]:
+def core_names(solver: Any, rev: Mapping[str, str]) -> list[str]:
     """Return human-readable names of assertions in the unsat core.
 
     Call after ``solver.check()`` returns ``z3.unsat``. Labels added by

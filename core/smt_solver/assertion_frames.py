@@ -102,9 +102,11 @@ def track_frames(
     with no solver queries. Use the returned frame's check() to capture
     native proof data; later assertion changes invalidate ownership.
     """
-    frames = tuple((tuple(labeled), tuple(origins) if origins is not None else None)
-                   for labeled, origins in frames)
-    for labeled, origins in frames:
+    materialized = tuple(
+        (tuple(labeled), tuple(origins) if origins is not None else None)
+        for labeled, origins in frames
+    )
+    for labeled, origins in materialized:
         if origins is not None:
             if len(origins) != len(labeled):
                 raise ValueError("constraint origin count must match the tracked frame")
@@ -114,7 +116,7 @@ def track_frames(
         raise ValueError("frame tracking requires a fresh solver without assertions")
     labeled_all: list[tuple[str, Any]] = []
     origins_all: list[int | None] = []
-    for labeled, origins in frames:
+    for labeled, origins in materialized:
         labeled_all.extend(labeled)
         origins_all.extend(origins if origins is not None else [None] * len(labeled))
     # Track the complete formula in one batch: global collision checks and

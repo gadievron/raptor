@@ -183,7 +183,7 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
         destinations[name] = dest
     publication = Publication(context.snapshot_id)
     rendered = {}
-    format_notes = []
+    format_notes: list[str] = []
     render_failures = []
     for name in destinations:
         try:

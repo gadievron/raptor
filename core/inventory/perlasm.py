@@ -593,7 +593,7 @@ def enrich_inventory_with_perlasm(inventory: dict, target_path: str | Path,
     for record in result.file_records:
         gen_rel = (record.get("perlasm") or {}).get("generator")
         pl_record = by_path.get(gen_rel)
-        if pl_record is None:
+        if pl_record is None or not isinstance(gen_rel, str):
             continue
         kernel_names = {
             it.get("name", "") for it in record.get("items", [])

@@ -13,7 +13,7 @@ from .profiles import PROFILES
 
 
 def strict_backend_error(*, use_sandbox: bool, use_mount: bool,
-                         requires_mount: bool, seccomp_profile: str) -> SandboxSetupError | None:
+                         requires_mount: bool, seccomp_profile: object) -> SandboxSetupError | None:
     from . import seccomp as _seccomp
 
     if not use_sandbox and sys.platform == "darwin":
@@ -92,6 +92,8 @@ def strict_backend_error(*, use_sandbox: bool, use_mount: bool,
             f"requirements on this host — it requires {missing}",
             fixes,
         )
+
+    return None
 
 
 def preflight_scan_cli(argv: list[str]) -> None:

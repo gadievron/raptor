@@ -770,7 +770,7 @@ def _build_cpg_into(
     target: Path,
     *,
     languages: set[str] | None = None,
-    output_dir: Path | None = None,
+    output_dir: Path,
     timeout: int = 600,
     subprocess_runner=None,
     on_progress: Callable | None = None,

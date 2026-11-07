@@ -3278,10 +3278,10 @@ def check_integer_narrowing(
     if language == "go":
         if function_name is not None:
             from .probe_function_scope import go_function_scope
-            scope = go_function_scope(source, function_name)
-            if scope.status != "selected":
-                return IntegerNarrowingResult(reasoning=f"requested function scope {scope.status}")
-            source = scope.source_span(source)
+            go_scope = go_function_scope(source, function_name)
+            if go_scope.status != "selected":
+                return IntegerNarrowingResult(reasoning=f"requested function scope {go_scope.status}")
+            source = go_scope.source_span(source)
         return _check_integer_narrowing_go(split_lines(source))
 
     lines = split_lines(source)

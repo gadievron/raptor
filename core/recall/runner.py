@@ -400,6 +400,7 @@ def collect_findings(out_dir: Path,
     findings: list[dict[str, Any]] = []
     with (scratch_dir("recall-sarif-chunks-") if oversized else contextlib.nullcontext()) as scratch_path:
         for path in oversized:
+            assert scratch_path is not None
             if path in sarifs:
                 sarifs.remove(path)
             sarifs.extend(_chunk_oversized_sarif(path, scratch_path))

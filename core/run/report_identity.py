@@ -9,9 +9,10 @@ from copy import deepcopy
 from pathlib import Path
 import re
 from uuid import uuid4
+from typing import Any, TypeGuard
 
 
-def valid_identity(value):
+def valid_identity(value: object) -> TypeGuard[dict[str, Any]]:
     return (isinstance(value, dict) and type(value.get("schema_version")) is int and value.get("schema_version") == 1
             and all(isinstance(value.get(k), str) and re.fullmatch(r"[a-f0-9]{32}", value[k])
                     for k in ("run_id", "pass_id", "attempt_id"))

@@ -104,3 +104,12 @@ def test_failed_probe_banner_is_not_a_usable_version(binary, monkeypatch):
         subprocess.CompletedProcess(command, 1,
             stdout='CodeQL command-line toolchain release 9.0.0.\n', stderr='failed'))
     assert version_probe.read_codeql_version(str(binary)) is None
+
+
+def test_missing_cli_has_no_version_and_does_not_probe(monkeypatch):
+    manager = DatabaseManager.__new__(DatabaseManager)
+    manager.codeql_cli = None
+    read = Mock(side_effect=AssertionError("missing CLI must not be executed"))
+    monkeypatch.setattr(version_probe, 'read_codeql_version', read)
+    assert manager.get_codeql_version() is None
+    read.assert_not_called()

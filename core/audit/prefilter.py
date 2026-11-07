@@ -4301,7 +4301,7 @@ def _check_c_post_loop_oob(
                 reset_search = re.compile(reset_re).search
                 write_search = None
                 pattern_index = loop_index_var
-            if views.vouch and reset_search(
+            if views.vouch and reset_search is not None and reset_search(
                 views.code_lines[i - line_start],
             ) and reset_search(stripped):  # baseline guard, verbatim (main)
                 loop_index_var = None

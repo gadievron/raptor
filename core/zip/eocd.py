@@ -50,7 +50,7 @@ import logging
 import os
 import struct
 from pathlib import Path
-from typing import BinaryIO, NamedTuple
+from typing import BinaryIO, NamedTuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +172,7 @@ def peek_eocd(
     summary fires the caller's gate.
     """
     if hasattr(source, "read") and hasattr(source, "seek"):
-        return _peek_from_stream(source)
+        return _peek_from_stream(cast(BinaryIO, source))
     if isinstance(source, (bytes, bytearray)):
         return _peek_from_bytes(bytes(source))
     return _peek_from_path(Path(source))

@@ -19,7 +19,7 @@ from functools import lru_cache, partial
 from heapq import nsmallest
 from itertools import chain, islice
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.json import load_json
 from core.paths import confine
@@ -5181,9 +5181,9 @@ def _match_trigger_keywords(title: str) -> list[str] | None:
     title_lower = title.lower()
     titles = tuple(_TRIGGER_KEYWORDS)
     # Bound retained catalogue text; oversized inputs keep the direct scan.
-    matcher = _matching_trigger_title
+    matcher: Callable[[str, tuple[str, ...]], str | None] = _matching_trigger_title
     if len(title_lower) > 256 or len(titles) > 64 or sum(map(len, titles)) > 4096:
-        matcher = matcher.__wrapped__
+        matcher = _matching_trigger_title.__wrapped__
     matched = matcher(title_lower, titles)
     return _TRIGGER_KEYWORDS.get(matched) if matched is not None else None
 

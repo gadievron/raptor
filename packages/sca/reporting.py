@@ -57,7 +57,8 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
     blocks.extend(_overview_blocks(rows))
     details = []
     for index, row in enumerate(captured, 1):
-        data = row.get("sca") if isinstance(row.get("sca"), dict) else {}
+        raw_sca = row.get("sca")
+        data = raw_sca if isinstance(raw_sca, dict) else {}
         reachability = data.get("reachability") or {}
         reachability = reachability.get("verdict") or reachability.get("status", "not recorded") if isinstance(reachability, dict) else str(reachability)
         fields = [["Package", data.get("name")], ["Ecosystem", data.get("ecosystem")], ["Version", data.get("version")],
