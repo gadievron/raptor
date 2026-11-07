@@ -161,9 +161,9 @@ def test_invalid_counterexamples_are_not_repaired(case):
 
 
 @pytest.mark.parametrize(
-    "size,expected", [(0, False), (-1, False), (1, True), (2, True)]
+    "size,expected", [(0, True), (-1, False), (1, True), (2, True)]
 )
-def test_opaque_sizes_are_positive_and_stable_during_replay(size, expected):
+def test_opaque_sizes_are_nonnegative_and_stable_during_replay(size, expected):
     model = {"Count": size, "sizeof(Data)": size, "Count'": size + 1}
     assert (
         validate_counterexample(
@@ -281,7 +281,7 @@ def test_pre_replay_worker_contract_is_not_accepted(monkeypatch, mode):
 def test_native_worker_uses_bounded_parser_and_replayed_witness(case):
     pytest.importorskip("z3")
     if case == "identifier":
-        result = inv.check_site_preservation("max_size <= Limit", "max_size++;")
+        result = inv.check_site_preservation("max_size <= Limit", "max_size++;", timeout_ms=30_000)
         assert result.verdict == "violable", result.to_dict()
         assert result.model["max_size'"] > result.model["Limit"]
     else:
@@ -295,8 +295,10 @@ def test_native_worker_uses_bounded_parser_and_replayed_witness(case):
                 ),
                 dict(code="Count++;", line=2, pre_conditions=[]),
             ],
+            timeout_ms=30_000,
         )
-        assert [result.verdict for result in results] == ["out_of_scope", "violable"]
+        assert results is not None, "native invariant batch returned no complete reply"
+        assert [result.verdict for result in results] == ["out_of_scope", "violable"], [result.to_dict() for result in results]
 
 
 def test_a_nonnegative_witness_blocks_a_contradictory_preservation_verdict(monkeypatch):

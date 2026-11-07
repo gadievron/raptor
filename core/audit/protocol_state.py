@@ -645,7 +645,8 @@ def _branch_guards(
 def _bare_fields(text: str, names: set[str]) -> str:
     """Normalise ``base->field`` / ``base.field`` chains to bare field
     names for every invariant identifier, so site code and guards
-    speak the invariant's vocabulary.
+    speak the invariant's vocabulary. Size operands retain their object/type
+    identity: ``sizeof(other->field)`` is not the size of bare ``field``.
 
     Implemented as a manual backward walk over ``ident (->|.)``
     prefixes. The previous ``(?:ident(?:->|.))+name`` regex carried an
@@ -653,10 +654,14 @@ def _bare_fields(text: str, names: set[str]) -> str:
     access chains (tens of seconds on multi-kB guard-condition
     strings), and the per-invariant budget is only checked between
     sites — one pathological condition stalled the whole harness."""
-    out = text
-    for name in sorted(names, key=len, reverse=True):
-        out = _strip_chain_prefixes(out, name)
-    return out
+    from .invariant_expression import SIZEOF
+
+    pieces = re.split(rf"(\b{SIZEOF})", text)
+    ordered = sorted(names, key=len, reverse=True)
+    for index in range(0, len(pieces), 2):
+        for name in ordered:
+            pieces[index] = _strip_chain_prefixes(pieces[index], name)
+    return "".join(pieces)
 
 
 def _chain_prefix_start(text: str, pos: int,

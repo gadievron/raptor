@@ -7,16 +7,39 @@ import operator
 import re
 
 IDENTIFIER = r"[A-Za-z_]\w*(?:(?:->|\.)\w+)*"
+SIZEOF = r"sizeof\s*\([^()]*\)"
 MAX_TEXT_CHARS = 8192
 MAX_TOKENS = 512
 MAX_DEPTH = 64
 MAX_INTEGER_DIGITS = 1024
 
-_TOKEN_RE = re.compile(rf"\s*(sizeof\s*\([^()]*\)|{IDENTIFIER}|[0-9]+|[()+\-,])")
+_TOKEN_RE = re.compile(rf"\s*({SIZEOF}|{IDENTIFIER}|[0-9]+|[()+\-,])")
 
 
 class ParseError(Exception):
     pass
+
+
+def _sizeof_symbol(text):
+    """Canonical opaque identity for simple object/type operands only.
+
+    Array declarators can contain evaluated runtime extents. A frozen
+    symbol cannot represent them; resolving even fixed arrays needs a
+    separate source/type admission path rather than opaque token capture.
+    """
+    if re.fullmatch(SIZEOF, text) is None:
+        raise ParseError("invalid sizeof expression")
+    operand = " ".join(text[text.index("(") + 1 : -1].split())
+    operand = re.sub(r"\s*(->|\.)\s*", r"\1", operand)
+    if (
+        re.fullmatch(IDENTIFIER, operand) is None
+        and re.fullmatch(r"[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*(?:\s*\*)*", operand) is None
+    ):
+        raise ParseError(
+            "sizeof operand requires source/type or runtime-extent modeling"
+        )
+    operand = re.sub(r"\s*\*\s*", "*", operand)
+    return f"sizeof({operand})"
 
 
 def _tokenize(text: str) -> list[str]:
@@ -114,8 +137,8 @@ class _ExprParser:
             b = self._expr(depth + 1)
             self._expect(")")
             return (tok, a, b)
-        if re.fullmatch(r"sizeof\s*\([^()]*\)", tok):
-            return ("sizeof", tok)
+        if re.fullmatch(SIZEOF, tok):
+            return ("sizeof", _sizeof_symbol(tok))
         if tok.isdigit():
             if len(tok) > MAX_INTEGER_DIGITS:
                 raise ParseError("integer literal exceeds digit budget")
@@ -166,9 +189,11 @@ def validate_expression(root):
         ):
             continue
         elif kind in {"var", "sizeof"} and len(node) == 2 and isinstance(node[1], str):
-            pattern = IDENTIFIER if kind == "var" else r"sizeof\s*\([^()]*\)"
+            pattern = IDENTIFIER if kind == "var" else SIZEOF
             if len(node[1]) > MAX_TEXT_CHARS or re.fullmatch(pattern, node[1]) is None:
                 raise ParseError("invalid expression symbol")
+            if kind == "sizeof" and _sizeof_symbol(node[1]) != node[1]:
+                raise ParseError("noncanonical sizeof identity")
             symbols[node[1]] = kind
         else:
             raise ParseError("unsupported expression node")
@@ -204,7 +229,7 @@ def validate_counterexample(
 ):
     """Replay the exact pre-state, guards, assignment and violated post-state.
 
-    Every required symbol must be present. Opaque sizes remain positive and
+    Every required symbol must be present. Opaque sizes remain nonnegative and
     unchanged, as in the declared mathematical model. No native query or
     value completion is used to repair a bad counterexample.
     """
@@ -243,7 +268,7 @@ def validate_counterexample(
         type(value) is not int or value.bit_length() > 4096 for value in model.values()
     ):
         return False
-    if any(kind == "sizeof" and model[name] <= 0 for name, kind in symbols.items()):
+    if any(kind == "sizeof" and model[name] < 0 for name, kind in symbols.items()):
         return False
     if nonnegative and any(model[name] < 0 for name in symbols):
         return False

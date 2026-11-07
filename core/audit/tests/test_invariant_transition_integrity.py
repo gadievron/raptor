@@ -156,6 +156,7 @@ def test_nonnegative_regime_cannot_restart_the_first_query_budget(monkeypatch):
 
 def test_all_mutation_sites_share_one_query_budget(monkeypatch):
     from core.smt_solver import session
+    z3 = pytest.importorskip("z3")
 
     clock = [0.0]
     monkeypatch.setattr(session, "monotonic", lambda: clock[0])
@@ -164,13 +165,13 @@ def test_all_mutation_sites_share_one_query_budget(monkeypatch):
 
     def construct(*args, **kwargs):
         solver = original(*args, **kwargs)
-        check = solver.check
 
         def native(*args):
             checks.append(1)
-            result = check(*args)
             clock[0] = 5.0
-            return result
+            # This tests deadline sharing, not whether a real native
+            # solver finishes within 10ms on a loaded pytest worker.
+            return z3.unsat
 
         monkeypatch.setattr(solver, "check", native)
         return solver
@@ -344,7 +345,7 @@ def test_sizeof_prefix_does_not_turn_a_source_variable_into_a_size_constant(name
     assert model[name + "'"] > model["Limit"]
 
 
-def test_actual_sizeof_remains_a_positive_opaque_constant():
+def test_actual_sizeof_remains_a_nonnegative_opaque_constant():
     result = inv.check_site_preservation("Count <= sizeof(Data)", "Count=0;")
     assert result.verdict == "preserved"
 

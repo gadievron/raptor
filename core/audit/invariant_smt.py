@@ -31,8 +31,9 @@ Scope — declared, not guessed:
 * Linear integer arithmetic over named identifiers (struct member
   chains like ``s->obuf_len`` are treated as atomic names), integer
   constants, ``+``/``-``, ``min()``/``max()`` (encoded as ITE) and
-  ``sizeof(...)`` (an opaque positive symbolic constant, one symbol
-  per distinct argument text).
+  simple object/type ``sizeof(...)`` operands (opaque nonnegative constants,
+  including zero-sized extensions; lexical whitespace is canonicalized).
+  Array and other unsupported operands require source/type modeling and decline.
 * Mathematical integers — source casts and ambiguous leading-zero literals
   decline; no C wraparound/overflow modelling (the
   overflow verbs cover that); no pointer, heap or alias reasoning.
@@ -365,7 +366,7 @@ def _collect_symbols(node: tuple, env: dict, z3mod: Any, solver) -> None:
     elif kind == "sizeof" and node[1] not in env:
         sym = z3mod.Int(f"__{len(env)}_{node[1][:24]}")
         env[node[1]] = sym
-        solver.add(sym > 0)   # sizeof is always positive
+        solver.add(sym >= 0)  # Opaque types may have zero size in compiler extensions.
     elif kind in ("add", "sub", "min", "max"):
         _collect_symbols(node[1], env, z3mod, solver)
         _collect_symbols(node[2], env, z3mod, solver)
