@@ -43,6 +43,9 @@ class CompilationResult:
     rule_path: Path | None = None
     rationale: str = ""
     dual_control: bool = False
+    # True only when the engine ran cleanly and rejected the drafted rule
+    # against its controls. Transport, parser, and tool errors are retryable.
+    control_rejected: bool = False
     matches: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     # Persisted for post-mortem: when dual control fails, the drafted
@@ -64,6 +67,7 @@ class CompilationResult:
             "rule_path": str(self.rule_path) if self.rule_path else None,
             "rationale": self.rationale,
             "dual_control": self.dual_control,
+            "control_rejected": self.control_rejected,
             "matches": self.matches,
             "errors": self.errors,
             "test_positive": self.test_positive,
@@ -368,8 +372,10 @@ class _InvariantProposer:
         self._inv = inv
         self._engine = engine
         self._source_snippets = source_snippets
+        self.last_attempt_complete = False
 
     def propose(self, context, feedback, *, prior_verdict=None):
+        self.last_attempt_complete = False
         from packages.checker_synthesis.prompts import SYNTHESIS_SCHEMA
 
         # The builder folds the engine-specific system base into the
@@ -379,7 +385,9 @@ class _InvariantProposer:
             source_snippets=self._source_snippets,
         )
         try:
-            return self._llm(prompt, SYNTHESIS_SCHEMA, system)
+            proposal = self._llm(prompt, SYNTHESIS_SCHEMA, system)
+            self.last_attempt_complete = isinstance(proposal, dict)
+            return proposal
         except Exception as exc:
             msg = f"LLM error: {exc}"
             raise ValueError(msg) from exc
@@ -395,8 +403,10 @@ class _DualControlOracle:
         self._engine = engine
         self._out_dir = out_dir
         self._call_count = 0
+        self.last_control_rejected = False
 
     def judge(self, candidate, _context):
+        self.last_control_rejected = False
         from core.orchestration.driver import Verdict
         from packages.checker_synthesis.models import SynthesisedRule
         from packages.checker_synthesis.synthesise import (
@@ -467,6 +477,16 @@ class _DualControlOracle:
                 " context forms that engines treat more literally."
                 f"\nThe fixture that did not match:\n{test_pos}"
             )
+        # _dual_control reports scanner errors separately from the fixture
+        # mismatch. Only a sole known mismatch is a completed rejection.
+        self.last_control_rejected = len(dc_errors) == 1 and (
+            dc_errors[0] == "dual control: rule did not match positive test fixture"
+            or re.fullmatch(
+                r"dual control: rule matched negative test fixture "
+                r"\([0-9]+ hit\(s\) — rule is too broad\)",
+                dc_errors[0],
+            ) is not None
+        )
         return Verdict(
             passed=False, feedback=dc_feedback,
             evidence={**evidence, "dc_errors": dc_errors},
@@ -520,6 +540,11 @@ def compile_invariant(
         result.rule_path = ev.get("rule_path")
         result.rationale = ev.get("rationale", "")
         result.dual_control = dr.verdict.passed
+        # The driver may retain an earlier verdict after a later exception.
+        # Reuse only when the final proposal AND control run completed.
+        result.control_rejected = (
+            proposer.last_attempt_complete and oracle.last_control_rejected
+        )
         result.test_positive = ev.get("test_positive", "")
         result.test_negative = ev.get("test_negative", "")
         if "dc_errors" in ev:
