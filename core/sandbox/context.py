@@ -1356,6 +1356,8 @@ def _stage_fake_home_intake(
         raise err
 
     home_fd = None
+    body_failed = False
+    home_close_failed = False
     try:
         home_fd = _open_fake_home(fake_home_path)
         for rel, dirnames, filenames, dir_fd in os.fwalk(
@@ -1373,6 +1375,7 @@ def _stage_fake_home_intake(
                     return None
                 # O_NOFOLLOW + fstat: the lstat/open race is real in
                 # a dir an earlier sandboxed child could write.
+                read_failed = False
                 fd = os.open(name,
                              os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                              dir_fd=dir_fd)
@@ -1394,15 +1397,34 @@ def _stage_fake_home_intake(
                         # (concurrent writer) — refuse rather than
                         # stage a torn/oversize copy.
                         return None
+                except BaseException:
+                    read_failed = True
+                    raise
                 finally:
-                    os.close(fd)
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        # Keep a read failure or cancellation authoritative.
+                        if not read_failed:
+                            raise
                 total += len(data)
                 stage_files[os.path.join(in_sbx_dir, name)] = data
     except OSError:
         return None
+    except BaseException:
+        body_failed = True
+        raise
     finally:
         if home_fd is not None:
-            os.close(home_fd)
+            try:
+                os.close(home_fd)
+            except OSError:
+                # Intake I/O is best-effort, including root cleanup, but
+                # cleanup must never replace an active cancellation.
+                if not body_failed:
+                    home_close_failed = True
+    if home_close_failed:
+        return None
     return stage_files, stage_dirs
 
 
