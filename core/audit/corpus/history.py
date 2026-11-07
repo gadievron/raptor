@@ -12,9 +12,9 @@ per scored label to a JSONL store (default
 ``~/.local/share/raptor/corpus-history.jsonl``, overridable via
 ``RAPTOR_CORPUS_HISTORY``).  ``compare`` is the report for measuring
 fix impact between two runs: per-label verdict flips grouped by flip
-type, attribution-cell changes, and cost deltas.  ``stability``
-measures nondeterminism: verdict variance across runs that share the
-same pipeline tree and config.
+type, attribution-cell changes, and cost deltas.  ``stability`` reports
+verdict variance across matching recorded pipeline, label, and configuration
+contexts.
 
 Reporting-only, by design: nothing in the audit/corpus pipeline reads
 this store to alter behavior.  The read side is exclusively this
@@ -855,33 +855,36 @@ def stability_groups(
     runs: list[dict[str, Any]],
     labels_by_run: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Group runs by (tree sha, label kind, profile, config); measure
-    variance.
+    """Group by recorded tree, kind, profile, config, and label fingerprints.
 
     Runs without a recorded tree sha (imports) cannot assert
     same-tree and are excluded.  Within each group of two or more
-    runs, a label is unstable when the same tree and config produced
-    different verdicts — the nondeterminism measure.  The label kind
-    joins the group key structurally: a mutant run can never share a
-    nondeterminism group with a real-label run.
+    runs, report labels with different verdicts. Missing label fingerprints
+    form separate legacy groups whose incomplete provenance is reported.
+    Recorded hashes are not revalidated. Label kind remains structural:
+    mutant and real-label runs never share a group.
     """
     grouped: dict[
-        tuple[str, str, str, str], list[dict[str, Any]],
+        tuple[str, str, str, str, str, str], list[dict[str, Any]],
     ] = {}
     for run in runs:
         tree = run.get("pipeline_tree_sha") or ""
         if not tree:
             continue
+        label_set = run.get("label_set_hash")
+        label_files = run.get("label_files_sha256")
         key = (
             tree,
             run_label_kind(run),
             run_profile(run),
             json.dumps(run.get("config") or {}, sort_keys=True),
+            label_set if isinstance(label_set, str) else "",
+            label_files if isinstance(label_files, str) else "",
         )
         grouped.setdefault(key, []).append(run)
 
     out = []
-    for (tree, kind, profile, config_json), group in sorted(
+    for (tree, kind, profile, config_json, label_set, label_files), group in sorted(
         grouped.items(),
     ):
         if len(group) < 2:
@@ -904,6 +907,9 @@ def stability_groups(
             "label_kind": kind,
             "profile": profile,
             "config": json.loads(config_json),
+            "label_set_hash": label_set,
+            "label_files_sha256": label_files,
+            "label_provenance_recorded": bool(label_set and label_files),
             "run_ids": [r.get("run_id", "") for r in group],
             "comparable_labels": comparable,
             "unstable": unstable,
@@ -912,11 +918,11 @@ def stability_groups(
 
 
 def format_stability(groups: list[dict[str, Any]]) -> str:
-    """Format the same-tree same-config variance report."""
+    """Format variance and recorded input-provenance coverage."""
     if not groups:
         return (
             "No comparable run groups (need two or more recorded runs "
-            "with the same pipeline tree and config)."
+            "with matching recorded tree, label provenance, profile, kind, and configuration)."
         )
     lines = []
     for g in groups:
@@ -933,6 +939,11 @@ def format_stability(groups: list[dict[str, Any]]) -> str:
             f"profile {g.get('profile', 'deployed')} "
             f"config [{config}] — runs: {', '.join(g['run_ids'])}"
         )
+        label_set = (g.get("label_set_hash") or "")[:12] or "unrecorded"
+        label_files = (g.get("label_files_sha256") or "")[:12] or "unrecorded"
+        lines.append(sanitise_for_terminal(f"  Recorded labels: set={label_set} definitions={label_files}"))
+        if not g.get("label_provenance_recorded", False):
+            lines.append("  NOTE: label provenance is incomplete; variance does not establish identical label inputs.")
         n_unstable = len(g["unstable"])
         lines.append(
             f"  Verdict variance: {n_unstable}/"
@@ -1218,8 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser(
         "stability",
-        help="Verdict variance across same-tree same-config runs "
-             "(nondeterminism measure)",
+        help="Verdict variance grouped by recorded pipeline, label provenance, and configuration",
     )
 
     p_imp = sub.add_parser(

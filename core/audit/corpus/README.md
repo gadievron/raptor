@@ -301,7 +301,8 @@ integer-ABI configuration. Missing fields stay absent and explicit nulls
 are preserved; the importing host's defaults do not fill historical gaps.
 Label records carry expected/actual status, match, the attribution
 cell, observed mechanisms, error_reason, cost, and duration.
-Stability grouping keys on (tree, profile, config) — a cold run
+Stability grouping keys on recorded tree, profile, config, selected-label hash,
+and label-definition hash — a cold run
 never shares a nondeterminism group with a deployed run — and
 `compare` warns when profiles differ or when either side is a
 selective refire.
@@ -327,6 +328,10 @@ profile and configuration, then falls back to the newest overlap with context
 warnings. Explicit comparisons and selective per-label deltas keep their
 existing selection behavior. Matching recorded settings does not establish
 identical cache contents or unchanged label expectations.
+Stability groups also keep recorded and missing label fingerprints separate.
+Legacy groups retain their verdict-variance counts with an incomplete-provenance
+notice. Fingerprint presence is reported without revalidating archived hashes;
+it does not establish identical runtime inputs or cache contents.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history
@@ -340,8 +345,8 @@ python3 -m core.audit.corpus.history runs
 # attribution-cell changes, cost deltas
 python3 -m core.audit.corpus.history compare v4 v5
 python3 -m core.audit.corpus.history trend --label 'src/net/session.c:session_recv'
-# Nondeterminism measure: verdict variance across runs sharing the
-# same pipeline tree + config
+# Verdict variance across matching recorded pipeline, label provenance,
+# and configuration
 python3 -m core.audit.corpus.history stability
 # Back-import results.json from runs predating the store (marked
 # imported=true; tolerates the older result shapes)
