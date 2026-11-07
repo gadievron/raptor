@@ -238,4 +238,4 @@ def test_signed_subtraction_uses_the_signed_backend_oracle(c_grammar):
 def test_parameter_attributes_cannot_masquerade_as_plain_scalar_types(c_grammar, declaration):
     text = f'unsigned Read({declaration},unsigned b){{return a+b;}}'
     result = operation.bind_arithmetic_operation(text, ['a', 'b'], '+', language='c', integer_abi='ilp32')
-    assert result.status == 'bound' and result.type_status == 'unavailable'
+    assert result.status == 'unavailable' and result.type_status == 'unavailable'

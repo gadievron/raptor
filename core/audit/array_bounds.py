@@ -19,6 +19,7 @@ from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
+from .function_execution_frame import ordinary_function_frame
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import visible_declarations
@@ -122,16 +123,11 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
         return ArrayAccess("unavailable", "one scoped function required")
     function = functions[0]
     body = function.child_by_field_name("body")
-    function_type = function.child_by_field_name("type")
     function_declarator = function.child_by_field_name("declarator")
     if function_declarator is None or function_declarator.type != "function_declarator":
         return ArrayAccess("unavailable", "plain function declaration required")
-    for child in function.named_children:
-        if child in (body, function_type, function_declarator) or child.type == "comment":
-            continue
-        if child.type in {"storage_class_specifier", "function_specifier"} and text(child) in {"static", "extern", "inline"}:
-            continue
-        return ArrayAccess("unavailable", "function execution qualifiers are unsupported")
+    if not ordinary_function_frame(function, data, language):
+        return ArrayAccess("unavailable", "function execution frame is unsupported")
     body_nodes = _nodes(body) if body is not None else None
     if body_nodes is None:
         return ArrayAccess("unavailable", "function body unavailable")

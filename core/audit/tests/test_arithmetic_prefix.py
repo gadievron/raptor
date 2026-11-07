@@ -103,7 +103,7 @@ def test_coroutine_suspension_cannot_be_ignored_before_the_site():
     text = ('Task Read(unsigned Value,unsigned Step,Awaitable Extra){co_await Extra;'
             'if(Value>0 && Step>0){unsigned Total=Value+Step;}}')
     result = bind_arithmetic_operation(text, ['Value', 'Step'], '+', language='cpp', integer_abi='ilp32')
-    assert result.status == 'bound' and result.guard_status == 'unavailable'
+    assert result.status == 'unavailable' and result.guard_status == 'unavailable'
 
 
 @pytest.mark.parametrize('language', ['c', 'cpp'])
@@ -129,7 +129,7 @@ def test_supported_prefix_keeps_real_source_smt_verdicts(prefix):
                                      source=source(prefix, guard='Value<=10 && Step<=10'),
                                      hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v17'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v18'
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'refuted'])
@@ -200,4 +200,20 @@ def test_unevaluated_atomic_storage_does_not_guess_a_plain_integer_size():
 def test_unevaluated_vector_operands_do_not_inherit_scalar_storage_size():
     extra = 'unsigned Extra __attribute__((vector_size(512)))'
     assert bind('signed char Ignored=sizeof(Extra+Extra);', extra=extra).guard_status == 'unavailable'
-    assert bind('unsigned Ignored=sizeof(Extra+Extra);', extra=extra).guard_status == 'bound'
+    # Even an unevaluated use cannot validate the surrounding function's
+    # unsupported parameter layout. The isolated size domain stays unknown.
+    assert bind('unsigned Ignored=sizeof(Extra+Extra);', extra=extra).status == 'unavailable'
+    from core.audit.arithmetic_prefix import PrefixIntegerModel
+    from core.audit.condition_extraction import _get_parser
+    from core.audit.integer_abi import resolve_integer_abi
+    data = source('unsigned Ignored=sizeof(Extra+Extra);', extra=extra).encode()
+    pending = [_get_parser('c').parse(data).root_node]
+    while pending:
+        node = pending.pop()
+        if node.type == 'sizeof_expression':
+            break
+        pending.extend(node.named_children)
+    else:
+        pytest.fail('sizeof fixture did not parse')
+    model = PrefixIntegerModel(data, 'c', resolve_integer_abi('ilp32'))
+    assert model.value_domain(node) == (0, None)
