@@ -523,9 +523,16 @@ def _normalize_for_comparison(value: str) -> str:
     return stripped.casefold()
 
 
+_NORMALIZE_IMPL = _normalize_for_comparison
+
+
 def _is_template(value: str) -> bool:
     """Check if a value is a dynamic template (contains {} placeholders)."""
     return "{" in value and "}" in value
+
+
+_TEMPLATE_IMPL = _is_template
+_VALUE_SORT_IMPL = sorted
 
 
 def _template_matches(template: str, literal: str) -> bool:
@@ -542,6 +549,38 @@ def _template_matches(template: str, literal: str) -> bool:
         return bool(_re.fullmatch(pattern, literal))
     except _re.error:
         return False
+
+
+def _native_format_matches(
+    unhandled: list[str], consumed: set[str], norms: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Join disjoint native values, preserving the first consumer match.
+
+    Index the visited prefix only; no consumer is normalized twice and no
+    eager scan is needed when an early consumer already answers a query.
+    """
+    remaining: list[str] = []
+    mismatches: list[str] = []
+    consumers = iter(consumed)
+    first_by_norm: dict[str, str] = {}
+    for value in unhandled:
+        normalized = _normalize_for_comparison(value)
+        candidate = first_by_norm.get(normalized)
+        if candidate is None:
+            for item in consumers:
+                item_norm = norms.get(item)
+                if item_norm is None:
+                    item_norm = _normalize_for_comparison(item)
+                    norms[item] = item_norm
+                first_by_norm.setdefault(item_norm, item)
+                if item_norm == normalized:
+                    candidate = item
+                    break
+        if candidate is not None:
+            mismatches.append(f"{value!r} vs {candidate!r} (format mismatch)")
+        else:
+            remaining.append(value)
+    return mismatches, remaining
 
 
 def _compute_gaps(
@@ -565,6 +604,13 @@ def _compute_gaps(
         unhandled = sorted(producer.produced - consumer.consumed)
         dead = sorted(consumer.consumed - producer.produced)
 
+        if (sorted is _VALUE_SORT_IMPL and not unhandled and not dead
+                and _is_template is _TEMPLATE_IMPL
+                and type(producer) is _FunctionLiterals and type(consumer) is _FunctionLiterals
+                and type(producer.produced) is set and type(consumer.consumed) is set
+                and all(type(value) is str for value in producer.produced)):
+            continue
+
         # Remove template producers that cover consumed literals.
         producer_templates = [v for v in producer.produced if _is_template(v)]
         if producer_templates:
@@ -576,30 +622,56 @@ def _compute_gaps(
         # Remove template values from unhandled (they aren't literal gaps).
         unhandled = [u for u in unhandled if not _is_template(u)]
 
+        native_join = (
+            sorted is _VALUE_SORT_IMPL and len(unhandled) >= 2
+            and type(producer) is _FunctionLiterals and type(consumer) is _FunctionLiterals
+            and type(producer.produced) is set and type(consumer.consumed) is set
+            and 8 <= len(consumer.consumed) <= 4096
+            and _normalize_for_comparison is _NORMALIZE_IMPL
+            and all(type(value) is str for value in producer.produced)
+            and all(type(value) is str for value in consumer.consumed)
+            and all(type(value) is str for value in unhandled)
+            and all(type(value) is str for value in dead)
+            and not any(value in consumer.consumed for value in unhandled)
+            and sum(map(len, consumer.consumed)) <= 256 * 1024
+        )
+        consumer_norms: dict[str, str] | None = {} if native_join else None
         # Symmetric normalization for dead branches: remove consumer values
         # that match a producer value after case-folding / zero-stripping.
         if dead:
             producer_norms = {_normalize_for_comparison(p) for p in producer.produced}
-            dead = [d for d in dead if _normalize_for_comparison(d) not in producer_norms]
+            if native_join:
+                assert consumer_norms is not None
+                for value in dead:
+                    consumer_norms[value] = _normalize_for_comparison(value)
+                dead = [d for d in dead if consumer_norms[d] not in producer_norms]
+            else:
+                dead = [d for d in dead if _normalize_for_comparison(d) not in producer_norms]
 
         # Format normalization: flag exact-miss values that match after
         # case-folding or zero-stripping.
-        format_mismatches: list[str] = []
-        remaining_unhandled: list[str] = []
-        for u in unhandled:
-            u_norm = _normalize_for_comparison(u)
-            matched = False
-            for c in consumer.consumed:
-                if c == u:
-                    continue
-                if _normalize_for_comparison(c) == u_norm:
-                    format_mismatches.append(
-                        f"{u!r} vs {c!r} (format mismatch)"
-                    )
-                    matched = True
-                    break
-            if not matched:
-                remaining_unhandled.append(u)
+        if native_join:
+            assert consumer_norms is not None
+            format_mismatches, remaining_unhandled = _native_format_matches(
+                unhandled, consumer.consumed, consumer_norms,
+            )
+        else:
+            format_mismatches: list[str] = []
+            remaining_unhandled: list[str] = []
+            for u in unhandled:
+                u_norm = _normalize_for_comparison(u)
+                matched = False
+                for c in consumer.consumed:
+                    if c == u:
+                        continue
+                    if _normalize_for_comparison(c) == u_norm:
+                        format_mismatches.append(
+                            f"{u!r} vs {c!r} (format mismatch)"
+                        )
+                        matched = True
+                        break
+                if not matched:
+                    remaining_unhandled.append(u)
 
         if not remaining_unhandled and not dead and not format_mismatches:
             continue
