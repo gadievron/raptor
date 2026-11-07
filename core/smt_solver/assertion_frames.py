@@ -14,11 +14,14 @@ from .session import check_solver
 
 @dataclass(frozen=True)
 class TrackedFrames:
-    """Immutable ownership for a formula and its own assumption-free solve.
+    """Immutable ownership for a formula and its frame-owned tracking query.
 
     A native solver can retain a stale core after pop(), even when its
     assertions match this frame again. Only check() captures proof data;
     arbitrary external checks never establish provenance for this frame.
+    The owned query explicitly assumes this frame's markers: rebuilding
+    identical implication assertions after pop/reset must not lose their
+    meaning when native assert-and-track bookkeeping has disappeared.
     """
 
     labels: Mapping[str, str] = field(default_factory=dict)
@@ -50,14 +53,15 @@ class TrackedFrames:
     def check(self) -> Any:
         """Solve this exact frame once and capture its native core immediately.
 
-        No assumptions or temporary facts are accepted. Failed/unknown/sat
-        checks clear earlier proof data. Reading captured ownership adds no
+        No caller assumptions or temporary facts are accepted. The only
+        explicit assumptions are the immutable markers owned by this frame.
+        Failed/unknown/sat checks clear earlier proof data. Reading ownership adds no
         queries and never reads a potentially stale native core.
         """
         object.__setattr__(self, "_core", None)
         if not self._matches(self._solver):
             raise ValueError("tracked frame assertions changed before check")
-        result = check_solver(self._solver)
+        result = check_solver(self._solver, *self._markers)
         if result == z3.unsat and self._matches(self._solver):
             try:
                 # Native AST identity includes context. Printed marker names

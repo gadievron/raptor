@@ -206,8 +206,8 @@ def test_entry_and_access_probes_share_one_query_budget(monkeypatch):
     def solver_factory(*args, **kwargs):
         solver = native_factory(*args, **kwargs)
         native_check = solver.check
-        def check():
-            result = native_check()
+        def check(*assumptions):
+            result = native_check(*assumptions)
             checks.append(1)
             now[0] += 6
             return result
