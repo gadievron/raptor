@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import rmtree_hardened
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox._daemon import _MAX_CAPTURE_BYTES as _DAEMON_CAPTURE_CAP
 
 log = logging.getLogger(__name__)
@@ -95,10 +96,16 @@ def _remove_owned_output(path: str) -> bool:
     try:
         if rmtree_hardened(path):
             return True
-    except Exception:
-        log.warning("Cannot remove sandbox host output %s", path, exc_info=True)
+    except Exception as exc:
+        log.warning(
+            "Cannot remove sandbox host output %s: %s: %s",
+            sanitise_for_terminal(path),
+            sanitise_for_terminal(type(exc).__name__, max_len=64),
+            sanitise_for_terminal(str(exc)),
+        )
     else:
-        log.warning("Sandbox host output retained after failed removal: %s", path)
+        log.warning("Sandbox host output retained after failed removal: %s",
+                    sanitise_for_terminal(path))
     return False
 
 
