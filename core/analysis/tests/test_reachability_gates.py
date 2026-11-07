@@ -1,5 +1,8 @@
 """Tests for core.analysis.reachability_gates — generic finding gates."""
 
+from core.testing.reachability_state import isolated_reachability_caches
+
+
 import json
 import re
 from typing import ClassVar
@@ -17,6 +20,16 @@ from core.analysis.reachability_gates import (
     query_sink_arg_index,
     query_unguarded_sinks,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 # ─── build_sink_reachable_set ────────────────────────────────────────────────
 

@@ -3,6 +3,10 @@ same-file bare-name language gating, and cache LRU behaviour tests
 for :mod:`core.analysis.reachability`."""
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+import pytest
+
+
 from typing import Any, Dict, List
 
 from core.analysis.reachability import (
@@ -11,6 +15,16 @@ from core.analysis.reachability import (
     entry_reachability,
     function_called,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _fn(name, line, vis=None, line_end=None):

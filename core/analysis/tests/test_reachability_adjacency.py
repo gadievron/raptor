@@ -29,6 +29,10 @@ Built-in policy points pinned by the tests below:
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+import pytest
+
+
 from typing import Any, Dict, List
 
 
@@ -46,6 +50,16 @@ from core.analysis.reachability import (
     is_framework_callable,
     is_registered_via_call,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # ---------------------------------------------------------------------------

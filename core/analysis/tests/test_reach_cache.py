@@ -7,6 +7,8 @@ sha256.
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+
 from pathlib import Path
 from typing import Any, Dict
 
@@ -20,6 +22,17 @@ from core.analysis.reachability import (
     _AdjacencyIndex,
     _get_or_build_index,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 
 @pytest.fixture(autouse=True)

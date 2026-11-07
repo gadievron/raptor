@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+import pytest
+
 from core.analysis.reach_witness import (
     STRUCTURALLY_SUPPRESSIBLE_KINDS,
     Reachability,
@@ -10,6 +13,17 @@ from core.analysis.reach_witness import (
     resolve_reachability,
     verdict_from_classification,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 # The corpus-earned set the enforcement consumer would pass once a labelled
 # corpus shows zero false-suppress for these kinds.
