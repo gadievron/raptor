@@ -410,6 +410,11 @@
     "count": 22,
     "kind": "alternation"
   },
+  "core/audit/condition_smt.py::_BUFFER_COPY_SINKS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Existing ten buffer-copy APIs previously baselined as function-local memcpy_sinks, now shared at module scope by the arithmetic checks. Symbol relocation only; no vocabulary expansion. This grandfathered API set selects the supported buffer-copy arithmetic model; additional APIs require separate review."
+  },
   "core/audit/condition_smt.py::_CAST_CONSUMERS": {
     "count": 16,
     "kind": "literal",
@@ -448,10 +453,6 @@
     "count": 14,
     "kind": "literal",
     "note": "unsigned C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
-  },
-  "core/audit/condition_smt.py::memcpy_sinks": {
-    "count": 10,
-    "kind": "literal"
   },
   "core/audit/consistency_dimensions.py::d": {
     "count": 11,
