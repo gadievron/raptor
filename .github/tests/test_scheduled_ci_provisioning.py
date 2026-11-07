@@ -180,6 +180,7 @@ def test_corpus_job_keeps_real_drivers_and_toolchain_skip_refusal():
 @pytest.mark.parametrize('file,name', [
     ('nightly_shuffled.yml', 'shuffled-fast'), ('weekly_corpus.yml', 'corpus-drivers'),
     ('ubuntu26-canary.yml', 'sandbox-canary'), ('preflight.yml', 'preflight'),
+    ('nightly.yml', 'intentional-crashes'), ('mypy-nightly.yml', 'mypy'),
 ])
 def test_warm_venv_callers_do_not_restore_an_unused_uv_download_cache(file, name):
     source = job(file, name)
@@ -203,3 +204,91 @@ def test_preflight_activates_cached_environment_before_all_hazard_checks():
     assert 'hidden-optional-deps' in source and 'hidden-tree-sitter' in source
     assert 'duration-guard' in source and 'tree-hygiene' in source
     assert 'shuffle-a' in source and 'shuffle-b' in source
+
+
+@pytest.mark.parametrize('file,name', [
+    ('mypy-nightly.yml', 'mypy'), ('nightly.yml', 'cpp-query-regressions'),
+    ('tests.yml', 'python-unit-tests-sca'), ('tests.yml', 'python-unit-tests-sandbox'),
+    ('tests.yml', 'python-unit-tests-exploit-feasibility'),
+])
+def test_remaining_consumers_save_exact_fallback_before_checks(file, name):
+    source = job(file, name)
+    restore = next(step for step in steps(source)
+                   if 'uses: ./.github/actions/setup-venv\n' in step)
+    assert "          save-on-rebuild: 'true'\n" in restore
+    assert 'cache-key-prefix' not in restore
+    assert 'install-method' not in restore
+    assert 'uv-export-extra-args' not in restore
+    assert source.index('actions/setup-python@') < source.index('uses: ./.github/actions/setup-venv')
+
+
+def test_floor_canary_owns_its_inputs_and_keeps_fresh_install_and_same_test_subset():
+    source = (ROOT / '.github/workflows/python-floor-canary.yml').read_text()
+    events = source.split('\nconcurrency:', 1)[0]
+    assert set(re.findall(r"^      - '([^']+)'$", events, re.M)) == {
+        'pyproject.toml', 'uv.lock', 'uv.toml', '.github/workflows/python-floor-canary.yml',
+        '.github/scripts/pytest_workers.py',
+    }
+    body = job('python-floor-canary.yml', 'floor-canary')
+    install = named_step(body, 'Create venv from the lockfile on the floor interpreter')
+    assert '        shell: bash\n' in install
+    assert 'uv export --locked --no-hashes | uv pip install -r -' in script(install)
+    assert 'uses: ./.github/actions/setup-venv' not in body  # Fresh install is the canary's contract.
+    run = script(named_step(body, 'Fast test subset'))
+    assert 'python .github/scripts/pytest_workers.py core/inventory core/dataflow' in run
+    assert 'python -m pytest core/inventory core/dataflow -q -n "$workers" --dist loadfile' in run
+    assert '-n auto' not in run
+    assert 'python - <<' in script(named_step(body, 'Import smoke'))
+    assert '  PYTHON_VERSION: \'3.12\'' in source
+
+
+@pytest.mark.parametrize('failure', ['', 'venv', 'export', 'pip'])
+def test_floor_install_binds_setup_python_and_propagates_failures(tmp_path, failure):
+    body = job('python-floor-canary.yml', 'floor-canary')
+    command = script(named_step(body, 'Create venv from the lockfile on the floor interpreter'))
+    tools = tmp_path / 'tools with spaces'
+    tools.mkdir()
+    (tools / 'python3').symlink_to(sys.executable)
+    record = tmp_path / 'uv-arguments.jsonl'
+    uv = tools / 'uv'
+    uv.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''\
+        import json, os, pathlib, sys
+        args = sys.argv[1:]
+        payload = {"argv": args}
+        if args[0] == "pip":
+            payload["stdin"] = sys.stdin.read()
+        with open(os.environ["UV_RECORD"], "a") as output:
+            output.write(json.dumps(payload) + "\\n")
+        if args[0] == os.environ["FAIL_STAGE"]:
+            sys.exit(19)
+        if args[0] == "venv":
+            activate = pathlib.Path(args[-1]) / "bin/activate"
+            activate.parent.mkdir(parents=True)
+            activate.write_text(":\\n")
+        elif args[0] == "export":
+            print("floor-fixture==1.0")
+    '''))
+    uv.chmod(0o755)
+    venv = tmp_path / 'environment with spaces'
+    result = subprocess.run(
+        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', command],
+        cwd=tmp_path,
+        env=dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin', VENV_PATH=str(venv),
+                 UV_RECORD=str(record), FAIL_STAGE=failure),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert (result.returncode == 0) is (not failure), result.stdout + result.stderr
+    calls = [json.loads(line) for line in record.read_text().splitlines()]
+    assert calls[0]['argv'] == ['venv', '--python', str(tools / 'python3'), str(venv)]
+    if not failure:
+        by_command = {call['argv'][0]: call for call in calls}
+        assert by_command['export']['argv'] == ['export', '--locked', '--no-hashes']
+        assert by_command['pip'] == {'argv': ['pip', 'install', '-r', '-'],
+                                     'stdin': 'floor-fixture==1.0\n'}
+
+
+def test_mypy_remains_a_full_tree_type_check_after_restore():
+    source = job('mypy-nightly.yml', 'mypy')
+    run = script(named_step(source, 'Run mypy'))
+    assert 'mypy --config-file pyproject.toml core/ packages/' in run
+    assert source.index('uses: ./.github/actions/setup-venv') < source.index('name: Run mypy')

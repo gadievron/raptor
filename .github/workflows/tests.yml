@@ -551,6 +551,8 @@ jobs:
       # the deps job saves.
       - name: Restore or rebuild venv
         uses: ./.github/actions/setup-venv
+        with:
+          save-on-rebuild: 'true'
 
       - name: Run SCA tests (group ${{ matrix.group }} of ${{ matrix.groups }})
         env:
@@ -600,6 +602,8 @@ jobs:
       # the deps job saves.
       - name: Restore or rebuild venv
         uses: ./.github/actions/setup-venv
+        with:
+          save-on-rebuild: 'true'
 
       - name: Run sandbox tests
         run: |
@@ -934,6 +938,8 @@ jobs:
       # the deps job saves.
       - name: Restore or rebuild venv
         uses: ./.github/actions/setup-venv
+        with:
+          save-on-rebuild: 'true'
 
       - name: Run exploit_feasibility integration tests
         env:
