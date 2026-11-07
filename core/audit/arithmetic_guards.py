@@ -111,7 +111,7 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                 continue
             if item.type in {"lambda_expression", "co_await_expression", "co_yield_expression",
                              "typeid_expression", "compound_literal_expression", "conditional_expression",
-                             "comma_expression", "user_defined_literal"}:
+                             "comma_expression", "user_defined_literal", "gnu_asm_expression"}:
                 return True
             if item.type == "cast_expression":
                 if not contains(item.child_by_field_name("value")):

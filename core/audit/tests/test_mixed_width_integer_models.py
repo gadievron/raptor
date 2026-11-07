@@ -185,7 +185,7 @@ def test_confined_overflow_worker_uses_the_common_operand_width(guard, outcome):
                                       source=source, hypothesis="integer overflow in `Alpha + Zulu`", integer_abi="lp64")
     assert result.outcome == outcome, result.details
     assert result.details["source_operation"]["profile"] == "int64"
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v13"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v14"
 
 
 @pytest.mark.slow

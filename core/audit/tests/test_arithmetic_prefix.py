@@ -129,7 +129,7 @@ def test_supported_prefix_keeps_real_source_smt_verdicts(prefix):
                                      source=source(prefix, guard='Value<=10 && Step<=10'),
                                      hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v13'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v14'
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'refuted'])
@@ -138,7 +138,7 @@ def test_worker_from_before_prefix_definedness_contract_cannot_be_reused(monkeyp
     _, selected = source_for_function(text, 'record.c', 'Read')
     binding = source_binding(selected, 'Read', verb='check-overflow', integer_abi='ilp32',
                              hypothesis='integer overflow in `Value + Step`')
-    binding['query_contract'] = 'common-width-integer-operands-v12'
+    binding['query_contract'] = 'common-width-integer-operands-v13'
     old = sweep.SweepResult(tool='smt', file_path='record.c', function_name='Read', rule_id='smt:check-overflow',
                             outcome=outcome, details={'source_scope': binding}, matches=[{'model': {}}])
     monkeypatch.setattr('core.audit.subproc_json.run_json_child', lambda *a, **kw: asdict(old))
