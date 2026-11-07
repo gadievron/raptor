@@ -1911,8 +1911,15 @@ class TestSpendMetaBreakdown:
         telemetry = gdir / "llm-telemetry.jsonl"
         telemetry.write_text(
             json.dumps({"cost_usd": 2.5, "call_class": "review"}) + "\n"
-            + json.dumps({"cost_usd": 2.5, "call_class": "study"}) + "\n",
+            + json.dumps({"cost_usd": 2.5, "call_class": "study"}) + "\n"
+            + json.dumps({"cost_usd": 0.25, "call_class": "unclassified",
+                          "event": "attempt_failed", "tokens_in": 10, "tokens_out": 2,
+                          "duration_s": 3, "caller_chain": [
+                              {"module": "fixture", "function": "review"}]}) + "\n",
         )
+        (gdir / "cost-breakdown.json").write_text(json.dumps({
+            "totals": {"total_spend_usd": 4.5},
+        }))
         rows = [
             dict(_result_row("a.c:f"), model="", cost_usd=2.0),
         ]
@@ -1924,8 +1931,32 @@ class TestSpendMetaBreakdown:
         meta = _meta_of(out)
         assert meta["label_attributed_usd"] == 2.0
         assert meta["cost_usd"] == 2.0  # legacy name, same figure
-        assert meta["total_spend_usd"] == 5.0
-        assert meta["infra_usd"] == 3.0
+        assert meta["total_spend_usd"] == 5.25
+        assert meta["infra_usd"] == 3.25
+        breakdown = meta["spend_breakdown"]
+        assert breakdown["total_usd"] == meta["total_spend_usd"]
+        assert breakdown["calls"] == 2
+        assert breakdown["cache_hits"] == 0
+        assert breakdown["cache_hits_by_class"] == {}
+        assert breakdown["per_class"] == {
+            "review": [1, 2.5], "study": [1, 2.5], "unclassified": [0, 0.25],
+        }
+        assert breakdown["groups"] == [{
+            "group": "run/test", "calls": 2, "cache_hits": 0, "telemetry_usd": 5.25, "ledger_usd": 4.5,
+        }]
+        assert breakdown["unclassified_origins"] == {"fixture.review": {
+            "calls": 0, "cache_hits": 0, "failed_attempts": 1, "cost_usd": 0.25,
+            "tokens_in": 10, "tokens_out": 2, "duration_s": 3.0,
+        }}
+
+    def test_missing_telemetry_does_not_invent_spend_snapshot(self, tmp_path, monkeypatch):
+        rc, out, _ = _stub_main_run(
+            tmp_path, monkeypatch, rows=[dict(_result_row("a.c:f"), model="")],
+        )
+        assert rc == 0
+        meta = _meta_of(out)
+        assert "spend_breakdown" not in meta
+        assert "total_spend_usd" not in meta
 
     def test_infra_measures_this_runs_rows_under_splice(
         self, tmp_path, monkeypatch,
@@ -1958,6 +1989,8 @@ class TestSpendMetaBreakdown:
         assert meta["infra_usd"] == 3.0
         # The refire's own attributed spend is recorded explicitly.
         assert meta["label_attributed_fresh_usd"] == 2.0
+        assert meta["spend_breakdown"]["total_usd"] == 5.0
+        assert meta["spend_breakdown"]["per_class"] == {"review": [1, 5.0]}
 
     def test_group_progress_prints_attributed_running_total(
         self, tmp_path, monkeypatch, capsys,

@@ -66,6 +66,9 @@ class TestAggregateSpend:
         ])
         spend = _aggregate_spend([tmp_path / "run"])
         assert spend["calls"] == 1
+        assert spend["cache_hits"] == 1
+        assert spend["cache_hits_by_class"] == {"review": 1}
+        assert spend["groups"][0]["cache_hits"] == 1
         assert abs(spend["total_usd"] - 1.25) < 1e-9
 
     def test_no_telemetry_returns_none(self, tmp_path):
@@ -167,9 +170,12 @@ def test_unclassified_caller_totals_preserve_cost_classes_and_paid_failures(tmp_
     spend = _aggregate_spend([tmp_path])
     assert spend["total_usd"] == 4.5
     assert spend["per_class"]["unclassified"] == (3, 4.5)
+    assert spend["cache_hits"] == 1
+    assert spend["cache_hits_by_class"] == {"unclassified": 1}
     caller = spend["unclassified_origins"]["core.example.generate"]
-    assert caller == {"calls": 2, "failed_attempts": 1, "cost_usd": 2.5,
+    assert caller == {"calls": 2, "cache_hits": 1, "failed_attempts": 1, "cost_usd": 2.5,
                       "tokens_in": 30, "tokens_out": 6, "duration_s": 9}
     assert spend["unclassified_origins"]["(unknown)"]["cost_usd"] == 2
     text = _format_spend_block(spend, label_cost=0)
     assert "core.example.generate" in text and "summed call time" in text
+    assert "Cache hits: 1 (excluded from completed calls)" in text

@@ -131,6 +131,17 @@ they legitimately disagree (2-3x observed):
 - `infra_usd` — the difference: study, prep, spec/checker synthesis,
   summaries, non-label review overheads.
 
+When telemetry is available, `spend_breakdown` preserves the same aggregate
+used by the terminal spend block: completed-call counts, per-class costs,
+per-group telemetry and summary totals, and unclassified caller diagnostics.
+Cache hits are counted separately at run, class, group, and unclassified
+caller level so lost cache reuse is distinguishable from additional calls.
+Failed-attempt costs remain included even though they are not completed calls.
+The snapshot covers the current run's telemetry, including under `--splice`;
+it does not allocate overhead to labels or cohorts. Missing telemetry leaves
+the snapshot absent rather than recording zero spend. Summed caller durations
+are call time, not elapsed wall time, because calls may overlap.
+
 Resume (requires a stable `--out`): each pass checkpoints per group
 (`checkpoint-*-groups.json`) as groups finish, so a mid-pass stop
 loses at most the in-flight group; a resume replays checkpointed

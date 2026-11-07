@@ -2290,6 +2290,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
     """
     groups: list[dict[str, Any]] = []
     per_class: dict[str, list[float]] = {}
+    cache_hits_by_class: dict[str, int] = {}
     origins: dict[str, dict[str, Any]] = {}
     seen: set = set()
     for base in run_dirs:
@@ -2302,6 +2303,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
                 continue
             seen.add(gdir)
             calls = 0
+            cache_hits = 0
             cost = 0.0
             try:
                 with Path(tel_path).open(encoding="utf-8") as f:  # raw-open: telemetry written by this harness (eval lane)
@@ -2316,9 +2318,13 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
                         c = float(rec.get("cost_usd") or 0.0)
                         cls = str(rec.get("call_class") or "unclassified")
                         st = per_class.setdefault(cls, [0, 0.0])
+                        cached = rec.get("disposition") == "cache_hit"
+                        if cached:
+                            cache_hits += 1
+                            cache_hits_by_class[cls] = cache_hits_by_class.get(cls, 0) + 1
                         completed = (
                             rec.get("event") != "attempt_failed"
-                            and rec.get("disposition") != "cache_hit"
+                            and not cached
                         )
                         if completed:
                             calls += 1
@@ -2334,13 +2340,14 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
                             origin = (f"{module}.{function}" if isinstance(module, str)
                                       and isinstance(function, str) and module and function else "(unknown)")
                             bucket = origins.setdefault(origin, {
-                                "calls": 0, "failed_attempts": 0, "cost_usd": 0.0,
+                                "calls": 0, "cache_hits": 0, "failed_attempts": 0, "cost_usd": 0.0,
                                 "tokens_in": 0, "tokens_out": 0, "duration_s": 0.0,
                             })
                             bucket["calls"] += int(completed)
+                            bucket["cache_hits"] += int(cached)
                             bucket["failed_attempts"] += int(rec.get("event") == "attempt_failed")
                             bucket["cost_usd"] += c
-                            if rec.get("disposition") != "cache_hit":
+                            if not cached:
                                 for field in ("tokens_in", "tokens_out"):
                                     bucket[field] += int(rec.get(field) or 0)
                                 bucket["duration_s"] += float(rec.get("duration_s") or 0)
@@ -2363,6 +2370,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
             groups.append({
                 "group": name,
                 "calls": calls,
+                "cache_hits": cache_hits,
                 "telemetry_usd": cost,
                 "ledger_usd": ledger_total,
             })
@@ -2371,6 +2379,8 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
     return {
         "total_usd": sum(g["telemetry_usd"] for g in groups),
         "calls": sum(g["calls"] for g in groups),
+        "cache_hits": sum(g["cache_hits"] for g in groups),
+        "cache_hits_by_class": dict(sorted(cache_hits_by_class.items())),
         "per_class": {
             cls: (int(v[0]), v[1]) for cls, v in sorted(per_class.items())
         },
@@ -2398,6 +2408,7 @@ def _format_spend_block(
     ]
     if cls_parts:
         lines.append("  Per class: " + ", ".join(cls_parts))
+    lines.append(f"  Cache hits: {spend.get('cache_hits', 0)} (excluded from completed calls)")
     origins = spend.get("unclassified_origins", {})
     if origins:
         from core.security.log_sanitisation import sanitise_for_terminal
@@ -2406,6 +2417,7 @@ def _format_spend_block(
             safe = sanitise_for_terminal(origin, max_len=240)
             lines.append(
                 f"    {safe}: {values['calls']} calls, "
+                f"{values.get('cache_hits', 0)} cache hits, "
                 f"{values['failed_attempts']} failed attempts, ${values['cost_usd']:.4f}, "
                 f"tokens {values['tokens_in']} in/{values['tokens_out']} out, "
                 f"summed call time {values['duration_s']:.1f}s"
@@ -3632,6 +3644,7 @@ def main(argv: list[str] | None = None) -> int:
     meta["open_discovery"] = args.open_discovery
     meta["budget_stop_reason"] = run_budget.stop_reason() if run_budget is not None else ""
     if spend:
+        meta["spend_breakdown"] = spend
         meta["total_spend_usd"] = round(spend["total_usd"], 4)
         meta["infra_usd"] = round(
             max(spend["total_usd"] - fresh_attributed_usd, 0.0), 4,
