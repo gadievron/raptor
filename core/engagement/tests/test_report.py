@@ -43,6 +43,7 @@ from core.engagement.report import (
     write_report,
 )
 from core.json import load_json, save_json
+from core.testing.standalone_cli import run_standalone_cli
 
 ART = "sha256-aabbccdd"
 ART2 = "sha256-11223344"
@@ -1181,8 +1182,9 @@ def _run_cli(*args: str, trusted: bool = True,
            if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
     if trusted:
         env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(_LAUNCHER), *args],
+        data_home=os.environ["XDG_DATA_HOME"],
         capture_output=True, text=True, env=env, timeout=120,
         check=False)
 
@@ -1221,7 +1223,12 @@ class TestLauncherCLI:
         assert "\x1b" not in proc.stdout
         assert not (tmp_path / REPORT_MD_FILENAME).exists()
 
-    def test_default_writes_both(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_default_writes_both(self, tmp_path: Path, monkeypatch,
+                                stale_launch: bool) -> None:
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
         _make_ledger(tmp_path, [_row()])
         proc = _run_cli(str(tmp_path))
         assert proc.returncode == 0
