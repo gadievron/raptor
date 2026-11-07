@@ -53,6 +53,7 @@ def _pe_file(tmp_path, **spec_overrides):
     return p
 
 
+@pytest.mark.usefixtures("describe_tool_probes")
 class TestCliDispatch:
     def test_pe_binary_gets_facts_block(self, tmp_path):
         rc, out, err = _run(_pe_file(tmp_path))
