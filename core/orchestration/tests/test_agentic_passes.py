@@ -28,6 +28,26 @@ from core.orchestration.agentic_passes import (
 from core.testing.module_bindings import patch_module_attribute
 
 
+import shutil
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+
+_discovery_imports = ModuleType("dispatch_discovery_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    from core.llm import cc_adapter
+
+    with scoped_function_imports(cc_adapter, ("resolve_claude_cli",), {"shutil": shutil}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate_subprocess_run_patches(monkeypatch):
     """Keep subprocess run mocks on consumer-owned module bindings."""
@@ -1543,8 +1563,7 @@ class RuleOfTwoTests(unittest.TestCase):
 
     def test_understand_passes_gate_when_human(self):
         h, s = self._legs(human=True, sandbox=False)
-        with h, s, patch(
-            "shutil.which", return_value=None
+        with h, s, mock_module_attribute(_discovery_imports, 'shutil', 'which', return_value=None
         ):
             result = run_understand_prepass(
                 target=Path("scratch/nonexistent-target"),
@@ -1558,8 +1577,7 @@ class RuleOfTwoTests(unittest.TestCase):
     def test_understand_passes_gate_when_sandboxed_noninteractive(self):
         # The new capability: CI/cron with containment runs the pass.
         h, s = self._legs(human=False, sandbox=True)
-        with h, s, patch(
-            "shutil.which", return_value=None
+        with h, s, mock_module_attribute(_discovery_imports, 'shutil', 'which', return_value=None
         ):
             result = run_understand_prepass(
                 target=Path("scratch/nonexistent-target"),
@@ -1575,8 +1593,7 @@ class RuleOfTwoTests(unittest.TestCase):
             report = tmp / "report.json"
             report.write_text('{"results": []}')
             h, s = self._legs(human=False, sandbox=True)
-            with h, s, patch(
-                "shutil.which",
+            with h, s, mock_module_attribute(_discovery_imports, 'shutil', 'which',
                 return_value=None,
             ):
                 result = run_validate_postpass(

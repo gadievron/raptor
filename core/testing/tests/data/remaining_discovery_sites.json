@@ -1,0 +1,284 @@
+[
+  {
+    "file": "core/analysis/tests/test_binary_oracle_p2_gaps.py",
+    "anchor": [
+      "test_extract_direct_call_edges_returns_empty_on_timeout"
+    ],
+    "line": 108,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda n: '/usr/bin/' + n)",
+    "new": "patch_module_attribute(monkeypatch, boe, 'shutil', 'which', lambda n: '/usr/bin/' + n)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/audit/tests/test_budget_terminal.py",
+    "anchor": [
+      "TestBatchedPassBudgetTerminal",
+      "test_exhaustion_with_queued_batches_terminates"
+    ],
+    "line": 584,
+    "target": "concurrent.futures.ThreadPoolExecutor",
+    "old": "monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SignalOnCancelDrain)",
+    "new": "patch_module_attribute(monkeypatch, imports, 'concurrent.futures', 'ThreadPoolExecutor', _SignalOnCancelDrain)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/audit/tests/test_capabilities.py",
+    "anchor": [
+      "TestProbeCapabilities",
+      "test_all_tools_missing"
+    ],
+    "line": 26,
+    "target": "shutil.which",
+    "old": "patch('shutil.which', return_value=None)",
+    "new": "_missing_tool_discovery(return_value=None)",
+    "kind": "mock",
+    "helper": "_missing_tool_discovery"
+  },
+  {
+    "file": "core/audit/tests/test_context.py",
+    "anchor": [
+      "TestToolCatalog",
+      "test_semgrep_only_when_installed"
+    ],
+    "line": 1119,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda cmd: None)",
+    "new": "patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda cmd: None)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/audit/tests/test_validate.py",
+    "anchor": [
+      "TestDispatchValidate",
+      "test_skipped_without_claude"
+    ],
+    "line": 350,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda _: None)",
+    "new": "patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: None)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/audit/tests/test_validate.py",
+    "anchor": [
+      "TestDispatchValidate",
+      "test_skipped_on_rule_of_two"
+    ],
+    "line": 363,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda _: '/usr/bin/claude')",
+    "new": "patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: '/usr/bin/claude')",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/audit/tests/test_validate.py",
+    "anchor": [
+      "TestDispatchValidate",
+      "test_never_raises"
+    ],
+    "line": 385,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda _: '/usr/bin/claude')",
+    "new": "patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _: '/usr/bin/claude')",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "RuleOfTwoTests",
+      "test_understand_passes_gate_when_human"
+    ],
+    "line": 1546,
+    "target": "shutil.which",
+    "old": "patch('shutil.which', return_value=None)",
+    "new": "mock_module_attribute(_discovery_imports, 'shutil', 'which', return_value=None)",
+    "kind": "mock",
+    "helper": null
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "RuleOfTwoTests",
+      "test_understand_passes_gate_when_sandboxed_noninteractive"
+    ],
+    "line": 1561,
+    "target": "shutil.which",
+    "old": "patch('shutil.which', return_value=None)",
+    "new": "mock_module_attribute(_discovery_imports, 'shutil', 'which', return_value=None)",
+    "kind": "mock",
+    "helper": null
+  },
+  {
+    "file": "core/orchestration/tests/test_agentic_passes.py",
+    "anchor": [
+      "RuleOfTwoTests",
+      "test_validate_passes_gate_when_sandboxed_noninteractive"
+    ],
+    "line": 1578,
+    "target": "shutil.which",
+    "old": "patch('shutil.which', return_value=None)",
+    "new": "mock_module_attribute(_discovery_imports, 'shutil', 'which', return_value=None)",
+    "kind": "mock",
+    "helper": null
+  },
+  {
+    "file": "core/sandbox/tests/test_host_tmpdir_grant_drop.py",
+    "anchor": [
+      "TestSymlinkedHostTmp",
+      "test_literal_tmp_entry_survives_symlinked_tmp"
+    ],
+    "line": 158,
+    "target": "os.path.realpath",
+    "old": "patch('os.path.realpath', side_effect=fake_realpath)",
+    "new": "mock_module_attribute(_spawn, 'os.path', 'realpath', side_effect=fake_realpath)",
+    "kind": "mock",
+    "helper": null
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "anchor": [
+      "TestAvailabilityCheck",
+      "test_no_unshare"
+    ],
+    "line": 68,
+    "target": "os.path.isfile",
+    "old": "patch('os.path.isfile', return_value=False)",
+    "new": "mock_module_attribute(imports, 'os.path', 'isfile', return_value=False)",
+    "kind": "mock",
+    "helper": null
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "anchor": [
+      "TestSeccompProbeCompleteness",
+      "test_probe_rejects_lib_missing_attr_set"
+    ],
+    "line": 2899,
+    "target": "ctypes.util.find_library",
+    "old": "monkeypatch.setattr('ctypes.util.find_library', lambda _n: 'libseccomp.so.2')",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda _n: 'libseccomp.so.2')",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/sandbox/tests/test_sandbox.py",
+    "anchor": [
+      "TestSeccompProbeCompleteness",
+      "test_probe_rejects_lib_missing_attr_set"
+    ],
+    "line": 2901,
+    "target": "ctypes.CDLL",
+    "old": "monkeypatch.setattr('ctypes.CDLL', lambda *a, **k: _LibWithoutAttrSet())",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', lambda *a, **k: _LibWithoutAttrSet())",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/sandbox/tests/test_tracer.py",
+    "anchor": [
+      "TestLibcCacheSentinel",
+      "test_failure_is_cached"
+    ],
+    "line": 71,
+    "target": "ctypes.util.find_library",
+    "old": "monkeypatch.setattr('ctypes.util.find_library', fake_find)",
+    "new": "patch_module_attribute(monkeypatch, tracer, 'ctypes.util', 'find_library', fake_find)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/startup/tests/test_doctor.py",
+    "anchor": [
+      "TestOutputShape",
+      "test_install_hint_attached_to_missing_tool_warning"
+    ],
+    "line": 442,
+    "target": "packages.describe.package_manager._platform.system",
+    "old": "monkeypatch.setattr('packages.describe.package_manager._platform.system', lambda: 'Linux')",
+    "new": "patch_module_attribute(monkeypatch, _install_advice, '_platform', 'system', lambda: 'Linux')",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/startup/tests/test_doctor.py",
+    "anchor": [
+      "TestOutputShape",
+      "test_install_hint_attached_to_missing_tool_warning"
+    ],
+    "line": 449,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda cmd: '/usr/bin/apt' if cmd == 'apt' else None)",
+    "new": "patch_module_attribute(monkeypatch, _install_advice, 'shutil', 'which', lambda cmd: '/usr/bin/apt' if cmd == 'apt' else None)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/startup/tests/test_doctor.py",
+    "anchor": [
+      "TestOutputShape",
+      "test_install_hint_for_codeql_uses_static_url"
+    ],
+    "line": 480,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda cmd: '/usr/bin/apt' if cmd == 'apt' else None)",
+    "new": "patch_module_attribute(monkeypatch, _install_advice, 'shutil', 'which', lambda cmd: '/usr/bin/apt' if cmd == 'apt' else None)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "core/startup/tests/test_install_guard.py",
+    "anchor": [
+      "test_restricted_worker_ipc_still_performs_full_serial_validation"
+    ],
+    "line": 482,
+    "target": "concurrent.futures.ProcessPoolExecutor",
+    "old": "monkeypatch.setattr(concurrent.futures, 'ProcessPoolExecutor', unavailable)",
+    "new": "patch_module_attribute(monkeypatch, imports, 'concurrent.futures', 'ProcessPoolExecutor', unavailable)",
+    "kind": "monkey",
+    "helper": null
+  },
+  {
+    "file": "packages/codeql/tests/test_first_use_install.py",
+    "anchor": [
+      "test_diagnostic_consumers_do_not_install_or_record_errors"
+    ],
+    "line": 310,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda name: str(command) if name == 'codeql' else None)",
+    "new": "_owned_toolchain_discovery(monkeypatch, lambda name: str(command) if name == 'codeql' else None)",
+    "kind": "monkey",
+    "helper": "_owned_toolchain_discovery"
+  },
+  {
+    "file": "packages/codeql/tests/test_first_use_install.py",
+    "anchor": [
+      "test_failed_version_output_is_not_recorded"
+    ],
+    "line": 328,
+    "target": "shutil.which",
+    "old": "monkeypatch.setattr('shutil.which', lambda name: str(command) if name in ('codeql', str(command)) else None)",
+    "new": "_owned_toolchain_discovery(monkeypatch, lambda name: str(command) if name in ('codeql', str(command)) else None)",
+    "kind": "monkey",
+    "helper": "_owned_toolchain_discovery"
+  },
+  {
+    "file": "packages/web/tests/test_scanner_boundaries.py",
+    "anchor": [
+      "TestValidatePostpassFailureSurfacing",
+      "test_validate_crash_is_loud_and_recorded"
+    ],
+    "line": 855,
+    "target": "shutil.which",
+    "old": "patch('shutil.which', return_value='/usr/bin/claude')",
+    "new": "_validate_path_lookup(scanner, return_value='/usr/bin/claude')",
+    "kind": "mock",
+    "helper": "_validate_path_lookup"
+  }
+]

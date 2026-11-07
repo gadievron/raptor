@@ -18,6 +18,11 @@ import pytest
 
 from core.sandbox._spawn import _drop_host_tmpdir_grants
 
+
+from core.sandbox import _spawn
+from core.testing.module_bindings import mock_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="mount-ns / Landlock are Linux-only",
 )
@@ -145,7 +150,6 @@ class TestSymlinkedHostTmp(unittest.TestCase):
         tempfile.tempdir = self._saved_tempdir
 
     def test_literal_tmp_entry_survives_symlinked_tmp(self):
-        from unittest.mock import patch
 
         real = os.path.realpath
 
@@ -155,7 +159,7 @@ class TestSymlinkedHostTmp(unittest.TestCase):
             return real(path)
 
         writable = ["/tmp", "/dev/shm", "/out/run"]
-        with patch("os.path.realpath", side_effect=fake_realpath):
+        with mock_module_attribute(_spawn, "os.path", "realpath", side_effect=fake_realpath):
             result = _drop_host_tmpdir_grants(
                 writable, target=None, output="/out/run", rootfs=None)
         self.assertEqual(result, writable)

@@ -48,6 +48,11 @@ from core.llm.client import (
 )
 
 
+from core.testing.module_views import scoped_function_imports
+from core.testing.module_bindings import patch_module_attribute
+
+
+
 class _FakeBudgetClient:
     """Stands in for LLMClient — only the budget probe is consulted."""
 
@@ -530,118 +535,118 @@ class TestBatchedPassBudgetTerminal:
            consumer must now terminate with four cancelled futures
            that will never complete.
         """
-        target, out, _names = _setup_trivial_target(
-            tmp_path, n_files=6, fns_per_file=4,
-        )
         import core.audit.orchestrator as orch
-        from core.audit import capabilities
+        with scoped_function_imports(orch, ('_run_audit_body',), {"concurrent.futures": concurrent.futures}) as imports:
+            target, out, _names = _setup_trivial_target(
+                tmp_path, n_files=6, fns_per_file=4,
+            )
+            from core.audit import capabilities
 
-        # The eight-second watchdog bounds cancellation/harvest, not
-        # unrelated host-tool discovery or background model study.
-        monkeypatch.setattr(
-            capabilities, "probe_capabilities",
-            lambda *a, **kw: capabilities.AuditCapabilities(),
-        )
-        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **kw: None)
-        monkeypatch.setattr(
-            orch, "_run_mechanical_detectors",
-            lambda *args, **kwargs: ({}, set()),
-        )
+            # The eight-second watchdog bounds cancellation/harvest, not
+            # unrelated host-tool discovery or background model study.
+            monkeypatch.setattr(
+                capabilities, "probe_capabilities",
+                lambda *a, **kw: capabilities.AuditCapabilities(),
+            )
+            monkeypatch.setattr(orch, "_study_consumer", lambda *a, **kw: None)
+            monkeypatch.setattr(
+                orch, "_run_mechanical_detectors",
+                lambda *args, **kwargs: ({}, set()),
+            )
 
-        client = _FlippableBudgetClient()
-        queue_drained = threading.Event()
+            client = _FlippableBudgetClient()
+            queue_drained = threading.Event()
 
-        real_check = orch._check_budget
+            real_check = orch._check_budget
 
-        def gated_check(config, start_time, result):
-            # Hold post-exhaustion WORKER rail checks until the
-            # consumer's cancel_futures drain has run. The consumer's
-            # own checks (main run thread) pass straight through.
-            if (
-                client.exhausted
-                and threading.current_thread().name.startswith(
-                    "ThreadPoolExecutor",
+            def gated_check(config, start_time, result):
+                # Hold post-exhaustion WORKER rail checks until the
+                # consumer's cancel_futures drain has run. The consumer's
+                # own checks (main run thread) pass straight through.
+                if (
+                    client.exhausted
+                    and threading.current_thread().name.startswith(
+                        "ThreadPoolExecutor",
+                    )
+                ):
+                    queue_drained.wait(timeout=15)
+                return real_check(config, start_time, result)
+
+            monkeypatch.setattr(orch, "_check_budget", gated_check)
+
+            class _SignalOnCancelDrain(ThreadPoolExecutor):
+                """Signals AFTER shutdown's queue drain cancelled the
+                pending futures — the only point that is causally ordered
+                after the cancellations the regression needs in place."""
+
+                def shutdown(self, wait=True, *, cancel_futures=False):
+                    super().shutdown(wait=wait, cancel_futures=cancel_futures)
+                    if cancel_futures:
+                        queue_drained.set()
+
+            # The batched pass imports ThreadPoolExecutor from
+            # concurrent.futures at call time; the private import view
+            # keeps this executor override on the audit body.
+            patch_module_attribute(monkeypatch, imports, "concurrent.futures", "ThreadPoolExecutor", _SignalOnCancelDrain,
+            )
+
+            calls: list[str] = []
+
+            def review_fn(ctx, config):
+                calls.append(ctx["function"])
+                if len(calls) >= 4:
+                    # First batch paid for — the cap is now exhausted.
+                    client.exhausted = True
+                return ReviewOutcome(
+                    file=ctx["file"], function=ctx["function"],
+                    status="clean", body="ok", cost_usd=0.5,
                 )
-            ):
-                queue_drained.wait(timeout=15)
-            return real_check(config, start_time, result)
 
-        monkeypatch.setattr(orch, "_check_budget", gated_check)
-
-        class _SignalOnCancelDrain(ThreadPoolExecutor):
-            """Signals AFTER shutdown's queue drain cancelled the
-            pending futures — the only point that is causally ordered
-            after the cancellations the regression needs in place."""
-
-            def shutdown(self, wait=True, *, cancel_futures=False):
-                super().shutdown(wait=wait, cancel_futures=cancel_futures)
-                if cancel_futures:
-                    queue_drained.set()
-
-        # The batched pass imports ThreadPoolExecutor from
-        # concurrent.futures at call time, so patching the module
-        # attribute reaches it.
-        monkeypatch.setattr(
-            concurrent.futures, "ThreadPoolExecutor", _SignalOnCancelDrain,
-        )
-
-        calls: list[str] = []
-
-        def review_fn(ctx, config):
-            calls.append(ctx["function"])
-            if len(calls) >= 4:
-                # First batch paid for — the cap is now exhausted.
-                client.exhausted = True
-            return ReviewOutcome(
-                file=ctx["file"], function=ctx["function"],
-                status="clean", body="ok", cost_usd=0.5,
+            cfg = _config(
+                target, out,
+                batch_sloc_threshold=15,
+                llm_budget_client=client,
+                # The Joern lifecycle is incidental to this seam and
+                # dominates wallclock on joern-equipped hosts; the
+                # watchdog below needs the healthy run to be fast.
+                joern_overrides={"enabled": False},
+                iris=False,
+                sage_recall=False,
+                immediate_verify=False,
+                sweep_validate_findings=False,
+                max_refinements=0,
             )
 
-        cfg = _config(
-            target, out,
-            batch_sloc_threshold=15,
-            llm_budget_client=client,
-            # The Joern lifecycle is incidental to this seam and
-            # dominates wallclock on joern-equipped hosts; the
-            # watchdog below needs the healthy run to be fast.
-            joern_overrides={"enabled": False},
-            iris=False,
-            sage_recall=False,
-            immediate_verify=False,
-            sweep_validate_findings=False,
-            max_refinements=0,
-        )
-
-        box: list = []
-        runner = threading.Thread(
-            target=lambda: box.append(run_orchestrator(cfg, review_fn)),
-            daemon=True,
-            name="audit-under-test",
-        )
-        runner.start()
-        runner.join(timeout=8.0)
-        if runner.is_alive():
-            queue_drained.set()  # unwedge the held worker before failing
-            runner.join(timeout=1.0)
-            pytest.fail(
-                "batched pass hung after budget exhaustion with queued "
-                "batches — the harvest loop never terminated on the "
-                "drain-cancelled futures",
+            box: list = []
+            runner = threading.Thread(
+                target=lambda: box.append(run_orchestrator(cfg, review_fn)),
+                daemon=True,
+                name="audit-under-test",
             )
+            runner.start()
+            runner.join(timeout=8.0)
+            if runner.is_alive():
+                queue_drained.set()  # unwedge the held worker before failing
+                runner.join(timeout=1.0)
+                pytest.fail(
+                    "batched pass hung after budget exhaustion with queued "
+                    "batches — the harvest loop never terminated on the "
+                    "drain-cancelled futures",
+                )
 
-        result = box[0]
-        # Batch 1 reviewed; batch 2 worker-gated; batches 3..6
-        # cancelled while pending — never dispatched.
-        assert len(calls) == 4, (
-            f"{len(calls)} reviews dispatched — queued batches ran "
-            f"after budget exhaustion"
-        )
-        # Every dispatched review's outcome is tallied, including any
-        # that complete during the shutdown itself.
-        assert result.reviewed == len(calls)
-        assert result.total_cost_usd == pytest.approx(0.5 * len(calls))
-        assert result.terminated_by == "llm_budget_exceeded"
-        assert len(_journal_functions(out)) == len(calls)
+            result = box[0]
+            # Batch 1 reviewed; batch 2 worker-gated; batches 3..6
+            # cancelled while pending — never dispatched.
+            assert len(calls) == 4, (
+                f"{len(calls)} reviews dispatched — queued batches ran "
+                f"after budget exhaustion"
+            )
+            # Every dispatched review's outcome is tallied, including any
+            # that complete during the shutdown itself.
+            assert result.reviewed == len(calls)
+            assert result.total_cost_usd == pytest.approx(0.5 * len(calls))
+            assert result.terminated_by == "llm_budget_exceeded"
+            assert len(_journal_functions(out)) == len(calls)
 
 
 class TestQueueDrainCancellation:

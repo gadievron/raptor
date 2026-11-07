@@ -19,6 +19,10 @@ from core.analysis.binary_oracle import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
+
 # ---------------------------------------------------------------------------
 # Agent A P2 — demangled-name parser edge cases (operator overloads, noexcept)
 # ---------------------------------------------------------------------------
@@ -105,7 +109,7 @@ def test_extract_direct_call_edges_returns_empty_on_timeout(
     # import path too.
     import core.sandbox as _sandbox
     monkeypatch.setattr(_sandbox, "run", _hang)
-    monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/" + n)
+    patch_module_attribute(monkeypatch, boe, 'shutil', 'which', lambda n: "/usr/bin/" + n)
 
     idx = boe.extract_direct_call_edges(binary, use_cache=False)
     assert idx.edges == []
