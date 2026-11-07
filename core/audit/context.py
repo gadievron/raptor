@@ -5444,6 +5444,12 @@ def _build_auto_traces(
 
     sd = context_map.get("sink_discovery", {})
     traces: list[dict[str, Any]] = []
+    # Every generated ID contains "->". For a native query without that
+    # separator, suffix matching is exactly membership in the last segments.
+    # Borrow native terminal names; otherwise derive them from actual IDs so
+    # embedded arrows/custom formatting retain their existing semantics.
+    # Compound/adapted queries keep the legacy scan.
+    terminal_targets: set[str] = set()
 
     for tr in sd.get("transitive_reach", []):
         if tr.get("file") != file_path or tr.get("function") != function_name:
@@ -5485,6 +5491,10 @@ def _build_auto_traces(
             }
 
         traces.append(trace_entry)
+        terminal_targets.add(
+            target if type(target) is str and "->" not in target
+            else trace_entry["id"][trace_entry["id"].rfind("->") + 2:]
+        )
 
     for sink in context_map.get("sinks", []):
         if sink.get("function") != function_name:
@@ -5494,7 +5504,10 @@ def _build_auto_traces(
         target = sink.get("target", "")
         if not target:
             continue
-        if any(t.get("id", "").endswith(f"->{target}") for t in traces):
+        if type(target) is str and "->" not in target:
+            if target in terminal_targets:
+                continue
+        elif any(t.get("id", "").endswith(f"->{target}") for t in traces):
             continue
         traces.append({
             "id": f"auto-direct-{file_path}:{function_name}->{target}",
@@ -5508,6 +5521,10 @@ def _build_auto_traces(
             "attacker_control": "",
             "auto_trace": True,
         })
+        terminal_targets.add(
+            target if type(target) is str and "->" not in target
+            else traces[-1]["id"][traces[-1]["id"].rfind("->") + 2:]
+        )
 
     return traces
 
