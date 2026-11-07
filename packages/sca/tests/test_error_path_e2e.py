@@ -282,13 +282,10 @@ def test_report_surfaces_parser_warnings_section(tmp_path: Path) -> None:
     of corrupted manifests couldn't distinguish that from a
     clean project.
 
-    Fix in ``packages.sca.parsers.capture_parse_failures`` +
-    ``packages.sca.report._render_parse_failures_section``. The
-    section must:
-      * appear in ``report.md`` when at least one parser failed
-      * cite the offending file path
-      * carry the canonical heading shape so operators can
-        ``grep '⚠ Parser warnings' report.md`` in CI logs"""
+    The shared document renderer must disclose parser failures as
+    limitations, cite each offending manifest, and retain the partial
+    inventory state in its machine-readable summary.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     # Two malformed manifests — exercise both XML and JSON paths.
@@ -310,17 +307,13 @@ def test_report_surfaces_parser_warnings_section(tmp_path: Path) -> None:
     report = out / "report.md"
     assert report.is_file(), "report.md not emitted"
     body = report.read_text(encoding="utf-8")
-    assert "Parser warnings" in body, (
-        "## ⚠ Parser warnings section missing from report.md "
-        "despite two malformed manifests. Body:\n"
-        f"{body[:2000]}"
-    )
-    # At least one of the malformed-manifest paths must be cited
-    # in the section — operators need to know WHICH file to fix.
-    assert ("pom.xml" in body) or ("Pipfile.lock" in body), (
-        f"Parser warnings section doesn't cite either malformed "
-        f"manifest path. Body:\n{body[:2000]}"
-    )
+    assert "## Limitations" in body, body
+    for name in ("pom.xml", "Pipfile.lock"):
+        assert f"Manifest parser failed: {repo / name}:" in body, body
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["state"] == "partial"
+    assert len([note for note in summary["diagnostics"]
+                if note.startswith("Manifest parser failed:")]) == 2
 
 
 def test_clean_run_has_no_parser_warnings_section(
@@ -340,7 +333,7 @@ def test_clean_run_has_no_parser_warnings_section(
     proc = _run_cli([str(repo), "--offline", "--out", str(out)])
     assert proc.returncode in (0, 1)
     body = (out / "report.md").read_text(encoding="utf-8")
-    assert "Parser warnings" not in body, (
-        f"clean run surfaced Parser-warnings section unexpectedly. "
+    assert "Manifest parser failed:" not in body, (
+        f"clean run surfaced a parser failure unexpectedly. "
         f"Body:\n{body[:1500]}"
     )
