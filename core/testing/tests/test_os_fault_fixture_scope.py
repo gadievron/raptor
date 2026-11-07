@@ -1,6 +1,7 @@
 """Native OS fault mocks must leave shared and borrowed namespaces untouched."""
 import ast
 import copy
+from collections import Counter
 from contextlib import ExitStack, contextmanager
 from functools import lru_cache
 import importlib
@@ -374,36 +375,13 @@ _SPECS = [{'file': 'core/build/tests/test_toolchain.py',
   'line': 306,
   'module': 'core.labeled_attempts.pruning',
   'target': 'os.rmdir'},
- {'file': 'core/inventory/tests/test_checklist_replacement.py',
-  'kind': 'monkey',
-  'line': 76,
-  'module': 'core.inventory',
-  'target': 'os.rename'},
+ # Checklist rename failures now patch rename_without_replace directly;
+ # only replacement still patches a native OS consumer binding.
  {'file': 'core/inventory/tests/test_checklist_replacement.py',
   'kind': 'monkey',
   'line': 77,
   'module': 'core.inventory',
   'target': 'os.replace'},
- {'file': 'core/inventory/tests/test_checklist_replacement.py',
-  'kind': 'monkey',
-  'line': 101,
-  'module': 'core.inventory',
-  'target': 'os.rename'},
- {'file': 'core/inventory/tests/test_checklist_replacement.py',
-  'kind': 'monkey',
-  'line': 276,
-  'module': 'core.inventory',
-  'target': 'os.rename'},
- {'file': 'core/inventory/tests/test_checklist_replacement.py',
-  'kind': 'monkey',
-  'line': 277,
-  'module': 'core.inventory',
-  'target': 'os.replace'},
- {'file': 'core/inventory/tests/test_checklist_replacement.py',
-  'kind': 'monkey',
-  'line': 359,
-  'module': 'core.inventory',
-  'target': 'os.rename'},
  {'file': 'core/run/tests/test_archive_publication_cleanup.py',
   'kind': 'monkey',
   'line': 47,
@@ -592,6 +570,8 @@ def _exercise(row, index, borrowed, exit_mode, mock=True):
 
 
 def _cases():
+    for file, count in Counter(row["file"] for row in _SPECS).items():
+        assert len(_nodes(file)) == count, f"refresh native OS fault inventory: {file}"
     seen = {}
     for row in sorted(_SPECS, key=lambda row: (row["file"], row["line"])):
         index = seen.get(row["file"], 0)
