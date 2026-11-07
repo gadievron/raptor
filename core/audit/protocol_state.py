@@ -781,7 +781,8 @@ def check_invariant_multi_site(
     per_site: list[dict[str, Any]] = []
     skipped = 0
     for site in sites:
-        if time.monotonic() - t0 > budget_s:
+        remaining_s = budget_s - (time.monotonic() - t0)
+        if remaining_s <= 0:
             skipped += 1
             continue
         source = source_texts.get(site["file"], "")
@@ -799,6 +800,10 @@ def check_invariant_multi_site(
             invariant, code,
             line=site["line"],
             pre_conditions=bare_guards,
+            # Guard discovery also consumes the consumer's budget. Cap
+            # before converting to milliseconds so a large outer budget
+            # never raises the site's normal five-second allowance.
+            timeout_ms=int(max(0.0, min(5.0, budget_s - (time.monotonic() - t0))) * 1000),
         )
         entry = res.to_dict()
         entry["file"] = site["file"]

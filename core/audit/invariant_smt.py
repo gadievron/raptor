@@ -31,7 +31,8 @@ Scope — declared, not guessed:
   constants, ``+``/``-``, ``min()``/``max()`` (encoded as ITE) and
   ``sizeof(...)`` (an opaque positive symbolic constant, one symbol
   per distinct argument text).
-* Mathematical integers — no C wraparound/overflow modelling (the
+* Mathematical integers — source casts and ambiguous leading-zero literals
+  decline; no C wraparound/overflow modelling (the
   overflow verbs cover that); no pointer, heap or alias reasoning.
   Sites needing any of that are reported ``out_of_scope``.
 * Inductive step only: the base case (invariant established at
@@ -48,6 +49,8 @@ import re
 from dataclasses import dataclass, field
 from core.source.lines import split_lines
 from typing import Any
+
+from core.smt_solver.session import check_solver, new_solver, query_budget, scoped, solver_reason_unknown
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +93,8 @@ _RHS_RE = re.compile(rf"^\s*({_SIDE_TAIL})")
 # How far around the operator an invariant side may reach.
 _SIDE_WINDOW = 100
 
-# Common C casts stripped before parsing.
-_CAST_RE = re.compile(
-    r"\(\s*(?:const\s+)?(?:unsigned\s+|signed\s+)?"
-    r"(?:size_t|ssize_t|u?int(?:8|16|32|64)?_t|int|long(?:\s+long)?"
-    r"|short|char|off_t|ptrdiff_t)\s*\)",
-)
-
 _TOKEN_RE = re.compile(
-    rf"\s*(sizeof\s*\([^()]*\)|min|max|{_IDENT}|\d+|[()+\-,])",
+    rf"\s*(sizeof\s*\([^()]*\)|min|max|{_IDENT}|[0-9]+|[()+\-,])",
 )
 
 
@@ -153,7 +149,6 @@ class InvariantPreservationResult:
 
 
 def _tokenize(text: str) -> list[str]:
-    text = _CAST_RE.sub("", text)
     tokens: list[str] = []
     pos = 0
     while pos < len(text):
@@ -166,6 +161,12 @@ def _tokenize(text: str) -> list[str]:
             raise _ParseError(msg)
         tokens.append(m.group(1).strip())
         pos = m.end()
+    # Without a type environment, `(Alias) + Value` could be a cast of
+    # unary +Value or a parenthesized scalar addition. Do not choose one.
+    for i in range(len(tokens) - 3):
+        if (tokens[i] == "(" and re.fullmatch(_IDENT, tokens[i + 1])
+                and tokens[i + 2] == ")" and tokens[i + 3] in {"+", "-"}):
+            raise _ParseError("ambiguous cast or grouped identifier requires source types")
     return tokens
 
 
@@ -229,9 +230,11 @@ class _ExprParser:
             b = self._expr()
             self._expect(")")
             return (tok, a, b)
-        if tok.startswith("sizeof"):
+        if re.fullmatch(r"sizeof\s*\([^()]*\)", tok):
             return ("sizeof", tok)
         if tok.isdigit():
+            if len(tok) > 1 and tok.startswith("0"):
+                raise _ParseError("leading-zero integer literals require source literal semantics")
             return ("int", int(tok))
         if re.fullmatch(_IDENT, tok):
             return ("var", tok)
@@ -276,6 +279,13 @@ def extract_invariants(*texts: str) -> list[str]:
             if not lm or not rm:
                 continue
             lhs_raw, rhs_raw = lm.group(1), rm.group(1)
+            # Prose matching must not extract the supported tail of a cast,
+            # unary expression or unsupported surrounding arithmetic.
+            before = left[:lm.start(1)].rstrip()
+            after = right[rm.end(1):].lstrip()
+            if ((before and before[-1] in ")+*/%&|^~!.><-")
+                    or (after and after[0] in "([+*/%&|^><-")):
+                continue
             try:
                 lhs = _parse_expr(lhs_raw)
                 rhs = _parse_expr(rhs_raw)
@@ -354,21 +364,19 @@ def find_mutation_sites(
     sites: list[tuple[int, str, str, str, str]] = []
     view = sanitized_view(source, language="c")
     for line_no, code in enumerate(split_lines(view), start=1):
+        line_sites = []
         for var in sorted(variables, key=len, reverse=True):
             v = re.escape(var)
-            m = re.search(
+            for match in re.finditer(
                 rf"(?<![\w.>]){v}\s*"
                 rf"(\+\+|--|<<=|>>=|[-+*/%&|^]=|=(?!=))\s*([^;]*)",
                 code,
-            )
-            if m:
-                op = m.group(1)
-                rhs = (m.group(2) or "").strip()
-                sites.append((line_no, code.strip(), var, op, rhs))
-                continue
-            m = re.search(rf"(\+\+|--)\s*{v}(?![\w.>-])", code)
-            if m:
-                sites.append((line_no, code.strip(), var, m.group(1), ""))
+            ):
+                line_sites.append((match.start(), var, match.group(1), (match.group(2) or "").strip()))
+            for match in re.finditer(rf"(\+\+|--)\s*{v}(?![\w.>-])", code):
+                line_sites.append((match.start(), var, match.group(1), ""))
+        for _, var, op, rhs in sorted(line_sites):
+            sites.append((line_no, code.strip(), var, op, rhs))
     return sites
 
 
@@ -469,6 +477,21 @@ def _collect_symbols(node: tuple, env: dict, z3mod: Any, solver) -> None:
 
 
 def check_invariant_preservation(
+    invariant: str,
+    source: str,
+    *,
+    timeout_ms: int = 5000,
+) -> InvariantPreservationResult:
+    """Check all mutation sites within one shared soft solver budget.
+
+    This proves mathematical-integer induction steps, not C conversion,
+    overflow, source reachability or the invariant's initialization.
+    """
+    with query_budget(timeout_ms):
+        return _check_invariant_preservation(invariant, source, timeout_ms=timeout_ms)
+
+
+def _check_invariant_preservation(
     invariant: str,
     source: str,
     *,
@@ -664,8 +687,7 @@ def _check_one_site(
                 ),
             )
 
-    solver = z3.Solver()
-    solver.set("timeout", timeout_ms)
+    solver = new_solver(timeout_ms)
     env: dict[str, Any] = {}
     for node in (lhs, rhs, new_expr):
         _collect_symbols(node, env, z3, solver)
@@ -681,7 +703,9 @@ def _check_one_site(
 
     # Post-state: substitute the mutated variable with a primed symbol
     # defined by the transition.
-    primed = z3.Int(f"{var}__post")
+    # Fresh native names contain "!", outside the admitted source identifier
+    # grammar. They cannot alias an ordinary variable such as Count__post.
+    primed = z3.FreshInt("invariant_post")
     post_env = dict(env)
     post_env[var] = primed
     post = _cmp_z3(
@@ -708,13 +732,13 @@ def _check_one_site(
             pass
         return values
 
-    check = solver.check()
+    check = check_solver(solver)
     if check == z3.unsat:
         return SiteResult(line=line_no, code=code, verdict="preserved")
     if check != z3.sat:
         return SiteResult(
             line=line_no, code=code, verdict="unknown",
-            reason="solver returned unknown (timeout or undecidable)",
+            reason="solver returned unknown: " + solver_reason_unknown(solver),
         )
 
     math_model = _model_values(solver.model())
@@ -724,14 +748,14 @@ def _check_one_site(
     # a different claim than a break with realistic operands). Re-ask
     # with every pre-state operand constrained >= 0; the two-regime
     # split is part of the receipt, never a hidden assumption.
-    solver.push()
-    for sym in env.values():
-        solver.add(sym >= 0)
-    nonneg_check = solver.check()
-    nonneg_model = (
-        _model_values(solver.model()) if nonneg_check == z3.sat else {}
-    )
-    solver.pop()
+    with scoped(solver):
+        for sym in env.values():
+            solver.add(sym >= 0)
+        nonneg_check = check_solver(solver)
+        nonneg_model = (
+            _model_values(solver.model()) if nonneg_check == z3.sat else {}
+        )
+        nonneg_reason = solver_reason_unknown(solver) if nonneg_check not in (z3.sat, z3.unsat) else ""
 
     if nonneg_check == z3.sat:
         return SiteResult(
@@ -754,11 +778,25 @@ def _check_one_site(
         )
     return SiteResult(
         line=line_no, code=code, verdict="unknown",
-        reason="solver returned unknown (timeout or undecidable)",
+        reason="solver returned unknown: " + nonneg_reason,
     )
 
 
 def check_site_preservation(
+    invariant: str,
+    code: str,
+    *,
+    line: int = 0,
+    pre_conditions: tuple = (),
+    timeout_ms: int = 5000,
+) -> SiteResult:
+    """Check exactly one direct mutation using a shared soft query budget."""
+    with query_budget(timeout_ms):
+        return _check_site_preservation(invariant, code, line=line,
+                                       pre_conditions=pre_conditions, timeout_ms=timeout_ms)
+
+
+def _check_site_preservation(
     invariant: str,
     code: str,
     *,
@@ -785,10 +823,20 @@ def check_site_preservation(
         )
     variables = _expr_vars(lhs) | _expr_vars(rhs)
     sites = find_mutation_sites(code or "", variables)
+    if find_alias_escapes(code or "", variables):
+        return SiteResult(
+            line=line, code=code.strip(), verdict="out_of_scope",
+            reason="aliased mutation requires an alias model",
+        )
     if not sites:
         return SiteResult(
             line=line, code=code.strip(), verdict="preserved",
             reason="no mutation of an invariant variable at this site",
+        )
+    if len(sites) != 1:
+        return SiteResult(
+            line=line, code=code.strip(), verdict="out_of_scope",
+            reason="multiple mutations require a joint transition model",
         )
     if not _z3_available():
         return SiteResult(
