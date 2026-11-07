@@ -10,6 +10,7 @@ import json
 import pytest
 
 import core.audit.corpus.history as history_mod
+from core.audit.integer_abi import select_integer_abi
 import core.audit.corpus.run_corpus as run_corpus
 from core.audit.corpus.run_corpus import (
     _emit_summary,
@@ -1803,6 +1804,7 @@ def _run_stamp(**overrides):
         "profile": "cold",
         "triage": "off",
         "prefilter": "off",
+        "integer_abi": select_integer_abi(None),
         "scope": "excerpt",
         "label_kind": "real",
     }
@@ -2024,6 +2026,7 @@ def _stamped_ckpt(groups, **overrides):
     stamp = {
         "mode": "security", "model": "", "profile": "deployed",
         "triage": True, "prefilter": True,
+        "integer_abi": select_integer_abi(None),
     }
     stamp.update(overrides)
     return {"stamp": stamp, "groups": groups}
@@ -2821,3 +2824,64 @@ class TestSyntheticMutantRuns:
         assert [
             r["label_kind"] for r in recs if r["record"] == "run"
         ] == ["real"]
+
+
+@pytest.mark.parametrize("selection", [None, "llp64", "unknown"])
+def test_integer_abi_cli_reaches_groups_metadata_and_history(tmp_path, monkeypatch, selection):
+    from core.audit import integer_abi
+    host = integer_abi.IntegerABI("host-lp64", 8, 16, 32, 64, 64,
+                                  "twos-complement-no-padding", source="host-assumption")
+    monkeypatch.setattr(integer_abi, "host_integer_abi", lambda: host)
+    expected = host.record() if selection is None else selection
+    captured = []
+
+    def audit(labels, dirs, **kwargs):
+        captured.append(kwargs["integer_abi"])
+        return [dict(_result_row("a.c:f"), model="")], []
+
+    argv = [] if selection is None else ["--integer-abi", selection]
+    rc, out, history = _stub_main_run(tmp_path, monkeypatch, audit_stub=audit, argv=argv)
+    assert rc == 0
+    assert captured == [expected]
+    assert _meta_of(out)["integer_abi"] == expected
+    records = [json.loads(line) for line in history.read_text().splitlines()]
+    header = next(record for record in records if record["record"] == "run")
+    assert header["config"]["integer_abi"] == expected
+
+
+@pytest.mark.parametrize("selection", [None, "llp64", "unknown"])
+def test_integer_abi_reaches_corpus_pipeline(tmp_path, monkeypatch, selection):
+    import core.audit.pipeline as pipeline
+    captured = []
+    monkeypatch.setattr(pipeline, "run_audit_pipeline", lambda opts: captured.append(opts))
+    monkeypatch.setattr(run_corpus, "_build_checklist", lambda *args: True)
+    run_corpus._run_audit_on_target(tmp_path, [_mk_label("a.c:f")],
+                                    out_dir=tmp_path / "out", integer_abi=selection)
+    assert captured[0].integer_abi == selection
+    config = pipeline._build_orchestrator_config(captured[0], None, ["test"], pipeline.ReviewMode.SECURITY)
+    expected = select_integer_abi(selection)
+    assert config.integer_abi == (None if expected == "unknown" else expected)
+
+
+def test_corpus_checkpoint_cannot_cross_abi_assumptions(tmp_path, monkeypatch):
+    from core.audit import integer_abi
+    host = integer_abi.IntegerABI("host-lp64", 8, 16, 32, 64, 64,
+                                  "twos-complement-no-padding", source="host-assumption")
+    monkeypatch.setattr(integer_abi, "host_integer_abi", lambda: host)
+    seen = []
+
+    def target(target_dir, labels, **kwargs):
+        seen.append(kwargs["integer_abi"])
+        return {lb.function_id: {"status": "clean"} for lb in labels}, {}, None
+
+    monkeypatch.setattr(run_corpus, "_run_audit_on_target", target)
+    checkpoint = tmp_path / "checkpoint.json"
+    args = ([_mk_label("a.c:f")], {"test": tmp_path})
+    kwargs = dict(joern_server=object(), checkpoint=checkpoint)
+    run_corpus._run_audit(*args, **kwargs)
+    run_corpus._run_audit(*args, **kwargs)
+    assert seen == [host.record()]
+    run_corpus._run_audit(*args, **kwargs, integer_abi="lp64")
+    assert seen == [host.record(), "lp64"]
+    run_corpus._run_audit(*args, **kwargs, integer_abi="unknown")
+    assert seen == [host.record(), "lp64", "unknown"]

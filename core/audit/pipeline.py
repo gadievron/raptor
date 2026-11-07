@@ -424,12 +424,21 @@ def _build_orchestrator_config(
     """
     from core.audit.orchestrator import OrchestratorConfig
 
-    from .integer_abi import resolve_integer_abi
+    from .integer_abi import resolve_integer_abi, select_integer_abi
+    opts.integer_abi = select_integer_abi(opts.integer_abi, target_path=opts.target_path)
     abi = resolve_integer_abi(opts.integer_abi)
-    if opts.integer_abi is not None and abi is None:
-        raise ValueError("unknown target integer ABI")
     if abi is None:
         logger.info("Target integer ABI unknown: source overflow/array SMT is inconclusive")
+    elif abi.source == "host-assumption":
+        logger.warning(
+            "Target integer ABI unspecified; assuming host C integer layout: %s "
+            "(int=%s, long=%s bits). Integer results apply under this assumption. "
+            "Override with --integer-abi; use --integer-abi unknown to disable.",
+            abi.name, abi.int_bits, abi.long_bits,
+        )
+    elif abi.source == "binary-platform":
+        logger.info("Target integer ABI: %s (binary platform ABI; "
+                    "compiler-specific settings are not inferred)", abi.name)
     else:
         logger.info("Target integer ABI: %s (explicit target assertion)", abi.name)
     return OrchestratorConfig(
@@ -440,7 +449,7 @@ def _build_orchestrator_config(
         scope_floor=opts.scope_floor,
         pins=opts.pins,
         strategy_filter=opts.strategy_filter,
-        integer_abi=opts.integer_abi,
+        integer_abi=opts.integer_abi if abi is not None else None,
         models=models,
         multi_model=len(models) > 1,
         adversarial=opts.adversarial,
