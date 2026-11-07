@@ -179,12 +179,16 @@ def _detect_javascript(language: str, content: str) -> list[DeadRange]:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
-    offsets = _newline_offsets(stripped)
+    # Native views need coordinates only after a complete range is found.
+    # Keep adapter preparation in its original order.
+    offsets = None if type(stripped) is str else _newline_offsets(stripped)
     for m in _JS_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
+        if offsets is None:
+            offsets = _newline_offsets(stripped)
         ranges.append((_line_at(offsets, m.start()),
                        _line_at(offsets, close)))
     return ranges
@@ -235,39 +239,60 @@ def _detect_rust(content: str) -> list[DeadRange]:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
-    offsets = _newline_offsets(stripped)
+    # Native views need coordinates only after a complete range is found.
+    # Keep adapter preparation in its original order.
+    offsets = None if type(stripped) is str else _newline_offsets(stripped)
     # ``if false { … }`` blocks.
     for m in _RUST_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
+        if offsets is None:
+            offsets = _newline_offsets(stripped)
         ranges.append((_line_at(offsets, m.start()),
                        _line_at(offsets, close)))
     # ``#[cfg(any())]`` gating the immediately-following fn / mod.
     for m in _RUST_DEAD_CFG.finditer(stripped):
-        after = stripped[m.end():]
-        if not _RUST_ITEM_AFTER_CFG.match(after):
-            # cfg gates a non-fn/mod item — do not range (avoids the
-            # false positive of grabbing an unrelated later fn).
-            continue
-        # First ``{`` after the attribute is the gated item's body —
-        # nothing between the cfg and the body uses braces (attributes
-        # use ``[]``, visibility uses ``()``, generics use ``<>``).
-        # A bodyless item (e.g. ``mod dead_mod;``) has no ``{`` before
-        # its ``;`` — skip rather than latching onto the next item.
-        brace_rel = after.find("{")
-        semi_rel = after.find(";")
-        if brace_rel == -1:
-            continue
-        if semi_rel != -1 and semi_rel < brace_rel:
-            continue
-        close = _match_brace(stripped, m.end() + brace_rel)
+        if type(stripped) is str:
+            # This pattern has no subject-start anchors or lookbehind: matching
+            # at the suffix offset is equivalent without copying that suffix.
+            item_start = m.end()
+            if not _RUST_ITEM_AFTER_CFG.match(stripped, item_start):
+                continue
+            brace_pos = stripped.find("{", item_start)
+            if brace_pos == -1:
+                continue
+            # Only a semicolon BEFORE the first brace refuses a bodyless
+            # item. Searching later text needlessly re-scans every suffix.
+            if stripped.find(";", item_start, brace_pos) != -1:
+                continue
+        else:
+            after = stripped[m.end():]
+            if not _RUST_ITEM_AFTER_CFG.match(after):
+                # cfg gates a non-fn/mod item — do not range (avoids the
+                # false positive of grabbing an unrelated later fn).
+                continue
+            # First ``{`` after the attribute is the gated item's body —
+            # nothing between the cfg and the body uses braces (attributes
+            # use ``[]``, visibility uses ``()``, generics use ``<>``).
+            # A bodyless item (e.g. ``mod dead_mod;``) has no ``{`` before
+            # its ``;`` — skip rather than latching onto the next item.
+            brace_rel = after.find("{")
+            semi_rel = after.find(";")
+            if brace_rel == -1:
+                continue
+            if semi_rel != -1 and semi_rel < brace_rel:
+                continue
+            brace_pos = m.end() + brace_rel
+        close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
         # Range spans from the attribute to the item's closing brace,
         # so the fn/mod ``line_start`` is captured (and, for mod, every
         # nested fn inside the dead module).
+        if offsets is None:
+            offsets = _newline_offsets(stripped)
         ranges.append((_line_at(offsets, m.start()),
                        _line_at(offsets, close)))
     return ranges
@@ -517,12 +542,24 @@ def _detect_php(content: str) -> list[DeadRange]:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
+    native_view = type(stripped) is str
+    line = 1
+    line_offset = 0
     for m in _PHP_DEAD_IF.finditer(stripped):
         close = _match_brace(stripped, m.end() - 1)
         if close is None:
             continue
-        ranges.append((stripped.count("\n", 0, m.start()) + 1,
-                       stripped.count("\n", 0, close) + 1))
+        if native_view:
+            # Starts advance even when nested closing positions move back.
+            # Count each gap once and the body locally; avoid a full-file
+            # newline table or repeated scans of the preceding prefix.
+            offset = m.start()
+            line += stripped.count("\n", line_offset, offset)
+            line_offset = offset
+            ranges.append((line, line + stripped.count("\n", offset, close)))
+        else:
+            ranges.append((stripped.count("\n", 0, m.start()) + 1,
+                           stripped.count("\n", 0, close) + 1))
     return ranges
 
 
