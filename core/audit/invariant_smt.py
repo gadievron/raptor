@@ -38,6 +38,10 @@ Scope — declared, not guessed:
 * Inductive step only: the base case (invariant established at
   initialisation) is not proven here.
 
+Proof-bearing site admission requires the optional C grammar; unavailable
+or unsupported source is inconclusive. The legacy textual line inventory
+is retained for non-proof consumers.
+
 Degrades gracefully without z3 (outcome ``inconclusive``,
 reason ``z3 unavailable``). Native queries run in the shared confined JSON
 worker. No LLM calls or target code execution.
@@ -245,8 +249,8 @@ def find_mutation_sites(
 
     Scans the sanitized view (comments/string literals blanked): a
     ``/* len = attacker */`` comment must not mint a mutation site.
-    Only DIRECT spellings are visible here — aliased mutations are
-    :func:`find_alias_escapes`' job.
+    This compatibility line inventory is not a preservation proof. Proof
+    consumers use the AST-backed invariant_source admission instead.
     """
     from .source_view import sanitized_view
     sites: list[tuple[int, str, str, str, str]] = []
@@ -406,74 +410,28 @@ def _check_invariant_preservation(
             reason="invariant names no variables",
         )
 
-    sites = find_mutation_sites(source or "", variables)
-    escapes = find_alias_escapes(source or "", variables)
-    if not sites and not escapes:
-        return InvariantPreservationResult(
-            outcome="preserved",
-            invariant=invariant,
-            reason=(
-                "no mutation sites for the invariant variables in this "
-                "function (vacuously preserved; base case not checked)"
-            ),
-        )
-    if not sites:
-        # Address-taken invariant variables with zero direct
-        # mutation sites: the mutation lives behind an alias
-        # (grow(&len, n), memcpy, helper calls) that the per-line
-        # regex cannot adjudicate. The docstring's contract — "sites
-        # needing alias reasoning are reported out_of_scope" — means
-        # this is inconclusive, never a vacuous 'preserved' receipt.
-        return InvariantPreservationResult(
-            outcome="inconclusive",
-            invariant=invariant,
-            reason=(
-                "no direct mutation sites, but invariant variable(s) "
-                "are address-taken ("
-                + "; ".join(
-                    f"&{var} at line {ln}" for ln, _c, var in escapes[:4]
-                )
-                + ") — aliased mutation needs alias reasoning, "
-                "out of scope"
-            ),
-            sites=[
-                SiteResult(line=ln, code=code, verdict="out_of_scope",
-                           reason=f"&{var} — address-taken; aliased "
-                                  f"mutation not analysable here")
-                for ln, code, var in escapes
-            ],
-        )
-
+    from .invariant_source import source_mutations
+    sites, effects, refusal = source_mutations(source or "", variables)
+    if refusal:
+        return InvariantPreservationResult(outcome="inconclusive", invariant=invariant, reason=refusal)
+    if not sites and not effects:
+        return InvariantPreservationResult(outcome="preserved", invariant=invariant,
+            reason="no mutation sites for the invariant variables in this function (vacuously preserved; base case not checked)")
     if not _z3_available():
-        return InvariantPreservationResult(
-            outcome="inconclusive",
-            invariant=invariant,
-            reason="z3 unavailable (pip install z3-solver)",
-            sites=[
-                SiteResult(line=ln, code=code, verdict="unknown",
-                           reason="z3 unavailable")
-                for ln, code, _v, _o, _r in sites
-            ],
-        )
-
+        return InvariantPreservationResult(outcome="inconclusive", invariant=invariant,
+            reason="z3 unavailable", sites=[SiteResult(line=site.line, code=site.code,
+                verdict="unknown", reason="z3 unavailable") for site in sites + effects])
     import z3
-
-    site_results: list[SiteResult] = []
-    for line_no, code, var, aop, rhs_text in sites:
-        result = _check_one_site(
-            z3, lhs, op, rhs, variables, line_no, code, var, aop,
-            rhs_text, timeout_ms,
-        )
+    site_results = []
+    for site in sites:
+        if site.reason:
+            result = SiteResult(line=site.line, code=site.code, verdict="out_of_scope", reason=site.reason)
+        else:
+            result = _check_one_site(z3, lhs, op, rhs, variables, site.line, site.code,
+                                     site.var, site.op, site.rhs, timeout_ms, pre_conditions=site.guards)
         site_results.append(result)
-    # Address-taken variables join as out_of_scope sites: an aliased
-    # mutation the direct-spelling scan cannot see must block the
-    # "every mutation site preserves" aggregation below.
-    for line_no, code, var in escapes:
-        site_results.append(SiteResult(
-            line=line_no, code=code, verdict="out_of_scope",
-            reason=f"&{var} — address-taken; aliased mutation not "
-                   f"analysable here",
-        ))
+    site_results.extend(SiteResult(line=effect.line, code=effect.code, verdict="out_of_scope", reason=effect.reason)
+                        for effect in effects)
 
     if any(s.verdict == "violable" for s in site_results):
         outcome = "violable"
@@ -743,30 +701,24 @@ def _check_site_preservation(
             reason=f"invariant outside the linear fragment: {exc}",
         )
     variables = _expr_vars(lhs) | _expr_vars(rhs)
-    sites = find_mutation_sites(code or "", variables)
-    if find_alias_escapes(code or "", variables):
-        return SiteResult(
-            line=line, code=code.strip(), verdict="out_of_scope",
-            reason="aliased mutation requires an alias model",
-        )
+    from .invariant_source import source_mutations
+    sites, effects, refusal = source_mutations(code or "", variables)
+    if refusal or effects:
+        return SiteResult(line=line, code=code.strip(), verdict="out_of_scope",
+                          reason=refusal or effects[0].reason)
     if not sites:
-        return SiteResult(
-            line=line, code=code.strip(), verdict="preserved",
-            reason="no mutation of an invariant variable at this site",
-        )
+        return SiteResult(line=line, code=code.strip(), verdict="preserved",
+                          reason="no mutation of an invariant variable at this site")
     if len(sites) != 1:
-        return SiteResult(
-            line=line, code=code.strip(), verdict="out_of_scope",
-            reason="multiple mutations require a joint transition model",
-        )
+        return SiteResult(line=line, code=code.strip(), verdict="out_of_scope",
+                          reason="multiple mutations require a joint transition model")
+    site = sites[0]
+    if site.reason or len(pre_conditions) + len(site.guards) > 64:
+        return SiteResult(line=line or site.line, code=site.code, verdict="out_of_scope",
+                          reason=site.reason or "reaching guard budget exhausted")
     if not _z3_available():
-        return SiteResult(
-            line=line, code=code.strip(), verdict="unknown",
-            reason="z3 unavailable",
-        )
+        return SiteResult(line=line, code=code.strip(), verdict="unknown", reason="z3 unavailable")
     import z3
-    _ln, site_code, var, aop, rhs_text = sites[0]
-    return _check_one_site(
-        z3, lhs, op, rhs, variables, line or _ln, site_code, var, aop,
-        rhs_text, timeout_ms, pre_conditions=tuple(pre_conditions),
-    )
+    return _check_one_site(z3, lhs, op, rhs, variables, line or site.line, site.code,
+                           site.var, site.op, site.rhs, timeout_ms,
+                           pre_conditions=tuple(pre_conditions) + site.guards)
