@@ -262,3 +262,125 @@ def test_duplicate_registration_does_not_create_another_record_or_authority_grou
         lifecycle.register(metadata, os.getpid())
     assert sorted(lifecycle.registry().iterdir()) == before
     assert sorted(lifecycle.authority_family().iterdir()) == groups
+
+
+@pytest.mark.parametrize('args', [[], ['--list'], ['--dry-run']])
+def test_empty_cleanup_explains_scope_without_creating_state(tmp_path, monkeypatch, capsys, args):
+    registry = tmp_path / 'empty-registry'
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(registry))
+    assert lifecycle.main(args) == 0
+    text = capsys.readouterr().out
+    assert 'no registered launcher-session scratch' in text
+    assert 'not scanned' in text
+    assert not registry.exists()
+
+
+@pytest.mark.parametrize('closure', ['never-released', 'pid-namespace', 'cgroup-v2'])
+def test_dry_run_reports_eligibility_without_mutating_owned_tree(owned, capsys, closure):
+    root, _, session_id = owned
+    lifecycle.record_closed(session_id, closure)
+    before = {p.name: p.read_bytes() for p in lifecycle.registry().iterdir()}
+    assert lifecycle.main(['--dry-run', '--session', session_id]) == 0
+    text = capsys.readouterr().out
+    assert 'would-remove' in text
+    assert 'filesystem checks' in text
+    assert root.exists()
+    assert before == {p.name: p.read_bytes() for p in lifecycle.registry().iterdir()}
+
+
+def test_retained_cleanup_explains_individual_override(owned, capsys):
+    root, _, session_id = owned
+    assert lifecycle.main([]) == 0
+    text = capsys.readouterr().out
+    assert '1 retained' in text
+    assert 'no recorded process-tree closure' in text
+    assert f'--session {session_id} --force' in text
+    assert root.exists()
+
+
+def test_cleanup_summary_distinguishes_new_removal_from_receipts(owned, capsys):
+    root, _, session_id = owned
+    lifecycle.record_closed(session_id, 'never-released')
+    assert lifecycle.main([]) == 0
+    assert '1 removed.' in capsys.readouterr().out
+    assert not root.exists()
+    assert lifecycle.main([]) == 0
+    assert '1 already-removed.' in capsys.readouterr().out
+    assert lifecycle.main(['--dry-run']) == 0
+    assert '1 already-removed.' in capsys.readouterr().out
+
+
+def test_cleanup_error_reports_sanitized_reason_and_fails(owned, monkeypatch, capsys):
+    root, _, _ = owned
+    def unavailable(*args, **kwargs):
+        raise PermissionError('fixture denied\x1b[31m\nnext line')
+    monkeypatch.setattr(lifecycle, 'cleanup', unavailable)
+    assert lifecycle.main([]) == 1
+    text = capsys.readouterr().out
+    assert 'PermissionError' in text
+    assert 'fixture denied' in text
+    assert '\x1b' not in text
+    assert '1 cleanup-error' in text
+    assert root.exists()
+
+
+@pytest.mark.parametrize('args', [[], ['--list'], ['--dry-run']])
+def test_invalid_record_is_visible_and_returns_failure(owned, capsys, args):
+    root, _, session_id = owned
+    (lifecycle.registry() / (session_id + '.json')).write_text('{}')
+    assert lifecycle.main(args) == 1
+    text = capsys.readouterr().out
+    assert 'invalid control record' in text
+    assert '1 invalid' in text
+    assert root.exists()
+
+
+def test_cleanup_warns_when_limit_leaves_records_uninspected(owned, capsys):
+    root, metadata, _ = owned
+    other = root.with_name('session-' + 'a' * 32)
+    other.mkdir(mode=0o700)
+    lifecycle.register(launch_scratch.create(other), os.getpid())
+    assert lifecycle.main(['--dry-run', '--limit', '1']) == 0
+    text = capsys.readouterr().out
+    assert 'more records remain' in text
+    assert '1 inspected' in text
+    assert root.exists() and other.exists() and metadata.exists()
+
+
+def test_exact_limit_does_not_warn_about_nonexistent_records(owned, capsys):
+    assert lifecycle.main(['--dry-run', '--limit', '1']) == 0
+    assert 'more records remain' not in capsys.readouterr().out
+
+
+def test_dry_run_recognizes_prior_removal_authorization(owned, capsys):
+    root, _, session_id = owned
+    with lifecycle.locked(session_id) as (node, value):
+        value.update(removal_authorized=True, state='cleanup-error')
+        lifecycle._write(node, session_id + '.json', value)
+    assert lifecycle.main(['--dry-run']) == 0
+    assert '1 would-remove' in capsys.readouterr().out
+    assert root.exists()
+
+
+def test_missing_selected_session_reports_reason(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'absent'))
+    assert lifecycle.main(['--session', 'b' * 32]) == 1
+    assert 'FileNotFoundError' in capsys.readouterr().err
+
+
+def test_individual_failure_does_not_stop_remaining_cleanup(owned, monkeypatch, capsys):
+    root, _, session_id = owned
+    other = root.with_name('session-' + 'c' * 32)
+    other.mkdir(mode=0o700)
+    second = lifecycle.register(launch_scratch.create(other), os.getpid())
+    lifecycle.record_closed(second, 'never-released')
+    original = lifecycle.cleanup
+    def fail_one(identifier, **kwargs):
+        if identifier == session_id:
+            raise OSError('first session unavailable')
+        return original(identifier, **kwargs)
+    monkeypatch.setattr(lifecycle, 'cleanup', fail_one)
+    assert lifecycle.main([]) == 1
+    text = capsys.readouterr().out
+    assert '1 cleanup-error, 1 removed' in text
+    assert root.exists() and not other.exists()
