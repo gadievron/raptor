@@ -115,8 +115,60 @@ def test_native_core_capture_checks_context_identity_not_printed_names(monkeypat
     frame = track_frames(solver, [([("contradiction", False)], [0])])
     foreign = z3.Bool(next(iter(frame.labels)), ctx=z3.Context())
     monkeypatch.setattr(solver, "unsat_core", lambda: [foreign])
-    assert frame.check() == z3.unsat
+    assert frame.check() == (z3.unknown if backend == "Optimize" else z3.unsat)
     assert frame.core_indices(solver) is None
+
+
+def test_pareto_exhaustion_does_not_refute_satisfiable_hard_constraints():
+    context = z3.Context()
+    solver = z3.Optimize(ctx=context)
+    solver.set(priority="pareto")
+    x, y = z3.Ints("x y", ctx=context)
+    solver.maximize(x)
+    solver.maximize(y)
+    bounds = z3.And(x >= 0, y >= 0, x <= 1, y <= 1, x + y <= 1)
+    frame = track_frames(solver, [([("bounds", bounds)], [0])])
+    witnesses = set()
+    for _ in range(2):
+        assert frame.check() == z3.sat
+        model = solver.model()
+        witnesses.add((model.eval(x).as_long(), model.eval(y).as_long()))
+    assert witnesses == {(0, 1), (1, 0)}
+    assert frame.check() == z3.unknown
+    assert frame.core_indices(solver) is None
+    assert frame.single_core_origin(solver) is None
+    # Exhaustion does not make the hard formula contradictory.
+    verifier = z3.Solver(ctx=context)
+    verifier.add(bounds)
+    assert verifier.check() == z3.sat
+
+
+def test_pareto_hard_contradiction_retains_owned_refutation():
+    solver = z3.Optimize()
+    solver.set(priority="pareto")
+    x, y = z3.Ints("x y")
+    solver.maximize(x)
+    solver.maximize(y)
+    frame = track_frames(solver, [([("positive", x > 0), ("negative", x < 0)], [3, 3])])
+    assert frame.check() == z3.unsat
+    assert set(frame.core_indices(solver)) == {0, 1}
+    assert frame.single_core_origin(solver) == 3
+
+
+@pytest.mark.parametrize("failure", ["empty", "unowned", "unavailable"])
+def test_optimizer_without_owned_core_cannot_establish_negative_verdict(monkeypatch, failure):
+    solver = z3.Optimize()
+    frame = track_frames(solver, [([("contradiction", False)], [0])])
+    assert frame.check() == z3.unsat
+    if failure == "unavailable":
+        def fail_core():
+            raise z3.Z3Exception("core unavailable")
+        monkeypatch.setattr(solver, "unsat_core", fail_core)
+    else:
+        monkeypatch.setattr(solver, "unsat_core", lambda: [] if failure == "empty" else [z3.Bool("external")])
+    assert frame.check() == z3.unknown
+    assert frame.core_indices(solver) is None
+    assert frame.single_core_origin(solver) is None
 
 
 @pytest.mark.parametrize("backend", ["Solver", "Optimize"])

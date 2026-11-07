@@ -115,6 +115,21 @@ def test_provenance_does_not_add_solver_queries(monkeypatch):
     assert result.refutation_uses_call_terms is True and checks == [1]
 
 
+def test_optimizer_without_contradiction_core_leaves_path_inconclusive(monkeypatch):
+    solver = z3.Optimize()
+    value = z3.BitVec("Value", 8)
+    monkeypatch.setattr(solver, "unsat_core", lambda: [])
+    result = paths._solve_pending(
+        [("zero", value == 0), ("one", value == 1)], solver, [], [], [],
+        profile=BVProfile(width=8, signed=False), vars_={"Value": value},
+        reduce_constraints=False,
+    )
+    assert result.feasible is None
+    assert result.model == {}
+    assert set(result.unknown) == {"zero", "one"}
+    assert result.wp_complete is False
+
+
 def test_unclassified_intrinsics_do_not_claim_call_independence():
     result = paths.check_verb_feasibility(
         [("intrinsic", z3.BoolVal(False))], [], {}, profile=BVProfile(width=8, signed=False),
