@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue  # noqa: F401
+
 import core.audit.orchestrator as orch
 from core.audit.orchestrator import (
     TierCounters,
@@ -26,6 +28,7 @@ def _types(chain):
     return [e["type"] for e in chain]
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestChainEmission:
     def test_guard_cwe_gets_joern_guard(self):
         for cwe in ("CWE-120", "CWE-122", "CWE-125", "CWE-787", "CWE-476"):
@@ -340,6 +343,7 @@ class TestReceiptEntries:
         assert "reachableByFlows" in tool_items[0].description
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestLifecycleChannelChainEmission:
     """Phase-A lifecycle channels (ptr_lifecycle / lock_region):
     classifier stanzas, CWE fallback membership, tier keys — additive
@@ -592,6 +596,7 @@ class TestLifecycleChannelDispatch:
         assert confirmed == ["lock_region:callback-under-lock"]
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestResourceBoundsWiring:
     """Five-channel programme: resource_bounds chain wiring (§9)."""
 
@@ -690,6 +695,7 @@ class TestResourceBoundsWiring:
         assert counters["resource_bounds"].confirmed == 1
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestReleaseOrderWiring:
     """Five-channel programme: release_order chain wiring (§9)."""
 
@@ -794,6 +800,7 @@ class TestReleaseOrderWiring:
         assert counters["release_order"].confirmed == 1
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestProtocolStateWiring:
     """Five-channel programme: protocol_state chain wiring, including
     the smt_invariant precedence pair (§4.5/§9)."""

@@ -247,7 +247,12 @@ def test_missing_tools_ignore_warm_joern_paths(finish, monkeypatch):
     monkeypatch.setattr(prereqs, '_java_version', lambda: prereqs.MIN_JAVA_VERSION)
     monkeypatch.setattr(prereqs, 'meets_min_version', lambda: True)
     assert prereqs.check_prereqs() == []
-    native.TestProbeCapabilities().test_all_tools_missing()
+    case = native.TestProbeCapabilities()
+    with pytest.MonkeyPatch.context() as fixture_patch, ExitStack() as scope:
+        fixture = native.TestProbeCapabilities._owned_capability_discovery.__wrapped__(case, fixture_patch)
+        scope.callback(fixture.close)
+        next(fixture)
+        case.test_all_tools_missing()
     try:
         with native._missing_tool_discovery(return_value=None):
             assert prereqs._joern_path() is None
