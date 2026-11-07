@@ -662,6 +662,56 @@ class TestImport:
 
 
 class TestStability:
+    @pytest.mark.parametrize("field", ["label_set_hash", "label_files_sha256"])
+    def test_different_recorded_label_fingerprints_split_groups(self, field):
+        runs, labels = self._store()
+        for run in runs[:2]:
+            run.update(label_set_hash="a" * 64, label_files_sha256="b" * 64)
+        runs[1][field] = "c" * 64
+        assert history.stability_groups(runs, labels) == []
+
+    @pytest.mark.parametrize("field", ["label_set_hash", "label_files_sha256"])
+    @pytest.mark.parametrize("value", [None, {"invalid": True}], ids=["missing", "invalid-type"])
+    def test_unknown_fingerprint_does_not_mix_with_recorded_fingerprint(self, field, value):
+        runs, labels = self._store()
+        for run in runs[:2]:
+            run.update(label_set_hash="a" * 64, label_files_sha256="b" * 64)
+        runs[1][field] = value
+        assert history.stability_groups(runs, labels) == []
+
+    def test_legacy_variance_is_retained_with_incomplete_provenance_notice(self):
+        runs, labels = self._store()
+        groups = history.stability_groups(runs, labels)
+        assert len(groups) == 1
+        assert groups[0]["label_provenance_recorded"] is False
+        assert groups[0]["label_set_hash"] == groups[0]["label_files_sha256"] == ""
+        output = history.format_stability(groups)
+        assert "label provenance is incomplete" in output
+        assert "1/2 comparable label(s) unstable" in output
+
+    def test_cli_reads_recorded_label_provenance_from_store(self, tmp_path, capsys):
+        runs, labels = self._store()
+        for run in runs[:2]:
+            run.update(label_set_hash="a" * 64, label_files_sha256="b" * 64)
+        store = tmp_path / "store.jsonl"
+        for run in runs:
+            history.append_records(store, [run, *labels[run["run_id"]]])
+        assert history.main(["--store", str(store), "stability"]) == 0
+        output = capsys.readouterr().out
+        assert "set=aaaaaaaaaaaa definitions=bbbbbbbbbbbb" in output
+        assert "label provenance is incomplete" not in output
+        assert "1/2 comparable label(s) unstable" in output
+
+    def test_recorded_fingerprints_are_retained_and_terminal_safe(self):
+        runs, labels = self._store()
+        fingerprint = "\x1b[31m" + "a" * 64
+        for run in runs[:2]:
+            run.update(label_set_hash=fingerprint, label_files_sha256="b" * 64)
+        groups = history.stability_groups(runs, labels)
+        assert groups[0]["label_set_hash"] == fingerprint
+        assert groups[0]["label_provenance_recorded"] is True
+        assert "\x1b" not in history.format_stability(groups)
+
     def _store(self):
         config = {"mode": "security", "triage": "off"}
         runs = [
