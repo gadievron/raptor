@@ -779,6 +779,31 @@ _REAPER_EXCLUDED_OUTPUT_PREFIXES = {
 }
 
 
+@pytest.fixture(scope="module")
+def production_scratch_prefixes():
+    """Share only the immutable checkout scan, never synthetic fixture scans."""
+    import json
+    import sys
+    from types import MappingProxyType
+    from core.testing.standalone_cli import run_standalone_cli
+
+    # Preserve real discovery without collecting unrelated worker objects.
+    script = (
+        "import json, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from core.run.tests.test_tmp_reaper import _derived_production_scratch_prefixes\n"
+        "print(json.dumps(_derived_production_scratch_prefixes()))\n"
+    )
+    result = run_standalone_cli(
+        [sys.executable, "-I", "-c", script,
+         str(Path(__file__).resolve().parents[3])],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return MappingProxyType({prefix: tuple(paths)
+                             for prefix, paths in json.loads(result.stdout).items()})
+
+
 class TestProductionScratchPrefixDerivation:
     """The census IS the derivation: every discovered production
     scratch prefix must be reaper-coverable through one of the three
@@ -799,6 +824,8 @@ class TestProductionScratchPrefixDerivation:
     @pytest.mark.parametrize("factory", ["native", "shared-positional", "shared-keyword", "shared-contained"])
     def test_shared_test_helpers_excluded_without_hiding_runtime(self, tmp_path, monkeypatch, factory):
         import subprocess
+        import sys
+        from core.testing.module_views import scoped_function_imports
         from types import SimpleNamespace
 
         files = {
@@ -825,14 +852,20 @@ class TestProductionScratchPrefixDerivation:
             assert command == ["git", "-C", str(tmp_path), "ls-files", "*.py", "libexec/*"]
             return SimpleNamespace(stdout="\n".join(files))
 
-        monkeypatch.setattr(subprocess, "run", tracked_files)
-        assert _derived_production_scratch_prefixes(tmp_path) == {
-            prefix: [rel] for rel, prefix in files.items()
-            if not rel.startswith("core/testing/") and factory != "shared-contained"
-        }
+        original_run = subprocess.run
+        with scoped_function_imports(
+            sys.modules[__name__], ("_derived_production_scratch_prefixes",),
+            {"subprocess": subprocess},
+        ) as imports, monkeypatch.context() as patch:
+            patch.setattr(imports.subprocess, "run", tracked_files)
+            assert subprocess.run is original_run
+            assert _derived_production_scratch_prefixes(tmp_path) == {
+                prefix: [rel] for rel, prefix in files.items()
+                if not rel.startswith("core/testing/") and factory != "shared-contained"
+            }
 
-    def test_every_derived_prefix_is_covered(self):
-        found = _derived_production_scratch_prefixes()
+    def test_every_derived_prefix_is_covered(self, production_scratch_prefixes):
+        found = production_scratch_prefixes
         misses = {p: files for p, files in sorted(found.items())
                   if p not in _REAPER_EXCLUDED_OUTPUT_PREFIXES
                   and not self._covered(p)}
@@ -842,11 +875,11 @@ class TestProductionScratchPrefixDerivation:
             f"a _DIR_PREFIXES entry: {misses}"
         )
 
-    def test_derivation_is_not_vacuous(self):
+    def test_derivation_is_not_vacuous(self, production_scratch_prefixes):
         # Two-direction guard: the sweep must actually see the known
         # production sites (spellings pinned loosely so refactors that
         # keep the prefix pass).
-        found = _derived_production_scratch_prefixes()
+        found = production_scratch_prefixes
         assert len(found) >= 30, sorted(found)
         assert "raptor-oracle-envbuild-" in found
         assert any(p.startswith("raptor-sca-") for p in found)
