@@ -718,7 +718,8 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
                    floor_refusals_sha256: str = "",
                    cli_sandbox_disabled: bool = False,
                    disable_consent: str = "",
-                   evidence_write_failure: bool = False) -> dict:
+                   evidence_write_failure: bool = False,
+                   audit_capture_sha256: str = "") -> dict:
     """MAC fields for sandbox-summary.json: the denial payload is
     covered by its content hash, so a planted or edited summary fails
     verification even when the headline counters are preserved.
@@ -746,6 +747,9 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
         "total_denials": total_denials,
         "denials_sha256": denials_sha256,
     }
+    if audit_capture_sha256:
+        # Join only when metadata exists, preserving pre-metadata tokens.
+        fields["audit_capture_sha256"] = audit_capture_sha256
     if corrupt_lines:
         fields["corrupt_lines"] = int(corrupt_lines)
     if inode_mismatch:

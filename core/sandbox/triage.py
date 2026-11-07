@@ -33,6 +33,8 @@ separate, larger change.
 
 from __future__ import annotations
 
+from .audit_control import AUDIT_CONTROL_TYPES, audit_capture_digest, valid_audit_capture
+
 import hashlib
 import json
 import os
@@ -78,11 +80,7 @@ TRIAGE_FILE = "sandbox-triage.json"
 # core/sandbox/audit_budget.py and the tracer's credential-path
 # guaranteed-keep lane — not enforcement denials, must be excluded
 # from the enforcement-oriented signal checks below.
-_BUDGET_MARKER_TYPES = frozenset({
-    "pid_budget_exceeded", "category_budget_exceeded",
-    "category_budget_exceeded_sampling", "audit_summary",
-    "credential_keep_cap_exceeded",
-})
+_BUDGET_MARKER_TYPES = AUDIT_CONTROL_TYPES
 
 VERDICT_CLEAN = "clean"
 VERDICT_NOTABLE = "notable"
@@ -393,6 +391,8 @@ def _verify_summary(
             or any(not valid_syscall_args(row.get("syscall"), row.get("args"))
                    for row in denials)):
         return None, _INTEGRITY_TAMPERED
+    if "audit_capture" in summary and not valid_audit_capture(summary["audit_capture"]):
+        return None, _INTEGRITY_TAMPERED
     inode_mismatch = bool(summary.get("inode_mismatch"))
     planted_object = str(summary.get("planted_object") or "")
     writer_flagged = (bool(corrupt_lines) or inode_mismatch
@@ -426,6 +426,8 @@ def _verify_summary(
         # one (flag or consent-source label) breaks verification.
         cli_sandbox_disabled=bool(summary.get("cli_sandbox_disabled")),
         disable_consent=str(summary.get("disable_consent") or ""),
+        **({"audit_capture_sha256": audit_capture_digest(summary["audit_capture"])}
+           if "audit_capture" in summary else {}),
     )
     if telemetry_mac.verify(fields, token):
         if writer_flagged:
@@ -742,6 +744,7 @@ def triage_run(run_dir: Path, *,
     signals += _check_host_recon(proxy_events, host_recon_threshold)
     signals += _check_credential_path_touch(enforcement_denials)
     signals += _check_volume_anomaly(summary, budget_markers)
+    signals += _check_audit_capture(summary)
     signals += _check_escape_burst(enforcement_denials)
     signals += _check_host_retry(proxy_events)
     signals += _check_dns_exfil_indicator(proxy_events)
@@ -844,6 +847,11 @@ def triage_run(run_dir: Path, *,
         "audit_degraded": audit_degraded is not None,
         "caveats": [],
     }
+    capture = (summary or {}).get("audit_capture")
+    if capture is not None:
+        report["inputs"]["audit_capture"] = capture
+        if capture["capture_incomplete"] or capture["budget_truncated"]:
+            report["caveats"].append("Audit capture dropped or could not confirm records.")
     legacy = sorted(name for name, state in integrity.items()
                     if state == _INTEGRITY_LEGACY
                     and name not in key_demoted)
@@ -989,6 +997,17 @@ def _check_credential_path_touch(denials: list[dict]) -> list[dict]:
     }]
 
 
+def _check_audit_capture(summary: dict | None) -> list[dict]:
+    capture = (summary or {}).get("audit_capture")
+    if not capture or not capture["capture_incomplete"]:
+        return []
+    return [{
+        "type": "audit_capture_incomplete", "severity": SEVERITY_MEDIUM,
+        "count": max(1, capture["malformed_records"]),
+        "evidence": ["audit collection could not confirm complete capture"],
+    }]
+
+
 def _check_volume_anomaly(summary: dict | None,
                            budget_markers: list[dict]) -> list[dict]:
     evidence = []
@@ -1000,6 +1019,11 @@ def _check_volume_anomaly(summary: dict | None,
         )
     marker_types = sorted({m.get("type") for m in budget_markers  # type: ignore[type-var]
                             if m.get("type") != "audit_summary"})
+    capture = (summary or {}).get("audit_capture")
+    if capture:
+        marker_types = sorted(set(marker_types) | (set(capture["by_type"]) - {"audit_summary"}))
+        if capture["budget_truncated"]:
+            evidence.append("audit capture reports dropped records")
     if marker_types:
         evidence.append(f"audit budget markers present: {marker_types}")
     if not evidence:

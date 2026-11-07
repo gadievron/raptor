@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.security.log_sanitisation import sanitise_for_terminal
+from core.sandbox.audit_control import capture_loss_status
 from core.security.capped_read import CappedReadRefused, path_may_exist, read_capped
 
 from .evidence import _unique_evidence_object
@@ -719,20 +720,8 @@ def parse_observe_log(run_dir, *,
         # `budget_truncated` (any drops) + per-category counts so an
         # operator knows the profile is incomplete.
         if rec.get("type") == "audit_summary":
-            # Omitted fields remain compatible with older writers. Present
-            # status fields must have the producer's exact boolean shape.
-            for field in ("reader_failed", "lineage_failed", "reader_drained", "producer_reaped",
-                          "lineage_stopped", "stdout_closed"):
-                if field in rec and type(rec[field]) is not bool:
-                    profile.capture_incomplete = True
-            if (rec.get("reader_failed") is True or rec.get("lineage_failed") is True
-                    or any(rec.get(field) is False for field in
-                           ("reader_drained", "producer_reaped", "lineage_stopped", "stdout_closed"))):
+            if capture_loss_status(rec)[0]:
                 profile.capture_incomplete = True
-            # A supplied loss counter is clean only as an exact integer zero.
-            for field in ("append_failures", "parse_ambiguous_records_dropped"):
-                if field in rec and (type(rec[field]) is not int or rec[field] != 0):
-                    profile.capture_incomplete = True
             dropped = rec.get("dropped_by_category", {})
             if not isinstance(dropped, dict):
                 profile.capture_incomplete = True
