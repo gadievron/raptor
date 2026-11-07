@@ -13114,12 +13114,10 @@ def _run_mechanical_detectors(
                         for guard in sg.guards:
                             if not guard.resolvable:
                                 continue
-                            # Pass the file source so the check can
-                            # consult the variable's declared type —
-                            # unknown signedness produces no finding
-                            # (the old default assumed every variable
-                            # unsigned and stamped a witness-carrying
-                            # mismatch per resolvable guard).
+                            # Type lookup alone cannot establish signed
+                            # comparison semantics. Without separately
+                            # bound conversion evidence the checker
+                            # produces no mismatch finding.
                             smr = _check_sm(guard, source=src)
                             if smr.mismatch:
                                 detector = "signed_mismatch_smt"

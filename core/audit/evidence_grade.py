@@ -22,6 +22,8 @@ import importlib
 from dataclasses import dataclass
 from typing import Any
 
+from .smt_evidence import LEGACY_GUARD_MODEL_NAMESPACES
+
 
 class EvidenceSource(str, enum.Enum):
     """Where a piece of evidence came from."""
@@ -145,18 +147,9 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
     # existence, not the request-to-unserialize taint path), so its
     # receipts aggregate but never promote alone.
     "gadget_oracle",
-    # Z3 path-infeasibility proof from the decorative-guard detector —
-    # a real solver run, previously graded tool_backed only through
-    # compute_tier's dispatched-name loophole (invisible to this
-    # firewall).
-    "dead_path_smt",
-    # Sibling condition-SMT detectors from the same mechanical pass
-    # (orchestrator._process_file_conditions): guard-sufficiency and
-    # signedness-mismatch solver runs whose ``:witness`` variants carry
-    # a concrete model. compute_tier now applies this firewall BEFORE
-    # its ``:witness`` confirmed check, so their namespaces must be
-    # known here or a genuine solver witness demotes to llm_only.
-    "insufficient_guard_smt", "signed_mismatch_smt",
+    # Legacy condition-model namespaces remain aggregation-eligible;
+    # their exact registry spellings below are diagnostic even with a model.
+    "dead_path_smt", "insufficient_guard_smt", "signed_mismatch_smt",
     # Live producer namespaces the firewall was missing — each stamp
     # is set exclusively by pipeline code (never reachable from raw
     # model output, which sanitize_llm_evidence_tool namespaces under
@@ -272,6 +265,11 @@ def _channel_detection_classifier(namespace: str):
 _ROLE_VERIFICATION = "verification"
 _ROLE_DETECTION = "detection"
 _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
+    # Complete arithmetic assignments still do not establish source
+    # argument identity, C conversions, or reachability. A witness suffix
+    # cannot grant these legacy condition models verification authority.
+    **{name: {name: _ROLE_DETECTION, f"{name}:witness": _ROLE_DETECTION}
+       for name in LEGACY_GUARD_MODEL_NAMESPACES},
     # Prediction matches are observations, not independent defect oracles.
     "dark_verify": {
         "dark_verify:sanitizer-violation": _ROLE_VERIFICATION,

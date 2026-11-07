@@ -85,3 +85,15 @@ def scope_smt_observation(verb: str, outcome: str, data: dict) -> tuple[str, dic
         details["oracle_scope"] = _DIAGNOSTIC_ORACLE_SCOPES[verb]
         return ("confirmed" if outcome == "confirmed" else "inconclusive"), details
     return scope_smt_feasibility(verb, outcome, data)
+
+
+LEGACY_GUARD_MODEL_NAMESPACES = frozenset({
+    "dead_path_smt", "insufficient_guard_smt", "signed_mismatch_smt",
+})
+
+
+def is_legacy_guard_model_rule(rule_id: str) -> bool:
+    """Legacy condition-bridge models never bind a complete source defect."""
+    if not isinstance(rule_id, str):
+        return False
+    return rule_id.removeprefix("clean-refuted:").split(":", 1)[0] in LEGACY_GUARD_MODEL_NAMESPACES

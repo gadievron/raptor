@@ -2958,6 +2958,12 @@ def _reuse_ineligibility(
       :func:`_context_staleness`). ``None`` skips the short-circuit.
     """
     receipts = getattr(entry, "evidence_tools", None) or []
+    from .smt_evidence import is_legacy_guard_model_rule
+    if any(is_legacy_guard_model_rule(part.strip())
+           for receipt in receipts if isinstance(receipt, str)
+           for part in receipt.split("+")):
+        return "legacy guard-model receipt requires fresh review"
+
     if any("smt:check-overflow:literal-call" in receipt for receipt in receipts if isinstance(receipt, str)):
         return "literal caller proof requires full source revalidation"
     if getattr(entry, "verdict", None) in {"suspicious", "dormant"}:
@@ -3043,6 +3049,8 @@ def _reuse_ineligibility(
 #: :func:`_reuse_ineligibility` returns. Keys feed per-reason counts in
 #: the fold log line and the run summary (``reuse_stats``).
 def _reuse_block_class(reason: str) -> str:
+    if reason.startswith("legacy guard-model"):
+        return "legacy_guard_model"
     if reason.startswith("unbound bounds demotion"):
         return "unbound_bounds_demotion"
     if reason.startswith("literal caller proof"):

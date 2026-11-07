@@ -491,15 +491,12 @@ class TestDetectionVariantFirewall:
             assert not is_tool_evidence(stamp), stamp
 
     def test_smt_verification_verbs_and_witnesses_qualify(self):
-        # Verification-role verbs and concrete solver witnesses keep
-        # their receipts; dead_path_smt is a real Z3 run that was
-        # previously invisible to the firewall.
+        # Verification-role source arithmetic receipts retain their role;
+        # supplied guard models are diagnostic even with concrete values.
         for stamp in (
             "smt",
             "smt:check-overflow",
             "smt:check-overflow:witness",
-            "dead_path_smt",
-            "dead_path_smt:witness",
         ):
             assert is_tool_evidence(stamp), stamp
 
@@ -631,8 +628,6 @@ class TestLiveProducerNamespaces:
             "validate:observed_runtime",        # validate_bridge
             "validate:replayed_crash",
             "validate:confirmed-history",       # findings_export receipt
-            "insufficient_guard_smt:witness",   # condition-SMT detectors
-            "signed_mismatch_smt:witness",
         ):
             assert is_tool_evidence(stamp), stamp
 

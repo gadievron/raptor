@@ -666,7 +666,7 @@ class TestGuardTextCheckersBooleanStructure:
 class TestSignedMismatch:
     def test_detects_mismatch(self):
         g = _guard("size < 1024", resolvable=True, concrete_values={})
-        result = check_signed_mismatch(g, var_is_unsigned=True, bit_width=32)
+        result = check_signed_mismatch(g, var_is_unsigned=True, comparison_is_signed=True, bit_width=32)
         assert result.mismatch is True
         assert result.variable == "size"
         assert result.witness is not None
@@ -691,12 +691,13 @@ class TestSignedMismatch:
         assert result.mismatch is False
         assert result.witness is None
 
-    def test_declared_unsigned_type_enables_check(self):
+    def test_declared_unsigned_type_does_not_establish_signed_comparison(self):
         g = _guard("size < 1024", resolvable=True, concrete_values={})
         src = "int f(size_t size) { if (size < 1024) use(size); }"
         result = check_signed_mismatch(g, source=src)
-        assert result.mismatch is True
-        assert result.variable == "size"
+        assert result.mismatch is False
+        assert result.witness is None
+        assert "semantics not established" in result.reasoning
 
     def test_declared_signed_type_suppresses_claim(self):
         g = _guard("size < 1024", resolvable=True, concrete_values={})
