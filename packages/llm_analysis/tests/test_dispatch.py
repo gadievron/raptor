@@ -1868,11 +1868,22 @@ class TestProvenModelBreakerThreshold:
                     or str(r.get("error", "")).startswith("aborted")]
 
     def test_proven_model_permanent_failure_opens_breaker(self):
+        from concurrent.futures import ThreadPoolExecutor
         from core.security.prompt_telemetry import defense_telemetry
         defense_telemetry.reset()
 
         findings = [_make_finding(f"f-{i:03d}") for i in range(30)]
         calls = []
+        queue_cancelled = threading.Event()
+        abort_deadline = None
+
+        class CancellationExecutor(ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                super().shutdown(wait=wait, cancel_futures=cancel_futures)
+                if cancel_futures:
+                    # Publish only after the real executor has cancelled its
+                    # queue, so releasing the straggler cannot start more work.
+                    queue_cancelled.set()
 
         def _drained_failures() -> int:
             models = defense_telemetry.summary()[
@@ -1881,39 +1892,46 @@ class TestProvenModelBreakerThreshold:
 
         def dead_after_one(prompt, schema, system_prompt, temperature,
                            model):
+            nonlocal abort_deadline
             n_prior_failures = max(0, len(calls) - 1)
             calls.append(1)
             if len(calls) == 1:
                 return _make_dispatch_result()
-            # Deterministic drain sync up to the threshold (see the
-            # dead-futures test); post-abort stragglers get a short
-            # stall that lets cancel_futures land.
-            deadline = time.monotonic() + (
-                10.0 if n_prior_failures < 10 else 0.5)
-            while (_drained_failures() < min(n_prior_failures, 10)
-                    and time.monotonic() < deadline):
-                time.sleep(0.002)
+            if n_prior_failures >= _BREAKER_PROVEN_THRESHOLD:
+                # This call may have passed the dead-model check before the
+                # drain published the breaker. Hold it until queue cancellation
+                # completes; telemetry alone precedes that publication.
+                if abort_deadline is None:
+                    abort_deadline = time.monotonic() + 5.0
+                queue_cancelled.wait(max(0.0, abort_deadline - time.monotonic()))
+            else:
+                deadline = time.monotonic() + 10.0
+                while (_drained_failures() < n_prior_failures
+                        and time.monotonic() < deadline):
+                    time.sleep(0.002)
             raise RuntimeError("credential expired mid-run")
 
-        results = dispatch_task(
-            task=AnalysisTask(),
-            items=findings,
-            dispatch_fn=dead_after_one,
-            role_resolution={},
-            prior_results={},
-            cost_tracker=CostTracker(0),
-            max_parallel=1,
-        )
+        with patch("packages.llm_analysis.dispatch.ThreadPoolExecutor", CancellationExecutor):
+            results = dispatch_task(
+                task=AnalysisTask(),
+                items=findings,
+                dispatch_fn=dead_after_one,
+                role_resolution={},
+                prior_results={},
+                cost_tracker=CostTracker(0),
+                max_parallel=1,
+            )
         defense_telemetry.reset()
 
-        # 1 success + 10 failures + one racing extra (+ possible
-        # cancel-window stragglers) — never one call per item.
-        assert 11 <= len(calls) <= 14
+        # One success, the proven threshold, and at most one in-flight
+        # straggler. The remaining items must be cancelled or short-circuited.
+        assert queue_cancelled.is_set(), "breaker did not cancel queued work"
+        assert 1 + _BREAKER_PROVEN_THRESHOLD <= len(calls) <= 2 + _BREAKER_PROVEN_THRESHOLD
         assert len(results) == 30
         broken = [r for r in results
                   if r.get("error_type") == "circuit_breaker"
                   or str(r.get("error", "")).startswith("aborted")]
-        assert len(broken) >= 16
+        assert len(broken) >= 30 - (2 + _BREAKER_PROVEN_THRESHOLD)
 
     def test_success_resets_consecutive_failure_counter(self):
         """The success branch's ``pm["consec"] = 0`` is what makes the
