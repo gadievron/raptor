@@ -89,14 +89,14 @@ class _ExprParser:
         return node
 
     def _expr(self, depth=0) -> tuple:
-        node = self._term(depth)
+        node = self._parse_term(depth)
         while self._peek() in ("+", "-"):
             op = self._next()
-            rhs = self._term(depth)
+            rhs = self._parse_term(depth)
             node = ("add" if op == "+" else "sub", node, rhs)
         return node
 
-    def _term(self, depth=0) -> tuple:
+    def _parse_term(self, depth=0) -> tuple:
         if depth > MAX_DEPTH:
             raise ParseError("expression exceeds depth budget")
         tok = self._next()
@@ -105,7 +105,7 @@ class _ExprParser:
             self._expect(")")
             return node
         if tok == "-":
-            inner = self._term(depth + 1)
+            inner = self._parse_term(depth + 1)
             return ("sub", ("int", 0), inner)
         if tok in ("min", "max") and self._peek() == "(":
             self._expect("(")
