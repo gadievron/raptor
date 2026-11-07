@@ -6,10 +6,16 @@ Use Python 3.12 or newer and install RAPTOR's locked dependencies from the
 checkout you intend to launch:
 
 ```bash
-uv sync --locked
+uv sync --locked --link-mode copy --extra codex --extra grammars
 source .venv/bin/activate
 uv tool install semgrep
 ```
+
+Copy mode prepares independent dependency files for installation protection.
+If an existing environment uses cache hard links, add `--reinstall` to the
+same sync command before launching with installation protection. Keep the
+extras you already use. An existing Semgrep installation can keep its current
+version; the tool-install command above is for a new setup.
 
 Install and sign in to Codex using the [official CLI instructions](https://learn.chatgpt.com/docs/cli).
 For an existing standalone installation:
@@ -64,6 +70,9 @@ codex plugin add raptor-codex-hooks@raptor-local --json
 If Codex reconnects to a server started before the update, add `--no-daemon`
 after `--` to start a fresh client/server with the launcher's environment.
 
+The `codex` extra supplies the optional WebSocket transport for session
+naming. It does not install a provider SDK or change your Semgrep version.
+
 ## Run workflows
 
 In the Codex chat composer, invoke a skill with its target:
@@ -107,6 +116,27 @@ then the validated launcher target, then the original caller directory. Read
 launcher data with `libexec/raptor-session-init --codex-context`; resolve a
 relative launch target against its stored caller directory. After `$project none`, a bare `$scan` still uses the launch target, including after resume.
 
+### Conversation names
+
+When a verified local Codex control connection is available, RAPTOR requests
+names such as `raptor · my-project · target`. SessionStart and Stop use the
+current conversation's project and target, so project changes appear after
+a turn completes. Once RAPTOR observes a manually chosen name, it leaves
+that conversation's name alone.
+
+Naming is optional. Missing transport, unsupported client versions, a busy
+lock or a slow server leave the existing name in place. RAPTOR does not start
+another server, resume a thread or change command approval to obtain a title.
+`--no-daemon` remains supported; versions without an accessible control
+listener simply keep their existing names. Remote-server naming is unsupported.
+
+Concurrent conversations have separate naming state, including conversations
+sharing one Codex server. The connection must belong to the authenticated
+session owner; RAPTOR never chooses the latest conversation from a list.
+Multiple instances can share a protected installation. Naming state lives in
+the private session registry outside the checkout, and each instance retains
+its own launcher scratch lifetime. Naming does not make the installation writable.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -116,5 +146,6 @@ relative launch target against its stored caller directory. After `$project none
 | Plugin is listed but RAPTOR startup is absent | Launch through `bin/raptor --codex`; add `--no-daemon` after `--` if reconnecting to an older server. Do not set a hook root from a scan target. |
 | Writes denied during startup | Use workspace-write. Custom paths need explicit directory grants. |
 | Project differs after resume | Check `$project status`; use `-p` at launch to pin the intended project. |
+| Conversation keeps its existing name | Check that the `codex` extra is installed. Naming needs a verified local control listener; unsupported transports and slow servers are skipped. A manual name is preserved. |
 | Codex reports bubblewrap needs user namespaces | Run Codex from a regular host terminal. An outer sandbox or container may prevent creation of Codex's inner sandbox; if it also fails on the host, check the host/container namespace policy. |
 | Frontend signs in but an analysis stage cannot authenticate | Check backend provider configuration and credential/file grants separately from Codex sign-in. |

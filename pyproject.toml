@@ -31,6 +31,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Native Codex title transport; reuse the WebSocket version already locked
+# for google-genai without requiring an unrelated provider SDK.
+codex = ["websockets==16.1.1"]
 # LLM providers — per-provider for targeted installs
 anthropic = ["anthropic==0.103.1"]
 google = ["google-genai==2.4.0"]

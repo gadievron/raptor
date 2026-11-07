@@ -13,7 +13,10 @@ import re
 import selectors
 import shutil
 import signal
+import socket
+import struct
 import subprocess
+import tempfile
 import time
 
 import pytest
@@ -246,3 +249,114 @@ def test_native_thread_names_round_trip_without_a_model_call(native):
     client.result('thread/name/set', {'threadId': first, 'name': 'Manual investigation'})
     assert client.result('thread/read', {'threadId': first})['thread']['name'] == 'Manual investigation'
 
+
+def test_two_clients_share_title_updates_and_preserve_manual_names(tmp_path, monkeypatch):
+    """Transport/policy acceptance only; this does not execute lifecycle hooks."""
+    websocket = pytest.importorskip('websockets.sync.client')
+    from core.project.session_titles import context_title
+    from core.startup import codex_session_title as naming
+
+    executable = shutil.which('codex')
+    if not executable:
+        pytest.skip('Codex CLI is not installed')
+    # Keep the Unix socket below sockaddr_un's pathname limit, independently
+    # of pytest's checkout/worker/test-name directory lengths.
+    with tempfile.TemporaryDirectory(prefix='r-title-') as directory:
+        root = Path(directory)
+        home, state = root / 'home', root / 'state'
+        home.mkdir(mode=0o700)
+        state.mkdir(mode=0o700)
+        endpoint = root / 'control.sock'
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+               'HOME': str(home), 'CODEX_HOME': str(state), 'TERM': 'dumb'}
+        # Deliberately exclude real credentials, installed plugins and RAPTOR
+        # hook markers. Only these temporary, model-free threads are accessed.
+        with (tmp_path / 'title-server.log').open('wb') as log:
+            process = subprocess.Popen(
+                [executable, 'app-server', '--listen', 'unix://' + str(endpoint)],
+                cwd=root, env=env, stdin=subprocess.DEVNULL,
+                stdout=log, stderr=log, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 10
+                while not endpoint.exists():
+                    assert process.poll() is None, (tmp_path / 'title-server.log').read_text()
+                    assert time.monotonic() < deadline, 'private server readiness timed out'
+                    time.sleep(.02)
+                with websocket.unix_connect(str(endpoint), open_timeout=2, close_timeout=.1) as owner:
+                    next_id = 0
+                    owner_events = []
+
+                    def call(client, method, params):
+                        nonlocal next_id
+                        next_id += 1
+                        identity = next_id
+                        client.send(json.dumps({'id': identity, 'method': method, 'params': params}))
+                        until = time.monotonic() + 3
+                        while True:
+                            reply = json.loads(client.recv(timeout=max(.001, until - time.monotonic())))
+                            if 'method' in reply and 'id' in reply:
+                                pytest.fail('unexpected interactive server request')
+                            if reply.get('id') == identity:
+                                assert 'error' not in reply, reply.get('error')
+                                return reply['result']
+                            if client is owner:
+                                owner_events.append(reply)
+
+                    call(owner, 'initialize', {'clientInfo': {'name': 'raptor-title-acceptance',
+                                                             'version': '1'}})
+                    owner.send('{"method":"initialized"}')
+                    first = call(owner, 'thread/start', {'cwd': str(root)})['thread']['id']
+                    second = call(owner, 'thread/start', {'cwd': str(root)})['thread']['id']
+                    desired = context_title('fixture', '/targets/first')
+                    policy_dir = root / 'titles'
+
+                    # Simulate the hook's already-authenticated ancestor resolver;
+                    # discovery, socket peer credentials and protocol are real.
+                    monkeypatch.setattr(naming.sessions, 'resolve_codex_owner_pid', lambda: process.pid)
+
+                    def update():
+                        # Native integration checks the API, not host latency.
+                        # Production hooks keep their shorter optional budget.
+                        deadline = time.monotonic() + 5
+                        assert naming._listener_path(process.pid) == endpoint
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                            probe.connect(str(endpoint))
+                            peer_pid, peer_uid, _ = struct.unpack('3i', probe.getsockopt(
+                                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+                            assert (peer_pid, peer_uid) == (process.pid, os.getuid()), 'server ownership'
+                        adapter = naming._connect(process.pid, deadline)
+                        assert adapter is not None, 'owning listener must be discoverable'
+                        with adapter:
+                            naming._synchronize(adapter, first, desired, policy_dir, deadline)
+
+                    update()
+                    assert call(owner, 'thread/read', {'threadId': first})['thread']['name'] == desired
+                    assert any(event.get('method') == 'thread/name/updated'
+                               and event['params']['threadId'] == first
+                               and event['params']['threadName'] == desired for event in owner_events)
+                    assert update() is None  # Native feedback acknowledges the request.
+                    call(owner, 'thread/name/set', {'threadId': first, 'name': 'Manual investigation'})
+                    desired = context_title('other-project', '/targets/second')
+                    assert update() is None
+                    assert call(owner, 'thread/read', {'threadId': first})['thread']['name'] == 'Manual investigation'
+                    assert call(owner, 'thread/read', {'threadId': second})['thread'].get('name') is None
+
+                    # The actual native listener also supports a generic
+                    # unix:// advertisement; its kernel pathname is hashed.
+                    read = naming._read
+                    def generic_listener(path, maximum):
+                        raw = read(path, maximum)
+                        if path.name == 'cmdline':
+                            return raw.replace(('unix://' + str(endpoint)).encode(), b'unix://')
+                        return raw
+                    with monkeypatch.context() as patch:
+                        patch.setattr(naming, '_read', generic_listener)
+                        assert naming._listener_path(process.pid).resolve() == endpoint.resolve()
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=3)
