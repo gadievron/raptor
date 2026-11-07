@@ -71,7 +71,8 @@ def test_interpreter_build_and_location_changes_invalidate_the_environment(repo,
     assert cache.venv_key(repo, HOST, interpreter) != key(repo)
 
 
-@pytest.mark.parametrize('kwargs', [dict(export_args='--extra web'), dict(export_args='--no-dev'), dict(prefix='venv-web'), dict(venv_path='other-venv'), dict(install_method='sync')])
+@pytest.mark.parametrize('kwargs', [dict(export_args='--extra web'), dict(export_args='--no-dev'), dict(export_args='--no-dev --extra cvss'),
+                                      dict(export_args='--extra cvss'), dict(prefix='venv-web'), dict(venv_path='other-venv'), dict(install_method='sync')])
 def test_profile_and_workspace_locations_cannot_collide(repo, kwargs):
     assert key(repo, **kwargs) != key(repo)
 

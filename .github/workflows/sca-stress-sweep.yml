@@ -59,6 +59,9 @@ concurrency:
   group: sca-stress-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  VENV_PATH: .venv
+
 jobs:
   sweep:
     if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
@@ -111,21 +114,25 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      # CVSS v4 scoring is a locked project extra; include it in the
+      # cached profile so installs and scoring share the project's pin.
+      - name: Restore or rebuild CVSS venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-runtime-cvss
+          uv-export-extra-args: --no-dev --extra cvss
+          save-on-rebuild: 'true'
 
-      - name: Install runtime deps
-        # ``raptor-sca`` needs the full runtime dependencies; the
-        # sweep then drives the actual scanner against each sample.
+      - name: Expose runtime interpreter to subsequent steps
         shell: bash
         run: |
-          uv export --locked --no-hashes --no-dev | uv pip install --system -r -
-          # CVSS v4 scoring — optional for end users (see the
-          # pyproject.toml entry), required here so v4-only
-          # advisories score numerically instead of degrading to
-          # the fallback label, which would skew vuln_findings
-          # severity vs the committed baseline.
-          uv pip install --system cvss==3.6
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(str(Path(os.environ["VENV_PATH"]).resolve() / "bin") + "\n")
+          PYTHON
 
       - name: Run stress sweep
         id: sweep

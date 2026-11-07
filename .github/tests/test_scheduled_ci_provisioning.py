@@ -300,6 +300,14 @@ RUNTIME_CONSUMERS = [
     ('typosquat-reaudit.yml', 'reaudit'),
 ]
 
+CVSS_CONSUMERS = [
+    ('sca-stress-sweep.yml', 'sweep', 'venv-runtime-cvss', '--no-dev --extra cvss'),
+    ('refresh-sca-project-samples.yml', 'collect', 'venv-runtime-cvss', '--no-dev --extra cvss'),
+    ('sca-self-bump.yml', 'self-bump', 'venv-cvss', '--extra cvss'),
+]
+
+INTERPRETER_CONSUMERS = RUNTIME_CONSUMERS + [(file, name) for file, name, _, _ in CVSS_CONSUMERS]
+
 
 @pytest.mark.parametrize('file,name', RUNTIME_CONSUMERS)
 def test_sca_consumers_share_only_the_runtime_profile(file, name):
@@ -329,7 +337,7 @@ def test_sca_consumers_share_only_the_runtime_profile(file, name):
         assert 'pull_request:' not in text
 
 
-@pytest.mark.parametrize('file,name', RUNTIME_CONSUMERS)
+@pytest.mark.parametrize('file,name', INTERPRETER_CONSUMERS)
 @pytest.mark.parametrize('absolute', [False, True])
 def test_sca_path_handoff_selects_the_restored_interpreter(tmp_path, file, name, absolute):
     source = job(file, name)
@@ -370,3 +378,20 @@ def test_runtime_cache_does_not_replace_the_compromise_or_reaudit_checks():
     run = script(named_step(reaudit, 'Re-audit reviewed-legit (mechanical, no LLM)'))
     assert 'python -m packages.sca.supply_chain.typosquat_audit --reaudit' in run
     assert 'name: Open / update issue when entries are flagged' in reaudit
+
+
+@pytest.mark.parametrize('file,name,prefix,args', CVSS_CONSUMERS)
+def test_cvss_jobs_cache_the_locked_extra_and_keep_dependency_groups(file, name, prefix, args):
+    source = job(file, name)
+    restore = named_step(source, 'Restore or rebuild CVSS venv')
+    assert 'uses: ./.github/actions/setup-venv' in restore
+    assert f'          cache-key-prefix: {prefix}\n' in restore
+    assert f'          uv-export-extra-args: {args}\n' in restore
+    assert "          save-on-rebuild: 'true'\n" in restore
+    assert 'install-method:' not in restore
+    assert 'astral-sh/setup-uv@' not in source
+    assert 'uv pip install' not in source
+    assert 'cvss==' not in source
+    expose = named_step(source, 'Expose runtime interpreter to subsequent steps')
+    assert source.index('actions/setup-python@') < source.index(restore) < source.index(expose)
+    assert '\nenv:\n  VENV_PATH: .venv\n' in (ROOT / '.github/workflows' / file).read_text()

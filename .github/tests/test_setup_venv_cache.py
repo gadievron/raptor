@@ -150,7 +150,9 @@ def test_rebuild_does_not_add_a_second_owner_for_an_existing_uv_cache(existing, 
     assert _expression(_field(step, 'enable-cache', indent=8), {'env.UV_CACHE_DIR': existing}) is expected
 
 
-@pytest.mark.parametrize('extras,expected_extras', [('--extra grammars', ['--extra', 'grammars']), ('--no-dev', ['--no-dev'])])
+@pytest.mark.parametrize('extras,expected_extras', [('--extra grammars', ['--extra', 'grammars']), ('--no-dev', ['--no-dev']),
+                                                   ('--no-dev --extra cvss', ['--no-dev', '--extra', 'cvss']),
+                                                   ('--extra cvss', ['--extra', 'cvss'])])
 @pytest.mark.parametrize('method', ['export', 'sync'])
 @pytest.mark.parametrize('status', [0, 23])
 def test_native_rebuild_keeps_method_extras_active_env_and_failure_status(tmp_path, method, status, extras, expected_extras):

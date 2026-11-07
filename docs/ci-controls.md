@@ -252,6 +252,9 @@ The SCA PR gate, compromise corpus and typosquat re-audit share a separate
 through `GITHUB_PATH`, and test/dev environments cannot satisfy its cache key.
 The compromise workflow also owns exact dependency and provisioning inputs in
 its PR path filters; the monthly re-audit remains scheduled or manually dispatched.
+Stress sweeps and project-sample refreshes use `venv-runtime-cvss` with
+`--no-dev --extra cvss`; self-bump retains dev dependencies in `venv-cvss`
+with `--extra cvss`. These profiles obtain the CVSS version from the lockfile.
 
 | Cache family | Identity and validation |
 |---|---|

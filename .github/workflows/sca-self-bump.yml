@@ -60,6 +60,9 @@ concurrency:
   group: sca-self-bump
   cancel-in-progress: false
 
+env:
+  VENV_PATH: .venv
+
 jobs:
   self-bump:
     # The self-bump target version is determined by upstream releases —
@@ -105,17 +108,25 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      # CVSS v4 scoring is a locked project extra; include it in the
+      # cached profile so installs and scoring share the project's pin.
+      - name: Restore or rebuild CVSS venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-cvss
+          uv-export-extra-args: --extra cvss
+          save-on-rebuild: 'true'
 
-      - name: Install RAPTOR + deps
+      - name: Expose runtime interpreter to subsequent steps
         shell: bash
         run: |
-          uv export --locked --no-hashes | uv pip install --system -r -
-          # CVSS v4 scoring — optional for end users (see the
-          # pyproject.toml entry), required here so severity-based
-          # bump prioritisation sees numeric v4 scores.
-          uv pip install --system cvss==3.6
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(str(Path(os.environ["VENV_PATH"]).resolve() / "bin") + "\n")
+          PYTHON
 
       - name: Phase 1 — harden Python / Debian / npm manifests
         id: harden
