@@ -5,6 +5,8 @@ import pytest
 from core.audit import sweep
 from core.audit.condition_smt import disprove_integer_overflow
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.mark.parametrize("guard_name,feasible", [("value", True), ("Value", False)])
 def test_source_overflow_paths_keep_case_distinct_values(guard_name, feasible):

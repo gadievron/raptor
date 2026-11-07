@@ -9,6 +9,8 @@ from core.audit.condition_smt import disprove_integer_overflow
 from core.audit.probe_function_scope import source_binding, source_for_function
 from core.audit.smt_promotion_gate import receipt_preconditions
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.mark.parametrize("text,left,operator,right", [
     pytest.param("`Value + size`", "Value", "+", "size", id="whole-quote"),

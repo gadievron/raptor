@@ -5,6 +5,8 @@ import pytest
 from core.audit.gaps import _reuse_block_class, _reuse_ineligibility
 from core.audit.tests.test_verdict_reuse import _entry, _write_target
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.mark.parametrize("receipts,body", [
     pytest.param(["smt:disproof:unsat"], "review", id="disproof-receipt"),

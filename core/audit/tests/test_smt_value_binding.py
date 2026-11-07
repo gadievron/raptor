@@ -5,6 +5,8 @@ import pytest
 from core.audit import sweep
 from core.audit.condition_smt import disprove_integer_overflow
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def prerequisites():

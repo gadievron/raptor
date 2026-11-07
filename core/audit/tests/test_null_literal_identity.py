@@ -6,6 +6,8 @@ from core.audit import sweep
 from core.audit.array_bounds import check_array_bounds
 from core.audit.condition_smt import disprove_integer_overflow
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def require_parsers_and_solver():

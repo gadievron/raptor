@@ -5,6 +5,8 @@ import pytest
 from core.audit import array_bounds as bounds
 from core.audit import sweep
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def parsers():

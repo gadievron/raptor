@@ -6,6 +6,8 @@ from core.audit import sweep
 from core.audit.arithmetic_operation import bind_arithmetic_operation
 from core.audit.condition_smt import disprove_integer_overflow
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.mark.parametrize("prefix", [
     pytest.param("int Other = 1 / Flag;", id="division-before-guards"),

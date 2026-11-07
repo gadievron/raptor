@@ -1394,6 +1394,9 @@ def _z3_dispatch_json(request: dict) -> Any:
     """
     tag = request.get("tag")
     args = request.get("args") or {}
+    if tag == "overflow_disproof":
+        from .overflow_disproof import run_request
+        return run_request(args)
     if tag == "literal_call":
         from .literal_call import check_literal_calls
         return check_literal_calls(**args)
@@ -5242,137 +5245,14 @@ def disprove_integer_overflow(
     function_name: str | None = None,
     integer_abi=None,
 ) -> HypothesisDisproofResult:
-    """Attempt to disprove an integer overflow/underflow hypothesis via SMT.
+    """Run the complete source-bound overflow disproof in a confined worker.
 
-    Extracts the claimed overflow expression from the hypothesis, resolves
-    variable types from source context, and checks whether the overflow
-    is feasible in the resolved type model. Pipeline callers provide the
-    file/function scope. Legacy callers without scope metadata must supply
-    one complete function; unknown operation or guard contexts decline.
-
-    Returns disproved=True if UNSAT (overflow cannot happen),
-    disproved=False if SAT (overflow is feasible), None if inconclusive.
+    Source parsing, prefix definedness and every native solver query stay in the
+    worker. Invalid, missing or stale replies cannot authorize a disproof.
+    Isolation refusals retain the shared child runner's fail-closed policy.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
-
-    from .integer_abi import resolve_integer_abi
-    abi = resolve_integer_abi(integer_abi)
-    if abi is None:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="target integer ABI unavailable — inconclusive",
-        )
-
-    import importlib.util
-    if not importlib.util.find_spec("z3"):
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            error="z3 not installed",
-        )
-
-    from .condition_extraction import language_for_file
-    language = language_for_file(file_path) if file_path else "c"
-    if file_path or function_name is not None:
-        from .probe_function_scope import source_for_function
-        _, selected = source_for_function(source_context, file_path, function_name or "")
-        if selected is None:
-            return HypothesisDisproofResult(
-                hypothesis_class="integer_overflow",
-                reasoning="function scope unavailable — inconclusive",
-            )
-        source_context = selected
-
-    var_types = var_types or {}
-
-    from .arithmetic_claim import has_integer_overflow_subject, parse_arithmetic_claim
-    claim = parse_arithmetic_claim(hypothesis) if has_integer_overflow_subject(hypothesis) else None
-    if claim is None:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="explicit arithmetic expression unavailable — inconclusive",
-        )
-    operands, op_char = list(claim.operands), claim.operator
-    var_names = [value for value in operands if _SMT_ASCII_IDENT_RE.fullmatch(value)]
-
-    from .arithmetic_operation import bind_arithmetic_operation
-    from .sweep import _premise_gate
-
-    # Preserve expression order, including literals. Reordering variables
-    # ahead of constants would change subtraction's intrinsic predicate.
-    operation = bind_arithmetic_operation(source_context, operands, op_char, language=language, integer_abi=abi)
-    if operation.status != "bound" or operation.guard_status == "unavailable":
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="source operation or guard context unavailable — inconclusive",
-        )
-    if operation.type_status != "bound":
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="source integer types or conversions unavailable — inconclusive",
-        )
-    from .arithmetic_types import integer_type
-    if any(name in var_types and integer_type(var_types[name], abi) != integer_type(spelling, abi)
-           for name, spelling in operation.types):
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="provided integer types disagree with source declarations — inconclusive",
-        )
-    profile, overflow_kind = operation.profile, operation.kind
-    premises = list(operation.premises + operation.domains)
-    overflow_premises = premises if operation.guard_status != "no-guards" or operation.domains else []
-    gate = _premise_gate(overflow_premises, profile)
-    if gate is not None:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning=f"inconclusive: {gate}",
-        )
-
-    try:
-        from packages.exploit_feasibility.smt_verbs import check_overflow
-        result = check_overflow(
-            operands, op_char, profile=profile, guards=premises,
-            kind=overflow_kind, reduce_constraints=False,
-        )
-        from .integer_witness import validate_overflow_result
-        result = validate_overflow_result(result, operation, operands, op_char, abi)
-    except Exception as exc:  # noqa: BLE001 — degrade to inconclusive
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            reasoning="overflow verb failed — inconclusive",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-
-    feasible = result.get("feasible")
-    if feasible is False:
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            disproved=True,
-            reasoning=(
-                f"Z3 UNSAT: {op_char}-chain over {var_names} cannot "
-                f"wrap at {profile} ({overflow_kind}) within the "
-                f"extracted guard premises {premises} — hypothesis "
-                f"disproved"
-            ),
-        )
-    if feasible is True:
-        model = result.get("model")
-        return HypothesisDisproofResult(
-            hypothesis_class="integer_overflow",
-            disproved=False,
-            reasoning=(
-                f"Z3 SAT: overflow IS feasible for {var_names} at "
-                f"{profile} ({overflow_kind}) within the guarded "
-                f"value space"
-            ),
-            witness=model if isinstance(model, dict) else None,
-        )
-    return HypothesisDisproofResult(
-        hypothesis_class="integer_overflow",
-        reasoning=(
-            "Z3 inconclusive: "
-            + str(result.get("reasoning") or "solver punted")
-        ),
-    )
-
-
+    from .overflow_disproof import run_disproof
+    return run_disproof(hypothesis, source_context, var_types, file_path=file_path,
+                        function_name=function_name, integer_abi=integer_abi)
