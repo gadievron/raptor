@@ -10,11 +10,11 @@ hosts where it is valid; one that narrows would red the nested-userns
 battery envelope again.
 """
 
-import os
 
 import pytest
 
 from core.sandbox.tests import capability
+from core.testing.module_bindings import patch_module_attribute
 
 
 class TestPidnsIsolationAvailableGate:
@@ -49,7 +49,7 @@ class TestOwnPidCollisionGate:
                                      SANDBOX_PIDNS_PID_COLLISION_CEILING])
     def test_collides_at_or_below_ceiling(
             self, monkeypatch: pytest.MonkeyPatch, pid: int) -> None:
-        monkeypatch.setattr(os, "getpid", lambda: pid)
+        patch_module_attribute(monkeypatch, capability, "os", "getpid", lambda: pid)
         assert capability.own_pid_collides_with_sandbox_pidns() is True
 
     @pytest.mark.parametrize(
@@ -57,7 +57,7 @@ class TestOwnPidCollisionGate:
         [capability.SANDBOX_PIDNS_PID_COLLISION_CEILING + 1, 300, 123456])
     def test_valid_above_ceiling(
             self, monkeypatch: pytest.MonkeyPatch, pid: int) -> None:
-        monkeypatch.setattr(os, "getpid", lambda: pid)
+        patch_module_attribute(monkeypatch, capability, "os", "getpid", lambda: pid)
         assert capability.own_pid_collides_with_sandbox_pidns() is False
 
     def test_ceiling_is_a_small_spawn_scale_number(self) -> None:
