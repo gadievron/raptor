@@ -540,6 +540,15 @@ using the randomized-order commands above. Run CI-filter tests in the
 pytest-only environment defined by `.github/workflows/tests.yml`, rather
 than relying solely on the fully provisioned development environment.
 
+### Refactors and audit records
+
+Audit baselines and registries may be keyed by file and symbol. When moving
+or renaming code, review affected records and honor their notes; update or
+remove entries according to whether their rationale still applies. Run the
+relevant tree-wide gates alongside functional tests after the refactor or
+rebase. A new finding paired with a stale entry can indicate that an audit
+record was separated from its code. Gate commands live in [CI controls](ci-controls.md).
+
 ## Mechanical gates you will hit
 
 The full control inventory, triggers, and reproduce-locally commands

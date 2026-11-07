@@ -135,8 +135,10 @@ repo-invariant detectors are PR gates too: the `repo-invariants` job in
 `main`, and merge-queue entry, and
 `.github/workflows/miswiring-scan.yml` re-runs the same set daily as a
 belt-and-braces sweep. A new finding fails the job; deliberate
-exceptions go in the detector's baseline JSON with a note. The two you
-are most likely to hit:
+exceptions go in the detector's baseline JSON with a note. For moves and
+renames, follow [Refactors and audit records](docs/developers.md#refactors-and-audit-records):
+review entries keyed by the old path/symbol and run the affected gate along
+with functional tests. The two you are most likely to hit:
 
 - **Miswiring scan** (`.github/scripts/check_miswiring.py`) — detects
   kwarg/signature mismatches, broken in-repo imports, dead definitions,
