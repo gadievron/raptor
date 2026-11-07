@@ -90,7 +90,7 @@ def _uds_budget_ok(root: str) -> bool:
 
 
 @pytest.fixture
-def uds_dir() -> Iterator[str]:
+def uds_dir(monkeypatch) -> Iterator[str]:
     """Deterministically short 0700 directory for AF_UNIX socket binds.
 
     Deliberately NOT pytest's ``tmp_path``: that nests
@@ -112,18 +112,22 @@ def uds_dir() -> Iterator[str]:
       falls back to ``/tmp`` when the TMPDIR root itself is already
       too long for any socket path beneath it.
     """
-    root = tempfile.gettempdir()
-    if not _uds_budget_ok(root):
-        root = "/tmp"
-    assert _uds_budget_ok(root), (
-        f"even {root!r} cannot host an AF_UNIX socket path"
-    )
-    d = tempfile.mkdtemp(prefix="j", dir=root)  # 0700 by default
-    assert len(os.fsencode(d)) + 1 + _UDS_SOCK_NAME_MAX <= _SUN_PATH_MAX
-    try:
-        yield d
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
+    from core.testing.tempdirs import private_tempfile_module
+
+    with monkeypatch.context() as scope:
+        scope.setitem(globals(), "tempfile", private_tempfile_module(tempfile))
+        root = tempfile.gettempdir()
+        if not _uds_budget_ok(root):
+            root = "/tmp"
+        assert _uds_budget_ok(root), (
+            f"even {root!r} cannot host an AF_UNIX socket path"
+        )
+        d = tempfile.mkdtemp(prefix="j", dir=root)  # 0700 by default
+        try:
+            assert len(os.fsencode(d)) + 1 + _UDS_SOCK_NAME_MAX <= _SUN_PATH_MAX
+            yield d
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def _sentinel(value: object) -> bool:

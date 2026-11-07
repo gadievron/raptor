@@ -41,7 +41,7 @@ def _drive(monkeypatch: pytest.MonkeyPatch, root: str) -> Iterator[None]:
     a controlled root. Callers ``next()`` it and ``close()`` it.
     """
     monkeypatch.setenv("TMPDIR", root)
-    monkeypatch.setattr(tempfile, "tempdir", root)
+    monkeypatch.setattr(dispatcher_conftest.tempfile, "tempdir", root)
     fixture = dispatcher_conftest._af_unix_safe_tmp
     fn = getattr(fixture, "__wrapped__", fixture)
     return fn(monkeypatch)
@@ -61,7 +61,7 @@ def test_multibyte_root_counted_in_bytes(
     gen = _drive(monkeypatch, root)
     next(gen)
     try:
-        got = len(os.fsencode(tempfile.gettempdir()))
+        got = len(os.fsencode(dispatcher_conftest.tempfile.gettempdir()))
         assert got <= _SAFE, (
             f"fixture left a {got}-byte TMPDIR in place (budget "
             f"{_SAFE} bytes): sun_path is a BYTE budget, and this "
@@ -84,7 +84,7 @@ def test_surrogate_root_measured_not_crashed(
     next(gen)
     try:
         # Within budget: used as-is, no re-root.
-        assert tempfile.gettempdir() == under
+        assert dispatcher_conftest.tempfile.gettempdir() == under
     finally:
         gen.close()
 
@@ -93,7 +93,7 @@ def test_surrogate_root_measured_not_crashed(
     gen = _drive(monkeypatch, over)
     next(gen)
     try:
-        got = tempfile.gettempdir()
+        got = dispatcher_conftest.tempfile.gettempdir()
         assert got != over
         assert len(os.fsencode(got)) <= _SAFE
     finally:
@@ -112,7 +112,7 @@ def test_boundary_both_directions(
     gen = _drive(monkeypatch, at)
     next(gen)
     try:
-        assert tempfile.gettempdir() == at
+        assert dispatcher_conftest.tempfile.gettempdir() == at
     finally:
         gen.close()
 
@@ -120,7 +120,7 @@ def test_boundary_both_directions(
     gen = _drive(monkeypatch, over)
     next(gen)
     try:
-        assert tempfile.gettempdir() != over
+        assert dispatcher_conftest.tempfile.gettempdir() != over
     finally:
         gen.close()
 
@@ -191,7 +191,7 @@ def test_sun_path_budget_exact_value(
                 host, "pin", _PINNED_SUN_PATH_BUDGET + overshoot
             )
             monkeypatch.setenv("TMPDIR", root)
-            monkeypatch.setattr(_tempfile, "tempdir", None)
+            monkeypatch.setattr(dispatcher_conftest.tempfile, "tempdir", None)
             d = LLMDispatcher(
                 run_id="pin",
                 creds=creds,
@@ -219,5 +219,5 @@ def test_sun_path_budget_exact_value(
             finally:
                 d.shutdown()
     finally:
-        monkeypatch.setattr(_tempfile, "tempdir", None)
+        monkeypatch.setattr(dispatcher_conftest.tempfile, "tempdir", None)
         shutil.rmtree(host, ignore_errors=True)
