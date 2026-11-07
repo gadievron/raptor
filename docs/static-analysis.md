@@ -289,6 +289,11 @@ count on every path; a conditional count change retains the candidate.
 `strncat` still requires a terminated destination. Destination replacement
 ends tracking.
 Nonzero fills and zero-byte `memset` calls do not establish termination.
+Reads can be reported again after recognized byte or memory writes that may
+remove a NUL, including after a `strlen(src) + 1` copy. Zero writes preserve
+existing termination, and recognized retermination keeps later reads quiet.
+Conditional termination protects only the paths on which it executes. Manual
+terminator bounds, uncertain write ranges, wrappers and aliases still need review.
 For supported literal formats, it checks the actual argument conversion,
 including positional arguments and width/precision arguments. Pointer displays,
 numeric conversions and unused arguments do not count as string reads. Recognized

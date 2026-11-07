@@ -152,6 +152,8 @@ def test_copy_and_boundary_candidates_share_production_invocation(tmp_path, monk
         'void string_read(char *d, char *s) { strncpy(d, s, 4); printf("%s", d); }\n'
         'void bounded_format(char *d, char *s) { strncpy(d, s, 4); printf("%.4s", d); }\n'
         'void dynamic_format(char *d, char *s, char *fmt) { strncpy(d, s, 4); printf(fmt, d); }\n'
+        'void erased(char *d, char *s, int n) { strncpy(d, s, n); d[0] = 0; d[0] = 65; printf("%s", d); }\n'
+        'void repaired(char *d, char *s) { strncpy(d, s, strlen(s) + 1); d[0] = 65; d[0] = 0; strlen(d); }\n'
         'int boundary(char *b, int sz) { int n = snprintf(b, sz, "%s", "x"); if (n > sz) return -1; return n; }\n',
     )
     original = runner._confined_default_runner
@@ -173,7 +175,7 @@ def test_copy_and_boundary_candidates_share_production_invocation(tmp_path, monk
     )
     assert set(results) == {"strncpy_no_nul", "snprintf_truncation_boundary"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
-    assert len(results["strncpy_no_nul"].matches) == 3
+    assert len(results["strncpy_no_nul"].matches) == 4
     assert len(results["snprintf_truncation_boundary"].matches) == 1
     assert len(invocations) == 1, invocations
 
@@ -250,3 +252,58 @@ def test_each_formatted_string_operand_has_its_own_location(tmp_path):
     rows = _run_rule(tmp_path, 'void f(char *dst, char *src) { strncpy(dst, src, 4); printf("%p %s %s", dst, dst, dst); }')
     assert len(rows) == 2
     assert len({(row["line"], row["col"]) for row in rows}) == 2
+
+
+@pytest.mark.parametrize("read", ["strlen(dst);", 'printf("%s", dst);'], ids=["strlen", "printf"])
+@pytest.mark.parametrize("copy", ["n", "strlen(src) + 1"], ids=["bounded-copy", "terminated-copy"])
+def test_termination_exclusions_require_stable_bytes_and_path_coverage(tmp_path, read, copy):
+    cases = [
+        ("", copy == "n"),
+        ("dst[0] = 0;", False),
+        ("dst[0] = 0; dst[0] = 'x';", True),
+        ("dst[0] = 0; dst[0] += 1;", True),
+        ("dst[0] = 0; dst[0]++;", True),
+        ("dst[0] = 0; ++dst[0];", True),
+        ("dst[0] = 0; (*dst) = 'x';", True),
+        ("dst[0] = 0; (*dst)++;", True),
+        ("dst[0] = 0; rewrite(&dst[0]);", True),
+        ("dst[0] = 0; memset(dst, 65, n);", True),
+        ("dst[0] = 0; memcpy(dst, other, n);", True),
+        ("dst[0] = 0; memmove(dst, other, n);", True),
+        ("memset(dst, 0, 1); dst[0] = 'x';", True),
+        ("memset(dst, 0, sizeof(dst)); dst[0] = 'x';", True),
+        ("dst[0] = 0; dst[0] = 'x'; dst[0] = 0;", False),
+        ("dst[0] = 0; dst[0] = 'x'; memset(dst, 0, 1);", False),
+        ("dst[0] = 0; other[0] = 'x';", False),
+        ("dst[0] = 0; memcpy(dst, other, 0);", False),
+        ("dst[0] = 0; memmove(dst, other, 0);", False),
+        ("dst[0] = 0; memset(dst, 65, 0);", False),
+        ('dst[0] = 0; snprintf(dst, 0, "x");', False),
+        ("dst[0] = 0; (*dst) = 0;", False),
+        ("(*dst) = 0; (*dst) = 'x';", True),
+        ("dst[0] = 0; char *alias = &dst[0];", True),
+        ("dst[0] = 0; log_length(strlen(dst));", False),
+        ("dst[0] = 0; log_length(strlen(dst)); dst[0] = 'x';", True),
+        ("dst[0] = 0; if (stop) { log_length(strlen(dst)); }", False),
+        ("if (stop) memset(dst, 0, n);", copy == "n"),
+        ("if (stop) dst[0] = 0;", copy == "n"),
+        ("dst[0] = 0; if (stop) dst[0] = 'x';", True),
+        ("if (stop) dst[0] = 0; else dst[0] = 0;", False),
+        ("dst[-1] = 0;", copy == "n"),
+    ]
+    lines, expected = [], set()
+    for index, (between, reports) in enumerate(cases):
+        lines += [f"void termination_{index}(char *dst, char *src, char *other, int n, int stop) {{",
+                  f"strncpy(dst, src, {copy});", between, read, "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    # Safe evidence for one branch's copy must not hide another origin at
+    # the same read, even when every source identifier has the same spelling.
+    lines += ["void branch_copy(char *dst, char *src, int n, int stop) {",
+              "if (stop) { strncpy(dst, src, n); } else { strncpy(dst, src, strlen(src) + 1); }",
+              read, "}"]
+    expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected)
