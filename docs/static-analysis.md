@@ -269,6 +269,15 @@ advances and remaining-size updates for the same formatting destination.
 It excludes unrelated length tallies and ends local tracking when the return
 value, cursor or size changes. Reports remain candidates for bounds review.
 
+The `snprintf`/`vsnprintf` boundary check reports review candidates when a
+return value is compared with `> size`: equality also means truncation.
+Decide whether the caller requires complete output before treating this as a
+bug; intentional truncation and diagnostic comparisons can be valid. The check
+recognizes direct assignments and declarations, stops tracking rewritten return
+values or sizes, and excludes simple inclusive comparisons and separate equality
+branches that return to the caller. Logging equality alone does not handle the
+boundary. Aliases and arbitrary compound guard logic require manual review.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

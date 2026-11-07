@@ -1,10 +1,8 @@
 """Fixture tests for the snprintf_truncation_boundary rule.
 
-Verification-role rule (fires mint confirmed CWE-193 verdicts): the
-libc contract makes ret == size a truncated result, so `ret > size`
-misses the exact-fit boundary. Negatives pin the two CORRECT guard
-spellings (`>=` and `> SZ - 1`) and a return value reassigned before
-the comparison — none of those may be confirmed.
+Detection-role rule: a strict boundary comparison needs review of whether
+complete output is required. Native cases verify value provenance and the
+supported complete equality guards without granting confirmation authority.
 """
 
 from __future__ import annotations
@@ -170,3 +168,85 @@ class TestNegatives:
             }
         """)
         assert len(results) == 1
+
+
+@pytest.mark.parametrize("declaration", [False, True], ids=["assignment", "declaration"])
+@pytest.mark.parametrize("formatter", ["snprintf", "vsnprintf"])
+def test_boundary_value_and_guard_contracts(tmp_path, declaration, formatter):
+    cases = [
+        ("", "if (n > sz) return -1;", True),
+        ("", "if (sz < n) return -1;", True),
+        ("", "if (n >= sz) return -1;", False),
+        ("", "if (n > sz - 1) return -1;", False),
+        ("", "if (n > sz || n == sz) return -1;", False),
+        ("", "if (n == sz || n > sz) return -1;", False),
+        ("", "if (n > sz || (n == sz && enabled)) return -1;", True),
+        ("if (n == sz) return -2;", "if (n > sz) return -1;", False),
+        ("", "if (n > sz) return -1; if (n == sz) return -2;", False),
+        ("if (n == sz) log_size(n);", "if (n > sz) return -1;", True),
+        ("", "if (n > sz) return -1; if (n == sz) log_size(n);", True),
+        ("if (n == sz) { if (enabled) return -2; }", "if (n > sz) return -1;", True),
+        ("if (n == other) return -2;", "if (n > sz) return -1;", True),
+        ("if (enabled) { if (n == sz) return -2; }", "if (n > sz) return -1;", True),
+        ("", "if (n > sz) return -1; if (enabled) { if (n == sz) return -2; }", True),
+        ("", "if (n > sz) return -1; n++; if (n == sz) return -2;", True),
+        ("", "if (n > sz) return -1; sz++; if (n == sz) return -2;", True),
+        ("other += 1;", "if (n > sz) return -1;", True),
+        ("", "if (n > other) return -1;", False),
+    ]
+    for operand in ("n", "sz"):
+        for operator in ("=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "^=", "|="):
+            cases.append((f"{operand} {operator} other;", "if (n > sz) return -1;", False))
+        for mutation in (f"{operand}++;", f"++{operand};", f"{operand}--;", f"--{operand};", f"rewrite(&{operand});"):
+            cases.append((mutation, "if (n > sz) return -1;", False))
+    lines, expected = [], set()
+    for index, (between, check, reports) in enumerate(cases):
+        lines.append(f"int case_{index}(char *buf, int sz, int other, int enabled) {{")
+        if not declaration:
+            lines.append("int n;")
+        lines.append(f'{"int " if declaration else ""}n = {formatter}(buf, sz, "%s", "text");')
+        lines.append(between)
+        lines.append(check)
+        if reports:
+            expected.add(len(lines))
+        lines.append("return n; }")
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in results}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(results) == len(expected)
+    assert all(row["rule"] == "snprintf_truncation_boundary" for row in results)
+    assert all(row["message"].startswith("Candidate:") for row in results)
+
+
+@pytest.mark.integration
+def test_boundary_and_cursor_checks_share_production_invocation(tmp_path, monkeypatch):
+    from packages.coccinelle import runner
+
+    source = tmp_path / "batch.c"
+    source.write_text(
+        'int boundary(char *b, int sz) { int n = snprintf(b, sz, "%s", "x"); if (n > sz) return -1; return n; }\n'
+        'int inclusive(char *b, int sz) { int n = snprintf(b, sz, "%s", "x"); if (n > sz || n == sz) return -1; return n; }\n'
+        'void advance(char *b, int sz) { b += snprintf(b, sz, "%s", "x"); }\n',
+    )
+    original = runner._confined_default_runner
+    invocations = []
+
+    def observe(*args, **kwargs):
+        execute = original(*args, **kwargs)
+
+        def invoke(argv, **options):
+            invocations.append(tuple(argv))
+            return execute(argv, **options)
+
+        return invoke
+
+    monkeypatch.setattr(runner, "_confined_default_runner", observe)
+    results = runner.run_rules_batched(
+        source, [_RULE, _RULE.with_name("snprintf_advance.cocci")],
+        allow_scripting=True, no_includes=True, timeout=60,
+    )
+    assert set(results) == {"snprintf_truncation_boundary", "snprintf_advance"}
+    assert all(result.returncode == 0 and not result.errors for result in results.values()), results
+    assert len(results["snprintf_truncation_boundary"].matches) == 1
+    assert len(results["snprintf_advance"].matches) == 1
+    assert len(invocations) == 1, invocations

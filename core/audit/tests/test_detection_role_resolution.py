@@ -53,3 +53,13 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/is_err_not_ptr_err.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only("coccinelle:is_err_not_ptr_err") is True
+
+
+    def test_snprintf_boundary_requires_complete_output_contract(self, monkeypatch, tmp_path):
+        from core.audit.sweep import get_rule_role
+
+        monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+        monkeypatch.chdir(tmp_path)
+        rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/snprintf_truncation_boundary.cocci"
+        assert get_rule_role(str(rule)) == "detection"
+        assert _is_detection_only("coccinelle:snprintf_truncation_boundary") is True
