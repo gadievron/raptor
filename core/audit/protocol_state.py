@@ -783,6 +783,7 @@ def check_invariant_multi_site(
 
     from .invariant_smt import SiteResult, check_site_batch
     from .protocol_invariant_bindings import projection_refusal
+    from .invariant_outcomes import aggregate_verdicts
 
     guard_leg = True
     per_site: list[dict[str, Any]] = []
@@ -834,16 +835,17 @@ def check_invariant_multi_site(
         per_site.append(entry)
 
     verdicts = {e["verdict"] for e in per_site}
+    aggregate = aggregate_verdicts(verdicts)
     if any(e["verdict"] == "unknown" and "z3" in (e.get("reason") or "")
            for e in per_site):
         outcome, reason = "inconclusive", "z3 unavailable"
-    elif "violable" in verdicts:
+    elif aggregate == "violable":
         outcome = "violable"
         reason = (
             "at least one census write site can break the invariant "
             "(inductive step, dominating guards encoded)"
         )
-    elif verdicts <= {"preserved", "preserved_nonneg"}:
+    elif aggregate == "preserved":
         if skipped or capped:
             # Budget-skipped or cap-truncated sites were never
             # checked: "every CHECKED site preserves" over a partial
@@ -871,7 +873,7 @@ def check_invariant_multi_site(
         undecided = [
             f"{e['file']}:{e['line']} {e.get('reason') or e['verdict']}"
             for e in per_site
-            if e["verdict"] in ("unknown", "out_of_scope")
+            if e["verdict"] in ("unknown", "out_of_scope", "preserved_nonneg")
         ]
         reason = "undecided sites — " + "; ".join(undecided[:4])
     if skipped:

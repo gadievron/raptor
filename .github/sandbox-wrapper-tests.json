@@ -832,9 +832,10 @@
             "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker",
             "core/audit/tests/test_invariant_batch.py::test_native_confined_batch",
             "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness",
-            "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker"
+            "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker",
+            "core/audit/tests/test_invariant_conditional_preservation.py::test_native_worker_keeps_conditional_preservation_scoped"
           ],
-          "expected": 20
+          "expected": 22
         },
         "darwin": {
           "tests": [
@@ -846,9 +847,10 @@
             "core/audit/tests/test_invariant_worker.py::test_native_confined_invariant_worker",
             "core/audit/tests/test_invariant_batch.py::test_native_confined_batch",
             "core/audit/tests/test_invariant_expression.py::test_native_worker_uses_bounded_parser_and_replayed_witness",
-            "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker"
+            "core/audit/tests/test_invariant_source.py::test_native_source_bound_invariant_worker",
+            "core/audit/tests/test_invariant_conditional_preservation.py::test_native_worker_keeps_conditional_preservation_scoped"
           ],
-          "expected": 19
+          "expected": 21
         }
       }
     },
