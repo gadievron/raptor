@@ -1,4 +1,4 @@
-"""Admission for projecting one object's fields into bare invariant names.
+"""Source-transition and field-projection admission for protocol invariants.
 
 This is a binding check, not an alias or object-identity proof. Distinct
 spellings must not be merged merely because their final field names match.
@@ -8,8 +8,38 @@ import re
 
 from .invariant_expression import ParseError, expression_vars, parse_expr
 from .invariant_smt import _parse_invariant
-from .invariant_source import source_mutations
+from .invariant_source import mutation_snapshot, source_mutations
 from .invariant_worker import _MAX_SOURCE, _MAX_TEXT
+
+
+def census_source_refusal(source, function_name, line, code):
+    """Require census code to describe the selected source transition.
+
+    A cropped statement may omit enclosing source guards, which are passed
+    separately. Embedded census guards may not add facts absent from source.
+    """
+    if len(code) > _MAX_SOURCE:
+        return "census source binding input budget exhausted"
+    actual = mutation_snapshot(source, function_name.rsplit(".", 1)[-1], line)
+    if actual is None:
+        return "census write has no unambiguous source mutation binding"
+    sites, effects, refusal = source_mutations(code)
+    if refusal or len(sites) != 1 or effects or sites[0].reason:
+        return refusal or "census code requires one admitted mutation without additional effects"
+    claimed = sites[0]
+    if (claimed.var, claimed.op) != (actual.var, actual.op):
+        return "census mutation target or operator disagrees with source"
+    if actual.op not in {"=", "+=", "-=", "++", "--"}:
+        return "source transition is outside the supported arithmetic model"
+    try:
+        if actual.op in {"=", "+=", "-="} and parse_expr(claimed.rhs) != parse_expr(actual.rhs):
+            return "census mutation value disagrees with source"
+        guards = {_parse_invariant(guard) for guard in actual.guards}
+        if any(_parse_invariant(guard) not in guards for guard in claimed.guards):
+            return "census code adds a guard absent from the source frame"
+    except ParseError:
+        return "census source binding requires supported transition and guard expressions"
+    return ""
 
 
 def projection_refusal(code, guards, variables):

@@ -374,10 +374,11 @@ def source_mutations(source, variables=None):
     return sites, effects, ""
 
 
-def guard_snapshot_conditions(source, function_name, line):
-    """Return every reaching fact for one unchanged, source-bound mutation.
+def mutation_snapshot(source, function_name, line):
+    """Return one unchanged source mutation and its complete guard frame.
 
     Source branch membership determines polarity, including empty branches.
+    Same-line unmodeled effects cannot be omitted by a narrower census record.
     None means unavailable, unsupported, or ambiguous site identity.
     """
     from .probe_function_scope import source_for_function
@@ -385,11 +386,17 @@ def guard_snapshot_conditions(source, function_name, line):
     _, selected = source_for_function(source, "source.c", function_name)
     if selected is None:
         return None
-    sites, _effects, refusal = source_mutations(selected)
+    sites, effects, refusal = source_mutations(selected)
     at_line = [site for site in sites if site.line == line]
-    if refusal or len(at_line) != 1 or at_line[0].reason:
+    if refusal or len(at_line) != 1 or at_line[0].reason or any(effect.line == line for effect in effects):
         return None
-    return list(at_line[0].guards)
+    return at_line[0]
+
+
+def guard_snapshot_conditions(source, function_name, line):
+    """Return every reaching fact for one unchanged, source-bound mutation."""
+    site = mutation_snapshot(source, function_name, line)
+    return list(site.guards) if site is not None else None
 
 
 def guard_snapshot_supported(source, function_name, line):

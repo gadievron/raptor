@@ -324,11 +324,11 @@ def test_guard_discovery_time_is_charged_before_site_solver_budget(monkeypatch):
 
     monkeypatch.setattr(protocol_state, "_branch_guards", guards)
     monkeypatch.setattr(inv, "check_site_batch", check)
-    site = {"file": "record.c", "function": "Read", "line": 1, "code": "Count=0;"}
+    site = {"file": "record.c", "function": "Read", "line": 2, "code": "Count=0;"}
     result = protocol_state.check_invariant_multi_site(
         "Count <= Limit",
         {"fields": {"Count": {"writes": [site]}}},
-        {"record.c": "Count=0;"},
+        {"record.c": "void Read(int Count,int Limit){\nCount=0;\n}"},
         budget_s=1.0,
     )
     assert result["outcome"] == "preserved"
