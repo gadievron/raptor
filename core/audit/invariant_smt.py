@@ -53,13 +53,19 @@ from typing import Any
 
 from core.smt_solver.session import check_solver, new_solver, query_budget, scoped, solver_reason_unknown
 
+from .invariant_expression import (
+    IDENTIFIER as _IDENT,
+    ParseError as _ParseError,
+    parse_expr as _parse_expr,
+    expression_vars as _expr_vars,
+    validate_expression,
+    validate_counterexample,
+)
+
 logger = logging.getLogger(__name__)
 
 RULE_ID = "smt:invariant-preservation"
 
-# Identifier including struct member chains: a, s->len, cfg.size,
-# ctx->hdr.len …
-_IDENT = r"[A-Za-z_]\w*(?:(?:->|\.)\w+)*"
 
 _CMP_OPS = ("<=", ">=", "==", "!=", "<", ">")
 
@@ -93,15 +99,6 @@ _RHS_RE = re.compile(rf"^\s*({_SIDE_TAIL})")
 
 # How far around the operator an invariant side may reach.
 _SIDE_WINDOW = 100
-
-_TOKEN_RE = re.compile(
-    rf"\s*(sizeof\s*\([^()]*\)|min|max|{_IDENT}|[0-9]+|[()+\-,])",
-)
-
-
-class _ParseError(Exception):
-    pass
-
 
 @dataclass
 class SiteResult:
@@ -147,116 +144,6 @@ class InvariantPreservationResult:
 
 
 # ── expression parsing ──────────────────────────────────────────────
-
-
-def _tokenize(text: str) -> list[str]:
-    tokens: list[str] = []
-    pos = 0
-    while pos < len(text):
-        if text[pos].isspace():
-            pos += 1
-            continue
-        m = _TOKEN_RE.match(text, pos)
-        if not m:
-            msg = f"unparseable at {text[pos:pos + 12]!r}"
-            raise _ParseError(msg)
-        tokens.append(m.group(1).strip())
-        pos = m.end()
-    # Without a type environment, `(Alias) + Value` could be a cast of
-    # unary +Value or a parenthesized scalar addition. Do not choose one.
-    for i in range(len(tokens) - 3):
-        if (tokens[i] == "(" and re.fullmatch(_IDENT, tokens[i + 1])
-                and tokens[i + 2] == ")" and tokens[i + 3] in {"+", "-"}):
-            raise _ParseError("ambiguous cast or grouped identifier requires source types")
-    return tokens
-
-
-class _ExprParser:
-    """Recursive-descent parser for the supported linear fragment:
-
-    expr   := term (('+'|'-') term)*
-    term   := IDENT | INT | 'min(' expr ',' expr ')'
-            | 'max(' expr ',' expr ')' | 'sizeof(...)' | '(' expr ')'
-    """
-
-    def __init__(self, tokens: list[str]) -> None:
-        self._toks = tokens
-        self._pos = 0
-
-    def _peek(self) -> str | None:
-        return self._toks[self._pos] if self._pos < len(self._toks) else None
-
-    def _next(self) -> str:
-        tok = self._peek()
-        if tok is None:
-            msg = "unexpected end of expression"
-            raise _ParseError(msg)
-        self._pos += 1
-        return tok
-
-    def _expect(self, tok: str) -> None:
-        got = self._next()
-        if got != tok:
-            msg = f"expected {tok!r}, got {got!r}"
-            raise _ParseError(msg)
-
-    def parse(self) -> tuple:
-        node = self._expr()
-        if self._peek() is not None:
-            msg = f"trailing tokens: {self._toks[self._pos:]}"
-            raise _ParseError(msg)
-        return node
-
-    def _expr(self) -> tuple:
-        node = self._term()
-        while self._peek() in ("+", "-"):
-            op = self._next()
-            rhs = self._term()
-            node = ("add" if op == "+" else "sub", node, rhs)
-        return node
-
-    def _term(self) -> tuple:
-        tok = self._next()
-        if tok == "(":
-            node = self._expr()
-            self._expect(")")
-            return node
-        if tok == "-":
-            inner = self._term()
-            return ("sub", ("int", 0), inner)
-        if tok in ("min", "max"):
-            self._expect("(")
-            a = self._expr()
-            self._expect(",")
-            b = self._expr()
-            self._expect(")")
-            return (tok, a, b)
-        if re.fullmatch(r"sizeof\s*\([^()]*\)", tok):
-            return ("sizeof", tok)
-        if tok.isdigit():
-            if len(tok) > 1 and tok.startswith("0"):
-                raise _ParseError("leading-zero integer literals require source literal semantics")
-            return ("int", int(tok))
-        if re.fullmatch(_IDENT, tok):
-            return ("var", tok)
-        msg = f"unexpected token {tok!r}"
-        raise _ParseError(msg)
-
-
-def _parse_expr(text: str) -> tuple:
-    return _ExprParser(_tokenize(text)).parse()
-
-
-def _expr_vars(node: tuple) -> set[str]:
-    kind = node[0]
-    if kind == "var":
-        return {node[1]}
-    if kind in ("add", "sub", "min", "max"):
-        return _expr_vars(node[1]) | _expr_vars(node[2])
-    return set()
-
-
-# ── invariant extraction ────────────────────────────────────────────
 
 
 def extract_invariants(*texts: str) -> list[str]:
@@ -676,6 +563,11 @@ def _check_one_site(
             reason=f"operator {aop!r} outside the linear fragment",
         )
 
+    try:
+        validate_expression(new_expr)
+    except _ParseError as exc:
+        return SiteResult(line=line_no, code=code, verdict="out_of_scope", reason=str(exc))
+
     parsed_pres: list[tuple[tuple, str, tuple]] = []
     for cond in pre_conditions:
         try:
@@ -744,6 +636,9 @@ def _check_one_site(
         )
 
     math_model = _model_values(solver.model())
+    if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, math_model):
+        return SiteResult(line=line_no, code=code, verdict="unknown",
+                          reason="mathematical counterexample replay failed")
 
     # Second regime: pure math admits negative operands that C size/
     # length domains usually exclude (a break that NEEDS size = -1 is
@@ -760,6 +655,9 @@ def _check_one_site(
         nonneg_reason = solver_reason_unknown(solver) if nonneg_check not in (z3.sat, z3.unsat) else ""
 
     if nonneg_check == z3.sat:
+        if not validate_counterexample(lhs, op, rhs, new_expr, var, parsed_pres, nonneg_model, nonnegative=True):
+            return SiteResult(line=line_no, code=code, verdict="unknown",
+                              reason="non-negative counterexample replay failed")
         return SiteResult(
             line=line_no, code=code, verdict="violable",
             reason=(
@@ -769,6 +667,9 @@ def _check_one_site(
             model=nonneg_model,
         )
     if nonneg_check == z3.unsat:
+        if all(value >= 0 for name, value in math_model.items() if name != f"{var}'"):
+            return SiteResult(line=line_no, code=code, verdict="unknown",
+                              reason="non-negative counterexample contradicts preservation verdict")
         return SiteResult(
             line=line_no, code=code, verdict="preserved_nonneg",
             reason=(
