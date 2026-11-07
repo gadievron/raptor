@@ -47,7 +47,8 @@ def track(
     """Track a complete batch without changing its formula's meaning.
 
     Labels use the solver's context and are disjoint from Boolean names
-    in existing assertions, incoming expressions, and the reverse map.
+    in existing assertions, optimizer objectives (including soft constraints),
+    incoming expressions, and the reverse map.
     Native fresh symbols alone are insufficient: an explicit declaration
     can already have the name the native fresh-name counter will choose.
     Invalid expression sorts or contexts decline before any assertion is
@@ -67,14 +68,16 @@ def track(
         batch.append((name, expr))
     existing = _boolean_names(solver.assertions())
     incoming = _boolean_names(expr for _, expr in batch)
+    objectives = getattr(solver, "objectives", None)
+    objective_names = _boolean_names(objectives()) if objectives is not None else set()
     # Retain only labels still present after pop/reset, bounding registry
     # lifetime to the solver's live assertions. A later source expression
     # cannot reuse an active marker: those markers are assumed true by Z3.
     active_labels = getattr(solver, "_raptor_track_labels", set(rev)) & existing
-    if incoming & active_labels:
-        raise ValueError("tracked expressions reference an active tracking label")
+    if (incoming | objective_names) & active_labels:
+        raise ValueError("tracked expressions or objectives reference an active tracking label")
     solver._raptor_track_labels = active_labels
-    reserved = existing | incoming | set(rev)
+    reserved = existing | incoming | objective_names | set(rev)
     for name, expr in batch:
         label = z3.FreshBool("_raptor_track", ctx=solver.ctx)
         while str(label.decl().name()) in reserved:

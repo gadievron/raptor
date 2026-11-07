@@ -597,6 +597,7 @@ def make_anon_call_var(vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     It stays separate from parser aliases and from source names introduced
     later, even when a low-level caller has not pre-reserved its guards.
     """
+    _validate_var_registry(vars_, profile)
     variable = z3.FreshConst(z3.BitVecSort(profile.width), prefix="_anon_operand")
     vars_[str(variable.decl().name())] = variable
     return variable
@@ -1280,6 +1281,8 @@ def _solve_pending(
     otherwise produce an objective on a freshly-minted variable
     decoupled from the path.
     """
+    if vars_ is not None:
+        _validate_var_registry(vars_, profile, context=solver.ctx)
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
     call_flags = tuple(pending_call_terms) if pending_call_terms is not None else (None,) * len(pending)
@@ -1505,6 +1508,31 @@ def is_literal_identifier(name: str) -> bool:
     return bool(_NULL_RE.fullmatch(name))
 
 
+def _validate_var_binding(name, value, profile, context):
+    """Uniform-profile registries cannot silently change width or context."""
+    from ._validation import require_bv
+    if not isinstance(name, str) or not name:
+        raise ValueError("variable registry names must be nonempty strings")
+    if is_literal_identifier(name):
+        raise ValueError("NULL is a reserved zero literal, not a source variable")
+    if value is None:
+        return  # lazy source-name reservation, not an encoded expression
+    require_bv(value, argument=f"variable registry binding for {name!r}")
+    if value.size() != profile.width:
+        raise ValueError(f"variable registry binding for {name!r} must match profile width {profile.width}")
+    if value.ctx != context:
+        raise ValueError("variable registry bindings must share the query's Z3 context")
+
+
+def _validate_var_registry(vars_, profile, *, context=None):
+    """Validate all bindings before parsing or mutating an encoder registry."""
+    if not isinstance(vars_, dict):
+        raise ValueError("variable registry must be a mutable dictionary")
+    context = z3.main_ctx() if context is None else context
+    for name, value in vars_.items():
+        _validate_var_binding(name, value, profile, context)
+
+
 def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     """Get-or-create a Z3 bitvector variable, sharing ``vars_`` with the parser.
 
@@ -1514,14 +1542,20 @@ def make_var(name: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any:
     ``count < MAX`` constrain the *same* Z3 variable.
 
     Names retain case, matching the parser and source identifier identity.
-    The reserved NULL literal cannot denote a source variable.
+    The reserved NULL literal cannot denote a source variable. Existing
+    bindings may be expressions or generated aliases, but must match the
+    profile width and default query context. None reserves a lazy name.
     """
-    if is_literal_identifier(name):
-        raise ValueError("NULL is a reserved zero literal, not a source variable")
-    key = name
-    if vars_.get(key) is None:
-        vars_[key] = _mk_var(key, profile.width)
-    return vars_[key]
+    if not isinstance(vars_, dict):
+        raise ValueError("variable registry must be a mutable dictionary")
+    if not isinstance(name, str) or not name:
+        raise ValueError("variable registry names must be nonempty strings")
+    value = vars_.get(name)
+    _validate_var_binding(name, value, profile, z3.main_ctx())
+    if value is None:
+        value = _mk_var(name, profile.width)
+        vars_[name] = value
+    return value
 
 
 def make_val(literal: str, *, profile: BVProfile) -> Any:
@@ -1562,7 +1596,9 @@ def check_verb_feasibility(
     share ``vars_`` so identifier-named operands resolve to the same
     Z3 BV regardless of which path created them. ``operand_model`` carries
     independent call occurrences and their optional theory; matching call
-    text does not merge operand and guard executions.
+    text does not merge operand and guard executions. All registered bindings
+    must be bitvector expressions in the profile width and default context;
+    malformed bindings raise ValueError before any query or registry mutation.
 
     ``reduce_constraints=False`` skips optional tautology and constraint-summary
     queries. The full parsed obligation is still asserted; summary fields are
@@ -1571,6 +1607,7 @@ def check_verb_feasibility(
     Always called with Z3 available; verbs short-circuit the
     ``smt_available=False`` case before calling this helper.
     """
+    _validate_var_registry(vars_, profile)
     require_bool(reduce_constraints, argument="reduce_constraints")
     for condition in text_guards:
         require_bool(condition.negated, argument="negated")
