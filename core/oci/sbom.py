@@ -41,13 +41,13 @@ import logging
 import re
 import sqlite3
 import struct
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+from core.run.scratch import scratch_dir
 
 from .distro import release_ecosystem
 
@@ -269,6 +269,29 @@ _RPMTAG_TYPE_STRING = 6
 _RPMTAG_TYPE_INT32 = 4
 
 
+@contextlib.contextmanager
+def _rpm_connection(content: bytes):
+    """Own the SQLite connection and every file its parser may leave behind."""
+    with scratch_dir("raptor-rpm-") as workspace:
+        path = workspace / "rpmdb.sqlite"
+        path.write_bytes(content)
+        # URI-escape the complete path: TMPDIR may legally contain '?' or '#'.
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+        failed = False
+        try:
+            yield conn
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                conn.close()
+            except BaseException:
+                if not failed:
+                    raise
+                logger.warning("RPM database close failed for %s", path, exc_info=True)
+
+
 def parse_rpm_sqlite(content: bytes) -> list[InstalledPackage]:
     """Parse ``var/lib/rpm/rpmdb.sqlite``.
 
@@ -290,76 +313,57 @@ def parse_rpm_sqlite(content: bytes) -> list[InstalledPackage]:
     tempfile is auto-cleaned on context exit.
     """
     out: list[InstalledPackage] = []
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix="raptor-rpm-", suffix=".sqlite", delete=False,
-        ) as fp:
-            tmp_path = Path(fp.name)
-            fp.write(content)
-        # ``mode=ro`` URI open guards against any accidental writes.
-        conn = sqlite3.connect(
-            f"file:{tmp_path}?mode=ro", uri=True,
-        )
+    with _rpm_connection(content) as conn:
+        # The database bytes come from an image layer, so the engine
+        # runs in its least-trusting configuration: no extension
+        # loading, no SQL from the schema itself (a view named
+        # ``Packages`` would otherwise execute its author's
+        # expressions when selected), cell-size validation against
+        # corrupt pages, and a heap ceiling so a crafted DB can't
+        # balloon the host process.
+        with contextlib.suppress(AttributeError):
+            conn.enable_load_extension(False)
+        cur = conn.cursor()
         try:
-            # The database bytes come from an image layer, so the engine
-            # runs in its least-trusting configuration: no extension
-            # loading, no SQL from the schema itself (a view named
-            # ``Packages`` would otherwise execute its author's
-            # expressions when selected), cell-size validation against
-            # corrupt pages, and a heap ceiling so a crafted DB can't
-            # balloon the host process.
-            with contextlib.suppress(AttributeError):
-                conn.enable_load_extension(False)
-            cur = conn.cursor()
-            try:
-                cur.execute("PRAGMA trusted_schema=OFF")
-                cur.execute("PRAGMA cell_size_check=ON")
-                cur.execute("PRAGMA hard_heap_limit=268435456")  # 256 MB
-                row = cur.execute(
-                    "SELECT type, sql FROM sqlite_master "
-                    "WHERE name = 'Packages'",
-                ).fetchone()
-                if row is None:
-                    logger.debug(
-                        "core.oci.sbom: rpmdb.sqlite has no Packages "
-                        "object; skipping",
-                    )
-                    return out
-                obj_type, obj_sql = row[0], row[1] or ""
-                if obj_type != "table" or re.match(
-                    r"\s*CREATE\s+VIRTUAL\s+TABLE", obj_sql, re.IGNORECASE,
-                ):
-                    # Only a plain table is acceptable — views and
-                    # virtual tables evaluate schema-author SQL/module
-                    # code on SELECT.
-                    logger.debug(
-                        "core.oci.sbom: Packages is %s, not a plain "
-                        "table; skipping", obj_type,
-                    )
-                    return out
-                cur.execute("SELECT blob FROM Packages")
-            except sqlite3.Error as e:
+            cur.execute("PRAGMA trusted_schema=OFF")
+            cur.execute("PRAGMA cell_size_check=ON")
+            cur.execute("PRAGMA hard_heap_limit=268435456")  # 256 MB
+            row = cur.execute(
+                "SELECT type, sql FROM sqlite_master "
+                "WHERE name = 'Packages'",
+            ).fetchone()
+            if row is None:
                 logger.debug(
-                    "core.oci.sbom: rpmdb.sqlite unreadable (%s); "
-                    "skipping", e,
+                    "core.oci.sbom: rpmdb.sqlite has no Packages "
+                    "object; skipping",
                 )
                 return out
-            for (blob,) in cur:
-                if not isinstance(blob, (bytes, bytearray)):
-                    continue
-                pkg = _parse_rpm_header(bytes(blob))
-                if pkg is not None:
-                    _check_record_cap(out, "rpmdb.sqlite")
-                    out.append(pkg)
-        finally:
-            conn.close()
-    finally:
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+            obj_type, obj_sql = row[0], row[1] or ""
+            if obj_type != "table" or re.match(
+                r"\s*CREATE\s+VIRTUAL\s+TABLE", obj_sql, re.IGNORECASE,
+            ):
+                # Only a plain table is acceptable — views and
+                # virtual tables evaluate schema-author SQL/module
+                # code on SELECT.
+                logger.debug(
+                    "core.oci.sbom: Packages is %s, not a plain "
+                    "table; skipping", obj_type,
+                )
+                return out
+            cur.execute("SELECT blob FROM Packages")
+        except sqlite3.Error as e:
+            logger.debug(
+                "core.oci.sbom: rpmdb.sqlite unreadable (%s); "
+                "skipping", e,
+            )
+            return out
+        for (blob,) in cur:
+            if not isinstance(blob, (bytes, bytearray)):
+                continue
+            pkg = _parse_rpm_header(bytes(blob))
+            if pkg is not None:
+                _check_record_cap(out, "rpmdb.sqlite")
+                out.append(pkg)
     return out
 
 

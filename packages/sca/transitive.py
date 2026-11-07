@@ -37,7 +37,6 @@ whether transitive coverage was real / approximate / missing-and-why.
 from __future__ import annotations
 
 import logging
-import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +47,7 @@ from .naming import parent_join_key as _parent_join_key
 from .parsers._safe_read import read_bounded
 from typing import TYPE_CHECKING
 from core.source.lines import split_lines
+from core.run.scratch import scratch_dir
 
 if TYPE_CHECKING:
     from core.json import JsonCache
@@ -990,8 +990,8 @@ def _parse_lockfile_bytes(
     temp file matching the parser's expected name, parse, return."""
     expected_name = _CASCADE_LOCKFILE_NAMES[ecosystem]
     try:
-        with tempfile.TemporaryDirectory(prefix="raptor-sca-cascade-") as td:
-            tmp = Path(td) / expected_name
+        with scratch_dir("raptor-sca-cascade-") as workspace:
+            tmp = workspace / expected_name
             tmp.write_bytes(blob)
             return list(parser(tmp))
     except Exception as e:                          # noqa: BLE001

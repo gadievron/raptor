@@ -18,7 +18,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -3161,15 +3160,15 @@ def main() -> None:
         args.extra_config = _resolved_extra
 
     start_time = time.time()
-    tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))
     repo_path = None
+    with scratch_dir("raptor_auto_", keep=args.keep) as tmp:
+        if args.keep:
+            logger.info("Keeping scanner scratch at %s", tmp)
+        logger.info("Starting automated code security scan")
+        logger.info("Repository: %s", args.repo)
+        logger.info("Policy version: %s", args.policy_version)
+        logger.info("Policy groups: %s", args.policy_groups)
 
-    logger.info("Starting automated code security scan")
-    logger.info("Repository: %s", args.repo)
-    logger.info("Policy version: %s", args.policy_version)
-    logger.info("Policy groups: %s", args.policy_groups)
-
-    try:
         # Acquire repository
         if args.repo.startswith(("http://", "https://", "git@")):
             repo_path = tmp / "repo"
@@ -3961,18 +3960,6 @@ def main() -> None:
         # the sandbox-engagement-failure exit code which is reserved
         # for the SandboxSetupError path at __main__).
         sys.exit(exit_code)
-    finally:
-        if not args.keep:
-            try:
-                shutil.rmtree(tmp)
-            except OSError as exc:
-                # rmtree failure on the scratch dir — log at WARNING
-                # so the operator can spot the leak. Pre-fix this
-                # was completely silent.
-                logger.warning(
-                    "scanner: failed to clean up scratch dir %s: %s",
-                    tmp, exc,
-                )
 
 
 if __name__ == "__main__":

@@ -307,7 +307,7 @@ def test_scanner_owns_one_setup_for_compiler_and_expanded_stages(compiler, disab
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
     # Execute the actual adjacent dispatch statements, without running unrelated
     # scanners or model analysis. A stage must receive the same run owner.
-    block = next(node for node in ast.walk(main) if isinstance(node, ast.Try)
+    block = next(node for node in ast.walk(main) if isinstance(node, ast.With)
                  and any(isinstance(item, ast.Assign)
                          and any(isinstance(t, ast.Name) and t.id == 'analysis_setup' for t in item.targets)
                          for item in node.body))
