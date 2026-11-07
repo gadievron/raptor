@@ -24,9 +24,9 @@ def test_repeated_checks_share_the_budget_and_preserve_the_factory_cap(clock, mo
     def set_parameter(name, value):
         settings.append((name, value))
         native_set(name, value)
-    def check():
+    def check(*assumptions):
         checks.append(1)
-        return native_check()
+        return native_check(*assumptions)
     monkeypatch.setattr(solver, 'set', set_parameter)
     monkeypatch.setattr(solver, 'check', check)
     with session.query_budget(1000):
@@ -90,8 +90,8 @@ def test_expiry_after_tautology_classification_cannot_reuse_its_sat_result(clock
     def solver_factory(*args, **kwargs):
         solver = real(*args, **kwargs)
         native = solver.check
-        def check():
-            result = native()
+        def check(*assumptions):
+            result = native(*assumptions)
             clock[0] += 1
             return result
         monkeypatch.setattr(solver, 'check', check)
@@ -136,8 +136,8 @@ def test_primary_sat_survives_expiry_during_optional_summary_reduction(clock, mo
     def solver_factory(*args, **kwargs):
         solver = real(*args, **kwargs)
         native = solver.check
-        def check():
-            result = native()
+        def check(*assumptions):
+            result = native(*assumptions)
             queries.append(1)
             clock[0] += 0.1 if len(queries) == 1 else 1
             return result
@@ -188,3 +188,18 @@ def test_yielded_deadline_cannot_extend_an_outer_budget(clock):
             assert shorter == 10.6
     with session.query_budget(5000) as fresh:
         assert fresh == 15.5
+
+
+@pytest.mark.parametrize("factory", [session.new_solver, session.new_optimizer])
+def test_managed_assumptions_are_query_local_and_share_the_budget(clock, factory):
+    solver = factory()
+    value = z3.Bool("Value")
+    solver.add(value)
+    with session.query_budget(1000):
+        assert session.check_solver(solver, z3.Not(value)) == z3.unsat
+        assert session.check_solver(solver) == z3.sat
+        clock[0] += 2
+        assert session.check_solver(solver, z3.Not(value)) == z3.unknown
+    assert len(solver.assertions()) == 1
+    assert solver.assertions()[0].eq(value)
+    assert session.check_solver(solver) == z3.sat

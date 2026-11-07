@@ -78,7 +78,7 @@ def test_changed_formula_is_declined_before_running_an_owned_query(monkeypatch, 
     solver = getattr(z3, backend)()
     frame = track_frames(solver, [([("base", True)], [0])])
     solver.add(False)
-    monkeypatch.setattr(solver, "check", lambda: pytest.fail("changed formula reached solve"))
+    monkeypatch.setattr(solver, "check", lambda *assumptions: pytest.fail("changed formula reached solve"))
     with pytest.raises(ValueError, match="assertions changed"):
         frame.check()
     assert frame.core_indices(solver) is None
@@ -91,7 +91,7 @@ def test_failed_or_inconclusive_owned_query_clears_an_earlier_snapshot(monkeypat
     assert frame.check() == z3.unsat
     assert frame.single_core_origin(solver) == 0
     if failure == "exception":
-        def fail():
+        def fail(*assumptions):
             raise z3.Z3Exception("owned query failed")
         monkeypatch.setattr(solver, "check", fail)
         with pytest.raises(z3.Z3Exception, match="owned query failed"):
@@ -103,7 +103,7 @@ def test_failed_or_inconclusive_owned_query_clears_an_earlier_snapshot(monkeypat
         assert frame.check() == z3.unsat
     else:
         outcome = z3.unknown if failure == "unknown" else z3.sat
-        monkeypatch.setattr(solver, "check", lambda: outcome)
+        monkeypatch.setattr(solver, "check", lambda *assumptions: outcome)
         assert frame.check() == outcome
     assert frame.core_indices(solver) is None
     assert frame.single_core_origin(solver) is None
@@ -124,7 +124,7 @@ def test_core_reads_never_reconsult_native_state_or_add_queries(monkeypatch, bac
     solver = getattr(z3, backend)()
     frame = track_frames(solver, [([("contradiction", False)], [7])])
     assert frame.check() == z3.unsat
-    monkeypatch.setattr(solver, "check", lambda: pytest.fail("extra query"))
+    monkeypatch.setattr(solver, "check", lambda *assumptions: pytest.fail("extra query"))
     monkeypatch.setattr(solver, "unsat_core", lambda: pytest.fail("re-read mutable native core"))
     assert frame.core_indices(solver) == (0,)
     assert frame.single_core_origin(solver) == 7
@@ -156,3 +156,58 @@ def test_metadata_copies_do_not_alias_inputs_or_depend_on_display_order(backend)
     assert len(frame.labels) == 2
     assert frame.core_indices(solver) == (1,)
     assert frame.single_core_origin(solver) == 1
+
+
+@pytest.mark.parametrize("backend,cleanup", [("Solver", "pop"), ("Solver", "reset"), ("Optimize", "pop")])
+def test_rebuilt_implications_cannot_drop_owned_tracking_assumptions(backend, cleanup):
+    context = z3.Context()
+    solver = getattr(z3, backend)(ctx=context)
+    solver.push()
+    frame = track_frames(solver, [([("contradiction", False)], [7])])
+    assert frame.check() == z3.unsat
+    assertions = tuple(solver.assertions())
+    getattr(solver, cleanup)()
+    solver.add(*assertions)
+    # Printed formulas match, but native assert-and-track assumptions were
+    # removed. The raw solver may set the marker false to satisfy them.
+    assert solver.check() == z3.sat
+    assert all(a.eq(b) for a, b in zip(assertions, solver.assertions(), strict=True))
+    assert frame.check() == z3.unsat
+    assert frame.core_indices(solver) == (0,)
+    assert frame.single_core_origin(solver) == 7
+
+
+@pytest.mark.parametrize("backend", ["Solver", "Optimize"])
+def test_owned_check_passes_only_its_markers_without_extra_queries(monkeypatch, backend):
+    solver = getattr(z3, backend)()
+    frame = track_frames(solver, [([("first", True), ("contradiction", False)], [0, 1])])
+    native = solver.check
+    queries = []
+    def check(*assumptions):
+        queries.append(assumptions)
+        return native(*assumptions)
+    monkeypatch.setattr(solver, "check", check)
+    assert frame.check() == z3.unsat
+    assert len(queries) == 1
+    assert len(queries[0]) == len(frame.labels)
+    assert {str(value) for value in queries[0]} == set(frame.labels)
+    assert frame.single_core_origin(solver) == 1
+
+
+def test_rebuilt_sat_frame_keeps_guard_constrained_optimizer_values():
+    context = z3.Context()
+    solver = z3.Optimize(ctx=context)
+    value = z3.BitVec("Value", 8, ctx=context)
+    solver.minimize(value)
+    solver.push()
+    frame = track_frames(solver, [([("seven", value == 7)], [0])])
+    assert frame.check() == z3.sat
+    assert solver.model().eval(value).as_long() == 7
+    assertions = tuple(solver.assertions())
+    solver.pop()
+    solver.add(*assertions)
+    assert solver.check() == z3.sat
+    assert solver.model().eval(value).as_long() == 0  # unassumed implications
+    assert frame.check() == z3.sat
+    assert solver.model().eval(value).as_long() == 7  # the actual owned guard
+    assert frame.core_indices(solver) is None

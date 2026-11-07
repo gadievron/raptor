@@ -51,19 +51,21 @@ def query_budget(timeout_ms: int) -> Iterator[float]:
         _QUERY_DEADLINE.reset(token)
 
 
-def check_solver(solver: Any) -> Any:
+def check_solver(solver: Any, *assumptions: Any) -> Any:
     """Check once, capping the native query by its shared remaining budget.
 
     Expiry returns unknown without consulting stale native query state.
     Preserve the factory's per-query cap and restore it after the query.
     Native models/cores survive timeout-parameter changes. A restoration
     failure propagates instead of presenting a cleanly completed query.
+    Optional assumptions are forwarded to this native check only; they do
+    not become persistent assertions or extend the shared query budget.
     """
     deadline = _QUERY_DEADLINE.get()
     if deadline is None:
         if getattr(solver, "_raptor_budget_exhausted", False) is True:
             solver._raptor_budget_exhausted = False
-        return solver.check()
+        return solver.check(*assumptions)
     timeout = getattr(solver, "_raptor_timeout_ms", None)
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("budgeted checks require a core SMT factory solver")
@@ -73,7 +75,7 @@ def check_solver(solver: Any) -> Any:
         return z3.unknown
     solver.set("timeout", min(timeout, remaining))
     try:
-        return solver.check()
+        return solver.check(*assumptions)
     finally:
         solver.set("timeout", timeout)
 
