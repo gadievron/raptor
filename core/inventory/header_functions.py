@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from core.inventory._walk import iter_regular_files
 from core.inventory.extractors import CExtractor
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -125,12 +126,28 @@ def build_header_function_index(
             except OSError:
                 continue
 
-            lines = text.splitlines()
+            native_text = type(text) is str
+            # Most headers only declare functions. Build source lines only
+            # when an eligible definition needs a body; adapters remain eager.
+            lines = None if native_text else split_lines(text)
+            line_no = 0
+            line_offset = 0
             for m in _FUNC_DEF_RE.finditer(text):
                 name = m.group(1)
                 if name in _SKIP_NAMES or name in index:
                     continue
-                line_no = text.count("\n", 0, m.start())
+                if native_text:
+                    # Regex matches advance: count disjoint ranges rather
+                    # than re-reading the whole prefix for every definition.
+                    offset = m.start()
+                    line_no += text.count("\n", line_offset, offset)
+                    line_offset = offset
+                else:
+                    line_no = text.count("\n", 0, m.start())
+                if lines is None:
+                    # Match offsets count LF, so body slices must too. A
+                    # display separator inside a comment is not a source row.
+                    lines = split_lines(text)
                 body = _extract_function_body(lines, line_no)
                 if body:
                     rel = str(p.relative_to(target_path))

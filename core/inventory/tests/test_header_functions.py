@@ -239,3 +239,102 @@ class TestMultiLineSignature:
         result = lookup_header_function(tmp_path, "one")
         assert result is not None
         assert "return 1;" in result[1]
+
+
+@pytest.mark.parametrize('separator', ['\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'],
+                         ids=['vt', 'ff', 'fs', 'gs', 'rs', 'nel', 'ls', 'ps'])
+def test_display_separators_do_not_shift_header_bodies(tmp_path, separator):
+    first = 'static int first(void) {\n    return 1;\n}'
+    second = 'static int second(void) {\n    return 2;\n}'
+    (tmp_path / 'rows.h').write_text(
+        f'/* comment{separator}still on the same source row */\n'
+        f'{first}\n/* middle{separator}comment */\n{second}\n',
+        encoding='utf-8',
+    )
+    assert build_header_function_index(tmp_path) == {
+        'first': ('rows.h', first), 'second': ('rows.h', second),
+    }
+
+
+def test_display_separator_does_not_consume_body_line_budget(tmp_path):
+    body = 'static int thirty(void) {\n' + '    /* a\fb */\n' * 28 + '}'
+    (tmp_path / 'budget.h').write_text(body + '\n', encoding='utf-8')
+    assert build_header_function_index(tmp_path) == {'thirty': ('budget.h', body)}
+
+
+def test_declarations_and_reserved_names_need_no_line_list(tmp_path, monkeypatch):
+    from core.inventory import header_functions as mod
+
+    (tmp_path / 'decls.h').write_text('int declared(void);\nif (x) {\n}\n', encoding='utf-8')
+
+    def unexpected(*args):
+        raise AssertionError('header without eligible definitions was split')
+
+    monkeypatch.setattr(mod, 'split_lines', unexpected)
+    assert build_header_function_index(tmp_path) == {}
+
+
+def test_duplicate_only_header_needs_no_line_list(tmp_path, monkeypatch):
+    from core.inventory import header_functions as mod
+
+    first = tmp_path / 'first.h'
+    second = tmp_path / 'second.h'
+    first.write_text('static int same(void) { return 1; }\n', encoding='utf-8')
+    second.write_text('static int same(void) { return 2; }\n', encoding='utf-8')
+    monkeypatch.setattr(mod, 'iter_regular_files', lambda *args: iter([first, second]))
+    split = mod.split_lines
+    seen = []
+
+    def observed(text):
+        seen.append(text)
+        return split(text)
+
+    monkeypatch.setattr(mod, 'split_lines', observed)
+    assert build_header_function_index(tmp_path) == {
+        'same': ('first.h', 'static int same(void) { return 1; }'),
+    }
+    assert seen == [first.read_text()]
+
+
+def test_line_progress_survives_skips_failed_bodies_and_file_reset(tmp_path, monkeypatch):
+    from core.inventory import header_functions as mod
+
+    first = tmp_path / 'first.h'
+    second = tmp_path / 'second.h'
+    accepted = 'static int recover(void) { return 3; }'
+    last = 'static int last(void) { return 4; }'
+    first.write_text(
+        '/* preamble */\nif (x) {}\nstatic int same(void) { return 1; }\n'
+        'static int same(void) { return 2; }\nstatic int recover(void) {\n'
+        + '    statement();\n' * 36 + '}\n' + accepted + '\n', encoding='utf-8',
+    )
+    second.write_text(last + '\n', encoding='utf-8')
+    monkeypatch.setattr(mod, 'iter_regular_files', lambda *args: iter([first, second]))
+    assert build_header_function_index(tmp_path) == {
+        'same': ('first.h', 'static int same(void) { return 1; }'),
+        'recover': ('first.h', accepted), 'last': ('second.h', last),
+    }
+
+
+def test_text_adapter_keeps_full_prefix_count_operations(tmp_path, monkeypatch):
+    from pathlib import Path
+    from core.inventory import header_functions as mod
+
+    calls = []
+
+    class Text(str):
+        def count(self, separator, start=0, end=None):
+            calls.append((separator, start, end))
+            return super().count(separator, start, end)
+
+    class Header(type(Path())):
+        def read_text(self, **kwargs):
+            return Text(super().read_text(**kwargs))
+
+    path = tmp_path / 'adapter.h'
+    source = '/* preface */\nstatic int one(void) {}\nstatic int two(void) {}\n'
+    path.write_text(source, encoding='utf-8')
+    monkeypatch.setattr(mod, 'iter_regular_files', lambda *args: iter([Header(path)]))
+    assert list(build_header_function_index(tmp_path)) == ['one', 'two']
+    assert calls == [('\n', 0, source.index('static int one')),
+                     ('\n', 0, source.index('static int two'))]
