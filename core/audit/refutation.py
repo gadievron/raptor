@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.source import open_regular
+from core.source.lines import iter_splitlines
 from types import SimpleNamespace
 from typing import Any, NamedTuple
 
@@ -3029,15 +3030,31 @@ def _refute_by_callee_inheritance(
     if not matched_callee:
         return None
 
-    code_lines = [
-        ln.strip() for ln in source.strip().splitlines()
-        if ln.strip()
-        and not ln.strip().startswith("//")
-        and not ln.strip().startswith("/*")
-        and not ln.strip().startswith("*")
-        and not ln.strip().startswith("#")
-        and ln.strip() not in ("{", "}")
-    ]
+    if type(source) is str:
+        code_lines = []
+        # Keep short inputs on the cheaper C splitter; large bodies can stop
+        # at the SLOC limit without allocating their full line list.
+        source_lines = source.splitlines() if len(source) < 16 * 1024 else iter_splitlines(source)
+        for line in source_lines:
+            text = line.strip()
+            if not text or text.startswith(("//", "/*", "*", "#")) or text in ("{", "}"):
+                continue
+            code_lines.append(text)
+            # The first retained line is the signature. Twelve retained
+            # lines already exceed the ten-body-line limit, regardless of
+            # the unread tail; no full source copy or line list is needed.
+            if len(code_lines) > 11:
+                return None
+    else:
+        code_lines = [
+            ln.strip() for ln in source.strip().splitlines()
+            if ln.strip()
+            and not ln.strip().startswith("//")
+            and not ln.strip().startswith("/*")
+            and not ln.strip().startswith("*")
+            and not ln.strip().startswith("#")
+            and ln.strip() not in ("{", "}")
+        ]
     body_lines = code_lines[1:] if code_lines else []
 
     if len(body_lines) > 10:
@@ -3172,7 +3189,9 @@ def _get_function_source_and_callees(
 
     Returns (source, callees) where source is the function body text
     and callees is a list of called function names.  Both may be empty
-    if the checklist doesn't have the data.
+    if the checklist doesn't have the data. Same-name occurrences require
+    an exact source start and disjoint complete spans before their calls
+    can supply refutation evidence.
     """
     if not checklist:
         return "", []
@@ -3180,13 +3199,53 @@ def _get_function_source_and_callees(
     for fentry in checklist.get("files", []):
         if fentry.get("path") != outcome.file:
             continue
-        for item in fentry.get("items", []):
+        items = fentry.get("items", [])
+        span = None
+        # Native inventory rows can prove ambiguity without invoking adapter
+        # operations. Keep the legacy lookup for other container/name shapes.
+        if type(items) is list and type(outcome.function) is str:
+            matches: list[dict[str, Any]] | None = []
+            for candidate in items:
+                if type(candidate) is not dict:
+                    matches = None
+                    break
+                name = candidate.get("name")
+                if name is not None and type(name) is not str:
+                    matches = None
+                    break
+                if name == outcome.function:
+                    matches.append(candidate)
+            if matches is not None and not matches:
+                continue
+            if matches is not None and len(matches) == 1:
+                items = matches
+            elif matches is not None and len(matches) > 1:
+                line = getattr(outcome, "line", 0)
+                selected = [item for item in matches
+                            if type(line) is int and line > 0 and item.get("line_start") == line]
+                if len(selected) != 1:
+                    return "", []
+                item = selected[0]
+                first, last = item.get("line_start"), item.get("line_end")
+                bounds = [(peer.get("line_start"), peer.get("line_end")) for peer in matches]
+                if (any(type(start) is not int or type(end) is not int or not 0 < start <= end
+                        for start, end in bounds)
+                        or any(start <= last and first <= end
+                               for peer, (start, end) in zip(matches, bounds) if peer is not item)):
+                    return item.get("source", ""), []
+                items = [item]
+                span = (first, last)
+        for item in items:
             if item.get("name") != outcome.function:
                 continue
             source = item.get("source", "")
             callees = []
             for c in _get_calls(fentry):
                 if c.get("caller") == outcome.function:
+                    if span is not None:
+                        line = c.get("line")
+                        if type(line) is not int or not span[0] <= line <= span[1]:
+                            continue
                     chain = c.get("chain", [])
                     if chain:
                         callees.extend(chain)
