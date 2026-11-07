@@ -19,6 +19,39 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux Landlock 
 PID = 424242
 
 
+@pytest.fixture(autouse=True)
+def _owned_local_probe_modules(monkeypatch):
+    """Keep fork/read faults on the real probe code's private lookup graph."""
+    import builtins
+    from core.testing.module_views import module_function_view
+
+    os_view = module_function_view(os)
+    select_view = module_function_view(select)
+    tempfile_view = module_function_view(tempfile)
+    util_view = module_function_view(ctypes.util)
+    ctypes_view = module_function_view(__import__("ctypes"), bindings={"util": util_view})
+    imports = {"os": os_view, "select": select_view, "tempfile": tempfile_view}
+    owned = {}
+
+    def import_owned(name, globals=None, locals=None, fromlist=(), level=0):
+        if not level and name in imports:
+            return imports[name]
+        if level == 1 and name == "probes" and globals.get("__package__") == "core.sandbox":
+            return owned["probes"]
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    probe_view = module_function_view(probes, bindings={"os": os_view, "select": select_view}, import_hook=import_owned)
+    owned["probes"] = probe_view
+    landlock_view = module_function_view(
+        landlock, bindings={"os": os_view, "select": select_view, "tempfile": tempfile_view, "ctypes": ctypes_view},
+        import_hook=import_owned,
+    )
+    monkeypatch.setitem(globals(), "probes", probe_view)
+    monkeypatch.setitem(globals(), "landlock", landlock_view)
+
+
+
+
 def closed(fd):
     with pytest.raises(OSError) as raised:
         os.fstat(fd)
@@ -231,8 +264,8 @@ def test_real_probe_child_and_artifacts_are_cleaned(monkeypatch, tmp_path, phase
         def poll(self, *args):
             raise cancellation
 
-    monkeypatch.setattr(ctypes.util, "find_library", lambda name: None)
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(landlock.ctypes.util, "find_library", lambda name: None)
+    monkeypatch.setattr(landlock.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(landlock.os, "fork", fork)
     monkeypatch.setattr(landlock.os, "pipe", pipe)
     monkeypatch.setattr(landlock.os, "_exit", exit_child)
@@ -240,7 +273,7 @@ def test_real_probe_child_and_artifacts_are_cleaned(monkeypatch, tmp_path, phase
     monkeypatch.setattr(landlock, "_run_selftest_in_child", selftest)
     monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.1)
     if phase == "cancel":
-        monkeypatch.setattr(select, "poll", CancelPoll)
+        monkeypatch.setattr(probes.select, "poll", CancelPoll)
     try:
         with wall_deadline(20, code_bound_s=60, what="Landlock self-test lifecycle"):
             if phase == "cancel":

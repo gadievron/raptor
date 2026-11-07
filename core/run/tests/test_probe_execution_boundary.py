@@ -12,6 +12,30 @@ from core.startup import init as startup
 from packages.fuzzing import capability, cargofuzz_runner
 
 
+@pytest.fixture(autouse=True)
+def _owned_execution_probe_modules(monkeypatch):
+    """Share subprocess faults inside the fixture, including local imports."""
+    import builtins
+    import threading
+    from core.testing.module_views import module_function_view
+
+    subprocess_view = module_function_view(subprocess)
+
+    def import_owned(name, globals=None, locals=None, fromlist=(), level=0):
+        if not level and name == "subprocess":
+            return subprocess_view
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    views = {
+        "toolprobe": module_function_view(toolprobe, bindings={"subprocess": subprocess_view, "_CACHE": {}, "_CACHE_LOCK": threading.Lock()}, import_hook=import_owned),
+        "startup": module_function_view(startup, import_hook=import_owned),
+        "cargofuzz_runner": module_function_view(cargofuzz_runner, bindings={"subprocess": subprocess_view}, import_hook=import_owned),
+        "capability": module_function_view(capability, bindings={"subprocess": subprocess_view}, import_hook=import_owned),
+    }
+    for name, view in views.items():
+        monkeypatch.setitem(globals(), name, view)
+
+
 @pytest.fixture
 def probe_fixture(tmp_path, monkeypatch):
     project = tmp_path / 'target'
