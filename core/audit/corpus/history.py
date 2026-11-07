@@ -1055,6 +1055,12 @@ def import_results(results_path: Path, store: Path) -> str:
         "scope": None,
         "splice": meta.get("spliced_from"),
     }
+    # Preserve recorded provenance without inventing current defaults for
+    # older artifacts. Presence matters: null ABI and a no-expiry TTL are
+    # explicit values, not missing configuration.
+    for key in ("model_resolved", "llm_cache", "llm_cache_policy", "integer_abi"):
+        if key in meta:
+            config[key] = meta[key]
     run_id = run_id_for_output(results_path)
     run_rec = build_run_record(
         rows, meta,

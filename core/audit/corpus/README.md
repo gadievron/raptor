@@ -296,6 +296,9 @@ prefilter / model / scope / splice), a hash of the label set (sorted
 (`label_files_sha256`, from results meta — back-imports of a
 meta-carrying results.json keep it), recomputed gate outcomes,
 totals, and cost.
+Back-imports retain recorded resolved-model, response-cache policy, and
+integer-ABI configuration. Missing fields stay absent and explicit nulls
+are preserved; the importing host's defaults do not fill historical gaps.
 Label records carry expected/actual status, match, the attribution
 cell, observed mechanisms, error_reason, cost, and duration.
 Stability grouping keys on (tree, profile, config) — a cold run
