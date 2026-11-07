@@ -464,7 +464,7 @@ def _pid_file_match(name: str, prefix: str, suffix: str) -> int | None:
     if not (name.startswith(prefix) and name.endswith(suffix)):
         return None
     digits = name[len(prefix):len(name) - len(suffix)]
-    if not digits or not digits.isdigit():
+    if not digits or not digits.isascii() or not digits.isdigit():
         return None
     return int(digits)
 
@@ -817,6 +817,45 @@ def _sweep_roots() -> list[tuple[Path, bool]]:
     return roots
 
 
+def _unchanged_artifact(path: Path, original: os.stat_result) -> bool:
+    """Revalidate the candidate without following a replacement symlink."""
+    current = path.lstat()
+    return ((current.st_dev, current.st_ino, current.st_mode, current.st_uid,
+             current.st_size, current.st_mtime_ns, current.st_ctime_ns)
+            == (original.st_dev, original.st_ino, original.st_mode, original.st_uid,
+                original.st_size, original.st_mtime_ns, original.st_ctime_ns))
+
+
+def _confirmed_absent(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    return False
+
+
+def _remove_candidate_directory(path: Path, original: os.stat_result) -> bool:
+    """Keep refusals local and count only confirmed removals of judged trees."""
+    try:
+        return (_unchanged_artifact(path, original)
+                and rmtree_hardened(path) and _confirmed_absent(path))
+    except OSError:
+        logger.debug("directory reap failed for %s", path, exc_info=True)
+        return False
+
+
+def _unlink_candidate_file(path: Path, original: os.stat_result) -> bool:
+    """A changed or refreshed file is a new candidate for a later sweep."""
+    try:
+        if not _unchanged_artifact(path, original):
+            return False
+        path.unlink()
+        return _confirmed_absent(path)
+    except OSError:
+        logger.debug("file reap failed for %s", path, exc_info=True)
+        return False
+
+
 def reap_stale_tmp(now: float | None = None) -> list[Path]:
     """Remove orphaned RAPTOR temp artifacts; return the reaped paths.
 
@@ -935,8 +974,9 @@ def _reap(now: float | None) -> list[Path]:
                 "and delete; skipping this sweep", path,
             )
             continue
-        rmtree_hardened(path)
-        if not path.exists():
+        if _recent_activity(path, now, max_age):
+            continue
+        if _remove_candidate_directory(path, st):
             reaped.append(path)
 
     for path in file_candidates:
@@ -950,11 +990,8 @@ def _reap(now: float | None) -> list[Path]:
             continue
         if now - st.st_mtime < max_age:
             continue
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        reaped.append(path)
+        if _unlink_candidate_file(path, st):
+            reaped.append(path)
 
     # Pid-owned sidecars: the embedded pid, not age, is the contract —
     # a dead owner's pair is reaped even when fresh; a live owner's
@@ -970,11 +1007,8 @@ def _reap(now: float | None) -> list[Path]:
             continue
         if _pid_alive(pid):
             continue
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        reaped.append(path)
+        if _unlink_candidate_file(path, st):
+            reaped.append(path)
 
     if reaped:
         logger.info(
@@ -1165,8 +1199,7 @@ def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int, *,
                 "validation and delete; skipping this sweep", path,
             )
             continue
-        rmtree_hardened(path)
-        if not path.exists():
+        if _remove_candidate_directory(path, st):
             reaped.append(path)
         else:
             # Partial-permission residue (e.g. root-owned entries
@@ -1325,8 +1358,11 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
                 "and delete; skipping this sweep", d,
             )
             continue
-        rmtree_hardened(d)
-        if not d.exists():
+        # A resume can change status or timing without replacing the run
+        # directory. Do not delete using the earlier metadata snapshot.
+        if load_json(meta_path, max_bytes=_RUN_METADATA_MAX_BYTES) != meta:
+            continue
+        if _remove_candidate_directory(d, st):
             reaped.append(d)
     if reaped:
         logger.info(
@@ -1432,11 +1468,8 @@ def _reap_logs(now: float | None) -> list[Path]:
             continue
         if now - st.st_mtime < max_age:
             continue
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        reaped.append(path)
+        if _unlink_candidate_file(path, st):
+            reaped.append(path)
     if reaped:
         logger.info("reaped %d audit log file(s) older than %g days",
                     len(reaped), days)
