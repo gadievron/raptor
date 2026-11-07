@@ -135,7 +135,9 @@ def _format_human(profile, *, cached: bool) -> str:
     what to open/connect to) — escape them before the operator's
     terminal like every other foreign-derived print surface.
     """
-    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+    from core.security.log_sanitisation import (
+        sanitise_for_terminal as _sft,
+    )
     SAMPLE = 15
     lines = []
     lines.append(f"binary: {_sft(str(profile.binary_path), max_len=200)}")
@@ -180,7 +182,10 @@ def _print_clear_result(
     cleared: int, errors: list[tuple[Path, OSError]], *, bin_path: Path | None = None,
 ) -> int:
     """Report successful removals and any incomplete cleanup separately."""
-    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+    from core.security.log_sanitisation import (
+        sanitise_exception_message,
+        sanitise_for_terminal as _sft,
+    )
 
     suffix = f" for {_sft(str(bin_path))}" if bin_path is not None else ""
     sys.stdout.write(f"cleared {cleared} profile(s){suffix}\n")
@@ -189,7 +194,7 @@ def _print_clear_result(
     path, error = errors[0]
     sys.stderr.write(
         f"raptor-sandbox-calibrate: {len(errors)} cache operation(s) failed; "
-        f"first failure for {_sft(str(path))}: {_sft(str(error))}\n"
+        f"first failure for {_sft(str(path))}: {sanitise_exception_message(error)}\n"
     )
     return _SOFTWARE_EX
 
@@ -198,7 +203,10 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    from core.security.log_sanitisation import sanitise_for_terminal as _sft
+    from core.security.log_sanitisation import (
+        sanitise_exception_message,
+        sanitise_for_terminal as _sft,
+    )
     from core.sandbox.errors import (
         SANDBOX_ENGAGE_EXIT_CODE,
         SandboxDisableRefusedError,
@@ -215,7 +223,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             n = cal.clear_cache(None, errors=errors)
         except OSError as exc:
             sys.stderr.write(
-                f"raptor-sandbox-calibrate: cannot clear profiles: {_sft(str(exc))}\n"
+                f"raptor-sandbox-calibrate: cannot clear profiles: {sanitise_exception_message(exc)}\n"
             )
             return _SOFTWARE_EX
         return _print_clear_result(n, errors)
@@ -227,14 +235,14 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         bin_path = Path(args.bin).expanduser()
     except RuntimeError as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: cannot expand binary path {_sft(str(args.bin))}: {_sft(str(exc))}\n"
+            f"raptor-sandbox-calibrate: cannot expand binary path {_sft(str(args.bin))}: {sanitise_exception_message(exc)}\n"
         )
         return _USAGE_EX
     try:
         bin_exists = bin_path.exists()
     except OSError as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: cannot inspect {_sft(str(bin_path))}: {_sft(str(exc))}\n"
+            f"raptor-sandbox-calibrate: cannot inspect {_sft(str(bin_path))}: {sanitise_exception_message(exc)}\n"
         )
         return _SOFTWARE_EX
     if not bin_exists:
@@ -249,7 +257,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             n = cal.clear_cache(bin_path, errors=errors)
         except OSError as exc:
             sys.stderr.write(
-                f"raptor-sandbox-calibrate: cannot clear profiles for {_sft(str(bin_path))}: {_sft(str(exc))}\n"
+                f"raptor-sandbox-calibrate: cannot clear profiles for {_sft(str(bin_path))}: {sanitise_exception_message(exc)}\n"
             )
             return _SOFTWARE_EX
         return _print_clear_result(n, errors, bin_path=bin_path)
@@ -265,7 +273,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             bin_sha = cal._sha256_file(bin_path.resolve())
         except OSError as exc:
             sys.stderr.write(
-                f"raptor-sandbox-calibrate: cannot hash {_sft(str(bin_path))}: {_sft(str(exc))}\n"
+                f"raptor-sandbox-calibrate: cannot hash {_sft(str(bin_path))}: {sanitise_exception_message(exc)}\n"
             )
             return _SOFTWARE_EX
         env_sig = cal._env_signature(env_keys)
@@ -318,7 +326,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         return SANDBOX_ENGAGE_EXIT_CODE
     except FileNotFoundError as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
+            f"raptor-sandbox-calibrate: {sanitise_exception_message(exc)}\n"
         )
         return _USAGE_EX
     except subprocess.TimeoutExpired:
@@ -329,7 +337,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         return _TIMEOUT_EX
     except (RuntimeError, OSError) as exc:
         sys.stderr.write(
-            f"raptor-sandbox-calibrate: {_sft(str(exc))}\n"
+            f"raptor-sandbox-calibrate: {sanitise_exception_message(exc)}\n"
         )
         return _SOFTWARE_EX
 
