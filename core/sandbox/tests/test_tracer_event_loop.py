@@ -33,6 +33,8 @@ from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import tracer  # noqa: E402
 
 
@@ -300,8 +302,7 @@ class TestLiveEscalation:
     def test_escape_primitive_escalates_once(
             self, arch_info, fake_helpers, monkeypatch):
         writes = []
-        monkeypatch.setattr(tracer.os, "write",
-                            lambda fd, data: writes.append((fd, data)))
+        patch_module_attribute(monkeypatch, tracer, "os", "write", lambda fd, data: writes.append((fd, data)))
         ptrace_nr = _ptrace_syscall_nr(arch_info)
         fake_helpers["decode_syscall"] = (
             lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
@@ -332,8 +333,7 @@ class TestLiveEscalation:
         # Default fake_decode_syscall returns openat — not in
         # _LIVE_ESCALATE_SYSCALLS.
         writes = []
-        monkeypatch.setattr(tracer.os, "write",
-                            lambda fd, data: writes.append((fd, data)))
+        patch_module_attribute(monkeypatch, tracer, "os", "write", lambda fd, data: writes.append((fd, data)))
         traced = {1000}
         _dispatch(
             1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
@@ -346,8 +346,7 @@ class TestLiveEscalation:
             self, arch_info, fake_helpers, monkeypatch):
         monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
         writes = []
-        monkeypatch.setattr(tracer.os, "write",
-                            lambda fd, data: writes.append((fd, data)))
+        patch_module_attribute(monkeypatch, tracer, "os", "write", lambda fd, data: writes.append((fd, data)))
         ptrace_nr = _ptrace_syscall_nr(arch_info)
         fake_helpers["decode_syscall"] = (
             lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
@@ -365,8 +364,7 @@ class TestLiveEscalation:
         # opted in (e.g. every other test in this file, via _dispatch's
         # own default) see no behaviour change at all.
         writes = []
-        monkeypatch.setattr(tracer.os, "write",
-                            lambda fd, data: writes.append((fd, data)))
+        patch_module_attribute(monkeypatch, tracer, "os", "write", lambda fd, data: writes.append((fd, data)))
         ptrace_nr = _ptrace_syscall_nr(arch_info)
         fake_helpers["decode_syscall"] = (
             lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
@@ -384,7 +382,7 @@ class TestLiveEscalation:
         # running regardless of whether the banner could be printed.
         def raising_write(fd, data):
             raise OSError("stderr closed")
-        monkeypatch.setattr(tracer.os, "write", raising_write)
+        patch_module_attribute(monkeypatch, tracer, "os", "write", raising_write)
         ptrace_nr = _ptrace_syscall_nr(arch_info)
         fake_helpers["decode_syscall"] = (
             lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
@@ -881,7 +879,7 @@ class TestGlobalCapNoticeStderr:
 
         def raising_write(fd, data):
             raise OSError("stderr closed")
-        monkeypatch.setattr(tracer.os, "write", raising_write)
+        patch_module_attribute(monkeypatch, tracer, "os", "write", raising_write)
         budget = audit_budget.AuditBudget()
         # Arm the one-shot notice exactly as the budget does when the
         # global cap first fires; the next dispatched event emits it.

@@ -16,6 +16,9 @@ import time
 
 import pytest
 
+import core.atomic_fs as atomic_mod
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import evidence as evidence_mod
 from core.sandbox import probes, ptrace_probe
 from core.sandbox import proxy as proxy_mod
@@ -181,7 +184,7 @@ class TestTracerJsonlFailureModes:
         # Force the write path to fail and verify we get a debug log.
         def boom(*a, **k):
             raise OSError("simulated disk full")
-        monkeypatch.setattr(os, "open", boom)
+        patch_module_attribute(monkeypatch, atomic_mod, "os", "open", boom)
 
         import logging as _l
         with caplog.at_level(_l.DEBUG, logger="core.sandbox.tracer"):
