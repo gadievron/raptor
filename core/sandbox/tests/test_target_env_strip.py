@@ -38,6 +38,7 @@ def test_constant_contents():
     assert "RAPTOR_SESSION_PID" in STRIP_SET
     assert "RAPTOR_SESSION_TOKEN" in STRIP_SET
     assert "RAPTOR_ALLOW_DEGRADED_UNTRUSTED" in STRIP_SET
+    assert "RAPTOR_CALLER_DIR" in STRIP_SET
 
 
 def test_session_credential_is_allowlisted_but_stripped():

@@ -715,6 +715,7 @@ class RaptorConfig:
         # on the keep-trust dispatch arm, which retains the full set
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND", "RAPTOR_INSTALL_PROTECTED",
+        "RAPTOR_CALLER_DIR",
         "RAPTOR_SCORECARD_PATH",
         # Operator-registry override: framework tell plus a host path
         # that leaks the operator's registry layout. No target
