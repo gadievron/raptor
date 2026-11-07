@@ -259,9 +259,8 @@ def negate_comparison(text: str) -> str | None:
     """Negate a linear comparison string (``a <= b`` → ``a > b``).
 
     Returns ``None`` when the text is not a comparison in the
-    supported fragment — callers must then drop the condition rather
-    than guess (the declared-scope discipline). Used by census-driven
-    consumers to encode false-branch dominators."""
+    supported fragment. A proof consumer must treat that guard as
+    unsupported rather than silently omit it from the obligation."""
     try:
         _lhs, op, _rhs = _parse_invariant(text)
     except _ParseError:
