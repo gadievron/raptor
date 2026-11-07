@@ -84,10 +84,14 @@ def scoped_function_imports(module, functions, imports):
         return original_import(name, globals, locals, fromlist, level)
 
     def invoke(name, *args, **kwargs):
-        view = module_function_view(module, bindings=originals, import_hook=import_local)
+        bindings = {key: original for key, original in originals.items()
+                    if vars(module).get(key) is wrappers[key]}
+        bindings[name] = originals[name]
+        view = module_function_view(module, bindings=bindings, import_hook=import_local)
         return getattr(view, name)(*args, **kwargs)
 
+    wrappers = {name: partial(invoke, name) for name in originals}
     with pytest.MonkeyPatch.context() as scope:
-        for name in originals:
-            scope.setattr(module, name, partial(invoke, name))
+        for name, wrapper in wrappers.items():
+            scope.setitem(vars(module), name, wrapper)
         yield owned

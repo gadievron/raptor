@@ -12,9 +12,34 @@ from __future__ import annotations
 import typing
 
 import pytest
+import importlib
+import importlib.util
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+from core.testing.module_bindings import mock_module_attribute
 
 from core.startup import doctor
 from core.startup.doctor import _render, main
+
+
+_probe_imports = ModuleType("doctor_probe_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_probe_imports(monkeypatch):
+    # ``import importlib.util`` binds the root module, unlike a from-import.
+    root = ModuleType(importlib.__name__)
+    vars(root).update(vars(importlib))
+    root.util = ModuleType(importlib.util.__name__)
+    vars(root.util).update(vars(importlib.util))
+    with scoped_function_imports(
+        doctor, ("_module_dep_warnings",), {"importlib.util": root},
+    ) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_probe_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _gather_stub(
@@ -279,10 +304,10 @@ class TestModuleDepVerification:
             return_value=proc, side_effect=run_side_effect,
         )
         with mock.patch.object(RaptorConfig, "TOOL_DEPS", self._DEPS), \
-             mock.patch(
-                 "importlib.util.find_spec",
+             mock_module_attribute(
+                 getattr(_probe_imports, "importlib.util"), "util", "find_spec",
                  return_value=object() if spec_found else None,
-             ), mock.patch("subprocess.run", run_mock):
+             ), mock_module_attribute(doctor, "subprocess", "run", run_mock):
             warnings = doctor._module_dep_warnings()
         return warnings, run_mock
 
@@ -348,8 +373,8 @@ class TestModuleProbeIsolation:
         }
         monkeypatch.chdir(attack)
         with mock.patch.object(RaptorConfig, "TOOL_DEPS", deps), \
-             mock.patch(
-                 "importlib.util.find_spec", return_value=object(),
+             mock_module_attribute(
+                 getattr(_probe_imports, "importlib.util"), "util", "find_spec", return_value=object(),
              ):
             doctor._module_dep_warnings()
         assert not canary.exists(), (

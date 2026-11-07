@@ -147,8 +147,8 @@ def test_import_scope_rolls_back_partial_publication(fail_at, error):
     from core.testing import module_views
 
     class FailingPatch(pytest.MonkeyPatch):
-        def setattr(self, *args, **kwargs):
-            super().setattr(*args, **kwargs)
+        def setitem(self, *args, **kwargs):
+            super().setitem(*args, **kwargs)
             self.calls = getattr(self, 'calls', 0) + 1
             if self.calls == fail_at:
                 raise error('publication failed')
@@ -172,3 +172,41 @@ def test_import_scope_rolls_back_partial_publication(fail_at, error):
         with contextmanager(private.scoped_function_imports)(owner, ('one', 'two'), {'os': os}):
             pytest.fail('body entered after publication failure')
     assert (owner.one, owner.two) == before
+
+
+@pytest.mark.parametrize('override', [False, True])
+@pytest.mark.parametrize('finish', ['normal', 'error', 'interrupt'])
+def test_selected_callee_keeps_body_override(override, finish):
+    owner = ModuleType('selected_functions')
+    exec('def first(): return second()\ndef second():\n import os\n return os.getcwd()\n', vars(owner))
+    originals = (owner.first, owner.second)
+    try:
+        with scoped_function_imports(owner, ('first', 'second'), {'os': os}) as imports:
+            imports.os.getcwd = lambda: 'owned directory'
+            with pytest.MonkeyPatch.context() as body:
+                if override:
+                    replacement = Mock(return_value='body override')
+                    body.setattr(owner, 'second', replacement)
+                assert owner.first() == ('body override' if override else 'owned directory')
+                if override:
+                    replacement.assert_called_once_with()
+                if finish == 'error':
+                    raise RuntimeError('owned exit')
+                if finish == 'interrupt':
+                    raise KeyboardInterrupt('owned exit')
+    except (RuntimeError, KeyboardInterrupt) as error:
+        assert type(error) is {'error': RuntimeError, 'interrupt': KeyboardInterrupt}.get(finish)
+    finally:
+        assert (owner.first, owner.second) == originals
+
+
+def test_selected_lazy_binding_restores_raw_absence():
+    owner = ModuleType('lazy_functions')
+    exec('def original():\n import os\n return os.getcwd()\n', vars(owner))
+    owner.__getattr__ = lambda name: owner.original if name == 'lazy' else None
+    assert 'lazy' not in vars(owner)
+    with scoped_function_imports(owner, ('lazy',), {'os': os}) as imports:
+        imports.os.getcwd = lambda: 'owned directory'
+        assert owner.lazy() == 'owned directory'
+    assert 'lazy' not in vars(owner)
+    assert owner.lazy is owner.original
