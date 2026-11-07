@@ -23,13 +23,16 @@ import ast
 import logging
 import re
 from bisect import bisect_right
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 
 from .run_memo import BoundedMemo
 
 logger = logging.getLogger(__name__)
+
+_SENTINEL_LINES_IMPL = split_lines
 
 _SENTINEL_PY_DEF_RE = re.compile(r"\s*(?:async\s+)?def\s+(\w+)\s*\(")
 _SENTINEL_GO_DEF_RE = re.compile(r"\s*func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(")
@@ -86,19 +89,36 @@ _FALSY_COERCION_PATTERNS: list[re.Pattern[str]] = [
     ),
 ]
 
+_FALSY_COERCION_IMPLS = tuple(_FALSY_COERCION_PATTERNS)
+
+
 def _detect_falsy_coercion(
     path: str,
     source: str,
 ) -> list[SentinelCollapse]:
     results: list[SentinelCollapse] = []
     current_func = "<module>"
-    lines = split_lines(source)
+    streaming = type(source) is str and split_lines is _SENTINEL_LINES_IMPL
+    lines = iter_source_lines(source) if streaming else split_lines(source)
+    recent = deque(maxlen=4) if streaming else None
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
+        if recent is not None:
+            recent.append(line)
         func_match = _SENTINEL_PY_DEF_RE.match(line)
         if func_match:
             current_func = func_match.group(1)
+            continue
+
+        if (
+            type(line) is str and "or" not in line and "else" not in line
+            and type(_FALSY_COERCION_PATTERNS) is list
+            and len(_FALSY_COERCION_PATTERNS) == 3
+            and _FALSY_COERCION_PATTERNS[0] is _FALSY_COERCION_IMPLS[0]
+            and _FALSY_COERCION_PATTERNS[1] is _FALSY_COERCION_IMPLS[1]
+            and _FALSY_COERCION_PATTERNS[2] is _FALSY_COERCION_IMPLS[2]
+        ):
             continue
 
         for pat in _FALSY_COERCION_PATTERNS:
@@ -109,7 +129,9 @@ def _detect_falsy_coercion(
             # Skip if the SAME variable is guarded by ``is not None``
             # in the preceding 3-line window
             window_start = max(0, lineno_0 - 3)
-            window = "\n".join(lines[window_start:lineno_0 + 1])
+            window = "\n".join(
+                recent if recent is not None else lines[window_start:lineno_0 + 1]
+            )
             guarded = re.search(
                 rf"\bif\s+{re.escape(var_name)}\s+is\s+not\s+None\b",
                 window,
@@ -181,12 +203,20 @@ _CACHE_READ_COERCE = re.compile(
 )
 
 
+_CACHE_WRITE_IMPL = _CACHE_WRITE_NONE
+_CACHE_READ_IMPL = _CACHE_READ_COERCE
+
+
 def _detect_cache_sentinel(
     path: str,
     source: str,
 ) -> list[SentinelCollapse]:
     results: list[SentinelCollapse] = []
-    lines = split_lines(source)
+    lines = (
+        iter_source_lines(source)
+        if type(source) is str and split_lines is _SENTINEL_LINES_IMPL
+        else split_lines(source)
+    )
     current_func = "<module>"
 
     # Collect per-function evidence: does the function both write None
@@ -216,11 +246,22 @@ def _detect_cache_sentinel(
             func_coercion_sites = []
             continue
 
-        if _CACHE_WRITE_NONE.search(line):
+        # The case-insensitive write regex needs either a subscript
+        # assignment (`[` and `=`) or a setter call (`(`).
+        if (
+            (type(line) is not str or "(" in line or ("[" in line and "=" in line)
+             or _CACHE_WRITE_NONE is not _CACHE_WRITE_IMPL)
+            and _CACHE_WRITE_NONE.search(line)
+        ):
             func_has_write_none = True
 
+        native_read = type(line) is str and _CACHE_READ_COERCE is _CACHE_READ_IMPL
+        if native_read and "or" not in line and "else" not in line:
+            continue
         m = _CACHE_READ_COERCE.search(line)
-        if m:
+        if m and (not func_coercion_sites or not native_read):
+            # Only the first site is reported. Retain all custom-provider
+            # matches as before, including their group calls and lifetimes.
             func_coercion_sites.append((lineno, m.group(0)))
 
     _flush()
@@ -372,6 +413,9 @@ _JS_FUNC_RE = re.compile(
 )
 
 
+_JS_COERCION_IMPLS = tuple(_JS_FALSY_COERCION)
+
+
 def _detect_js_sentinel(
     path: str,
     source: str,
@@ -393,11 +437,15 @@ def _detect_js_sentinel(
     except ImportError:
         pass
 
-    lines = split_lines(source)
+    streaming = type(source) is str and split_lines is _SENTINEL_LINES_IMPL
+    lines = iter_source_lines(source) if streaming else split_lines(source)
+    recent = deque(maxlen=4) if streaming else None
     current_func = "<module>"
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
+        if recent is not None:
+            recent.append(line)
 
         # Function name: prefer tree-sitter map, fall back to regex
         if func_name_at_line:
@@ -411,6 +459,15 @@ def _detect_js_sentinel(
                 )
                 continue
 
+        if (
+            type(line) is str and "||" not in line and "??" not in line
+            and type(_JS_FALSY_COERCION) is list and len(_JS_FALSY_COERCION) == 3
+            and _JS_FALSY_COERCION[0] is _JS_COERCION_IMPLS[0]
+            and _JS_FALSY_COERCION[1] is _JS_COERCION_IMPLS[1]
+            and _JS_FALSY_COERCION[2] is _JS_COERCION_IMPLS[2]
+        ):
+            continue
+
         for pat in _JS_FALSY_COERCION:
             m = pat.search(line)
             if not m:
@@ -418,7 +475,9 @@ def _detect_js_sentinel(
             var_name = m.group(1)
             default = m.group(2)
             window_start = max(0, lineno_0 - 3)
-            window = "\n".join(lines[window_start:lineno_0 + 1])
+            window = "\n".join(
+                recent if recent is not None else lines[window_start:lineno_0 + 1]
+            )
             if re.search(
                 rf"\b{re.escape(var_name)}\s*!==?\s*(?:null|undefined)\b",
                 window,
