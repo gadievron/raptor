@@ -5,6 +5,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 from pathlib import Path
+from pkgutil import resolve_name
 import shutil
 import subprocess
 from unittest import mock
@@ -66,6 +67,7 @@ def test_native_probe_mock_is_private(file, anchor, target, index, finish, tmp_p
         assert all(a is b for a, b in zip(_shared(), shared, strict=True))
         imports = getattr(module, '_probe_imports', None)
         namespace = dict(mock=mock, mock_module_attribute=mock_module_attribute,
+                         _mock_owner=resolve_name,
                          _probe_imports=imports, doctor=doctor,
                          proc=mock.Mock(), proc2=mock.Mock(), run_mock=mock.Mock(),
                          PackageNotFoundError=importlib.metadata.PackageNotFoundError,

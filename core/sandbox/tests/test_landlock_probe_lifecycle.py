@@ -264,14 +264,16 @@ def test_real_probe_child_and_artifacts_are_cleaned(monkeypatch, tmp_path, phase
         def poll(self, *args):
             raise cancellation
 
-    monkeypatch.setattr(landlock.ctypes.util, "find_library", lambda name: None)
+    patch_module_attribute(monkeypatch, landlock, 'ctypes.util', 'find_library', lambda name: None)
     monkeypatch.setattr(landlock.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(landlock.os, "fork", fork)
     monkeypatch.setattr(landlock.os, "pipe", pipe)
     monkeypatch.setattr(landlock.os, "_exit", exit_child)
     monkeypatch.setattr(landlock.os, "read", read)
     monkeypatch.setattr(landlock, "_run_selftest_in_child", selftest)
-    monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.1)
+    # Keep production scheduling headroom for successful completion.
+    if phase != "normal":
+        monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.1)
     if phase == "cancel":
         monkeypatch.setattr(probes.select, "poll", CancelPoll)
     try:

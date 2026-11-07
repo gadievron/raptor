@@ -1,0 +1,765 @@
+[
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_strips_suffix_when_real_path_matches"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', return_value='/opt/jdk-17/bin/java')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/jdk-17/bin/java')",
+    "kind": "mock",
+    "line": 58
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_rejects_when_real_path_does_not_end_with_suffix"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', return_value='/opt/wrapper-script.sh')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/wrapper-script.sh')",
+    "kind": "mock",
+    "line": 69
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestResolveFromWhich",
+      "test_os_error_returns_none"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', side_effect=OSError('stat failed'))",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', side_effect=OSError('stat failed'))",
+    "kind": "mock",
+    "line": 76
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_debian_default_java_symlink_wins"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p == '/usr/lib/jvm/default-java')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/lib/jvm/default-java')",
+    "kind": "mock",
+    "line": 86
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_fallback_to_which_java"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p.startswith('/opt/jdk-17'))",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p.startswith('/opt/jdk-17'))",
+    "kind": "mock",
+    "line": 94
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_fallback_to_which_java"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', return_value='/opt/jdk-17/bin/java')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/jdk-17/bin/java')",
+    "kind": "mock",
+    "line": 96
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_returns_none_when_nothing_found"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', return_value=False)",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False)",
+    "kind": "mock",
+    "line": 103
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectJavaHome",
+      "test_returns_none_when_nothing_found"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isfile",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isfile', return_value=False)",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isfile', return_value=False)",
+    "kind": "mock",
+    "line": 105
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectGoroot",
+      "test_from_which_go"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p == '/usr/local/go')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/local/go')",
+    "kind": "mock",
+    "line": 111
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectGoroot",
+      "test_from_which_go"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', return_value='/usr/local/go/bin/go')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/usr/local/go/bin/go')",
+    "kind": "mock",
+    "line": 113
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectDotnetRoot",
+      "test_dirname_of_dotnet_binary"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.realpath', return_value='/usr/share/dotnet/dotnet')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/usr/share/dotnet/dotnet')",
+    "kind": "mock",
+    "line": 124
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectDotnetRoot",
+      "test_dirname_of_dotnet_binary"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p == '/usr/share/dotnet')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/share/dotnet')",
+    "kind": "mock",
+    "line": 125
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_asks_rustup_show_home"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p == '/home/user/.rustup')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/home/user/.rustup')",
+    "kind": "mock",
+    "line": 146
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_fallback_to_home_rustup_when_rustup_not_on_path"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', lambda p: p == '/home/alice/.rustup')",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/home/alice/.rustup')",
+    "kind": "mock",
+    "line": 161
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectRustupHome",
+      "test_returns_none_when_no_rustup_and_no_home_dir"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', return_value=False)",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False)",
+    "kind": "mock",
+    "line": 169
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectorsRegistry",
+      "test_all_detectors_return_optional_str"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isdir",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isdir', return_value=False)",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False)",
+    "kind": "mock",
+    "line": 188
+  },
+  {
+    "file": "core/build/tests/test_toolchain.py",
+    "anchor": [
+      "TestDetectorsRegistry",
+      "test_all_detectors_return_optional_str"
+    ],
+    "owner": "core.build.toolchain",
+    "binding": "os.path",
+    "attribute": "isfile",
+    "receiver": "_mock_owner('core.build.toolchain')",
+    "old": "patch('core.build.toolchain.os.path.isfile', return_value=False)",
+    "new": "mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isfile', return_value=False)",
+    "kind": "mock",
+    "line": 189
+  },
+  {
+    "file": "core/llm/tests/test_bedrock_guards.py",
+    "anchor": [
+      "TestPreflightClassification",
+      "_classify"
+    ],
+    "owner": "core.llm.bedrock_preflight",
+    "binding": "urllib.request",
+    "attribute": "urlopen",
+    "receiver": "pf",
+    "old": "monkeypatch.setattr(pf.urllib.request, 'urlopen', _raise)",
+    "new": "patch_module_attribute(monkeypatch, pf, 'urllib.request', 'urlopen', _raise)",
+    "kind": "monkey",
+    "line": 169
+  },
+  {
+    "file": "core/llm/tests/test_http_pool.py",
+    "anchor": [
+      "TestHttp2Gate",
+      "test_opted_in_with_h2_installed"
+    ],
+    "owner": "core.llm.http_pool",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "http_pool",
+    "old": "monkeypatch.setattr(http_pool.importlib.util, 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "new": "patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "kind": "monkey",
+    "line": 149
+  },
+  {
+    "file": "core/llm/tests/test_http_pool.py",
+    "anchor": [
+      "TestHttp2Gate",
+      "test_opted_in_without_h2_warns_once_and_stays_http1"
+    ],
+    "owner": "core.llm.http_pool",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "http_pool",
+    "old": "monkeypatch.setattr(http_pool.importlib.util, 'find_spec', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: None)",
+    "kind": "monkey",
+    "line": 159
+  },
+  {
+    "file": "core/llm/tests/test_http_pool.py",
+    "anchor": [
+      "TestHttp2Gate",
+      "test_client_construction_honours_gate"
+    ],
+    "owner": "core.llm.http_pool",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "http_pool",
+    "old": "monkeypatch.setattr(http_pool.importlib.util, 'find_spec', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: None)",
+    "kind": "monkey",
+    "line": 172
+  },
+  {
+    "file": "core/llm/tests/test_http_pool.py",
+    "anchor": [
+      "TestUpstreamShardCount",
+      "_force_h2"
+    ],
+    "owner": "core.llm.http_pool",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "http_pool",
+    "old": "monkeypatch.setattr(http_pool.importlib.util, 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "new": "patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "kind": "monkey",
+    "line": 302
+  },
+  {
+    "file": "core/llm/tests/test_http_pool.py",
+    "anchor": [
+      "TestShardLifecycleKnobs",
+      "_force_h2"
+    ],
+    "owner": "core.llm.http_pool",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "http_pool",
+    "old": "monkeypatch.setattr(http_pool.importlib.util, 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "new": "patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)",
+    "kind": "monkey",
+    "line": 508
+  },
+  {
+    "file": "core/sandbox/tests/test_landlock_probe_lifecycle.py",
+    "anchor": [
+      "test_real_probe_child_and_artifacts_are_cleaned"
+    ],
+    "owner": "core.sandbox.landlock",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "landlock",
+    "old": "monkeypatch.setattr(landlock.ctypes.util, 'find_library', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, landlock, 'ctypes.util', 'find_library', lambda name: None)",
+    "kind": "monkey",
+    "line": 267
+  },
+  {
+    "file": "core/sandbox/tests/test_pathpin.py",
+    "anchor": [
+      "TestBindPinnedSource",
+      "test_post_canonicalisation_swap_fails_loudly"
+    ],
+    "owner": "core.sandbox.mount_ns",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "mount_ns",
+    "old": "monkeypatch.setattr(mount_ns.os.path, 'realpath', lambda p, **_kw: pre_swap_answer)",
+    "new": "patch_module_attribute(monkeypatch, mount_ns, 'os.path', 'realpath', lambda p, **_kw: pre_swap_answer)",
+    "kind": "monkey",
+    "line": 154
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_musl_shape_falls_back_to_dlopen_null"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes.util, 'find_library', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)",
+    "kind": "monkey",
+    "line": 131
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_failure_is_cached_never_reprobed"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes.util, 'find_library', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)",
+    "kind": "monkey",
+    "line": 140
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_failure_is_cached_never_reprobed"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes, 'CDLL', _no_dlopen)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes', 'CDLL', _no_dlopen)",
+    "kind": "monkey",
+    "line": 147
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_failure_is_cached_never_reprobed"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes.util, 'find_library', _boom)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', _boom)",
+    "kind": "monkey",
+    "line": 155
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_success_is_cached_never_reprobed"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes.util, 'find_library', _boom)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', _boom)",
+    "kind": "monkey",
+    "line": 165
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_total_failure_warns_parent_side"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes.util, 'find_library', lambda name: None)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)",
+    "kind": "monkey",
+    "line": 173
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestPreexecLibcCache",
+      "test_total_failure_warns_parent_side"
+    ],
+    "owner": "core.sandbox.preexec",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "preexec",
+    "old": "monkeypatch.setattr(preexec.ctypes, 'CDLL', _no_dlopen)",
+    "new": "patch_module_attribute(monkeypatch, preexec, 'ctypes', 'CDLL', _no_dlopen)",
+    "kind": "monkey",
+    "line": 180
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestFingerprintLibcCache",
+      "test_success_cached_lock_free_for_child"
+    ],
+    "owner": "core.sandbox.fingerprint",
+    "binding": "_ctypes_util",
+    "attribute": "find_library",
+    "receiver": "fingerprint",
+    "old": "monkeypatch.setattr(fingerprint._ctypes_util, 'find_library', _boom)",
+    "new": "patch_module_attribute(monkeypatch, fingerprint, '_ctypes_util', 'find_library', _boom)",
+    "kind": "monkey",
+    "line": 196
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestFingerprintLibcCache",
+      "test_failure_cached_raises_without_reprobe"
+    ],
+    "owner": "core.sandbox.fingerprint",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "fingerprint",
+    "old": "monkeypatch.setattr(fingerprint.ctypes, 'CDLL', _raise)",
+    "new": "patch_module_attribute(monkeypatch, fingerprint, 'ctypes', 'CDLL', _raise)",
+    "kind": "monkey",
+    "line": 206
+  },
+  {
+    "file": "core/sandbox/tests/test_prefork_libc_resolution.py",
+    "anchor": [
+      "TestFingerprintLibcCache",
+      "test_failure_cached_raises_without_reprobe"
+    ],
+    "owner": "core.sandbox.fingerprint",
+    "binding": "_ctypes_util",
+    "attribute": "find_library",
+    "receiver": "fingerprint",
+    "old": "monkeypatch.setattr(fingerprint._ctypes_util, 'find_library', _boom)",
+    "new": "patch_module_attribute(monkeypatch, fingerprint, '_ctypes_util', 'find_library', _boom)",
+    "kind": "monkey",
+    "line": 215
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "_probe"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes.util, 'find_library', lambda name: libname)",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: libname)",
+    "kind": "monkey",
+    "line": 79
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "test_probe_reports_unavailable_on_load_failure"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes.util, 'find_library', lambda name: 'seccomp')",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: 'seccomp')",
+    "kind": "monkey",
+    "line": 100
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "test_probe_reports_unavailable_on_load_failure"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes, 'CDLL', mock.Mock(side_effect=OSError('bad build')))",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(side_effect=OSError('bad build')))",
+    "kind": "monkey",
+    "line": 102
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "test_probe_success_caches_the_library_handle"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes.util",
+    "attribute": "find_library",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes.util, 'find_library', lambda name: 'seccomp')",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: 'seccomp')",
+    "kind": "monkey",
+    "line": 128
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "test_probe_success_caches_the_library_handle"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes, 'CDLL', mock.Mock(return_value=lib))",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(return_value=lib))",
+    "kind": "monkey",
+    "line": 130
+  },
+  {
+    "file": "core/sandbox/tests/test_seccomp_policy_pins.py",
+    "anchor": [
+      "_probe"
+    ],
+    "owner": "core.sandbox.seccomp",
+    "binding": "ctypes",
+    "attribute": "CDLL",
+    "receiver": "sc",
+    "old": "monkeypatch.setattr(ctypes, 'CDLL', mock.Mock(return_value=lib))",
+    "new": "patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(return_value=lib))",
+    "kind": "monkey",
+    "line": 82
+  },
+  {
+    "file": "core/startup/tests/test_check_tools.py",
+    "anchor": [
+      "_run_check_tools"
+    ],
+    "owner": "core.startup.init",
+    "binding": "importlib.util",
+    "attribute": "find_spec",
+    "receiver": "_mock_owner('core.startup.init')",
+    "old": "mock.patch('core.startup.init.importlib.util.find_spec', return_value=object() if module_present else None)",
+    "new": "mock_module_attribute(_mock_owner('core.startup.init'), 'importlib.util', 'find_spec', return_value=object() if module_present else None)",
+    "kind": "mock",
+    "line": 135
+  },
+  {
+    "file": "packages/exploit_feasibility/tests/test_bugfixes.py",
+    "anchor": [
+      "TestReadSysctlPathTraversal",
+      "test_escaping_realpath_returns_default"
+    ],
+    "owner": "packages.exploit_feasibility.analyzer",
+    "binding": "os.path",
+    "attribute": "realpath",
+    "receiver": "_mock_owner('packages.exploit_feasibility.analyzer')",
+    "old": "patch('packages.exploit_feasibility.analyzer.os.path.realpath', return_value=str(decoy))",
+    "new": "mock_module_attribute(_mock_owner('packages.exploit_feasibility.analyzer'), 'os.path', 'realpath', return_value=str(decoy))",
+    "kind": "mock",
+    "line": 229
+  },
+  {
+    "file": "packages/frida/tests/test_probe_import_hygiene.py",
+    "anchor": [
+      "test_cli_interpreter_discovery_supports_linux_and_macos_paths"
+    ],
+    "owner": "packages.frida.sandboxed",
+    "binding": "os.path",
+    "attribute": "isfile",
+    "receiver": "sandboxed",
+    "old": "monkeypatch.setattr(sandboxed.os.path, 'isfile', lambda path: path == interpreter)",
+    "new": "patch_module_attribute(monkeypatch, sandboxed, 'os.path', 'isfile', lambda path: path == interpreter)",
+    "kind": "monkey",
+    "line": 92
+  },
+  {
+    "file": "packages/joern/tests/test_graph_artifacts.py",
+    "anchor": [
+      "test_unset_macos_temp_uses_private_os_directory"
+    ],
+    "owner": "packages.joern.client",
+    "binding": "os.sys",
+    "attribute": "platform",
+    "receiver": "client",
+    "old": "monkeypatch.setattr(client.os.sys, 'platform', 'darwin')",
+    "new": "patch_module_attribute(monkeypatch, client, 'os.sys', 'platform', 'darwin')",
+    "kind": "monkey",
+    "line": 109
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_stress_timeout_retry.py",
+    "anchor": [
+      "recording_executor"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "ThreadPoolExecutor",
+    "receiver": "stress_mod",
+    "old": "monkeypatch.setattr(stress_mod.concurrent.futures, 'ThreadPoolExecutor', RecordingExecutor)",
+    "new": "patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'ThreadPoolExecutor', RecordingExecutor)",
+    "kind": "monkey",
+    "line": 107
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_stress_timeout_retry.py",
+    "anchor": [
+      "test_orphan_still_running_skips_retry_and_keeps_error"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "ThreadPoolExecutor",
+    "receiver": "stress_mod",
+    "old": "monkeypatch.setattr(stress_mod.concurrent.futures, 'ThreadPoolExecutor', lambda **kwargs: executor)",
+    "new": "patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'ThreadPoolExecutor', lambda **kwargs: executor)",
+    "kind": "monkey",
+    "line": 206
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_stress_timeout_retry.py",
+    "anchor": [
+      "test_orphan_still_running_skips_retry_and_keeps_error"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "wait",
+    "receiver": "stress_mod",
+    "old": "monkeypatch.setattr(stress_mod.concurrent.futures, 'wait', poll)",
+    "new": "patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'wait', poll)",
+    "kind": "monkey",
+    "line": 225
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_workspace_lifecycle.py",
+    "anchor": [
+      "test_timed_out_retry_keeps_ephemeral_root"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "ThreadPoolExecutor",
+    "receiver": "stress",
+    "old": "patch.setattr(stress.concurrent.futures, 'ThreadPoolExecutor', ObservedExecutor)",
+    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', ObservedExecutor)",
+    "kind": "monkey",
+    "line": 333
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_workspace_lifecycle.py",
+    "anchor": [
+      "test_heartbeat_join_failure_keeps_driver_error"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "ThreadPoolExecutor",
+    "receiver": "stress",
+    "old": "patch.setattr(stress.concurrent.futures, 'ThreadPoolExecutor', fail)",
+    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', fail)",
+    "kind": "monkey",
+    "line": 369
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_workspace_lifecycle.py",
+    "anchor": [
+      "test_live_abandoned_worker_keeps_root_until_exit"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "wait",
+    "receiver": "stress",
+    "old": "patch.setattr(stress.concurrent.futures, 'wait', stop_driver)",
+    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', stop_driver)",
+    "kind": "monkey",
+    "line": 162
+  },
+  {
+    "file": "packages/sca/calibration/tests/test_workspace_lifecycle.py",
+    "anchor": [
+      "test_ephemeral_setup_failure_cleans_root"
+    ],
+    "owner": "packages.sca.calibration.stress",
+    "binding": "concurrent.futures",
+    "attribute": "ThreadPoolExecutor",
+    "receiver": "stress",
+    "old": "patch.setattr(stress.concurrent.futures, 'ThreadPoolExecutor', fail)",
+    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', fail)",
+    "kind": "monkey",
+    "line": 197
+  }
+]

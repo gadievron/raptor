@@ -6,6 +6,9 @@ network, no spend).
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import json
 import urllib.error
 
@@ -166,7 +169,7 @@ class TestPreflightClassification:
                 "https://bedrock-stub.test/x", code, "err", headers,
                 __import__("io").BytesIO(body),
             )
-        monkeypatch.setattr(pf.urllib.request, "urlopen", _raise)
+        patch_module_attribute(monkeypatch, pf, 'urllib.request', 'urlopen', _raise)
         return pf._probe_one(CredentialStore(), _mc())
 
     def test_403_is_entitlement_warning(self, monkeypatch):

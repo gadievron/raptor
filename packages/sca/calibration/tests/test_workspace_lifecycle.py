@@ -1,5 +1,8 @@
 """Own ephemeral calibration roots through queued, abandoned and retry work."""
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import concurrent.futures
 import logging
 import subprocess
@@ -159,7 +162,7 @@ def test_live_abandoned_worker_keeps_root_until_exit(owned, interrupt, worker_er
                 def stop_driver(*args, **kwargs):
                     assert started.wait(5)
                     raise KeyboardInterrupt("driver interrupted")
-                patch.setattr(stress.concurrent.futures, "wait", stop_driver)
+                patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', stop_driver)
             try:
                 if interrupt:
                     with pytest.raises(KeyboardInterrupt, match="driver interrupted"):
@@ -194,7 +197,7 @@ def test_ephemeral_setup_failure_cleans_root(owned, monkeypatch, failure, error)
         with pytest.MonkeyPatch.context() as patch:
             with isolated_stress_workers(stress, patch):
                 if failure == "executor":
-                    patch.setattr(stress.concurrent.futures, "ThreadPoolExecutor", fail)
+                    patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', fail)
                 else:
                     class FailedThread(stress.threading.Thread):
                         def start(self):
@@ -330,7 +333,7 @@ def test_timed_out_retry_keeps_ephemeral_root(owned, error):
                         future.add_done_callback(lambda future: first_done.set())
                     return future
 
-            patch.setattr(stress.concurrent.futures, "ThreadPoolExecutor", ObservedExecutor)
+            patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', ObservedExecutor)
             patch.setattr(stress, "_scan_one_inner", scan)
             original_started_at = stress._scan_started_at
             # The coordinator waits for the orphan's completion callback. It
@@ -366,6 +369,6 @@ def test_heartbeat_join_failure_keeps_driver_error(owned, error):
                 raise RuntimeError("primary executor failure")
 
             patch.setattr(stress.threading, "Thread", InterruptedJoin)
-            patch.setattr(stress.concurrent.futures, "ThreadPoolExecutor", fail)
+            patch_module_attribute(patch, stress, 'concurrent.futures', 'ThreadPoolExecutor', fail)
             with pytest.raises(RuntimeError, match="primary executor failure"):
                 stress.run_stress_sweep(samples=[])

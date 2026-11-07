@@ -11,6 +11,9 @@ parent-side miss never triggers a child-side re-probe.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import ast
 import inspect
 import sys as _sys
@@ -128,23 +131,19 @@ class TestPreexecLibcCache:
         # dlopen(NULL) must rescue the lane instead of silently
         # disabling pdeathsig and the reaper/subreaper split.
         monkeypatch.setattr(preexec, "_libc", None)
-        monkeypatch.setattr(
-            preexec.ctypes.util, "find_library", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)
         libc = preexec._get_libc()
         assert libc is not None
         assert hasattr(libc, "prctl")
 
     def test_failure_is_cached_never_reprobed(self, monkeypatch):
         monkeypatch.setattr(preexec, "_libc", None)
-        monkeypatch.setattr(
-            preexec.ctypes.util, "find_library", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)
 
         def _no_dlopen(*a, **kw):
             raise OSError("dlopen unavailable")
 
-        monkeypatch.setattr(preexec.ctypes, "CDLL", _no_dlopen)
+        patch_module_attribute(monkeypatch, preexec, 'ctypes', 'CDLL', _no_dlopen)
         assert preexec._get_libc() is None
         assert preexec._libc is preexec._LIBC_UNAVAILABLE
 
@@ -152,7 +151,7 @@ class TestPreexecLibcCache:
             raise AssertionError("post-failure re-probe: find_library "
                                  "ran again (would be post-fork in prod)")
 
-        monkeypatch.setattr(preexec.ctypes.util, "find_library", _boom)
+        patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', _boom)
         assert preexec._get_libc() is None
 
     def test_success_is_cached_never_reprobed(self, monkeypatch):
@@ -162,7 +161,7 @@ class TestPreexecLibcCache:
         def _boom(name):
             raise AssertionError("re-probe after successful resolve")
 
-        monkeypatch.setattr(preexec.ctypes.util, "find_library", _boom)
+        patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', _boom)
         assert preexec._get_libc() is not None
 
     def test_total_failure_warns_parent_side(self, monkeypatch, caplog):
@@ -170,14 +169,12 @@ class TestPreexecLibcCache:
         # silent None turns off pdeathsig + the reaper split for every
         # subsequent spawn in the process.
         monkeypatch.setattr(preexec, "_libc", None)
-        monkeypatch.setattr(
-            preexec.ctypes.util, "find_library", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, preexec, 'ctypes.util', 'find_library', lambda name: None)
 
         def _no_dlopen(*a, **kw):
             raise OSError("dlopen unavailable")
 
-        monkeypatch.setattr(preexec.ctypes, "CDLL", _no_dlopen)
+        patch_module_attribute(monkeypatch, preexec, 'ctypes', 'CDLL', _no_dlopen)
         with caplog.at_level("WARNING", logger=preexec.__name__):
             assert preexec._get_libc() is None
         assert any("pdeathsig" in r.message for r in caplog.records)
@@ -193,7 +190,7 @@ class TestFingerprintLibcCache:
         def _boom(name):
             raise AssertionError("re-probe after successful resolve")
 
-        monkeypatch.setattr(fingerprint._ctypes_util, "find_library", _boom)
+        patch_module_attribute(monkeypatch, fingerprint, '_ctypes_util', 'find_library', _boom)
         assert fingerprint._get_libc() is not None
 
     def test_failure_cached_raises_without_reprobe(self, monkeypatch):
@@ -203,7 +200,7 @@ class TestFingerprintLibcCache:
         def _raise(name, use_errno=False):
             raise OSError("simulated missing libc")
 
-        monkeypatch.setattr(fingerprint.ctypes, "CDLL", _raise)
+        patch_module_attribute(monkeypatch, fingerprint, 'ctypes', 'CDLL', _raise)
         with pytest.raises(OSError):
             fingerprint._get_libc()
         assert fingerprint._libc_error is not None
@@ -212,7 +209,7 @@ class TestFingerprintLibcCache:
             raise AssertionError("post-failure re-probe: find_library "
                                  "ran again (would be post-fork in prod)")
 
-        monkeypatch.setattr(fingerprint._ctypes_util, "find_library", _boom)
+        patch_module_attribute(monkeypatch, fingerprint, '_ctypes_util', 'find_library', _boom)
         with pytest.raises(OSError):
             fingerprint._get_libc()
 

@@ -22,16 +22,6 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_os_fault_patches(monkeypatch):
-    """Keep process and path simulations on the module under test."""
-    import core.build.toolchain as consumer
-
-    from types import ModuleType
-
-    path = ModuleType(consumer.os.path.__name__)
-    vars(path).update(vars(consumer.os.path))
-    patch_module_attribute(monkeypatch, consumer, "os", "path", path)
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +45,7 @@ class TestResolveFromWhich(unittest.TestCase):
         # `which java` -> /usr/bin/java, realpath -> /opt/jdk-17/bin/java.
         # Suffix "bin/java" strips to "/opt/jdk-17".
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
-             patch('core.build.toolchain.os.path.realpath', return_value="/opt/jdk-17/bin/java"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/jdk-17/bin/java'):
             self.assertEqual(
                 toolchain._resolve_from_which("java", "bin/java"),
                 "/opt/jdk-17",
@@ -66,14 +56,14 @@ class TestResolveFromWhich(unittest.TestCase):
         # under a JDK layout — real path `/opt/wrapper-script.sh`.
         # We refuse to synthesise a bogus home.
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/bin/java"), \
-             patch('core.build.toolchain.os.path.realpath', return_value="/opt/wrapper-script.sh"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/wrapper-script.sh'):
             self.assertIsNone(
                 toolchain._resolve_from_which("java", "bin/java"),
             )
 
     def test_os_error_returns_none(self):
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
-             patch('core.build.toolchain.os.path.realpath', side_effect=OSError("stat failed")):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', side_effect=OSError('stat failed')):
             self.assertIsNone(
                 toolchain._resolve_from_which("java", "bin/java"),
             )
@@ -83,7 +73,7 @@ class TestDetectJavaHome(unittest.TestCase):
     def test_debian_default_java_symlink_wins(self):
         # Debian/Ubuntu convention: /usr/lib/jvm/default-java is a
         # symlink managed by update-alternatives. We detect it first.
-        with patch('core.build.toolchain.os.path.isdir', lambda p: p == "/usr/lib/jvm/default-java"):
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/lib/jvm/default-java'):
             self.assertEqual(
                 toolchain.detect_JAVA_HOME(),
                 "/usr/lib/jvm/default-java",
@@ -91,26 +81,26 @@ class TestDetectJavaHome(unittest.TestCase):
 
     def test_fallback_to_which_java(self):
         # default-java doesn't exist; fall back to readlink of `which java`.
-        with patch('core.build.toolchain.os.path.isdir', lambda p: p.startswith("/opt/jdk-17")), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p.startswith('/opt/jdk-17')), \
              mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/bin/java"), \
-             patch('core.build.toolchain.os.path.realpath', return_value="/opt/jdk-17/bin/java"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/opt/jdk-17/bin/java'):
             self.assertEqual(
                 toolchain.detect_JAVA_HOME(),
                 "/opt/jdk-17",
             )
 
     def test_returns_none_when_nothing_found(self):
-        with patch('core.build.toolchain.os.path.isdir', return_value=False), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False), \
              mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
-             patch('core.build.toolchain.os.path.isfile', return_value=False):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isfile', return_value=False):
             self.assertIsNone(toolchain.detect_JAVA_HOME())
 
 
 class TestDetectGoroot(unittest.TestCase):
     def test_from_which_go(self):
-        with patch('core.build.toolchain.os.path.isdir', lambda p: p == "/usr/local/go"), \
+        with mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/local/go'), \
              mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/go/bin/go"), \
-             patch('core.build.toolchain.os.path.realpath', return_value="/usr/local/go/bin/go"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/usr/local/go/bin/go'):
             self.assertEqual(toolchain.detect_GOROOT(), "/usr/local/go")
 
     def test_returns_none_when_go_not_on_path(self):
@@ -121,8 +111,8 @@ class TestDetectGoroot(unittest.TestCase):
 class TestDetectDotnetRoot(unittest.TestCase):
     def test_dirname_of_dotnet_binary(self):
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/share/dotnet/dotnet"), \
-             patch('core.build.toolchain.os.path.realpath', return_value="/usr/share/dotnet/dotnet"), \
-             patch('core.build.toolchain.os.path.isdir', lambda p: p == "/usr/share/dotnet"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'realpath', return_value='/usr/share/dotnet/dotnet'), \
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/usr/share/dotnet'):
             self.assertEqual(
                 toolchain.detect_DOTNET_ROOT(),
                 "/usr/share/dotnet",
@@ -143,7 +133,7 @@ class TestDetectRustupHome(unittest.TestCase):
         )
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value="/usr/local/bin/rustup"), \
              patch("core.sandbox.run_trusted", return_value=stub), \
-             patch('core.build.toolchain.os.path.isdir', lambda p: p == "/home/user/.rustup"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/home/user/.rustup'):
             self.assertEqual(
                 toolchain.detect_RUSTUP_HOME(),
                 "/home/user/.rustup",
@@ -158,7 +148,7 @@ class TestDetectRustupHome(unittest.TestCase):
         FakePw = namedtuple("FakePw", ["pw_dir"])
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
              patch("pwd.getpwuid", return_value=FakePw(pw_dir="/home/alice")), \
-             patch('core.build.toolchain.os.path.isdir', lambda p: p == "/home/alice/.rustup"):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', lambda p: p == '/home/alice/.rustup'):
             self.assertEqual(
                 toolchain.detect_RUSTUP_HOME(),
                 "/home/alice/.rustup",
@@ -166,7 +156,7 @@ class TestDetectRustupHome(unittest.TestCase):
 
     def test_returns_none_when_no_rustup_and_no_home_dir(self):
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
-             patch('core.build.toolchain.os.path.isdir', return_value=False):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False):
             # Even with HOME set, if ~/.rustup isn't a real dir, None.
             self.assertIsNone(toolchain.detect_RUSTUP_HOME())
 
@@ -185,8 +175,8 @@ class TestDetectorsRegistry(unittest.TestCase):
         # returning Optional[str]. Exercise with everything mocked to
         # None — verifies the function signatures at minimum.
         with mock_module_attribute(_mock_owner('core.build.toolchain'), 'shutil', 'which', return_value=None), \
-             patch('core.build.toolchain.os.path.isdir', return_value=False), \
-             patch('core.build.toolchain.os.path.isfile', return_value=False):
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isdir', return_value=False), \
+             mock_module_attribute(_mock_owner('core.build.toolchain'), 'os.path', 'isfile', return_value=False):
             for name, fn in toolchain.DETECTORS.items():
                 result = fn()
                 self.assertTrue(
