@@ -25,12 +25,30 @@ env was passed to Popen.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
+import os
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
 
 
 from core.testing.module_bindings import mock_module_attribute
+
+
+_local_imports = ModuleType("spawn_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_spawn_imports(monkeypatch):
+    from core.llm.dispatcher import spawn
+
+    with scoped_function_imports(spawn, ("spawn_worker",), {"os": os}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_local_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture
@@ -55,7 +73,7 @@ def test_spawn_worker_env_none_defaults_to_safe_env(fake_dispatcher):
             captured_env.update(kwargs.get("env") or {})
 
     with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
-            patch("os.close"):
+            mock_module_attribute(_local_imports, "os", "close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
             ["/bin/true"],
@@ -99,7 +117,7 @@ def test_spawn_worker_env_none_preserves_operator_proxy(
             captured_env.update(kwargs.get("env") or {})
 
     with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
-            patch("os.close"):
+            mock_module_attribute(_local_imports, "os", "close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
             ["/bin/true"],
@@ -142,7 +160,7 @@ def test_spawn_worker_env_none_carries_routing_family_not_secrets(
             captured_env.update(kwargs.get("env") or {})
 
     with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
-            patch("os.close"):
+            mock_module_attribute(_local_imports, "os", "close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
             ["/bin/true"],
@@ -177,7 +195,7 @@ def test_spawn_worker_explicit_env_not_overlaid(fake_dispatcher, monkeypatch):
             captured_env.update(kwargs.get("env") or {})
 
     with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
-            patch("os.close"):
+            mock_module_attribute(_local_imports, "os", "close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
             ["/bin/true"],

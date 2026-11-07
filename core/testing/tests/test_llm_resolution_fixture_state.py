@@ -10,6 +10,7 @@ from core.testing.llm_state import isolated_llm_resolution
 
 
 CASES = [
+    ("core.llm.tests.test_bedrock_entry_resolution", "_isolated_env"),
     ("core.llm.tests.test_ollama_primary_resolution", "_isolated_env"),
     ("core.llm.tests.test_transport_route_matrix", "_hermetic_resolution"),
     ("core.llm.tests.test_config_file", "_restore_llm_caches"),
