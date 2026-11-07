@@ -320,6 +320,49 @@ class TestClassifyFlip:
 
 
 class TestCompareRuns:
+    def test_expectation_revision_is_visible_without_verdict_flip(self):
+        a = {"a.c:f": _label_rec("a.c:f", "clean", expected="clean", match=True)}
+        b = {"a.c:f": _label_rec("a.c:f", "clean", expected="finding", match=False)}
+        diff = history.compare_runs(_run_rec("a"), _run_rec("b"), a, b)
+        assert diff["expectation_changes"] == [{
+            "function_id": "a.c:f", "from_recorded": True, "from": "clean",
+            "to_recorded": True, "to": "finding",
+        }]
+        assert diff["flips"] == {}
+        assert diff["common_label_matches"]["matched_a"] == 1
+        assert diff["common_label_matches"]["matched_b"] == 0
+        output = history.format_compare(diff)
+        assert "match deltas may reflect label revisions" in output
+        assert "a.c:f: expected 'clean' -> 'finding'" in output
+
+    def test_missing_expectation_is_distinct_from_explicit_null(self):
+        a = _label_rec("a.c:f", "clean")
+        del a["expected"]
+        b = {**a, "expected": None}
+        diff = history.compare_runs(_run_rec("a"), _run_rec("b"), {"a.c:f": a}, {"a.c:f": b})
+        assert diff["expectation_changes"] == [{
+            "function_id": "a.c:f", "from_recorded": False, "from": None,
+            "to_recorded": True, "to": None,
+        }]
+        assert "expected (unrecorded) -> None" in history.format_compare(diff)
+
+    def test_expectation_details_escape_terminal_output_and_preserve_recorded_values(self):
+        fid = "function\x1b[31m"
+        a = {fid: _label_rec(fid, "clean", expected="clean\x1b[31m")}
+        b = {fid: _label_rec(fid, "clean", expected="finding")}
+        diff = history.compare_runs(_run_rec("a"), _run_rec("b"), a, b)
+        assert diff["expectation_changes"][0]["from"] == "clean\x1b[31m"
+        assert diff["expectation_changes"][0]["function_id"] == fid
+        assert "\x1b" not in history.format_compare(diff)
+
+    def test_legacy_comparison_without_expectation_changes_still_formats(self):
+        run = _run_rec("a")
+        labels = {"a.c:f": _label_rec("a.c:f", "clean")}
+        diff = history.compare_runs(run, run, labels, labels)
+        assert diff["expectation_changes"] == []
+        del diff["expectation_changes"]
+        assert "recorded label expectations differ" not in history.format_compare(diff)
+
     def test_configuration_changes_preserve_nulls_and_do_not_change_flips(self):
         config_a = {"mode": "security", "llm_cache_policy": {"enabled": True, "ttl_seconds": None}}
         config_b = {"mode": "quality", "llm_cache_policy": {"enabled": True, "ttl_seconds": 120},

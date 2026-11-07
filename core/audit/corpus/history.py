@@ -38,6 +38,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import load_json, loads
 from core.json.jsonl import append_jsonl
+from core.security.log_sanitisation import sanitise_for_terminal
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -533,8 +534,15 @@ def compare_runs(
     common = sorted(set(labels_a) & set(labels_b))
     flips: dict[str, list[dict[str, Any]]] = {}
     attribution_changes: list[dict[str, Any]] = []
+    expectation_changes: list[dict[str, Any]] = []
     for fid in common:
         a, b = labels_a[fid], labels_b[fid]
+        if ("expected" in a, a.get("expected")) != ("expected" in b, b.get("expected")):
+            expectation_changes.append({
+                "function_id": fid,
+                "from_recorded": "expected" in a, "from": a.get("expected"),
+                "to_recorded": "expected" in b, "to": b.get("expected"),
+            })
         if a.get("actual") != b.get("actual"):
             flips.setdefault(classify_flip(a, b), []).append({
                 "function_id": fid,
@@ -595,6 +603,7 @@ def compare_runs(
         "cost_b": cost_b,
         "cost_delta": cost_b - cost_a,
         "configuration_changes": configuration_changes,
+        "expectation_changes": expectation_changes,
     }
 
 
@@ -634,13 +643,18 @@ def format_compare(diff: dict[str, Any]) -> str:
         lines.append(f"  Profiles: {prof_a} -> {prof_b}{note}")
     configuration_changes = diff.get("configuration_changes", [])
     if configuration_changes:
-        from core.security.log_sanitisation import sanitise_for_terminal
-
         lines.append("  NOTE: recorded configuration differs; verdict changes alone do not isolate fix impact.")
         for change in configuration_changes:
             before = repr(change["from"]) if change["from_recorded"] else "(unrecorded)"
             after = repr(change["to"]) if change["to_recorded"] else "(unrecorded)"
             lines.append(sanitise_for_terminal(f"    {change['field']}: {before} -> {after}"))
+    expectation_changes = diff.get("expectation_changes", [])
+    if expectation_changes:
+        lines.append("  NOTE: recorded label expectations differ; match deltas may reflect label revisions.")
+        for change in expectation_changes:
+            before = repr(change["from"]) if change["from_recorded"] else "(unrecorded)"
+            after = repr(change["to"]) if change["to_recorded"] else "(unrecorded)"
+            lines.append(sanitise_for_terminal(f"    {change['function_id']}: expected {before} -> {after}"))
     lines.append(
         f"  Labels: {diff['common']} common"
         + (f", {len(diff['only_in_a'])} only in {a.get('run_id')}"
