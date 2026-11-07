@@ -155,6 +155,7 @@ from core.smt_solver.call_arguments import find_call_end, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
+from core.smt_solver.witness import format_vars as _format_vars
 from core.smt_solver.session import check_solver, solver_reason_unknown
 
 
@@ -203,6 +204,10 @@ class PathSMTResult:
     Its model and reduced predicate describe only the encoded subset and
     remain diagnostic. UNSAT of a sound weakening can still refute the
     complete conjunction, subject to the mutation/provenance checks.
+
+    Registered model keys evaluate their bound expressions in the solved
+    assignment. Other native declaration values remain diagnostic; they
+    cannot override or fill an unevaluated registered identity.
 
     ``unknown`` keeps the original list-of-strings form for callers that
     only care which texts were dropped.  ``unknown_reasons`` carries the
@@ -1349,7 +1354,18 @@ def _solve_pending(
     result = tracked.check()
 
     if result == z3.sat:
-        model_dict = _format_witness(solver.model(), signed=profile.signed)
+        model = solver.model()
+        model_dict = _format_witness(model, signed=profile.signed)
+        if vars_ is not None:
+            # Native declaration names (including generated display aliases)
+            # do not establish source identity. Reserve every registry key,
+            # even lazy/unassigned ones, before inserting evaluated bindings.
+            for name in vars_:
+                model_dict.pop(name, None)
+            model_dict.update(_format_vars(
+                model, {name: value for name, value in vars_.items() if value is not None},
+                signed=profile.signed,
+            ))
         # Optional implication-reduced constraint summary. Its fresh solver
         # cannot change the primary verdict, but still consumes worker time.
         wp_predicate: str | None = None
@@ -1637,6 +1653,7 @@ def check_verb_feasibility(
         list(intrinsic) + batch.pending, solver,
         batch.satisfied, batch.unknown, batch.rejections,
         profile=profile, anon_map={**operand_model.anon_var_map, **batch.anon_map},
+        vars_=vars_,
         axioms=operand_axioms + batch.axioms,
         pending_call_terms=[*([None] * len(intrinsic)), *batch.pending_call_terms],
         pending_epochs=[*([None] * len(intrinsic)), *batch.pending_epochs],
