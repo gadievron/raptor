@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox import _macos_spawn
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.mark.darwin_native
@@ -1242,7 +1243,7 @@ def test_xcrun_probe_rejects_untrusted_results(monkeypatch, output):
         assert kwargs['cwd'] == '/'
         assert kwargs['env'] == {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
         return SimpleNamespace(returncode=0, stdout=output)
-    monkeypatch.setattr(subprocess, 'run', run)
+    patch_module_attribute(monkeypatch, _macos_spawn, 'subprocess', 'run', run)
     assert _macos_spawn._xcrun_path('--find', 'clang') is None
 
 
@@ -1250,13 +1251,16 @@ def test_xcrun_keeps_cpp_driver_spelling(monkeypatch):
     from types import SimpleNamespace
     cpp = '/Library/Developer/CommandLineTools/usr/bin/clang++'
     clang = '/Library/Developer/CommandLineTools/usr/bin/clang'
-    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw:
+    patch_module_attribute(monkeypatch, _macos_spawn, 'subprocess', 'run', lambda *a, **kw:
                         SimpleNamespace(returncode=0, stdout=cpp + '\n'))
     monkeypatch.setattr(_macos_spawn.seatbelt, '_developer_toolchain_read_dirs',
                         lambda: ('/Library/Developer/CommandLineTools',))
-    monkeypatch.setattr(os.path, 'realpath', lambda p: clang if p == cpp else p)
-    monkeypatch.setattr(os.path, 'isdir', lambda p: True)
-    monkeypatch.setattr(os.path, 'exists', lambda p: True)
+    private_os = patch_module_attribute(
+        monkeypatch, _macos_spawn, "os", "__name__", os.__name__,
+    )
+    patch_module_attribute(monkeypatch, private_os, "path", 'realpath', lambda p: clang if p == cpp else p)
+    patch_module_attribute(monkeypatch, private_os, "path", 'isdir', lambda p: True)
+    patch_module_attribute(monkeypatch, private_os, "path", 'exists', lambda p: True)
     assert _macos_spawn._xcrun_path('--find', 'clang++') == cpp
 
 
@@ -1283,8 +1287,11 @@ def test_cold_xcrun_query_has_bounded_startup_headroom(monkeypatch):
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         assert kwargs["timeout"] <= 30
         return SimpleNamespace(returncode=0, stdout=compiler)
-    monkeypatch.setattr(subprocess, "run", run)
+    patch_module_attribute(monkeypatch, _macos_spawn, "subprocess", "run", run)
     monkeypatch.setattr(_macos_spawn.seatbelt, "_developer_toolchain_read_dirs", lambda: ("/Library/Developer/CommandLineTools",))
-    monkeypatch.setattr(os.path, "isdir", lambda p: True)
-    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    private_os = patch_module_attribute(
+        monkeypatch, _macos_spawn, "os", "__name__", os.__name__,
+    )
+    patch_module_attribute(monkeypatch, private_os, "path", "isdir", lambda p: True)
+    patch_module_attribute(monkeypatch, private_os, "path", "exists", lambda p: True)
     assert _macos_spawn._xcrun_path("--find", "clang") == compiler
