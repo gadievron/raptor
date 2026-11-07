@@ -3,6 +3,8 @@ import threading
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import context
 
 
@@ -33,13 +35,14 @@ def test_early_failures_release_lock(tmp_path, monkeypatch, failure, stage):
                     return fail()
                 return realpath(path, *args, **kwargs)
 
-            scoped.setattr(context.os.path, 'realpath', canonicalize)
+            patch_module_attribute(scoped, context, "os", "__name__", context.os.__name__)
+            patch_module_attribute(scoped, context.os, "path", 'realpath', canonicalize)
         elif stage == 'open':
-            scoped.setattr(context.os, 'open', fail)
+            patch_module_attribute(scoped, context, 'os', 'open', fail)
         else:
             def refused(*args, **kwargs):
                 raise OSError('open refused')
-            scoped.setattr(context.os, 'open', refused)
+            patch_module_attribute(scoped, context, 'os', 'open', refused)
             scoped.setattr(context, '_read_proxy_count_sidecar', fail)
         with pytest.raises(failure, match='injected early exit'):
             context._persist_proxy_events([{'host': 'example.test'}], output=tmp_path)
@@ -57,7 +60,7 @@ def test_open_failure_releases_lock_on_normal_return(tmp_path, monkeypatch):
     def refused(*args, **kwargs):
         raise OSError('open refused')
 
-    monkeypatch.setattr(context.os, 'open', refused)
+    patch_module_attribute(monkeypatch, context, 'os', 'open', refused)
     monkeypatch.setattr(context, '_read_proxy_count_sidecar', lambda *a: (0, set(), False))
     seen = []
     monkeypatch.setattr(context, '_write_proxy_count_sidecar', lambda *a: seen.append(a))

@@ -6,6 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import preexec, state
 from core.security import capped_read
 
@@ -36,7 +38,7 @@ class TestLimitsConfigIO:
             replaced.append(True)
             return metadata
 
-        monkeypatch.setattr(capped_read.os, "fstat", replace_after_stat)
+        patch_module_attribute(monkeypatch, capped_read, 'os', "fstat", replace_after_stat)
         assert preexec._load_user_limits() == {"memory_mb": 128}
         assert replaced == [True]
         assert self.path.is_dir()
@@ -51,7 +53,7 @@ class TestLimitsConfigIO:
                 stream.write(b" " * (64 * 1024))
             return metadata
 
-        monkeypatch.setattr(capped_read.os, "fstat", grow)
+        patch_module_attribute(monkeypatch, capped_read, 'os', "fstat", grow)
         assert preexec._load_user_limits() == {}
         assert not math.isinf(state._user_limits_cache_decided_at)
 
@@ -59,7 +61,7 @@ class TestLimitsConfigIO:
     def test_decoder_errors_fall_back_and_remain_retryable(self, monkeypatch, failure_type):
         self.path.write_text('{"memory_mb": 128}')
         with monkeypatch.context() as patch:
-            patch.setattr(preexec.json, "loads", Mock(side_effect=failure_type("bad JSON")))
+            patch_module_attribute(patch, preexec, 'json', "loads", Mock(side_effect=failure_type("bad JSON")))
             assert preexec._load_user_limits() == {}
         assert not math.isinf(state._user_limits_cache_decided_at)
         state._user_limits_cache_decided_at = 0.0
@@ -68,13 +70,13 @@ class TestLimitsConfigIO:
     def test_oversized_config_is_rejected_before_json_parsing(self, monkeypatch):
         self.path.write_bytes(b" " * (64 * 1024 + 1))
         loads = Mock(side_effect=AssertionError("oversized config must not be parsed"))
-        monkeypatch.setattr(preexec.json, "loads", loads)
+        patch_module_attribute(monkeypatch, preexec, 'json', "loads", loads)
         assert preexec._load_user_limits() == {}
         loads.assert_not_called()
 
     def test_stat_failure_falls_back(self, monkeypatch):
         self.path.write_text('{"memory_mb": 128}')
-        monkeypatch.setattr(capped_read.os, "fstat", Mock(side_effect=OSError("stat failed")))
+        patch_module_attribute(monkeypatch, capped_read, 'os', "fstat", Mock(side_effect=OSError("stat failed")))
         assert preexec._load_user_limits() == {}
 
     def test_missing_config_is_silent(self, caplog):

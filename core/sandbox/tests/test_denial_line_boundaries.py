@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import summary
 
 
@@ -10,8 +12,7 @@ from core.sandbox import summary
 def capture_summary(monkeypatch):
     captured = {}
     monkeypatch.setattr(summary, 'reassert_audit_degraded', lambda run: False)
-    monkeypatch.setattr(summary._evidence, 'resolve_read_path',
-                        lambda run, name: run / name)
+    patch_module_attribute(monkeypatch, summary, '_evidence', 'resolve_read_path', lambda run, name: run / name)
     monkeypatch.setattr(summary, '_evidence_handle', None)
 
     def assemble(run, **kwargs):
@@ -58,7 +59,7 @@ def test_growth_past_read_bound_remains_flagged(tmp_path, capture_summary, monke
     (tmp_path / summary.DENIALS_FILE).write_bytes(b'{}\n')
     monkeypatch.setattr(summary, '_MAX_DENIALS_BYTES', 4)
     chunks = iter([b'{}\n', b'{}\n'])
-    monkeypatch.setattr(summary.os, 'read', lambda fd, count: next(chunks))
+    patch_module_attribute(monkeypatch, summary, 'os', 'read', lambda fd, count: next(chunks))
     summary.summarize_and_write(tmp_path)
     assert capture_summary['records'] == []
     assert capture_summary['planted_object'] == 'grew past the size bound mid-read'

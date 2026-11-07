@@ -6,6 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 from core.sandbox import observe_profile as observe
 from core.security import capped_read
 
@@ -30,7 +32,7 @@ def test_growth_past_cap_refuses_the_entire_log(tmp_path, monkeypatch, caplog):
             output.write(line("/last") + b"\n")
         return metadata
 
-    monkeypatch.setattr(capped_read.os, "fstat", grow)
+    patch_module_attribute(monkeypatch, capped_read, 'os', "fstat", grow)
     assert observe.parse_observe_log(tmp_path).paths_read == []
     assert "growing artifact" in caplog.text
 
@@ -61,6 +63,6 @@ def test_oversized_log_is_refused_before_json_decoding(tmp_path, monkeypatch):
     monkeypatch.setattr(observe, "_MAX_OBSERVE_BYTES", 64)
     (tmp_path / observe.OBSERVE_FILENAME).write_bytes(b"x" * 65)
     loads = Mock(side_effect=AssertionError("oversized input must not be parsed"))
-    monkeypatch.setattr(observe.json, "loads", loads)
+    patch_module_attribute(monkeypatch, observe, 'json', "loads", loads)
     assert observe.parse_observe_log(tmp_path).paths_read == []
     loads.assert_not_called()
