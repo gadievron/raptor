@@ -758,7 +758,7 @@ class _LauncherMixin:
         if self._projectless_cases is None:
             # Direct unittest-method callers retain independently owned state.
             directory = TemporaryDirectory()
-            self.addCleanup(directory.cleanup)
+            unittest.TestCase.addCleanup(self, directory.cleanup)
             return self._launch_projectless_at(Path(directory.name))
         root, cases = self._projectless_cases
         if "projectless" not in cases:
