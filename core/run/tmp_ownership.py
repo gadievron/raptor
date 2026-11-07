@@ -39,7 +39,7 @@ from core.atomic_fs import rmtree_hardened, write_text_atomically
 
 # Import-light (stdlib-only at module level) — shares the reaper's
 # in-use probes so both sweeps judge liveness the same way.
-from core.run.tmp_reaper import _dir_in_use, _live_cwds
+from core.run.tmp_reaper import _dir_in_use, _live_cwds, _pid_alive, _recent_activity
 
 logger = logging.getLogger(__name__)
 
@@ -133,22 +133,6 @@ def _owner_pid(marker: Path) -> int | None:
     return None
 
 
-def _pid_alive(pid: int) -> bool:
-    """Plain existence probe — the owners here are ordinary Python
-    processes, so :func:`core.run.metadata._pid_alive`'s
-    ``comm == claude`` cross-check would misread every one of them as
-    dead. Residual pid-reuse risk fails safe: a reused pid keeps a
-    stale dir until the age-based reaper claims it.
-    """
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists, owned by another user
-    return True
-
-
 def sweep_dead_owner_dirs(
     prefix: str,
     *,
@@ -158,11 +142,19 @@ def sweep_dead_owner_dirs(
     """Remove ``<tempdir>/<prefix>*`` dirs whose owner is dead.
 
     ``exclude`` names a dir that must survive regardless (the one the
-    caller is creating right now). Returns the removed paths. Never
+    caller is creating right now). Prefixes must be ASCII basename labels
+    ending in '-' or '_', at least three characters long; the legacy grace
+    must be finite and positive. Returns the removed paths. Never
     raises — a sweep failure must never block a component boot.
     """
     try:
-        if not math.isfinite(legacy_max_age_s):
+        # A sweep prefix is a delimited basename, never a path or an empty
+        # match-all selector. Invalid policy inputs must permit no deletion.
+        if (not isinstance(prefix, str) or len(prefix) < 3
+                or not prefix.endswith(("-", "_"))
+                or not all(char.isascii() and (char.isalnum() or char in ".-_") for char in prefix)
+                or isinstance(legacy_max_age_s, bool)
+                or not math.isfinite(legacy_max_age_s) or legacy_max_age_s <= 0):
             return []
         return _sweep(prefix, exclude, legacy_max_age_s)
     except Exception:  # noqa: BLE001 — best-effort by contract
@@ -186,72 +178,61 @@ def _sweep(
     cwd_probe_done = False
 
     for name in names:
-        if not name.startswith(prefix):
+        if not name.startswith(prefix) or name == prefix:
             continue
         path = tmp_root / name
         try:
             st = path.lstat()
-        except OSError:
-            continue
-        if not stat.S_ISDIR(st.st_mode):
-            continue  # symlink or file squatting on the prefix
-        if st.st_uid != euid:
-            continue
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
-        # Containment: only entries that genuinely live directly under
-        # the temp dir are eligible — anything resolving elsewhere
-        # (mount tricks, a relocated tempdir) is left alone.
-        if resolved.parent != tmp_root:
-            continue
-        if excluded is not None and resolved == excluded:
-            continue
-
-        pid = _owner_pid(path / OWNER_MARKER_NAME)
-        if pid is not None:
-            if _pid_alive(pid):
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != euid:
                 continue
-        # Marker-less dirs get an age gate instead of pid liveness.
-        # Both directions matter: no gate could race a sibling process
-        # between its mkdtemp and its marker write (a milliseconds
-        # window, but real), while a gate longer than the age-based
-        # reaper's floor would make this sweep pointless for legacy
-        # dirs. 24 h covers pre-marker legacy dirs at the reaper's own
-        # floor and dwarfs the marker-write window.
-        elif now - st.st_mtime < legacy_max_age_s:
-            continue
+            resolved = path.resolve()
+            if resolved.parent != tmp_root or resolved == excluded:
+                continue
 
-        # In-use probes (live cwd references, answering sockets) guard
-        # dirs whose real user outlives the marker pid: a Joern JVM in
-        # its own session survives its dead Python parent with the
-        # workspace as cwd, and a marker-less dispatcher dir may hold
-        # a socket a live process still answers on.
-        if not cwd_probe_done:
-            live_cwds = _live_cwds()
-            cwd_probe_done = True
-        if _dir_in_use(path, live_cwds):
-            continue
+            pid = _owner_pid(path / OWNER_MARKER_NAME)
+            if pid is not None:
+                # Shared liveness keeps unknown/overflowing pids and refuses
+                # cross-namespace verdicts instead of treating ESRCH as death.
+                if _pid_alive(pid):
+                    continue
+            elif now - st.st_mtime < legacy_max_age_s:
+                continue
 
-        # Validation-to-delete identity pin (same as tmp_reaper): a
-        # same-uid writer swapping a different entry — or a symlink —
-        # into this name between the checks above and the rmtree is
-        # skipped this sweep.
-        try:
-            st2 = path.lstat()
+            if not cwd_probe_done:
+                live_cwds = _live_cwds()
+                cwd_probe_done = True
+            if _dir_in_use(path, live_cwds):
+                continue
+            if pid is None and _recent_activity(path, time.time(), legacy_max_age_s):
+                continue
+
+            current = path.lstat()
+            if ((current.st_dev, current.st_ino) != (st.st_dev, st.st_ino)
+                    or not stat.S_ISDIR(current.st_mode)
+                    or current.st_uid != euid):
+                continue
+            # A legacy directory may have been stamped or refreshed while
+            # its socket/cwd probes ran. A dead owner's directory can also
+            # transfer to a new owner without changing its inode.
+            current_pid = _owner_pid(path / OWNER_MARKER_NAME)
+            if current_pid != pid:
+                continue
+            if pid is None:
+                if time.time() - current.st_mtime < legacy_max_age_s:
+                    continue
+            elif _pid_alive(pid):
+                continue
+
+            if not rmtree_hardened(path):
+                continue
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                removed.append(path)
         except OSError:
+            # Retain completed receipts and try the remaining siblings.
+            logger.debug("dead-owner sweep could not reclaim %s", path, exc_info=True)
             continue
-        if ((st2.st_dev, st2.st_ino) != (st.st_dev, st.st_ino)
-                or not stat.S_ISDIR(st2.st_mode)):
-            logger.debug(
-                "dead-owner sweep: %s changed identity between "
-                "validation and delete; skipping this sweep", path,
-            )
-            continue
-        rmtree_hardened(path)
-        if not path.exists():
-            removed.append(path)
 
     if removed:
         logger.info(

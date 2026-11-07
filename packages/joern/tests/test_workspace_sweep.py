@@ -136,3 +136,10 @@ def _idle_fixture_cwds(monkeypatch):
     # native integration concern. An unrelated lsof warning must not
     # turn their dead-owner/age assertions into host-dependent results.
     monkeypatch.setattr("core.run.tmp_ownership._live_cwds", lambda: set())
+
+
+@pytest.fixture(autouse=True)
+def _owned_root_namespace_verdict(monkeypatch):
+    # Reclamation tests own their private roots and recorded child pids.
+    # Native namespace refusal is exercised by the shared reaper tests.
+    monkeypatch.setattr("core.run.tmp_reaper._in_child_pid_ns", lambda: False)
