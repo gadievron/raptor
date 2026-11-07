@@ -1106,18 +1106,22 @@ class ExecutableModeBitTests(unittest.TestCase):
     bit for the whole libexec/ + bin/ surface."""
 
     def _tracked_entries(self) -> list[tuple[str, str]]:
-        proc = subprocess.run(
-            ["git", "ls-files", "--stage", "--", "libexec", "bin"],
-            cwd=REPO, capture_output=True, text=True, check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", "ls-files", "-z", "--stage", "--", "libexec", "bin"],
+                cwd=REPO, capture_output=True, check=False,
+            )
+        except FileNotFoundError:
+            self.skipTest("git unavailable")
         if proc.returncode != 0 or not proc.stdout.strip():
             self.skipTest("not a git checkout (or git unavailable)")
         entries: list[tuple[str, str]] = []
-        for line in proc.stdout.splitlines():
-            meta, _tab, path = line.partition("\t")
+        for record in proc.stdout.split(b"\0"):
+            meta, _tab, path = record.partition(b"\t")
             if not path:
                 continue
-            entries.append((meta.split()[0], path))
+            entries.append((meta.split()[0].decode("ascii"),
+                            path.decode("utf-8", errors="surrogateescape")))
         return entries
 
     def test_every_dispatch_script_is_committed_executable(self):
@@ -1145,3 +1149,49 @@ class ExecutableModeBitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_executable_guard_rejects_literal_special_paths(tmp_path, monkeypatch):
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    names = ("plain", "two words", "tab\tname", "line\nname",
+             "naïve", 'quote"name', "back\\slash")
+    for directory in ("libexec", "bin"):
+        (repo / directory).mkdir()
+        for name in names:
+            script = repo / directory / name
+            script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            script.chmod(0o755)
+    git_run(repo, "add", "--all")
+    monkeypatch.setitem(globals(), "REPO", repo)
+    case = ExecutableModeBitTests("test_every_dispatch_script_is_executable_on_disk")
+    expected = {f"{directory}/{name}" for directory in ("libexec", "bin") for name in names}
+    for rel in sorted(expected):
+        script = repo / rel
+        script.chmod(0o644)
+        try:
+            with case.assertRaises(AssertionError, msg=f"missed non-executable {rel!r}") as caught:
+                case.test_every_dispatch_script_is_executable_on_disk()
+            assert rel in str(caught.exception)
+        finally:
+            script.chmod(0o755)
+    assert set(case._tracked_entries()) == {("100755", rel) for rel in expected}
+    case.test_every_dispatch_script_is_committed_executable()
+    case.test_every_dispatch_script_is_executable_on_disk()
+
+
+def test_executable_guard_skip_contract(monkeypatch):
+    from types import SimpleNamespace
+
+    for outcome in ("missing", "failure", "empty"):
+        def run(*args, **kwargs):
+            if outcome == "missing":
+                raise FileNotFoundError("git")
+            return SimpleNamespace(returncode=1 if outcome == "failure" else 0, stdout=b"")
+
+        with monkeypatch.context() as local:
+            local.setitem(globals(), "subprocess", SimpleNamespace(run=run))
+            case = ExecutableModeBitTests("test_every_dispatch_script_is_executable_on_disk")
+            with case.assertRaises(unittest.SkipTest):
+                case._tracked_entries()

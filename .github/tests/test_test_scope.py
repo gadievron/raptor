@@ -1135,20 +1135,23 @@ class TestPytestLaneClosure:
     """
 
     @staticmethod
-    def _tracked_test_files() -> list[str]:
+    def _tracked_test_files(repo: Path | None = None) -> list[str]:
         import subprocess
+        if repo is None:
+            repo = Path(__file__).resolve().parents[2]
         try:
             out = subprocess.run(
-                ["git", "-C", str(Path(__file__).resolve().parents[2]),
-                 "ls-files", "*.py"],
-                capture_output=True, text=True, check=True,
+                ["git", "-C", str(repo),
+                 "ls-files", "-z", "--", "*.py"],
+                capture_output=True, check=True,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pytest.skip("not a git checkout (or git unavailable)")
-        return [
-            rel for rel in out.stdout.splitlines()
-            if is_test_file(Path(rel))
+        tracked = [
+            raw.decode("utf-8", errors="surrogateescape")
+            for raw in out.stdout.split(b"\0") if raw
         ]
+        return [rel for rel in tracked if is_test_file(Path(rel))]
 
     def test_every_tracked_test_file_is_claimed_by_a_lane(self):
         orphans = [
@@ -1376,3 +1379,33 @@ def test_large_matrix_rebalance_starts_without_large_environment_value(tmp_path)
     matrix = json.loads(output.read_text().split('=', 1)[1])
     assert sorted(path for batch in matrix for path in batch['files'].split()) == files
     assert all(batch['files'] for batch in matrix)
+
+
+def test_lane_closure_includes_literal_special_paths(tmp_path):
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    expected = {
+        f"unclaimed/tests/test_{name}.py"
+        for name in ("plain", "two words", "tab\tname", "line\nname",
+                     "naïve", 'quote"name', "back\\slash")
+    }
+    for rel in expected | {"core/module.py", "unclaimed/tests/data.json",
+                           "unclaimed/tests/fixtures/test_fixture.py"}:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    git_run(repo, "add", "--all")
+    assert set(TestPytestLaneClosure._tracked_test_files(repo)) == expected
+
+    class Probe(TestPytestLaneClosure):
+        __test__ = False
+
+        @staticmethod
+        def _tracked_test_files():
+            return TestPytestLaneClosure._tracked_test_files(repo)
+
+    with pytest.raises(AssertionError, match="claimed by NO pytest lane") as caught:
+        Probe().test_every_tracked_test_file_is_claimed_by_a_lane()
+    for rel in expected:
+        assert repr(rel) in str(caught.value)
