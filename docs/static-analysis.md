@@ -255,6 +255,12 @@ for review. It excludes explicit `bool`/`_Bool` predicates and checks that an
 assigned value actually reaches the return. Matches remain review candidates
 in `/audit`; check the expected errno contract before reporting a defect.
 
+The variadic-type check covers `va_arg` and `__builtin_va_arg`, including
+argument lists stored in structures, arrays or accessed through pointers.
+It flags narrow integer, `_Bool` and real `float` extraction where argument
+promotion requires a different type. Use the actual promoted type: some
+unsigned integer promotions require `unsigned int` rather than `int`.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
