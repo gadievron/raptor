@@ -1133,7 +1133,7 @@ it in `unresolved_references`).
   provided items.
 - `security_fields`: struct fields holding privilege, credential, \
   or access-control state (uid/gid fields, capability masks, \
-  security flags, ACL pointers).
+  security flags, ACL pointers). Use bare field identifiers.
 - `fallibility_contracts`: per-function fallibility — can the \
   function fail, and how is failure signalled? `convention` is one \
   of: `null` (returns NULL/None on failure), `negative` (negative \
@@ -1149,7 +1149,7 @@ it in `unresolved_references`).
   its authority (`local` = this endpoint computes it, `peer` = set \
   from peer-supplied data, `derived`) and monotonicity \
   (`increase`/`decrease`/`none`) when evident from the provided \
-  code.
+  code. Use bare field identifiers and the optional `struct` for the owner.
 
 **Struct annotations**: cover EVERY struct in the focus items — \
 1-3 fields per struct, breadth first. Do not annotate 4 fields on \
@@ -2805,6 +2805,24 @@ def _batch_identifier_universe(items: list[StudyItem]) -> set[str]:
     return names
 
 
+def _batch_field_aliases(items: list[StudyItem]) -> dict[str, tuple[str, str]]:
+    """Qualified fields justified by a visible struct's extracted field list.
+
+    Only the first 30 fields are rendered by _format_item. Do not manufacture
+    an owner/member relation from unrelated tokens or doc-comment prose.
+    Returned identifiers remain suitable for the downstream strict grammar.
+    """
+    aliases: dict[str, tuple[str, str]] = {}
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+    for item in items:
+        if item.kind != "struct" or not ident.fullmatch(item.name):
+            continue
+        for name in item.fields[:30]:
+            if ident.fullmatch(name):
+                aliases[f"{item.name}.{name}"] = (name, item.name)
+    return aliases
+
+
 def _names_in_signal(items: list[StudyItem], attr: str) -> set[str]:
     """Identifiers appearing in one mechanically extracted signal list."""
     names: set[str] = set()
@@ -2828,10 +2846,11 @@ def _parse_api_vocabulary(
 
     Enforcement mirrors the receipts discipline for prose answers:
 
-    - Every name must appear in the batch's study items (the material
-      the LLM was shown). A name that does not is DISCARDED — the LLM
-      can only have it from training memory. Discards are recorded in
-      *discard_sink*.
+    - Names must be grounded in the batch's study items (the material
+      the LLM was shown). A qualified struct field can normalize to a
+      bare name only when that owner's visible extracted field list
+      establishes membership. Other absent names are DISCARDED and
+      recorded in *discard_sink*.
     - Kept entries are stamped with a provenance tier: ``mechanical``
       when the claim is corroborated by a study-prep-extracted signal
       (``paired_with``/``lock_sites``/``alloc_frees`` for pairs,
@@ -2851,6 +2870,7 @@ def _parse_api_vocabulary(
         return []
 
     universe = _batch_identifier_universe(items)
+    field_aliases = _batch_field_aliases(items)
 
     def _discard(vclass: str, name: str) -> None:
         logger.warning(
@@ -2977,7 +2997,9 @@ def _parse_api_vocabulary(
         name = str(fld.get("name") or "").strip()
         if not name:
             continue
-        if name not in universe:
+        if name in field_aliases:
+            name = field_aliases[name][0]
+        elif name not in universe:
             _discard("security_fields", name)
             continue
         # Field membership is mechanical, but "security-sensitive" is
@@ -3072,14 +3094,23 @@ def _parse_api_vocabulary(
         authority = str(sf.get("authority") or "").lower()
         if not name or authority not in ("local", "peer", "derived"):
             continue
-        if name not in universe:
+        qualified_owner = ""
+        if name in field_aliases:
+            original_name = name
+            name, qualified_owner = field_aliases[name]
+            if sf.get("struct") and sf["struct"] != qualified_owner:
+                _discard("state_fields", original_name)
+                continue
+        elif name not in universe:
             _discard("state_fields", name)
             continue
         # Field membership is verifiable; the authority/monotonicity
         # classification is the LLM's judgement unless the field rode
         # a mechanically extracted state-transition signal.
         tier = (
-            TIER_MECHANICAL if name in state_signal
+            # A bare transition signal does not establish the newly recovered
+            # owner-qualified classification. Keep that claim hint-tier.
+            TIER_MECHANICAL if not qualified_owner and name in state_signal
             else TIER_LLM_SUMMARIZED
         )
         entry = {
@@ -3088,7 +3119,9 @@ def _parse_api_vocabulary(
             "authority": authority,
             "provenance": tier,
         }
-        if sf.get("struct"):
+        if qualified_owner:
+            entry["struct"] = qualified_owner
+        elif sf.get("struct"):
             entry["struct"] = str(sf["struct"])
         if str(sf.get("monotonic") or "") in ("increase", "decrease",
                                               "none"):
