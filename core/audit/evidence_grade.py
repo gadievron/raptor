@@ -441,7 +441,7 @@ def _is_detection_variant(part: str) -> bool:
     # String-heuristic fallback for hosts where a channel module is
     # unavailable — mirrors each channel's DETECTION_VARIANT_SUFFIX
     # contract.
-    if part in ("joern:live", "joern:pre_sweep", "joern:flow-encoding"):
+    if part in ("joern:live", "joern:pre_sweep", "joern:flow-encoding", "joern:xf:caller_constraint"):
         return True
     if part.startswith("consistency:") and part.split(":", 2)[1].removesuffix("-majority") in {"guard-presence", "guard-predicate"}:
         return True
@@ -1515,6 +1515,11 @@ def grade_review_result(
         parts = evidence_tool.split("+") if "+" in evidence_tool else [evidence_tool]
         seen: set = set()
         for part in parts:
+            part = part.strip()
+            # A valid composite does not grant verification authority
+            # to its detection-only or unrecognized components.
+            if not is_tool_evidence(part):
+                continue
             namespace = part.split(":")[0] if ":" in part else part
             entry = _RECEIPT_MAP.get(part) or _RECEIPT_MAP.get(namespace)
             if entry and entry[0] not in seen:

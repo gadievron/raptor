@@ -2,9 +2,9 @@
 
 Provides 5 verifiers that use interprocedural Joern queries to confirm
 or refute hypotheses about cross-function bugs.  Each verifier is
-dispatched based on hypothesis keyword matching, and returns
-verification-grade evidence that can promote findings through the
-merge layer.
+dispatched based on hypothesis keyword matching. Positive observations
+retain their channel evidence roles; the caller-constraint name-presence
+check is a detection lead, not verification of a violated precondition.
 
 Verifiers:
   1. unchecked_return   — callee return value ignored
@@ -308,6 +308,8 @@ def _verify_caller_constraint(
     then checks every caller for presence of that guard.  When
     *counter* is set and no specific guard is found, falls back to
     length/bounds-checking function patterns instead of lock patterns.
+    A positive query reports absent guard-call names, not proof that the
+    caller violates the precondition. Its receipt is detection-role.
     """
     safe_fn = _safe_name(function_name)
     if safe_fn is None:

@@ -68,8 +68,12 @@ FLOW_ENCODING_STAMP = "joern:flow-encoding"
 # verification role. ``joern:flow-encoding`` is endpoint-bound too but
 # its extra premise — no sanitizer NAME on the path — is textual, so
 # it corroborates without convicting alone.
+# Caller-constraint checks inspect guard-call names in caller ASTs. A
+# missing name does not establish a violated precondition or account for
+# alternate guards, wrappers, macros, or the state at the call site.
 DETECTION_STAMPS = frozenset({
     "joern:live", "joern:pre_sweep", FLOW_ENCODING_STAMP,
+    "joern:xf:caller_constraint",
 })
 
 
