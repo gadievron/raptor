@@ -285,6 +285,35 @@ a narrower, string-level check for single-quoted attributes in `echo` or
 `print`: a safe attribute interpolation with request data elsewhere in the
 same string can still report. A no-match remains inconclusive in `/audit`.
 
+PHP weak-crypto checks use security-related names to limit noise. Password
+checks cover `md5`, `sha1` and `hash` with a literal MD5/SHA1 algorithm,
+including qualified and mixed-case built-in spellings. They recognize
+password-named data within expressions and direct digest stores into named
+variables, instance/static fields and literal or statically resolved array
+keys. Receiver names, helper names and ordinary string contents do not
+establish password data.
+
+For simple local reads and stores, adjacent literal assignments to algorithm
+and key variables are recognized even on older engines without PHP constant
+propagation. These forms exclude intervening statements and side-effecting
+arguments. More complex aliases need separate review.
+
+Predictable-generator checks recognize security-named stores, including
+qualified and mixed-case calls wrapped in hashes. Unresolved selectors do
+not establish a storage context. Literal keys may use separators such as
+underscores, hyphens and dots. Bare sampling/jitter calls, direct strong-random
+results and unrelated namespaces or methods stay outside these checks.
+Additional entropy mixed into a value needs separate review.
+
+Names remain a heuristic: semantically unrelated security-shaped names can
+report, while neutral aliases, arbitrary algorithms and application function
+shadows/import aliases need separate review. The rules run in the PHP
+`/scan` pack and the existing CWE-327/CWE-338 `/audit` routes. A no-match is
+inconclusive in `/audit`; it does not establish cryptographic safety. Prefer
+PHP's [password hashing API](https://www.php.net/manual/en/function.password-hash.php)
+and [cryptographic randomness](https://www.php.net/manual/en/function.random-bytes.php)
+for those respective purposes.
+
 PHP quoted-attribute encoding checks cover both `htmlspecialchars` and
 `htmlentities`. They check whether explicit flags protect the surrounding
 quote, including document/error flags that do not enable quoting, supported

@@ -1,90 +1,98 @@
+# raptor: confirm-only
+# Predictable generators stored under security-material names are candidates,
+# not a whole-class safety oracle. Bare jitter/sampling calls stay silent.
+# Qualified/case-varied builtin spellings are recognized syntactically; method
+# and unrelated namespace calls are excluded. Function shadows/import aliases
+# still require review. Hashing predictable input does not add entropy.
+# Destinations are plain variables, named instance/static properties or literal
+# array keys. Dynamic selectors do not establish security-material storage.
+# pad remains a plain-variable-only anchor, avoiding wire-padding properties.
+# Neutral intermediate aliases/direct returns and semantically unrelated
+# security-shaped names remain name-heuristic limitations.
+# Older PHP AST spans can omit a literal field selector's closing brace;
+# the field guards tolerate that span without accepting variable selectors.
+# The adjacent literal-key fallback is restricted to local array writes and
+# direct zero-argument generators, avoiding unknown intervening mutations.
 rules:
-  # CWE-338: non-cryptographic PRNG output stored under a
-  # security-material name (token/secret/nonce/otp/csrf/api key/
-  # session id/activation/reset/pad). mt_rand/rand/uniqid/lcg_value
-  # are seedable/predictable; str_shuffle and array_rand draw from
-  # them. The name anchor is the precision gate — a bare mt_rand()
-  # (jitter, sampling, shard selection) never fires, only one whose
-  # result is stored as security material. Hashing the PRNG output
-  # (md5(uniqid(rand(), true))) does not add entropy; the deep
-  # expression match (<... ...>) sees through those wrappers.
-  #
-  # Anchors use letter-run lookarounds, not \b: underscores are word
-  # chars so \b never fires inside $reset_token, while a bare
-  # substring test fires inside $preset/$notepad. (?<![a-z])reset
-  # matches $reset_token but not $preset; pad(?![a-z]) matches
-  # $pad_bytes but not $keypad_layout.
-  #
-  # Known FP/FN modes:
-  #   - Name-anchored: security material stored under a neutral name
-  #     ($val, $r), returned directly without assignment, or hopped
-  #     through an intermediate variable before the named store is
-  #     missed (FN, executable examples in the negative fixture).
-  #     Bare "key" is deliberately NOT an anchor — $cache_key/
-  #     $array_key would swamp the signal; apikey/api_key carry the
-  #     security sense.
   - id: raptor.php.weak-prng-token.var
-    languages: [php]
+    languages:
+      - php
     severity: HIGH
-    message: >
-      Security material is derived from a non-cryptographic PRNG
-      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
-      sequences are predictable from a small number of outputs or a
-      guessable seed, so the token/secret is forgeable. Use
-      random_bytes()/random_int() (CSPRNG).
+    message: >-
+      A security-named value contains output from a non-cryptographic generator.
+      Check its entropy provenance; use random_bytes()/random_int() for
+      security-sensitive randomness.
     patterns:
       - pattern: $VAR = <... $RAND(...) ...>;
       - metavariable-regex:
           metavariable: $RAND
-          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
-      # Fully anchored to the plain-variable shape ($name only): the
-      # $VAR metavariable also binds property/array lvalues, and an
-      # unanchored regex would double-report the shapes the property
-      # and array-store rules own — and defeat the property rule's
-      # deliberate 'pad' exclusion via $obj->pad.
+          regex: (?i)^\\?(?:mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+          constant-propagation: false
       - metavariable-regex:
           metavariable: $VAR
           regex: (?i)^\$[a-z0-9_]*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset|pad)(?![a-z])[a-z0-9_]*$
     metadata:
-      cwe: ["CWE-338"]
+      cwe:
+        - CWE-338
   - id: raptor.php.weak-prng-token.property
-    languages: [php]
+    languages:
+      - php
     severity: HIGH
-    message: >
-      Security material is derived from a non-cryptographic PRNG
-      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
-      sequences are predictable from a small number of outputs or a
-      guessable seed, so the token/secret is forgeable. Use
-      random_bytes()/random_int() (CSPRNG).
+    message: >-
+      A security-named value contains output from a non-cryptographic generator.
+      Check its entropy provenance; use random_bytes()/random_int() for
+      security-sensitive randomness.
     patterns:
-      - pattern: $OBJ->$PROP = <... $RAND(...) ...>;
+      - pattern: $DEST = <... $RAND(...) ...>;
       - metavariable-regex:
           metavariable: $RAND
-          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+          regex: (?i)^\\?(?:mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+          constant-propagation: false
       - metavariable-regex:
-          metavariable: $PROP
-          regex: (?i).*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z]).*
+          metavariable: $DEST
+          constant-propagation: false
+          regex: (?i)^[^\n;]+(?:->\s*(?:[a-z0-9_]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_]*|(?:'[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*'|"[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*")|\{\s*(?:'[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*'|"[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*")\s*\}?)|::\s*\$[a-z0-9_]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_]*)$
     metadata:
-      cwe: ["CWE-338"]
-  # The canonical CSRF shape stores into an array slot, not a
-  # variable: $_SESSION['csrf_token'] = md5(mt_rand()). The key
-  # literal carries the anchor.
+      cwe:
+        - CWE-338
   - id: raptor.php.weak-prng-token.array-store
-    languages: [php]
+    languages:
+      - php
     severity: HIGH
-    message: >
-      Security material is derived from a non-cryptographic PRNG
-      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
-      sequences are predictable from a small number of outputs or a
-      guessable seed, so the token/secret is forgeable. Use
-      random_bytes()/random_int() (CSPRNG).
-    patterns:
-      - pattern: $ARR[$KEY] = <... $RAND(...) ...>;
-      - metavariable-regex:
-          metavariable: $RAND
-          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
-      - metavariable-regex:
-          metavariable: $KEY
-          regex: (?i).*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z]).*
+    message: >-
+      A security-named value contains output from a non-cryptographic generator.
+      Check its entropy provenance; use random_bytes()/random_int() for
+      security-sensitive randomness.
     metadata:
-      cwe: ["CWE-338"]
+      cwe:
+        - CWE-338
+    pattern-either:
+      - patterns:
+          - pattern: $ARR[$KEY] = <... $RAND(...) ...>;
+          - metavariable-regex:
+              metavariable: $RAND
+              regex: (?i)^\\?(?:mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+              constant-propagation: false
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?i)^(?:'[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*'|"[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*")$
+      - patterns:
+          - pattern: '$KEY_ALIAS = $KEY_LITERAL;
+
+              $ARRAY_ALIAS[$KEY_ALIAS] = $RAND();'
+          - metavariable-regex:
+              metavariable: $KEY_LITERAL
+              constant-propagation: false
+              regex: (?i)^(?:'[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*'|"[a-z0-9_.:-]*(?<![a-z])(?:token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z])[a-z0-9_.:-]*")$
+          - metavariable-regex:
+              metavariable: $KEY_ALIAS
+              constant-propagation: false
+              regex: ^\$[A-Za-z_][A-Za-z_0-9]*$
+          - metavariable-regex:
+              metavariable: $ARRAY_ALIAS
+              constant-propagation: false
+              regex: ^\$[A-Za-z_][A-Za-z_0-9]*$
+          - metavariable-regex:
+              metavariable: $RAND
+              constant-propagation: false
+              regex: (?i)^\\?(?:mt_rand|rand|uniqid|lcg_value)$
