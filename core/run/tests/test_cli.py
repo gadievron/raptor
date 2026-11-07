@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.testing.standalone_cli import standalone_cli_env
 from core.json import load_json
 from core.run.metadata import RUN_METADATA_FILE
 
@@ -19,15 +20,17 @@ def _run(*args, tmp_home=None):
     """Run libexec/raptor-run-lifecycle with given args."""
     env = os.environ.copy()
     env.pop("RAPTOR_CALLER_DIR", None)
-    if tmp_home:
-        env["HOME"] = tmp_home
-        # Match the registry planted by _setup_project_symlink, including in children.
-        env["RAPTOR_REGISTRY_HOME"] = str(Path(tmp_home) / ".raptor")
-    result = subprocess.run(
-        [sys.executable, LIFECYCLE] + list(args),
-        capture_output=True, text=True, env=env,
-    )
-    return result
+    with standalone_cli_env(env=env, data_home=os.environ["XDG_DATA_HOME"]) as child_env:
+        home = Path(tmp_home or child_env["HOME"])
+        child_env["RAPTOR_OUT_DIR"] = str(home / "out")
+        if tmp_home:
+            child_env["HOME"] = tmp_home
+            # Keep the fixture's registry across start and completion calls.
+            child_env["RAPTOR_REGISTRY_HOME"] = str(Path(tmp_home) / ".raptor")
+        return subprocess.run(
+            [sys.executable, LIFECYCLE] + list(args),
+            capture_output=True, text=True, env=child_env, timeout=60,
+        )
 
 
 def _extract_out_dir(result):
@@ -109,6 +112,7 @@ class TestRunLifecycle(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             out_dir = _extract_out_dir(result)
             self.assertTrue(out_dir.name.startswith("scan_"))
+            self.assertTrue(out_dir.is_relative_to(Path(home)))
 
     def test_start_no_command_fails(self):
         result = _run("start")
@@ -240,3 +244,19 @@ class TestJournalIndexMerge(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse(
                     (Path(scratch) / INDEX_FILENAME).exists())
+
+
+def test_stale_parent_launch_cannot_block_lifecycle(tmp_path, monkeypatch):
+    monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-parent-authorization")
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-parent-scratch"))
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    _setup_project_symlink(home, project)
+    result = _run("start", "audit", tmp_home=str(home))
+    assert result.returncode == 0, result.stderr
+    out = _extract_out_dir(result)
+    result = _run("complete", str(out), tmp_home=str(home))
+    assert result.returncode == 0, result.stderr
+    assert load_json(out / RUN_METADATA_FILE)["status"] == "completed"

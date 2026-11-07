@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 from core.hash import sha256_file
 from packages.binary_analysis.cli import _build_parser, _normalise_argv, _print_report, main
 from packages.binary_analysis.manifest import BinaryManifest
@@ -363,10 +366,14 @@ def test_corpus_summary_scrubs_hostile_family_keys(tmp_path: Path, capsys) -> No
     assert "\x07" not in stdout
 
 
-def test_wrapper_help_is_available() -> None:
+@pytest.mark.parametrize("stale_launch", [False, True])
+def test_wrapper_help_is_available(tmp_path, monkeypatch, stale_launch) -> None:
+    if stale_launch:
+        monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-parent-authorization")
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-parent-scratch"))
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
-    proc = subprocess.run(
+    proc = run_standalone_cli(
         [sys.executable, str(WRAPPER), "--help"],
         capture_output=True,
         text=True,
