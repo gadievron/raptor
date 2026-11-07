@@ -53,8 +53,8 @@ offers a tree-sitter tier plus alias-assignment contexts this
 regex-tier index lacks; migrating this module onto
 ``build_field_census`` is future work — until then the two censuses
 are maintained separately. Guard-dependent verdicts report
-``census-degraded`` when the CFG leg is unavailable rather than
-guessing. No LLM calls, no subprocesses.
+``census-degraded`` when source guard binding is unavailable rather than
+guessing. No LLM calls; native invariant queries use the confined SMT worker.
 """
 
 from __future__ import annotations
@@ -200,8 +200,6 @@ _CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 _WRITE_TAIL_RE = re.compile(r"\s*(\+\+|--|(?:[+\-*/%|&^]|<<|>>)?=(?!=))")
 _BACKTICK_IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)\s*(?:\(\s*\))?`")
 _IDENT_RE = re.compile(r"\b([A-Za-z_]\w{2,})\b")
-_COND_LABEL_RE = re.compile(r"^(?:If|While|ElIf)\s*\((.+)\)$",
-                            re.IGNORECASE)
 
 
 def is_protocol_state_hypothesis(text: str) -> bool:
@@ -570,7 +568,7 @@ def _peer_source_chain(
     return None
 
 
-# ── CFG guard extraction with branch polarity ───────────────────────
+# ── source guard extraction with branch polarity ────────────────────
 
 
 def _branch_guards(
@@ -578,72 +576,16 @@ def _branch_guards(
     function_name: str,
     line: int,
 ) -> list[str] | None:
-    """Polarity-resolved dominating conditions at *line* — the
-    census-driven pre-conditions for the per-site inductive step.
+    """Source-bound reaching predicates for one unambiguous mutation.
 
-    A condition node's constraint applies as stated only when the site
-    is dominated by the condition's single-predecessor TRUE successor;
-    negated (via :func:`invariant_smt.negate_comparison`) when
-    dominated by the FALSE successor. Undecidable polarity ⇒ the guard
-    is dropped (never a wrong-polarity guess); dropping only ever
-    widens violability, the claim direction the honesty gate already
-    caps. ``None`` = CFG unavailable."""
+    Branch polarity comes from the source AST, never CFG successor order.
+    Missing or unsupported source bindings decline the whole guard frame.
+    """
     try:
-        from core.analysis.cfg_builder_cpp import build_cpp_intraproc_cfg
-        from core.analysis.cfg_utils import find_node_at_line
-        from core.analysis.dominators import build_dom_tree
-    except ImportError:
-        return None
-    tail = function_name.rsplit(".", 1)[-1]
-    try:
-        cfg = build_cpp_intraproc_cfg(source, tail, language="c")
-        if cfg is None:
-            return None
-        dom = build_dom_tree(cfg)
-        site_node = find_node_at_line(cfg, line)
-        if site_node is None:
-            return []
-        preds: dict[Any, list[Any]] = {}
-        for node in cfg.nodes():
-            for succ in cfg.successors(node):
-                preds.setdefault(succ, []).append(node)
-        conditions: list[str] = []
-        from .invariant_smt import negate_comparison
-        for d in dom.dominators_of(site_node):
-            m = _COND_LABEL_RE.match((d.label or "").strip())
-            if not m:
-                continue
-            cond = m.group(1).strip()
-            succs = list(cfg.successors(d))
-            if len(succs) != 2:
-                continue
-            for succ, polarity in ((succs[0], True), (succs[1], False)):
-                # The single-predecessor requirement applies to the
-                # site node itself too: a fall-through JOIN reached
-                # directly by one branch edge is also reached around
-                # the branch, so the edge's polarity constrains
-                # nothing there — recording it minted a guard the
-                # code does not have (and a vacuously-guarded
-                # preservation proof from it).
-                if len(preds.get(succ, [])) == 1 and (
-                    succ is site_node
-                    or dom.dominates(succ, site_node)
-                ):
-                    if polarity:
-                        conditions.append(cond)
-                    else:
-                        neg = negate_comparison(cond)
-                        if neg is not None:
-                            conditions.append(neg)
-                    break
-        if conditions:
-            from .invariant_source import guard_snapshot_supported
-            if not guard_snapshot_supported(source, tail, line):
-                return None
-        return conditions
+        from .invariant_source import guard_snapshot_conditions
+        return guard_snapshot_conditions(source, function_name.rsplit(".", 1)[-1], line)
     except Exception:
-        logger.debug("protocol_state: branch guard walk failed",
-                     exc_info=True)
+        logger.debug("protocol_state: source guard binding failed", exc_info=True)
         return None
 
 
@@ -756,7 +698,7 @@ def check_invariant_multi_site(
     (:func:`invariant_smt.check_site_batch`) with
     polarity-resolved dominating guards. Returns ``{outcome, sites,
     reason, guard_leg}`` — ``outcome`` ∈ violable | preserved |
-    inconclusive; ``guard_leg`` is False when the CFG leg was
+    inconclusive; ``guard_leg`` is False when source guard binding was
     unavailable (a violable outcome then may NOT confirm:
     ``census-degraded``). Bare-field projection also requires consistent
     scalar/object bindings; ambiguous sites retain an explicit refusal
@@ -808,16 +750,17 @@ def check_invariant_multi_site(
         source = source_texts.get(site["file"], "")
         guards = _branch_guards(source, site["function"], site["line"]) \
             if site["function"] else []
-        if guards is None:
+        unavailable_guards = guards is None
+        if unavailable_guards:
             guard_leg = False
             guards = []
-        refusal = projection_refusal(site["code"], guards, variables)
+        refusal = ("source guard binding unavailable or unsupported" if unavailable_guards
+                   else projection_refusal(site["code"], guards, variables))
         if refusal:
             guard_leg = False
-        bare_guards = tuple(
-            _bare_fields(g, variables) for g in guards
-            if any(v in _bare_fields(g, variables) for v in variables)
-        )
+        # Guards over other values can still exclude this mutation; retain
+        # the full admitted conjunction in the worker and witness replay.
+        bare_guards = tuple(_bare_fields(g, variables) for g in guards)
         code = _bare_fields(site["code"], variables)
         prepared.append((site, {"code": code, "line": site["line"], "pre_conditions": bare_guards}, refusal))
 
@@ -1051,7 +994,7 @@ def _adjudicate_invariant(
             outcome="inconclusive",
             reason=(
                 f"{REASON_CENSUS_DEGRADED}: a violable site exists but "
-                "the CFG guard leg was unavailable — a dominating "
+                "source guard binding was unavailable — a dominating "
                 "validation could be invisible; not confirming on a "
                 "partial census"
             ),
@@ -1295,7 +1238,7 @@ def run_protocol_state_check(
     if degraded:
         return _inconclusive(
             REASON_CENSUS_DEGRADED,
-            "CFG guard leg unavailable for the peer-write check",
+            "source guard binding unavailable for the peer-write check",
         )
     if unresolved:
         return _inconclusive(

@@ -374,13 +374,24 @@ def source_mutations(source, variables=None):
     return sites, effects, ""
 
 
-def guard_snapshot_supported(source, function_name, line):
-    """A CFG predicate is usable only at a source-bound unchanged write site."""
+def guard_snapshot_conditions(source, function_name, line):
+    """Return every reaching fact for one unchanged, source-bound mutation.
+
+    Source branch membership determines polarity, including empty branches.
+    None means unavailable, unsupported, or ambiguous site identity.
+    """
     from .probe_function_scope import source_for_function
 
     _, selected = source_for_function(source, "source.c", function_name)
     if selected is None:
-        return False
+        return None
     sites, _effects, refusal = source_mutations(selected)
     at_line = [site for site in sites if site.line == line]
-    return not refusal and bool(at_line) and all(not site.reason for site in at_line)
+    if refusal or len(at_line) != 1 or at_line[0].reason:
+        return None
+    return list(at_line[0].guards)
+
+
+def guard_snapshot_supported(source, function_name, line):
+    """Whether a mutation has an admitted, unchanged source guard frame."""
+    return guard_snapshot_conditions(source, function_name, line) is not None
