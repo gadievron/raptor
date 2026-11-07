@@ -24,7 +24,16 @@ which is the convention every producer/consumer site uses.
 from __future__ import annotations
 
 import ast
+import json
+import sys
+import unicodedata
 from pathlib import Path
+from types import MappingProxyType
+
+import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
+from core.testing.module_bindings import patch_module_attribute
 
 _AUDIT = Path(__file__).resolve().parents[1]
 
@@ -69,7 +78,12 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     writes: dict[str, set[str]] = {}
     reads: dict[str, set[str]] = {}
     for path in sorted(_AUDIT.glob("*.py")):
-        tree = ast.parse(path.read_text())
+        source = path.read_text()
+        tree = ast.parse(source)
+        # Python normalizes identifiers before building Name nodes. Preserve
+        # those spellings, and still parse every file so syntax errors fail.
+        if "ctx" not in unicodedata.normalize("NFKC", source).lower():
+            continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.Assign, ast.AugAssign)):
                 targets = (
@@ -122,9 +136,29 @@ def _renderer_reads() -> set[str]:
     return keys
 
 
+@pytest.fixture(scope="module")
+def context_key_inventory():
+    """Share one read-only snapshot of the immutable runtime checkout."""
+    # Keep the full AST scan off the accumulated heap of a large pytest worker.
+    script = (
+        "import json, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from core.audit.tests.test_context_key_closure import _scan\n"
+        "print(json.dumps([{key: sorted(paths) for key, paths in entries.items()} "
+        "for entries in _scan()]))\n"
+    )
+    result = run_standalone_cli(
+        [sys.executable, "-I", "-c", script, str(_AUDIT.parents[1])],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return tuple(MappingProxyType({key: frozenset(paths) for key, paths in entries.items()})
+                 for entries in json.loads(result.stdout))
+
+
 class TestContextKeyClosure:
-    def test_every_written_key_has_a_reader(self):
-        writes, reads = _scan()
+    def test_every_written_key_has_a_reader(self, context_key_inventory):
+        writes, reads = context_key_inventory
         dead = {
             k: sorted(v)
             for k, v in writes.items()
@@ -135,8 +169,8 @@ class TestContextKeyClosure:
             f"silent dead integration): {dead}"
         )
 
-    def test_every_renderer_key_has_a_producer(self):
-        writes, _ = _scan()
+    def test_every_renderer_key_has_a_producer(self, context_key_inventory):
+        writes, _ = context_key_inventory
         orphans = sorted(
             k for k in _renderer_reads()
             if k not in writes and k not in _READ_EXCEPTIONS
@@ -196,8 +230,41 @@ class TestContextKeyClosure:
         assert "2 do NOT" in out
         assert "system" in out
 
-    def test_structured_evidence_twin_no_longer_computed(self):
+    def test_structured_evidence_twin_no_longer_computed(self, context_key_inventory):
         # The adjudicated delete: the structured evidence rendering
         # was produced beside the prose form with no consumer.
-        writes, _ = _scan()
+        writes, _ = context_key_inventory
         assert "mechanical_evidence_structured" not in writes
+
+
+class TestContextScanPrefilter:
+    @pytest.mark.parametrize("identifier", [
+        pytest.param("ctx", id="plain"),
+        pytest.param("CTX", id="uppercase"),
+        pytest.param("long_ctx", id="suffix"),
+        pytest.param("ｃｔｘ", id="normalized"),
+    ])
+    def test_ctx_spellings_remain_visible(self, tmp_path, monkeypatch, identifier):
+        monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
+        (tmp_path / "sample.py").write_text(
+            f"{identifier} = {{'field': 1}}\nvalue = {identifier}.get('field')\n",
+            encoding="utf-8",
+        )
+        writes, reads = _scan()
+        assert writes == reads == {"field": {"sample.py"}}
+
+    def test_unrelated_source_does_not_walk_the_tree(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
+        (tmp_path / "sample.py").write_text("ordinary = {'field': 1}\n")
+
+        def unexpected_walk(tree):
+            pytest.fail("unrelated syntax tree was walked")
+
+        patch_module_attribute(monkeypatch, sys.modules[__name__], "ast", "walk", unexpected_walk)
+        assert _scan() == ({}, {})
+
+    def test_invalid_unrelated_source_still_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
+        (tmp_path / "sample.py").write_text("ordinary = (\n")
+        with pytest.raises(SyntaxError):
+            _scan()
