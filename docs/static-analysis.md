@@ -286,6 +286,21 @@ encoding; they do not prove attacker control or account for prior encoding.
 In `/audit`, a no-match remains
 inconclusive for CWE-116 rather than refuting the whole encoding class.
 
+PHP unquoted-attribute checks follow request data through `htmlspecialchars`
+or `htmlentities`, including local aliases. Even `ENT_QUOTES` does not encode
+whitespace: quote the attribute value as well as encoding its contents. The
+check requires encoded request data; fixed values, tainted flags alone and
+ignored encoder results do not qualify. Modeled numeric casts/converters and
+URL-encoded final values are excluded.
+
+This additional check requires Semgrep 1.47.0 or newer; older installations
+can still run the quoted-attribute checks. Supported contexts are bounded
+HTML-tag literals followed by a flat encoder call or a simple local-variable
+read, using either PHP quote style. Complex templates, object fields,
+application validators and later decoding or character reconstruction need
+separate review. `/scan` includes the check in the PHP pack; `/audit` uses it
+for PHP CWE-116, with no-match remaining inconclusive.
+
 Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs
