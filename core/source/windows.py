@@ -3,15 +3,44 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypeVar
 
 from core.source.contained import DEFAULT_MAX_SOURCE_CHARS, open_regular
 from core.source.lines import split_lines
 
 _CHUNK_BYTES = 64 * 1024
 _CHUNK_CHARS = 64 * 1024
+_Chunk = TypeVar("_Chunk", bytes, str)
+
+
+def _after_many_newlines(chunk: _Chunk, count: int, offset: int, newline: _Chunk) -> int:
+    """Narrow the nth-newline interval without one Python call per line.
+
+    Each count scans only the left half of the remaining interval. The
+    intervals scanned across all steps total less than the original
+    interval length; the final short interval retains index semantics.
+    """
+    end = len(chunk)
+    while end - offset > 256:
+        middle = (offset + end) // 2
+        before = chunk.count(newline, offset, middle)
+        if before < count:
+            offset = middle
+            count -= before
+        else:
+            end = middle
+    for _ in range(count):
+        offset = chunk.index(newline, offset, end) + 1
+    return offset
 
 
 def _after_newlines(chunk: bytes, count: int, offset: int = 0) -> int:
+    # Counting pays off for many nearby newlines; sparse chunks retain the
+    # direct index loop. These thresholds affect work, never selected bytes.
+    if (type(count) is int and count >= 128 and type(chunk) is bytes
+            and type(offset) is int and offset >= 0
+            and len(chunk) - offset <= count * 64):
+        return _after_many_newlines(chunk, count, offset, b"\n")
     for _ in range(count):
         offset = chunk.index(b"\n", offset) + 1
     return offset
@@ -62,6 +91,10 @@ def read_line_window_capped(
 
 
 def _after_text_newlines(chunk: str, count: int, offset: int = 0) -> int:
+    if (type(count) is int and count >= 128 and type(chunk) is str
+            and type(offset) is int and offset >= 0
+            and len(chunk) - offset <= count * 64):
+        return _after_many_newlines(chunk, count, offset, "\n")
     for _ in range(count):
         offset = chunk.index("\n", offset) + 1
     return offset
