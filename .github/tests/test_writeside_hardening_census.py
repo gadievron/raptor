@@ -85,6 +85,7 @@ with (_path_patch.object(sys, "path", sys.path.copy())
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
     from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
+    from ast_census import iter_calls  # noqa: E402
 
     _PACKAGES = (
         "packages/fuzzing/",
@@ -300,8 +301,8 @@ def _flagged_calls(text: str) -> list[tuple[ast.Call, str]]:
         return []
     return [
         (node, why)
-        for node in ast.walk(ast.parse(text))
-        if isinstance(node, ast.Call) and (why := _flag(node)) is not None
+        for node in iter_calls(ast.parse(text))
+        if (why := _flag(node)) is not None
     ]
 
 
