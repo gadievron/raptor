@@ -103,6 +103,20 @@ def sanitise_for_terminal(s: str, *, max_len: int = 256) -> str:
     return out
 
 
+def sanitise_exception_message(exc: BaseException, *, max_len: int = 256) -> str:
+    """Escape and bound an exception message without letting formatting fail.
+
+    Custom exceptions can raise from __str__ or return a non-string. Keep
+    diagnostics best-effort with a fixed fallback, without trying repr or
+    another rendering of the same object. Cancellation still propagates.
+    """
+    try:
+        message = str(exc)
+    except Exception:
+        return sanitise_for_terminal("exception message unavailable", max_len=max_len)
+    return sanitise_for_terminal(message, max_len=max_len)
+
+
 #: Default bound for one untrusted value EMBEDDED inside a trusted
 #: message skeleton (:func:`sanitise_excerpt`). Churn-prone limit —
 #: rationale in both directions:

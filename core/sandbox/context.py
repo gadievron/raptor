@@ -26,7 +26,7 @@ from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from typing import Any, TypeVar
 
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 
 from . import landlock as _landlock
 from . import probes as _probes
@@ -550,7 +550,7 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
         logger.debug(
             "proxy persist accounting failed: %s: %s",
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
     path = os.path.join(output, _proxy_mod.PROXY_EVENTS_COUNT_FILENAME)
     try:
@@ -575,7 +575,7 @@ def _write_proxy_count_sidecar(output, count, flags, run_binding):
             "Sandbox: could not write %s: %s: %s",
             sanitise_for_terminal(path),
             sanitise_for_terminal(type(exc).__name__, max_len=64),
-            sanitise_for_terminal(str(exc)),
+            sanitise_exception_message(exc),
         )
 
 
@@ -668,7 +668,7 @@ def _persist_proxy_events(
             logger.debug(
                 "Sandbox: could not open %s for proxy-event "
                 "persistence: %s", sanitise_for_terminal(_log_path),
-                sanitise_for_terminal(str(_log_err)),
+                sanitise_exception_message(_log_err),
             )
             # A planted symlink/FIFO at the events path used to suppress
             # evidence with only this DEBUG line. Record it as a
@@ -802,7 +802,7 @@ def _persist_proxy_events(
                 "Sandbox: could not write proxy events to %s: %s: %s",
                 sanitise_for_terminal(_log_path),
                 sanitise_for_terminal(type(_persist_exc).__name__, max_len=64),
-                sanitise_for_terminal(str(_persist_exc)),
+                sanitise_exception_message(_persist_exc),
             )
             # Preserve the failure and every acknowledged write across later
             # batches. Recounting alone must not renumber over missing history.
@@ -824,7 +824,7 @@ def _persist_proxy_events(
                 logger.warning(
                     "Sandbox: could not persist proxy write-failure state: %s: %s",
                     sanitise_for_terminal(type(exc).__name__, max_len=64),
-                    sanitise_for_terminal(str(exc)),
+                    sanitise_exception_message(exc),
                 )
 
 
