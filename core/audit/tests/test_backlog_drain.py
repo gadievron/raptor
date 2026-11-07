@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 from core.audit.backlog_drain import (
     BACKLOG_FILENAME,
     DRAIN_REPORT_FILENAME,
@@ -990,11 +992,10 @@ class TestCLI:
     display integrity (row fields are hostile-artifact bytes)."""
 
     def _run(self, *argv, cwd=None):
-        import subprocess
         import sys
         repo = Path(__file__).resolve().parents[3]
         env = dict(os.environ, _RAPTOR_TRUSTED="1")
-        return subprocess.run(
+        return run_standalone_cli(
             [sys.executable, str(repo / "libexec" / "raptor-audit"),
              "backlog", *argv],
             capture_output=True, text=True, env=env, cwd=cwd or repo,

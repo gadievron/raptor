@@ -18,6 +18,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from core.testing.standalone_cli import standalone_cli_env
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LIFECYCLE = str(REPO_ROOT / "libexec" / "raptor-run-lifecycle")
 
@@ -148,10 +150,13 @@ class TestRefreshHookLifecycle(unittest.TestCase):
         env.pop("RAPTOR_CALLER_DIR", None)
         env["HOME"] = tmp_home
         env["RAPTOR_REGISTRY_HOME"] = str(Path(tmp_home) / ".raptor")
-        return subprocess.run(
-            [sys.executable, LIFECYCLE] + list(args),
-            capture_output=True, text=True, env=env,
-        )
+        with standalone_cli_env(env=env, data_home=Path(tmp_home) / ".local/share") as child_env:
+            # This fixture owns a persistent registry across start/complete.
+            child_env.update(HOME=tmp_home, RAPTOR_REGISTRY_HOME=env["RAPTOR_REGISTRY_HOME"])
+            return subprocess.run(
+                [sys.executable, LIFECYCLE] + list(args),
+                capture_output=True, text=True, env=child_env, timeout=60,
+            )
 
     @staticmethod
     def _setup_project(home_dir, project_dir):

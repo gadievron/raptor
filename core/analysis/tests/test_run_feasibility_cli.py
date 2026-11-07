@@ -21,6 +21,8 @@ from unittest.mock import patch
 import pytest
 
 from types import ModuleType
+from core.testing.standalone_cli import run_standalone_cli
+
 from core.testing.module_views import module_function_view
 import builtins
 from core.testing.module_bindings import patch_module_attribute
@@ -33,7 +35,7 @@ CLI = REPO_ROOT / "libexec" / "raptor-run-feasibility"
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(CLI), *args],
         env=env,
         cwd=str(cwd),
