@@ -457,6 +457,33 @@ class TestImport:
         assert runs[0]["config"]["triage"] is None
         assert labels_by_run["corpus-full-v2"][0]["error_reason"] == ""
         assert labels_by_run["corpus-bare"][0]["match"] is False
+        for run in runs:
+            for key in ("model_resolved", "llm_cache", "llm_cache_policy", "integer_abi"):
+                assert key not in run["config"]
+
+    @pytest.mark.parametrize("cache, policy, abi", [
+        ("off", {"enabled": False, "ttl_seconds": None}, "llp64"),
+        ("on", {"enabled": True, "ttl_seconds": 120.0}, None),
+    ], ids=["bypassed-no-expiry", "enabled-null-abi"])
+    def test_recorded_config_survives_import(self, tmp_path, monkeypatch, cache, policy, abi):
+        # The importing host's policy must not replace recorded settings.
+        monkeypatch.setenv("RAPTOR_LLM_CACHE", "off" if cache == "on" else "on")
+        monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", "999")
+        recorded = {"model_resolved": "fixture/resolved-model", "llm_cache": cache,
+                    "llm_cache_policy": policy, "integer_abi": abi}
+        path = self._write(tmp_path, "saved", {
+            "meta": {"model": "fixture-alias", **recorded, "unrelated": "not configuration"},
+            "results": [_row()],
+        })
+        original = path.read_bytes()
+        store = tmp_path / "store.jsonl"
+        history.import_results(path, store)
+        runs, _ = history.load_store(store)
+        config = runs[0]["config"]
+        assert {key: config[key] for key in recorded} == recorded
+        assert config["model"] == "fixture-alias"
+        assert "unrelated" not in config
+        assert path.read_bytes() == original
 
     def test_unrecognized_shape_raises(self, tmp_path):
         store = tmp_path / "store.jsonl"
