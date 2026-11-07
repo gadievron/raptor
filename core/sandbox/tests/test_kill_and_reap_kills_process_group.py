@@ -32,7 +32,9 @@ from pathlib import Path
 
 import pytest
 
+from core.sandbox import _spawn
 from core.sandbox._spawn import _kill_and_reap
+from core.testing.module_bindings import patch_module_attribute
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="/proc required for process liveness check",
@@ -161,7 +163,7 @@ class TestTeardownTargetSelfGroupGuard:
     def _teardown(self, popen, monkeypatch):
         from core.sandbox import _spawn
         killed: list[int] = []
-        monkeypatch.setattr(os, "killpg",
+        patch_module_attribute(monkeypatch, _spawn, "os", "killpg",
                             lambda pgid, sig: killed.append(pgid))
         death_r, death_w = os.pipe()
         try:
@@ -209,10 +211,10 @@ def test_reaped_numeric_pid_never_authorises_signals(monkeypatch):
         raise ChildProcessError("already reaped")
     def forbidden(*args):
         raise AssertionError("reaped PID used to address a process or group")
-    monkeypatch.setattr(os, "waitid", reaped)
-    monkeypatch.setattr(os, "getpgid", forbidden)
-    monkeypatch.setattr(os, "kill", forbidden)
-    monkeypatch.setattr(os, "killpg", forbidden)
+    patch_module_attribute(monkeypatch, _spawn, "os", "waitid", reaped)
+    patch_module_attribute(monkeypatch, _spawn, "os", "getpgid", forbidden)
+    patch_module_attribute(monkeypatch, _spawn, "os", "kill", forbidden)
+    patch_module_attribute(monkeypatch, _spawn, "os", "killpg", forbidden)
     _kill_and_reap(12345)
 
 
@@ -227,7 +229,7 @@ def test_graceful_teardown_keeps_zombie_until_group_sweep(monkeypatch):
         assert status is not None, "group identity released before descendant sweep"
         observations.append(group)
         return original_killpg(group, signum)
-    monkeypatch.setattr(os, "killpg", sweep)
+    patch_module_attribute(monkeypatch, _spawn, "os", "killpg", sweep)
     try:
         _teardown_target(process.pid, write_fd, {write_fd}, grace_s=2)
         process.returncode = 0  # helper owns the wait

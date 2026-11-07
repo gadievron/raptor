@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox import _macos_spawn
+from core.testing.module_bindings import patch_module_attribute
 
 SHIM_PATH = (
     Path(__file__).resolve().parents[3] / "libexec" / "raptor-seatbelt-shim"
@@ -251,8 +252,7 @@ class TestRunSandboxedSweepWiring:
         monkeypatch.setattr(
             _macos_spawn, "_ps_snapshot", lambda: list(self.LIVE_SENTINEL))
         killpgs = []
-        monkeypatch.setattr(
-            os, "killpg",
+        patch_module_attribute(monkeypatch, _macos_spawn, "os", "killpg",
             lambda pid, sig: killpgs.append((pid, sig)))
         sweeps = []
 
@@ -337,8 +337,7 @@ class TestShimSweep:
         self_pid = os.getpid()
         child = FAKE_SHIM_PID + 1
         escapee = FAKE_SHIM_PID + 2
-        monkeypatch.setattr(
-            os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         live = [(child, self_pid, child), (escapee, child, escapee)]
         post = [(escapee, 1, escapee), (200, 1, 200)]
         tables = [post, []]
@@ -355,7 +354,7 @@ class TestShimSweep:
         # sandbox pgid even from a post-exit snapshot.
         child = FAKE_SHIM_PID + 1
         member = FAKE_SHIM_PID + 3
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         post = [(member, 1, child)]
         tables = [post, []]
         killed = []
@@ -367,7 +366,7 @@ class TestShimSweep:
     def test_sweep_orphans_never_touches_unrelated(
             self, shim_mod, monkeypatch):
         child = FAKE_SHIM_PID + 1
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         post = [(200, 1, 200), (201, 200, 200)]
         tables = [post, []]
         killed = []
@@ -381,8 +380,7 @@ class TestShimSweep:
             self, shim_mod, monkeypatch):
         child = FAKE_SHIM_PID + 1
         killpgs = []
-        monkeypatch.setattr(
-            os, "killpg", lambda pid, sig: killpgs.append((pid, sig)))
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: killpgs.append((pid, sig)))
         shim_mod._sweep_orphans(
             child, None, snapshot_fn=lambda: [], kill_fn=lambda p: None)
         assert killpgs == [(child, signal.SIGKILL)]
@@ -496,7 +494,7 @@ class TestShimSweepLineageLedger:
             self, shim_mod, monkeypatch):
         child = FAKE_SHIM_PID + 1
         escapee = FAKE_SHIM_PID + 2
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         # The latest live table no longer attributes the escapee (its
         # link broke before the final snapshot) — only the ledger,
         # accumulated from an EARLIER snapshot, still knows it.
@@ -519,7 +517,7 @@ class TestShimSweepLineageLedger:
         child = FAKE_SHIM_PID + 1
         intermediate = FAKE_SHIM_PID + 4
         daemon = FAKE_SHIM_PID + 5
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         post = [(daemon, 1, intermediate), (200, 1, 200)]
         killed = []
         tables = [list(post), []]
@@ -545,7 +543,7 @@ class TestShimSweepLineageLedger:
         # pgid.
         child = FAKE_SHIM_PID + 1
         recycled = FAKE_SHIM_PID + 6
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         post = [(recycled, 1, 777)]  # different group now
         tables = [post, []]
         killed = []
@@ -566,7 +564,7 @@ class TestShimSweepLineageLedger:
         self_pid = os.getpid()
         child = FAKE_SHIM_PID + 1
         ps_child = FAKE_SHIM_PID + 7
-        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+        patch_module_attribute(monkeypatch, shim_mod, "os", "killpg", lambda pid, sig: None)
         # The ps helper appears as a live child of the SHIM, outside
         # the sandbox group.
         post = [(child, self_pid, child), (ps_child, self_pid, self_pid)]
