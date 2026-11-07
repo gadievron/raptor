@@ -53,6 +53,12 @@ class WorkQueue:
                 WHERE status='obsolete';
             CREATE INDEX IF NOT EXISTS queue_nonnull_turns ON views(namespace,last_turn)
                 WHERE last_turn IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS queue_delivery_jobs ON jobs(namespace,view_id)
+                WHERE status IN ('complete','prepared');
+            CREATE INDEX IF NOT EXISTS queue_unfinished_jobs ON jobs(namespace,view_id)
+                WHERE status NOT IN ('complete','prepared','not_applicable','obsolete');
+            CREATE INDEX IF NOT EXISTS queue_runnable_jobs ON jobs(namespace,view_id)
+                WHERE status NOT IN ('complete','prepared','not_applicable','blocked','obsolete');
         """)
 
     def close(self):
