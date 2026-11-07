@@ -38,7 +38,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
@@ -1216,6 +1216,9 @@ def _analyze_returned_var(
 # ── peer-caller corroboration (never verdict-bearing) ────────────────
 
 
+_PEER_LINES_IMPL = split_lines
+
+
 def _peer_checks(
     source_texts: dict[str, str],
     callee: str,
@@ -1237,7 +1240,9 @@ def _peer_checks(
         lang = _language_of(fp)
         if lang not in _C_LANGUAGES:
             continue
-        for idx, line_text in enumerate(split_lines(source), 1):
+        lines = (iter_source_lines(source)
+                 if type(source) is str and split_lines is _PEER_LINES_IMPL else split_lines(source))
+        for idx, line_text in enumerate(lines, 1):
             if (fp, idx) == exclude:
                 continue
             m = pattern.search(line_text)
