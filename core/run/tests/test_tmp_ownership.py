@@ -224,3 +224,10 @@ def test_unknown_cwd_census_is_probed_once_per_sweep(tmp_root, monkeypatch):
     assert sweep_dead_owner_dirs(PREFIX) == []
     assert probes == [1]
     assert all(path.is_dir() for path in paths)
+
+
+@pytest.fixture(autouse=True)
+def _owned_root_namespace_verdict(monkeypatch):
+    # Unit sweeps own private directories and explicit owner pids. Native
+    # namespace probing remains covered by test_tmp_reaper's native battery.
+    monkeypatch.setattr("core.run.tmp_reaper._in_child_pid_ns", lambda: False)
