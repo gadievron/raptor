@@ -38,6 +38,14 @@ def det():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _owned_detector_walk(monkeypatch, det):
+    """Keep scandir guards inside the real walk's private function globals."""
+    from core.testing.module_views import module_function_view
+
+    monkeypatch.setattr(det, "os", module_function_view(det.os))
+
+
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
     for rel, body in files.items():
         p = tmp_path / rel
