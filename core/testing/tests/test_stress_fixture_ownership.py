@@ -9,6 +9,7 @@ from types import ModuleType
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
 from core.testing.stress_state import isolated_stress_workers
 from packages.sca.calibration import stress
 
@@ -141,7 +142,8 @@ def test_native_registry_scope_drains_before_restoring(path, finish, body_regist
 def test_recording_executor_preserves_borrowed_futures(finish):
     view = _stress_view()
     patch = pytest.MonkeyPatch()
-    namespace = {"concurrent": concurrent, "pytest": pytest, "stress_mod": view}
+    namespace = {"concurrent": concurrent, "pytest": pytest, "stress_mod": view,
+                 "patch_module_attribute": patch_module_attribute}
     recording = _native(PATHS[2], "_RecordingExecutor", namespace)
     borrowed = [concurrent.futures.Future()]
     borrowed[0].set_result(stress.StressResult(
