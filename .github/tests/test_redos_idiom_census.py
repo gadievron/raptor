@@ -2543,9 +2543,15 @@ def _scan_restart_members() -> dict[tuple[str, str], dict]:
     import hashlib
 
     members: dict[tuple[str, str], dict] = {}
+    # Membership depends on pattern, flags and call mode, not its source
+    # coordinate. Retain only the decision, and only for this invocation;
+    # every repeated site still contributes its own identity and digest.
+    proposed: dict[tuple[str, int, str], bool] = {}
     for site in _all_runtime_sites():
-        lanes = _site_scan_lanes(site)
-        if not lanes:
+        pattern_key = (site.pattern, site.flags, site.mode)
+        if pattern_key not in proposed:
+            proposed[pattern_key] = bool(_site_scan_lanes(site))
+        if not proposed[pattern_key]:
             continue
         digest = hashlib.sha256(
             f"{site.flags}:{site.mode}:{site.pattern}".encode(),
