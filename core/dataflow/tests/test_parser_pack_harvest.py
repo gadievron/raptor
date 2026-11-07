@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.dataflow.parser_pack_harvest import (
     PROVENANCE_CVE_FIX,
     PROVENANCE_LEGACY,
@@ -439,7 +440,7 @@ def test_shim_bootstraps_via_raptor_dir(tmp_path: Path):
     env = dict(os.environ)
     env["RAPTOR_DIR"] = str(repo_root)
     env["_RAPTOR_TRUSTED"] = "1"
-    proc = subprocess.run(
+    proc = run_standalone_cli(
         [sys.executable, str(shim),
          "--sources", str(cfg), "--pack", str(tmp_path / "pack.json"),
          "--dry-run"],

@@ -11,6 +11,7 @@ import pytest
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.audit.discovery import (
     HandlerSite,
     SeamBundle,
@@ -951,16 +952,14 @@ class TestOrchestratorHookImport:
 
 class TestCLIArgParsing:
     def test_open_discovery_flag(self):
-        import subprocess
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, "libexec/raptor-audit", "run", "--help"],
             capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
         )
         assert "--no-open-discovery" in result.stdout
 
     def test_discovery_budget_flag(self):
-        import subprocess
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, "libexec/raptor-audit", "run", "--help"],
             capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
         )

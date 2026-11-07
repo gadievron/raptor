@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _AUDIT_CLI = _REPO_ROOT / "libexec" / "raptor-audit"
@@ -45,7 +46,7 @@ def _write_annotation(tmp_path: Path) -> tuple[Path, Path, Path]:
 
     ann_dir = tmp_path / "annotations"
     env = dict(os.environ, PYTHONPATH=str(_REPO_ROOT))
-    cp = subprocess.run(
+    cp = run_standalone_cli(
         [sys.executable, str(_ANNOTATE_CLI), "add",
          "src/auth.c", "check_pw",
          "--base", str(ann_dir), "--target", str(target),
