@@ -35,6 +35,7 @@ import pytest
 
 from core.sandbox import _macos_spawn
 from core.sandbox.errors import SandboxSetupError
+from core.testing.module_bindings import patch_module_attribute
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="POSIX-only",
@@ -217,8 +218,24 @@ class TestPinTeardown:
                             "ino": int(st.st_ino) + 1}])  # stale ino
         sr, sw = os.pipe()
         witness = tmp_path / "ran"
+        # Exercise the child's pre-exec gate independently of the parent's
+        # polling gate: otherwise the watcher can win and report "mid-run"
+        # before the child has been scheduled. Other tests cover the watcher.
+        child_gate_only = """
+import os, runpy, sys
+shim = sys.argv[1]
+sys.argv = sys.argv[1:]
+main = runpy.run_path(shim)["main"]
+namespace = main.__globals__
+verify = namespace["_pin_violation"]
+parent = os.getpid()
+def child_pin_violation(pins):
+    return None if os.getpid() == parent else verify(pins)
+namespace["_pin_violation"] = child_pin_violation
+raise SystemExit(main())
+"""
         p = subprocess.Popen(
-            [sys.executable, "-I", shim,
+            [sys.executable, "-I", "-c", child_gate_only, shim,
              "/bin/sh", "-c", f'printf K >&3; exec 3>&-; exec "$@"',
              "raptor-seatbelt-rdy", "/bin/sh", "-c",
              f'touch "{witness}"'],
@@ -465,7 +482,7 @@ class TestBirthTimeWitness:
                 return _WithBirthtime(st)
             return st
 
-        monkeypatch.setattr(os, "stat", stat_with_birthtime)
+        patch_module_attribute(monkeypatch, _macos_spawn, "os", "stat", stat_with_birthtime)
         with pytest.raises(SandboxSetupError, match="birth time"):
             _macos_spawn.run_sandboxed(
                 ["/bin/sh", "-c", "echo never"],
