@@ -1962,6 +1962,39 @@ def _oracle_classify(pattern: str, flags: int,
     return (worst, synthesized)
 
 
+def _member_variants(members):
+    """Each distinct pattern/flags/mode under every member, in site order.
+
+    Repeated coordinates do not need another measurement, but a second
+    pattern under the same symbol must not inherit the first one's verdict.
+    """
+    for key, record in sorted(members.items()):
+        seen = set()
+        for site in record["sites"]:
+            _lineno, pattern, flags, mode = site
+            variant = (pattern, int(flags), mode)
+            if variant not in seen:
+                seen.add(variant)
+                yield key, record, site
+
+
+def _record_variant_pin(rows, key, row, failures):
+    """One pin can summarize only variants with the same disposition."""
+    name = "\x1f".join(key)
+    previous = rows.get(name)
+    if previous is None:
+        rows[name] = row
+    elif previous["verdict"] != row["verdict"]:
+        failures.append(
+            f"{key[0]} :: {key[1]} has mixed variant dispositions "
+            f"({previous['verdict']} / {row['verdict']}) — split the member "
+            "identity or review each variant explicitly before pinning")
+    else:
+        exponents = [exp for exp in (previous["exp"], row["exp"])
+                     if exp is not None]
+        previous["exp"] = max(exponents) if exponents else None
+
+
 def _regen_expected(workers: int = 8) -> int:
     """Re-run the pump oracle over every proposed member and rewrite
     the pin file.  REFUSES to pin a superlinear member — fixing the
@@ -1974,14 +2007,13 @@ def _regen_expected(workers: int = 8) -> int:
     failures: list[str] = []
 
     def classify(item):
-        key, record = item
-        lineno, pattern, flags, mode = record["sites"][0]
+        key, record, (lineno, pattern, flags, mode) = item
         exponent, synthesized = _oracle_classify(pattern, flags, mode)
         return key, record, exponent, synthesized
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for key, record, exponent, synthesized in pool.map(
-                classify, sorted(members.items())):
+                classify, _member_variants(members)):
             if not synthesized:
                 verdict = "noattack"
             elif exponent is not None and exponent >= 1.5:
@@ -2005,12 +2037,12 @@ def _regen_expected(workers: int = 8) -> int:
                     continue
             else:
                 verdict = "linear"
-            rows["\x1f".join(key)] = {
+            _record_variant_pin(rows, key, {
                 "digests": sorted(record["digests"]),
                 "rules": sorted(record["rules"]),
                 "verdict": verdict,
                 "exp": None if exponent is None else round(exponent, 2),
-            }
+            }, failures)
     if failures:
         print("REFUSED to regenerate:")
         for failure in failures:
@@ -2677,8 +2709,7 @@ def _regen_scan_expected(workers: int = 8) -> int:
     failures: list[str] = []
 
     def classify(item):
-        key, record = item
-        lineno, pattern, flags, _mode = record["sites"][0]
+        key, record, (lineno, pattern, flags, _mode) = item
         exponent, synthesized = _scan_oracle_classify(pattern, flags)
         lanes = _site_scan_lanes(_Site(
             key, lineno, pattern, flags, "search", None,
@@ -2688,7 +2719,7 @@ def _regen_scan_expected(workers: int = 8) -> int:
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for key, record, exponent, synthesized, starved, n_lanes \
-                in pool.map(classify, sorted(members.items())):
+                in pool.map(classify, _member_variants(members)):
             if n_lanes > _SCAN_LANE_CAP:
                 # Loud, never silent: a part-measured member must not
                 # pin — its unmeasured lanes could carry the verdict.
@@ -2722,11 +2753,11 @@ def _regen_scan_expected(workers: int = 8) -> int:
                 continue
             else:
                 verdict = "linear"
-            rows["\x1f".join(key)] = {
+            _record_variant_pin(rows, key, {
                 "digests": sorted(record["digests"]),
                 "verdict": verdict,
                 "exp": None if exponent is None else round(exponent, 2),
-            }
+            }, failures)
     if failures:
         print("REFUSED to regenerate:")
         for failure in failures:
@@ -3892,20 +3923,22 @@ class TrailingSpanNightly(unittest.TestCase):
         violations: list[str] = []
 
         def measure(item):
-            key, record = item
-            lineno, pattern, flags, mode = record["sites"][0]
-            return key, _oracle_classify(pattern, flags, mode)
+            key, record, (lineno, pattern, flags, mode) = item
+            row = pinned["\x1f".join(key)]
+            measured = ((None, False) if row["verdict"] == "adjudicated"
+                        else _oracle_classify(pattern, flags, mode))
+            return key, lineno, measured
 
-        items = [
-            (key, record) for key, record in sorted(live.items())
+        items = _member_variants({
+            key: record for key, record in live.items()
             if pinned.get("\x1f".join(key)) is not None
-        ]
+        })
         # The lanes are hard-killed subprocesses; eight in flight
         # keeps the nightly run in minutes without starving the
         # runner (each worker is one child at a time).
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(measure, items))
-        for key, (exponent, synthesized) in results:
+        for key, lineno, (exponent, synthesized) in results:
             row = pinned["\x1f".join(key)]
             if row["verdict"] == "adjudicated":
                 # Deliberately pinned worst-case-superlinear (bounded
@@ -3915,7 +3948,7 @@ class TrailingSpanNightly(unittest.TestCase):
             if row["verdict"] == "noattack":
                 if synthesized:
                     violations.append(
-                        f"{key}: pinned noattack but the synthesizer "
+                        f"{key} at line {lineno}: pinned noattack but the synthesizer "
                         f"now builds an attack — re-adjudicate "
                         f"(exp={exponent})",
                     )
@@ -3926,7 +3959,7 @@ class TrailingSpanNightly(unittest.TestCase):
             # census threshold is 1.6, the nightly alarm is 1.9).
             if exponent is not None and exponent >= 1.9:
                 violations.append(
-                    f"{key}: pinned linear but measures "
+                    f"{key} at line {lineno}: pinned linear but measures "
                     f"exp={exponent:.2f}",
                 )
         self.assertFalse(violations,
@@ -4473,8 +4506,7 @@ class ScanRestartNightly(unittest.TestCase):
         violations: list[str] = []
 
         def measure(item):
-            key, record = item
-            lineno, pattern, flags, _mode = record["sites"][0]
+            key, record, (lineno, pattern, flags, _mode) = item
             lanes = _site_scan_lanes(_Site(
                 key, lineno, pattern, flags, "search", None,
             ))
@@ -4484,18 +4516,18 @@ class ScanRestartNightly(unittest.TestCase):
             # static census. Their timings are never used for a verdict.
             measured = ((None, False) if row["verdict"] == "adjudicated"
                         else _scan_oracle_classify(pattern, flags))
-            return key, starved, len(lanes), measured
+            return key, lineno, starved, len(lanes), measured
 
-        items = [
-            (key, record) for key, record in sorted(live.items())
+        items = _member_variants({
+            key: record for key, record in live.items()
             if pinned.get("\x1f".join(key)) is not None
-        ]
+        })
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for key, starved, n_lanes, (exponent, synthesized) \
+            for key, lineno, starved, n_lanes, (exponent, synthesized) \
                     in pool.map(measure, items):
                 if n_lanes > _SCAN_LANE_CAP:
                     violations.append(
-                        f"{key[0]} :: {key[1]}: {n_lanes} lanes over "
+                        f"{key[0]} :: {key[1]} at line {lineno}: {n_lanes} lanes over "
                         f"the classify cap ({_SCAN_LANE_CAP}) — the "
                         f"pin is part-measured; raise _SCAN_LANE_CAP")
                 row = pinned["\x1f".join(key)]
@@ -4507,12 +4539,12 @@ class ScanRestartNightly(unittest.TestCase):
                 if row["verdict"] == "noattack":
                     if synthesized and not starved:
                         violations.append(
-                            f"{key[0]} :: {key[1]}: noattack pin but "
+                            f"{key[0]} :: {key[1]} at line {lineno}: noattack pin but "
                             f"the synthesizer now builds an attack — "
                             f"regenerate")
                     elif exponent is not None and exponent >= 1.9:
                         violations.append(
-                            f"{key[0]} :: {key[1]}: manual-lane pin "
+                            f"{key[0]} :: {key[1]} at line {lineno}: manual-lane pin "
                             f"but a lane measures exp={exponent:.2f}")
                     continue
                 # Alarm threshold sits ABOVE the census threshold
@@ -4520,7 +4552,7 @@ class ScanRestartNightly(unittest.TestCase):
                 # real regression, not on a loaded runner.
                 if exponent is not None and exponent >= 1.9:
                     violations.append(
-                        f"{key[0]} :: {key[1]}: pinned linear but "
+                        f"{key[0]} :: {key[1]} at line {lineno}: pinned linear but "
                         f"measures exp={exponent:.2f}")
         self.assertFalse(violations,
                          "scan-restart nightly oracle disagrees with "
