@@ -8,6 +8,7 @@ active scans can exceed them, and protected state is outside the budget.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import math
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Iterator
 
 from core.atomic_fs import rmtree_hardened
+from core.atomic_fs.cache_eviction import file_generation
 
 from core.atomic_fs.fs_lock import validate_lock_fd
 
@@ -49,6 +51,8 @@ class _Unit:
     files: int = 1
     directory: bool = False
     stress: bool = False
+    snapshot: os.stat_result | None = None
+    fingerprint: bytes | None = None
 
 
 _ENVELOPE_HEADER = re.compile(
@@ -177,6 +181,27 @@ def _is_database(path: Path) -> bool:
         return True
 
 
+def _project_usage(project: Path, snapshot: os.stat_result,
+                   result: EvictionResult) -> tuple[int, int, float, float, bytes]:
+    """Stream usage and file generations without retaining a whole tree listing.
+
+    A changed traversal order is conservatively treated as changed contents.
+    Access times affect LRU but not the generation digest.
+    """
+    size, count, newest, used = 0, 0, snapshot.st_mtime, snapshot.st_mtime
+    digest = hashlib.sha256()
+    for path, info in _walk(project, result):
+        size += info.st_size
+        count += 1
+        newest = max(newest, info.st_mtime)
+        used = max(used, info.st_atime, info.st_mtime)
+        digest.update(os.fsencode(path.relative_to(project)))
+        digest.update(b"\0")
+        digest.update(repr(file_generation(info)).encode('ascii'))
+        digest.update(b"\n")
+    return size, count, newest, used, digest.digest()
+
+
 def _units(root: Path, result: EvictionResult) -> list[_Unit]:
     units = []
     # Generic cache files. Leave operational sidecars, immutable user state,
@@ -203,7 +228,7 @@ def _units(root: Path, result: EvictionResult) -> list[_Unit]:
                         if _is_database(p):
                             continue
                         units.append(_Unit(p, st.st_size, st.st_mtime,
-                                           max(st.st_atime, st.st_mtime)))
+                                           max(st.st_atime, st.st_mtime), snapshot=st))
         except OSError:
             result.errors += 1
 
@@ -228,13 +253,11 @@ def _units(root: Path, result: EvictionResult) -> list[_Unit]:
             except OSError:
                 result.errors += 1
                 continue
-            size, count, newest, used = 0, 0, st.st_mtime, st.st_mtime
-            for _, info in _walk(project, result):
-                size += info.st_size
-                count += 1
-                newest = max(newest, info.st_mtime)
-                used = max(used, info.st_atime, info.st_mtime)
-            units.append(_Unit(project, size, newest, used, count, True, stress))
+            errors_before = result.errors
+            size, count, newest, used, fingerprint = _project_usage(project, st, result)
+            if result.errors != errors_before:
+                continue  # Never delete a partly inspected whole-directory unit.
+            units.append(_Unit(project, size, newest, used, count, True, stress, st, fingerprint))
     result.files_scanned = sum(u.files for u in units)
     return units
 
@@ -302,17 +325,32 @@ def _prune_locked(
         if unit.path in removed:
             return
         try:
+            # Preview and deletion share the same ownership/refusal checks.
+            if any(p.is_symlink() for p in [unit.path, *unit.path.parents]
+                   if p != root.parent):
+                raise OSError('symlink in cache path')
+            if (unit.snapshot is None
+                    or file_generation(unit.path.lstat()) != file_generation(unit.snapshot)):
+                raise OSError('cache entry changed during maintenance')
+            if unit.directory:
+                errors_before = result.errors
+                usage = _project_usage(unit.path, unit.snapshot, result)
+                if (result.errors != errors_before
+                        or usage != (unit.size, unit.files, unit.written, unit.used, unit.fingerprint)
+                        or file_generation(unit.path.lstat()) != file_generation(unit.snapshot)):
+                    raise OSError('cache directory contents changed during maintenance')
             if not dry_run:
-                # A cooperative writer cannot race this pass. Refuse static
-                # symlinks even if the cache came from an untrusted archive.
-                if any(p.is_symlink() for p in [unit.path, *unit.path.parents]
-                       if p != root.parent):
-                    raise OSError('symlink in cache path')
                 if unit.directory:
                     if not rmtree_hardened(unit.path):
                         raise OSError(f'could not remove cache directory {unit.path}')
                 else:
                     unit.path.unlink()
+                try:
+                    unit.path.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise OSError('cache entry still present after removal')
         except OSError:
             result.errors += 1
             return
@@ -368,12 +406,21 @@ def cache_session(root: Path, *, maintain: bool = True) -> Iterator[None]:
     After the final concurrent scan releases its lease, attempt throttled
     maintenance. Offline scans pin entries but never evict their input data.
     """
+    failed = False
     try:
         with _lock(root, shared=True):
             yield
+    except BaseException:
+        failed = True
+        raise
     finally:
         if maintain:
-            maintain_cache(root)
+            try:
+                maintain_cache(root)
+            except BaseException:
+                if not failed:
+                    raise
+                logger.warning('SCA cache maintenance failed during scan teardown', exc_info=True)
 
 
 def maintain_cache(root: Path) -> None:
@@ -388,7 +435,16 @@ def maintain_cache(root: Path) -> None:
                 return
             stamp = root / _STAMP
             now = time.time()
-            if stamp.exists() and now - stamp.lstat().st_mtime < _INTERVAL:
+            if not math.isfinite(now):
+                raise ValueError('non-finite cache maintenance clock')
+            try:
+                marker = stamp.lstat()
+            except FileNotFoundError:
+                marker = None
+            regular_marker = (marker is None or (stat.S_ISREG(marker.st_mode)
+                              and marker.st_uid == os.geteuid() and marker.st_nlink == 1))
+            if (marker is not None and regular_marker
+                    and 0 <= now - marker.st_mtime < _INTERVAL):
                 return
             result = _prune_locked(
                 root, EvictionResult(), 30, tuning.sca_cache_max_mb * 1024**2,
@@ -396,7 +452,8 @@ def maintain_cache(root: Path) -> None:
             )
             # Avoid opening a caller-planted symlink for the throttle stamp.
             from core.atomic_fs import write_text_atomically
-            write_text_atomically(stamp, str(now))
+            if regular_marker and not result.errors:
+                write_text_atomically(stamp, str(now))
             if result.files_removed or result.errors:
                 logger.info('SCA cache: freed %.1f MiB; %.1f MiB remain (%d errors)',
                             result.bytes_freed / 1024**2,

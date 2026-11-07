@@ -65,6 +65,9 @@ def _fresh(monkeypatch, tmp_path, _owned_tempfile_namespace):
     monkeypatch.setattr(workdir, "_resolved", False)
     monkeypatch.setattr(workdir, "_cached", None)
     monkeypatch.setattr(workdir, "_cached_identity", None)
+    from core.run import tmp_reaper
+    monkeypatch.setattr(tmp_reaper, "_in_child_pid_ns", lambda: False)
+    monkeypatch.setattr(workdir, "_live_cwds", lambda: set())
     callbacks = []
     patch_module_attribute(
         monkeypatch, workdir, "atexit", "register",
@@ -322,16 +325,16 @@ def test_managed_sessions_never_use_pid_liveness_for_reclamation(_fresh, monkeyp
     legacy.mkdir()
     probes = []
 
-    def invisible(pid, signal):
+    def invisible(pid):
         assert pid != 1000000001, 'managed session must not be judged by its PID'
         probes.append(pid)
-        raise ProcessLookupError
+        return False
 
-    patch_module_attribute(monkeypatch, workdir, 'os', 'kill', invisible)
+    monkeypatch.setattr(workdir, '_pid_alive', invisible)
     workdir._sweep_dead_sessions(family)
     assert (managed / 'keep').read_text() == 'still in use by a descendant'
     assert not legacy.exists()
-    assert probes == [1000000002]
+    assert probes == [1000000002, 1000000002]
 
 
 def test_unreadable_metadata_identity_is_retained(_fresh, monkeypatch):
@@ -345,11 +348,11 @@ def test_unreadable_metadata_identity_is_retained(_fresh, monkeypatch):
             raise PermissionError('cannot inspect managed-session marker')
         return original_lstat(path, *args, **kwargs)
 
-    def must_not_probe(pid, signal):
+    def must_not_probe(pid):
         pytest.fail('unavailable metadata must not trigger PID-based deletion')
 
     patch_module_attribute(monkeypatch, workdir, 'os', 'lstat', unavailable)
-    patch_module_attribute(monkeypatch, workdir, 'os', 'kill', must_not_probe)
+    monkeypatch.setattr(workdir, '_pid_alive', must_not_probe)
     workdir._sweep_dead_sessions(family)
     assert managed.is_dir()
 

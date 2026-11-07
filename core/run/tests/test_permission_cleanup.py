@@ -90,6 +90,9 @@ def test_expired_restricted_tree_is_reclaimed(tmp_path, monkeypatch, mode, kind)
         if kind == "dead-owner":
             tmp_ownership.write_owner_marker(tree)
             monkeypatch.setattr(tmp_ownership, "_pid_alive", lambda pid: False)
+        if kind == "workdir":
+            monkeypatch.setattr(workdir, "_pid_alive", lambda pid: False)
+            monkeypatch.setattr(workdir, "_live_cwds", lambda: set())
         # Only stale descendant mtimes qualify for the activity probe.
         # Restrictive modes may block the walk, so restore traversal briefly.
         (tree / "locked").chmod(0o700)

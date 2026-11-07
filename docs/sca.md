@@ -1228,6 +1228,13 @@ removed as whole units. Active scans are pinned; fingerprint baselines and
 SQLite databases are preserved and excluded from the disposable budget.
 Offline scans do not trigger cleanup.
 
+Cleanup rechecks candidate generations before removal. A partially inspected
+inventory or stress directory is retained as a whole; reported byte totals
+cover inspected units, so errors can leave additional unaccounted data.
+Dry-run applies the same eligibility checks. Failed maintenance is retried on
+the next online scan; only successful passes refresh the ten-minute throttle.
+Unexpected or future-dated throttle markers do not prevent reclamation.
+
 ```bash
 raptor-sca clean-cache --dry-run
 raptor-sca clean-cache --max-size-mb 1024 --stress-max-size-mb 256

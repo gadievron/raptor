@@ -7,7 +7,7 @@ from core.llm import client
 
 
 @pytest.mark.parametrize(
-    "limit", [-1, -100, 1.5, "2", True, float("nan"), float("inf")]
+    "limit", [-1, -100, 1.5, "2", True, False, 0.0, float("nan"), float("inf")]
 )
 def test_invalid_entry_limit_uses_bounded_default(tmp_path, monkeypatch, limit):
     monkeypatch.setattr(client, "DEFAULT_CACHE_MAX_ENTRIES", 2, raising=False)

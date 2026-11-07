@@ -18,12 +18,10 @@ import json
 import logging as _logging
 import math
 import re
-import stat
 import sys
 import threading
 import time
 from collections import OrderedDict
-from pathlib import Path
 from typing import Any
 
 from core.hash import sha256_string
@@ -2382,37 +2380,12 @@ class LLMClient:
         across the namespace as a whole — operators reason about a
         single budget, not two."""
         cap = self.config.cache_max_entries
-        if cap is None or cap == 0:
+        if cap is None or type(cap) is int and cap == 0:
             return
         if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
             cap = DEFAULT_CACHE_MAX_ENTRIES
-        try:
-            entries = list(self.config.cache_dir.glob("*.json"))
-        except OSError:
-            return
-        # Only files and links belong to this flat cache. lstat keeps a
-        # dangling link from corrupting the count or borrowing its target's
-        # mtime; unrelated directories/FIFOs must not consume file quota.
-        with_mtime: list[tuple[float, Path]] = []
-        for path in entries:
-            try:
-                info = path.lstat()
-            except OSError:
-                continue
-            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                with_mtime.append((info.st_mtime, path))
-        with_mtime.sort(key=lambda pair: (pair[0], pair[1].name))
-        remaining = len(with_mtime)
-        for _, victim in with_mtime:
-            if remaining <= cap:
-                break
-            try:
-                victim.unlink()
-            except FileNotFoundError:
-                pass  # A concurrent remover already freed this slot.
-            except OSError:
-                continue  # Try later candidates instead of abandoning quota.
-            remaining -= 1
+        from core.atomic_fs.cache_eviction import evict_oldest_files
+        evict_oldest_files(self.config.cache_dir.glob("*.json"), cap)
 
     # Bump when schema-to-Pydantic conversion changes behaviour so
     # cached results validated under old rules are not replayed.
