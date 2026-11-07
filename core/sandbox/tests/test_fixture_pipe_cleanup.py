@@ -5,9 +5,10 @@ import importlib
 import os
 import sys
 import threading
-from types import SimpleNamespace
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
 
 _CASES = [
     ("daemon", "second-pipe"),
@@ -80,29 +81,19 @@ def test_failed_pipe_helper_setup_releases_descriptors(helper, fault, monkeypatc
             if helper in ("waiter", "rules"):
                 replacements["fork"] = fail
             if helper == "stdout":
-                # This constructor imports os locally.
-                patcher.setattr(os, "pipe", pipe)
+                patch_module_attribute(patcher, module, "os", "pipe", pipe)
                 if fault == "write":
-                    patcher.setattr(os, "write", fail)
+                    patch_module_attribute(patcher, module, "os", "write", fail)
                 else:
                     patcher.setattr(module, "open", fail, raising=False)
             else:
-                patcher.setattr(
-                    module, "os", SimpleNamespace(**(vars(os) | replacements))
-                )
+                for name, value in replacements.items():
+                    patch_module_attribute(patcher, module, "os", name, value)
             if helper in ("daemon", "host"):
-                patcher.setattr(
-                    module,
-                    "threading",
-                    SimpleNamespace(
-                        **(
-                            vars(threading)
-                            | {
-                                "Thread": thread,
-                                "Lock": fail if fault == "lock" else threading.Lock,
-                            }
-                        ),
-                    ),
+                patch_module_attribute(patcher, module, "threading", "Thread", thread)
+                patch_module_attribute(
+                    patcher, module, "threading", "Lock",
+                    fail if fault == "lock" else threading.Lock,
                 )
                 if fault == "host":
                     patcher.setattr(module, "SandboxHost", fail)

@@ -16,6 +16,7 @@ import pytest
 from core.sandbox import host as host_mod
 from core.sandbox.tests.pipe_host import fake_host
 from core.testing.pipes import pipes_for_setup
+from core.testing.module_bindings import patch_module_attribute
 
 
 def frame(body):
@@ -75,7 +76,7 @@ def test_decoder_recursion_error_is_typed(monkeypatch, source):
     def fail(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(host_mod, "json", SimpleNamespace(loads=fail))
+    patch_module_attribute(monkeypatch, host_mod, "json", "loads", fail)
     with pytest.raises(host_mod.HostRPCError) as raised:
         host_mod._decode_response(b"{}", source=source)
     assert raised.value.__cause__ is failure
@@ -142,7 +143,7 @@ def test_high_numbered_reply_descriptor_is_supported():
     assert not errors
 
 
-def test_zero_progress_request_write_raises_host_rpc_error(monkeypatch):
+def test_zero_progress_request_write_raises_host_rpc_error(monkeypatch, tmp_path):
     calls = []
 
     def write(fd, data):
@@ -153,11 +154,12 @@ def test_zero_progress_request_write_raises_host_rpc_error(monkeypatch):
             return 0
         raise AssertionError("retried zero-progress write")
 
-    monkeypatch.setattr(host_mod, "os", SimpleNamespace(write=write))
+    patch_module_attribute(monkeypatch, host_mod, "os", "write", write)
     host = object.__new__(host_mod.SandboxHost)
-    host._write_fd = 123
-    with pytest.raises(host_mod.HostRPCError, match="write to daemon failed"):
-        host._write_frame({"cmd": "ping"})
+    with (tmp_path / "request").open("wb") as request_stream:
+        host._write_fd = request_stream.fileno()
+        with pytest.raises(host_mod.HostRPCError, match="write to daemon failed"):
+            host._write_frame({"cmd": "ping"})
     assert len(calls) == 2
 
 

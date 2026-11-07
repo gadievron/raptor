@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from unittest import mock
 
 
@@ -47,7 +48,6 @@ class _FakeStdout:
     def __init__(self, lines):
         self._buf = io.BytesIO(b"".join(lines))
         # selectors needs a real fd — back the BytesIO with a pipe.
-        import os
         self._read_fd, self._write_fd = os.pipe()
         try:
             os.write(self._write_fd, b"".join(lines))
