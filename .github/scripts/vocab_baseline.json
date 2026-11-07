@@ -271,9 +271,9 @@
     "kind": "alternation"
   },
   "core/audit/array_bounds.py::_FRAME_NODES": {
-    "count": 19,
+    "count": 21,
     "kind": "literal",
-    "note": "closed tree-sitter C/C++ syntax schema for the admitted source-array frame; these are parser node tags, not application function or identifier vocabulary. Unknown nodes decline the obligation."
+    "note": "closed tree-sitter C/C++ syntax schema for the admitted source-array frame; includes sizeof_expression and type_descriptor for size-based bounds; these are parser node tags, not application function or identifier vocabulary. Unknown nodes decline the obligation."
   },
   "core/audit/array_bounds.py::_WRITE_CLAIM": {
     "count": 11,

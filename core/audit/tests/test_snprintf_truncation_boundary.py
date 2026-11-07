@@ -94,10 +94,10 @@ class TestDispatchWiring:
     def test_rule_file_exists(self):
         assert _RULE.is_file()
 
-    def test_rule_role_is_verification(self):
+    def test_rule_role_requires_review(self):
         from core.audit.sweep import get_rule_role
 
-        assert get_rule_role(str(_RULE)) == "verification"
+        assert get_rule_role(str(_RULE)) == "detection"
 
     def test_cwe_193_dispatch_entry(self):
         from core.audit.cwe_dispatch import cocci_rule_for_cwe, lookup
