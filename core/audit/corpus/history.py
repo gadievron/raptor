@@ -1030,14 +1030,16 @@ def refire_deltas(
 
 
 def full_run_delta(store: Path, current_run_id: str) -> str | None:
-    """Fix-impact delta of THIS run vs the latest prior recorded run.
+    """Delta vs an overlapping prior run, preferring recorded context.
 
     Full-run counterpart to :func:`refire_deltas`: a 220-label run
     used to print nothing but "history appended" even when the store
     held a complete prior run — the flip report existed in the data
     and was never shown.  Read-only, reporting-only, best-effort:
     returns None when the store, the current run, a prior run, or any
-    common label is absent.
+    common label is absent across all same-kind priors. Prefer the latest
+    overlapping run with matching recorded profile and configuration;
+    otherwise use the latest overlapping run with context warnings.
     """
     try:
         runs, labels_by_run = load_store(store)
@@ -1062,13 +1064,36 @@ def full_run_delta(store: Path, current_run_id: str) -> str | None:
     ]
     if not prior_runs:
         return None
-    prior = prior_runs[-1]
-    labels_a = _latest_labels(prior, labels_by_run)
     labels_b = _latest_labels(current, labels_by_run)
-    if not (set(labels_a) & set(labels_b)):
+    fallback = None
+    selected = None
+    seen_run_ids = set()
+    for candidate in reversed(prior_runs):
+        candidate_id = candidate.get("run_id", "")
+        if candidate_id in seen_run_ids:
+            continue
+        seen_run_ids.add(candidate_id)
+        candidate_labels = _latest_labels(candidate, labels_by_run)
+        if not (candidate_labels.keys() & labels_b.keys()):
+            continue
+        if fallback is None:
+            fallback = (candidate, candidate_labels)
+        if (run_profile(candidate) == run_profile(current)
+                and (candidate.get("config") or {}) == (current.get("config") or {})):
+            selected = (candidate, candidate_labels)
+            break
+    if fallback is None:
         return None
+    if selected is None:
+        selected = fallback
+        note = "Automatic baseline: no matching recorded context; using latest overlapping run.\n"
+    elif selected[0] is not fallback[0]:
+        note = "Automatic baseline: preferred matching recorded profile and configuration.\n"
+    else:
+        note = ""
+    prior, labels_a = selected
     diff = compare_runs(prior, current, labels_a, labels_b)
-    return format_compare(diff)
+    return note + format_compare(diff)
 
 
 # ---------------------------------------------------------------------------

@@ -1225,6 +1225,69 @@ class TestFullRunDelta:
         ])
         assert history.full_run_delta(store, "v2") is None
 
+    def test_intervening_disjoint_run_does_not_hide_older_overlap(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("baseline"), _label_rec("a.c:f", "clean", run_id="baseline"),
+            _run_rec("unrelated"), _label_rec("b.c:g", "clean", run_id="unrelated"),
+            _run_rec("current"), _label_rec("a.c:f", "finding", run_id="current"),
+        ])
+        output = history.full_run_delta(store, "current")
+        assert output is not None
+        assert "Compare baseline" in output
+
+    @pytest.mark.parametrize("field, before, after", [
+        ("mode", "quality", "security"),
+        ("model_resolved", "fixture/other", "fixture/current"),
+        ("llm_cache_policy", {"enabled": False}, {"enabled": True}),
+        ("integer_abi", "lp64", "llp64"),
+        ("max_seconds", 100, 200),
+    ], ids=["mode", "model", "cache-policy", "abi", "budget"])
+    def test_matching_configuration_is_preferred_to_newer_overlap(self, tmp_path, field, before, after):
+        store = self._store_with(tmp_path, [
+            _run_rec("matching", config={field: after}), _label_rec("a.c:f", "clean", run_id="matching"),
+            _run_rec("different", config={field: before}), _label_rec("a.c:f", "finding", run_id="different"),
+            _run_rec("current", config={field: after}), _label_rec("a.c:f", "finding", run_id="current"),
+        ])
+        output = history.full_run_delta(store, "current")
+        assert output is not None
+        assert "preferred matching recorded profile and configuration" in output
+        assert "Compare matching" in output
+
+    def test_matching_profile_is_preferred(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("matching", profile="cold"), _label_rec("a.c:f", "clean", run_id="matching"),
+            _run_rec("different", profile="deployed"), _label_rec("a.c:f", "finding", run_id="different"),
+            _run_rec("current", profile="cold"), _label_rec("a.c:f", "finding", run_id="current"),
+        ])
+        output = history.full_run_delta(store, "current")
+        assert output is not None
+        assert "Compare matching" in output
+
+    def test_reused_prior_id_keeps_latest_header_context(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("reused", config={"mode": "security"}), _label_rec("a.c:f", "clean", run_id="reused"),
+            _run_rec("reused", config={"mode": "quality"}), _label_rec("a.c:f", "finding", run_id="reused"),
+            _run_rec("current", config={"mode": "security"}), _label_rec("a.c:f", "clean", run_id="current"),
+        ])
+        output = history.full_run_delta(store, "current")
+        assert output is not None
+        assert "no matching recorded context" in output
+        assert "mode: 'quality' -> 'security'" in output
+        assert "preferred matching recorded profile" not in output
+
+    def test_fallback_retains_latest_overlap_and_context_warning(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("older", config={"mode": "quality"}), _label_rec("a.c:f", "clean", run_id="older"),
+            _run_rec("latest", config={"mode": "quality"}), _label_rec("a.c:f", "finding", run_id="latest"),
+            _run_rec("disjoint", config={"mode": "security"}), _label_rec("b.c:g", "clean", run_id="disjoint"),
+            _run_rec("current", config={"mode": "security"}), _label_rec("a.c:f", "clean", run_id="current"),
+        ])
+        output = history.full_run_delta(store, "current")
+        assert output is not None
+        assert "no matching recorded context" in output
+        assert "Compare latest" in output
+        assert "recorded configuration differs" in output
+
 
 class TestLabelKindSeparation:
     """Synthetic-mutant runs never mix with real-label runs anywhere
