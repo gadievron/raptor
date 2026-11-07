@@ -141,6 +141,9 @@ def fixture_scope(spec, namespace):
             args["self"] = object()
         if "monkeypatch" in parameters:
             args["monkeypatch"] = patch
+        if "_owned_wsl_namespace" in parameters:
+            # native_fixture already routes WSL bindings/imports to this view.
+            args["_owned_wsl_namespace"] = namespace
         result = function(**args)
         if not inspect.isgenerator(result):
             yield
