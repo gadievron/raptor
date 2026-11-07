@@ -1,63 +1,78 @@
-// fcntl_flag_domain.cocci — Detect fcntl() calls that mix up
-// file-descriptor flags and file-status flags.
+// fcntl_flag_domain.cocci — Detect descriptor/status flag domain confusion.
 //
-// F_SETFD operates on file-descriptor flags (FD_CLOEXEC).
-// F_SETFL operates on file-status flags (O_NONBLOCK, O_APPEND, etc).
-// Passing FD_CLOEXEC to F_SETFL or O_NONBLOCK to F_SETFD silently
-// does the wrong thing: the flag is applied to the wrong domain
-// and has no effect on the intended behaviour.
-//
+// F_SETFD takes descriptor flags; F_SETFL takes file-status flags.
+// Check exact identifiers whose bits survive supported OR/AND expressions.
+// A correct-domain flag alongside a wrong-domain flag does not repair it.
+// Numeric values, casts and unsupported expressions establish no flag facts.
+// Keep parsing bounded and report-local to preserve production batching.
 // CWE-688: Function Call With Incorrect Variable or Reference as Argument
-// Zero-FP: cross-domain flag is always a bug — FD_CLOEXEC is 1, so
-// F_SETFL with FD_CLOEXEC sets an undefined file-status bit;
-// O_NONBLOCK to F_SETFD sets random fd-flag bits.
 // @role: verification
 
-@setfl_fdflags@
-expression FD;
-expression FLAGS;
+@fcntl_flag_domain@
+expression FD, COMMAND, FLAGS;
 position p;
 @@
 
-* fcntl@p(FD, F_SETFL, FLAGS)
+* \(fcntl\|fcntl64\)(FD, COMMAND, FLAGS)@p
 
-@script:python check_setfl depends on setfl_fdflags@
-p << setfl_fdflags.p;
-FLAGS << setfl_fdflags.FLAGS;
+@script:python check_domain depends on fcntl_flag_domain@
+p << fcntl_flag_domain.p;
+COMMAND << fcntl_flag_domain.COMMAND;
+FLAGS << fcntl_flag_domain.FLAGS;
 @@
+import ast
 import json
-_f = str(FLAGS)
-if "FD_CLOEXEC" in _f and "O_" not in _f:
+import re
+
+
+def _fcntl_surviving_flags(node):
+    if isinstance(node, ast.Name):
+        # Abstract identity bits, not operating-system flag values.
+        return {
+            "FD_CLOEXEC": 1,
+            "O_NONBLOCK": 2,
+            "O_APPEND": 4,
+            "O_ASYNC": 8,
+            "O_DIRECT": 16,
+            "O_NOATIME": 32,
+        }.get(node.id, 0)
+    if isinstance(node, ast.BinOp):
+        left = _fcntl_surviving_flags(node.left)
+        right = _fcntl_surviving_flags(node.right)
+        if isinstance(node.op, ast.BitOr):
+            return left | right
+        if isinstance(node.op, ast.BitAnd):
+            return left & right
+    return 0
+
+
+_fcntl_command = str(COMMAND).strip()
+_fcntl_flags = str(FLAGS)
+_fcntl_wrong = 0
+if len(_fcntl_flags) <= 512 and _fcntl_flags.isascii() and len(_fcntl_command) <= 64 and _fcntl_command.isascii():
+    try:
+        _fcntl_command_node = ast.parse(_fcntl_command, mode="eval").body
+        _fcntl_command_name = (
+            _fcntl_command_node.id if isinstance(_fcntl_command_node, ast.Name) else ""
+        )
+        _fcntl_wrong_mask = {"F_SETFL": 1, "F_SETFD": 62}.get(_fcntl_command_name, 0)
+        if _fcntl_wrong_mask:
+            # Numeric leaves prove no symbolic flags; normalize C integer
+            # spelling without assigning platform-specific numeric values.
+            _fcntl_flags = re.sub(
+                r"\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|[0-9]+)[uUlL]*\b", "0", _fcntl_flags,
+            )
+            _fcntl_wrong = _fcntl_surviving_flags(
+                ast.parse(_fcntl_flags, mode="eval").body,
+            ) & _fcntl_wrong_mask
+    except (SyntaxError, ValueError, RecursionError):
+        _fcntl_wrong = 0
+if _fcntl_wrong:
     msg = {
-      "rule":  "fcntl_flag_domain",
-      "file":  p[0].file,
-      "line":  int(p[0].line),
-      "col":   int(p[0].column),
-      "message": "fcntl(fd, F_SETFL, FD_CLOEXEC) — FD_CLOEXEC is a file-descriptor flag, not a file-status flag. Use F_SETFD (CWE-688)."
-    }
-    print("COCCIRESULT:" + json.dumps(msg))
-
-@setfd_statusflags@
-expression FD;
-expression FLAGS;
-position p;
-@@
-
-* fcntl@p(FD, F_SETFD, FLAGS)
-
-@script:python check_setfd depends on setfd_statusflags@
-p << setfd_statusflags.p;
-FLAGS << setfd_statusflags.FLAGS;
-@@
-import json
-_f = str(FLAGS)
-_status_flags = ["O_NONBLOCK", "O_APPEND", "O_ASYNC", "O_DIRECT", "O_NOATIME"]
-if any(sf in _f for sf in _status_flags) and "FD_CLOEXEC" not in _f:
-    msg = {
-      "rule":  "fcntl_flag_domain",
-      "file":  p[0].file,
-      "line":  int(p[0].line),
-      "col":   int(p[0].column),
-      "message": "fcntl(fd, F_SETFD, %s) — file-status flag passed to F_SETFD (file-descriptor flag domain). Use F_SETFL (CWE-688)." % _f
+      "rule": "fcntl_flag_domain",
+      "file": p[0].file,
+      "line": int(p[0].line),
+      "col": int(p[0].column),
+      "message": "fcntl-family call mixes file-descriptor and file-status flag domains (CWE-688). Use F_SETFD for FD_CLOEXEC and F_SETFL for file-status flags."
     }
     print("COCCIRESULT:" + json.dumps(msg))

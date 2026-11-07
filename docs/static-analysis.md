@@ -232,6 +232,12 @@ casts, other arithmetic, indirect flag definitions and expressions longer
 than 512 characters
 are outside this check's proof scope.
 
+The flag-domain check covers `fcntl` and `fcntl64`. It reports descriptor
+flags passed to `F_SETFL` and file-status flags passed to `F_SETFD`, including
+calls that mix correct and incorrect flag types. Similarly named identifiers
+and flags that are masked out do not trigger these reports. Numeric flag
+values and indirect flag definitions need source review.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
