@@ -55,6 +55,8 @@ from core.audit.dark_verify import (
 
 from core.testing.module_bindings import patch_module_attribute
 
+import core.audit.dark_verify._execute as _tool_lookup_consumer
+
 # -- language_for_file --------------------------------------------------------
 
 
@@ -1309,8 +1311,7 @@ class TestExecuteWitnessC:
                 "arg_expressions": ["42"], "includes": [], "setup_lines": [],
             },
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "compiler not found" in r.match_detail
@@ -1587,8 +1588,7 @@ class TestExecuteWitnessJs:
             args=["test"],
             lang_config={"require_path": "./auth.js"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "node not found" in r.match_detail
@@ -1606,8 +1606,7 @@ class TestExecuteWitnessGo:
             language="go",
             lang_config={"package": "main", "arg_expressions": [], "return_type": ""},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "go compiler not found" in r.match_detail
@@ -1770,8 +1769,7 @@ class TestExecuteWitnessTs:
             args=["test"],
             lang_config={"require_path": "./auth.ts"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "tsx" in r.match_detail or "ts-node" in r.match_detail
@@ -1790,8 +1788,7 @@ class TestExecuteWitnessRuby:
             args=["test"],
             lang_config={"require_path": "auth"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "ruby not found" in r.match_detail
@@ -1810,8 +1807,7 @@ class TestExecuteWitnessPhp:
             args=["test"],
             lang_config={"require_path": "auth.php"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "php not found" in r.match_detail
@@ -1834,8 +1830,7 @@ class TestExecuteWitnessRust:
                 "setup_lines": [],
             },
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "rustc not found" in r.match_detail
@@ -1859,8 +1854,7 @@ class TestExecuteWitnessJava:
                 "is_static": True,
             },
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "javac" in r.match_detail
@@ -1879,8 +1873,7 @@ class TestExecuteWitnessLua:
             args=["test"],
             lang_config={"require_path": "auth"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "lua not found" in r.match_detail
@@ -1899,8 +1892,7 @@ class TestExecuteWitnessPerl:
             args=["test"],
             lang_config={"use_module": "Auth"},
         )
-        import shutil
-        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda cmd: None)
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert "perl not found" in r.match_detail
@@ -3607,7 +3599,7 @@ class TestCompileSandboxParity:
             "package main\n\nfunc Add(a, b int) int { return a + b }\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         spy = _SandboxSpy([
             _completed(),  # go build
             _completed(stdout=json.dumps({"status": "returned", "token": "feedface", "value": "7"})),
@@ -3640,7 +3632,7 @@ class TestCompileSandboxParity:
         (tmp_path / "lib.rs").write_text(
             "pub fn double_it(x: i32) -> i32 { x * 2 }\n", encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         spy = _SandboxSpy([
             _completed(),  # rustc
             _completed(stdout=json.dumps({"status": "returned", "token": "feedface", "value": "84"})),
@@ -3680,7 +3672,7 @@ class TestCompileSandboxParity:
             "}\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         spy = _SandboxSpy([
             _completed(),  # javac
             _completed(stdout=json.dumps({"status": "returned", "token": "feedface", "value": "49"})),
@@ -4246,7 +4238,7 @@ class TestSandboxFailClosed:
         (tmp_path / "add.c").write_text(
             "int add(int a, int b) { return a + b; }\n", encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         monkeypatch.setattr(ex, "_import_sandbox_run", lambda: None)
         _forbid_bare_subprocess(monkeypatch)
         spec = DarkWitnessSpec(
@@ -4265,7 +4257,7 @@ class TestSandboxFailClosed:
             "package main\n\nfunc Add(a, b int) int { return a + b }\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         monkeypatch.setattr(ex, "_import_sandbox_run", lambda: None)
         _forbid_bare_subprocess(monkeypatch)
         spec = DarkWitnessSpec(
@@ -4283,7 +4275,7 @@ class TestSandboxFailClosed:
         (tmp_path / "lib.rs").write_text(
             "pub fn f() {}\n", encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         monkeypatch.setattr(ex, "_import_sandbox_run", lambda: None)
         _forbid_bare_subprocess(monkeypatch)
         spec = DarkWitnessSpec(
@@ -4302,7 +4294,7 @@ class TestSandboxFailClosed:
             "public class A { public static int f() { return 1; } }\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name: f'/usr/bin/{name}')
         monkeypatch.setattr(ex, "_import_sandbox_run", lambda: None)
         _forbid_bare_subprocess(monkeypatch)
         spec = DarkWitnessSpec(
@@ -4614,6 +4606,8 @@ class TestSandboxExecPath:
     @staticmethod
     def _system_env() -> str:
         env_bin = shutil.which("env")
+        if env_bin:
+            env_bin = os.path.realpath(env_bin)
         assert env_bin and any(
             env_bin.startswith(p) for p in ex._SYSTEM_TOOLCHAIN_PREFIXES)
         if os.path.basename(os.path.realpath(env_bin)) != "env":

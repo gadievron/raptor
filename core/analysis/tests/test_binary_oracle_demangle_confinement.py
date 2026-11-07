@@ -19,10 +19,12 @@ from typing import Any
 
 import pytest
 
+import core.analysis.binary_oracle as _tool_lookup_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.fixture
 def sandbox_calls(monkeypatch) -> list[dict[str, Any]]:
-    import shutil
 
     import core.sandbox as _sb
 
@@ -39,11 +41,7 @@ def sandbox_calls(monkeypatch) -> list[dict[str, Any]]:
         return SimpleNamespace(returncode=0, stdout="foo()\n", stderr="")
 
     monkeypatch.setattr(_sb, "run", fake_run)
-    monkeypatch.setattr(
-        shutil, "which",
-        lambda name, *a, **k: "/usr/bin/c++filt" if name == "c++filt"
-        else None,
-    )
+    patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda name, *a, **k: '/usr/bin/c++filt' if name == 'c++filt' else None)
     return calls
 
 
@@ -67,11 +65,10 @@ def test_demangle_confines_filesystem(sandbox_calls: list[dict[str, Any]]):
 def test_demangle_missing_tool_never_reaches_sandbox(
     sandbox_calls: list[dict[str, Any]], monkeypatch,
 ):
-    import shutil
 
     from core.analysis.binary_oracle import _demangle_linkage_names
 
-    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda *a, **k: None)
 
     assert _demangle_linkage_names(["_Z3foov"]) == {}
     assert sandbox_calls == []

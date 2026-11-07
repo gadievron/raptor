@@ -14,6 +14,9 @@ import pytest
 from packages.ghidra.session import GhidraSession, GhidraSessionError
 from packages.ghidra.project_util import fix_owner, prepare_working_copy
 
+import packages.ghidra.session as _tool_lookup_consumer
+from core.testing.module_bindings import mock_module_attribute
+
 
 MINIMAL_GPR = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -210,12 +213,12 @@ class TestFindInstallDir:
         headless.write_text("#!/bin/sh\n", encoding="utf-8")
         headless.chmod(0o755)
 
-        with patch("shutil.which", return_value=str(headless)):
+        with mock_module_attribute(_tool_lookup_consumer, 'shutil', 'which', return_value=str(headless)):
             result = GhidraSession._find_install_dir()
         assert result == tmp_path / "ghidra"
 
     def test_returns_none_when_not_found(self):
-        with patch("shutil.which", return_value=None):
+        with mock_module_attribute(_tool_lookup_consumer, 'shutil', 'which', return_value=None):
             assert GhidraSession._find_install_dir() is None
 
     def test_returns_none_when_not_in_support(self, tmp_path):
@@ -223,7 +226,7 @@ class TestFindInstallDir:
         headless.write_text("#!/bin/sh\n", encoding="utf-8")
         headless.chmod(0o755)
 
-        with patch("shutil.which", return_value=str(headless)):
+        with mock_module_attribute(_tool_lookup_consumer, 'shutil', 'which', return_value=str(headless)):
             assert GhidraSession._find_install_dir() is None
 
     def test_auto_detects_on_this_system(self):

@@ -49,6 +49,9 @@ from core.audit.tests._live_transport import (
     skip_unless_cpp_carries_probe,
 )
 
+import core.audit.preprocessor_view as _tool_lookup_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 FIXTURES = Path(__file__).parent / "fixtures" / "preprocessor_view"
 
 with isolated_module_state(pv, {"_PROBE_CACHE": {}}, lock=pv._PROBE_LOCK):
@@ -463,7 +466,7 @@ class TestDegradation:
         # Deliberately MINTS the availability shape (the guard's
         # transport arm on cpp-probed hosts), so it must bypass the
         # guard — the sole reason this leg calls the raw runner.
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, 'shutil', 'which', lambda *a, **k: None)
         target = _target_with(tmp_path, "simple.c")
         view = expand_translation_unit(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
