@@ -202,9 +202,15 @@ class SMTAdapter(ToolAdapter):
             )
 
         if result.feasible is None:
+            reason = result.reasoning or "SMT verdict unknown"
+            dropped = list(result.unknown or [])
+            if dropped:
+                shown = ", ".join(repr(c) for c in dropped[:5])
+                more = f" (+{len(dropped) - 5} more)" if len(dropped) > 5 else ""
+                reason += f"; {len(dropped)} unparseable condition(s): {shown}{more}"
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
-                error=result.reasoning or "SMT verdict unknown",
+                error=reason,
             )
 
         dropped = list(result.unknown or [])

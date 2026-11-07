@@ -854,3 +854,29 @@ class TestSMTAdapterDualSignedness:
         ev = SMTAdapter(bv_profile=BV_C_UINT64).run("ret < 0\n", tmp_path)
         assert ev.success
         assert "unsat" in ev.summary
+
+
+@pytest.mark.parametrize("dropped", [[], ["ptr->field == 1"], [f"invalid_{i}" for i in range(7)]])
+def test_indeterminate_smt_preserves_reason_and_bounds_dropped_conditions(tmp_path, monkeypatch, dropped):
+    import packages.hypothesis_validation.adapters.smt as module
+    from core.smt_solver.path_feasibility import PathSMTResult
+
+    result = PathSMTResult(
+        feasible=None, satisfied=[], unsatisfied=[], unknown=dropped,
+        model={}, smt_available=True, reasoning="query remains indeterminate",
+    )
+    monkeypatch.setattr(module, "_z3_available", lambda: True)
+    monkeypatch.setattr(module, "check_path_feasibility_dual", lambda *a, **kw: result)
+    evidence = SMTAdapter().run("size > 0", tmp_path)
+    assert not evidence.success
+    assert not evidence.matches
+    assert not evidence.empty_matches_conclusive
+    assert evidence.error.startswith(result.reasoning)
+    if not dropped:
+        assert evidence.error == result.reasoning
+    else:
+        assert "unparseable" in evidence.error
+        assert all(repr(condition) in evidence.error for condition in dropped[:5])
+        if len(dropped) > 5:
+            assert "(+2 more)" in evidence.error
+            assert "invalid_5" not in evidence.error
