@@ -16,6 +16,10 @@ encoder's responsibility.
   bitvec is arithmetic right shift; the logical form is ``z3.LShR``.
   Wrapping both by name stops encoders from silently picking the wrong
   one for a given signedness.
+- **Definedness predicates** — ``division_undefined`` and
+  ``shift_count_invalid`` — expose invalid arithmetic cases that Z3
+  otherwise assigns total bitvector results. They require explicit
+  promoted operand types; they do not infer source-language semantics.
 - **``cast``** combines the above to simulate a C-style conversion
   between integer types.
 
@@ -293,3 +297,54 @@ def cast(bv: Any, to_width: int, from_signed: bool) -> Any:
     if to_width < from_width:
         return truncate(bv, to_width)
     return bv
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic definedness obligations
+# ---------------------------------------------------------------------------
+
+def division_undefined(a: Any, b: Any, *, signed: bool) -> Any:
+    """Invalid division/remainder for explicit, already-promoted integers.
+
+    Z3 division and remainder are total, including a zero divisor and the
+    signed minimum divided by minus one. C integer / and % are undefined
+    for both cases, even though the mathematical remainder in the latter
+    case would be zero. Unsigned division only excludes a zero divisor.
+
+    This predicate adds no constraints and performs no query. Assert it to
+    search for an invalid operation; assert its negation when modeling a
+    defined execution. Source types, promotions and reachability remain
+    separate obligations. Width-one vectors follow this integer model;
+    they do not establish C Boolean arithmetic semantics.
+    """
+    require_bool(signed, argument="signed")
+    require_bv_pair(a, b)
+    zero = z3.BitVecVal(0, b.size(), ctx=b.ctx)
+    invalid = b == zero
+    if signed:
+        minimum = z3.BitVecVal(1 << (a.size() - 1), a.size(), ctx=a.ctx)
+        minus_one = z3.BitVecVal(-1, b.size(), ctx=b.ctx)
+        invalid = z3.Or(invalid, z3.And(a == minimum, b == minus_one))
+    return invalid
+
+
+def shift_count_invalid(count: Any, value_width: int, *, signed: bool) -> Any:
+    """Count is negative or at least the promoted left operand's bit width.
+
+    The count may have a different width from the shifted value, as C's
+    integer promotions apply to the operands independently. ``signed`` is
+    the promoted count's signedness. A wider comparison frame prevents a
+    large value_width from wrapping into the count's narrower bitvector.
+
+    This covers counts for either shift direction. It does not establish
+    signed left-shift value definedness or choose the implementation's
+    behavior for right-shifting a negative signed value.
+    """
+    require_bool(signed, argument="signed")
+    require_width(value_width, argument="value_width")
+    require_bv(count, argument="count")
+    compare_width = max(count.size(), value_width.bit_length())
+    extended = zero_extend(count, compare_width)
+    limit = z3.BitVecVal(value_width, compare_width, ctx=count.ctx)
+    too_large = z3.UGE(extended, limit)
+    return z3.Or(count < z3.BitVecVal(0, count.size(), ctx=count.ctx), too_large) if signed else too_large
