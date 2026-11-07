@@ -132,6 +132,13 @@ class TestDispatchEntries:
     def test_rule_file_exists_on_disk(self, cwe: str):
         assert (_RULES_DIR / _PHP_FAMILIES[cwe][0]).is_file()
 
+    def test_php_attribute_encoding_rule_cannot_refute_the_whole_class(self):
+        from core.audit.sweep import is_confirm_only_rule
+
+        rule = resolve_semgrep_rule_for_cwe("CWE-116", "index.php")
+        assert rule is not None
+        assert is_confirm_only_rule(rule)
+
     def test_every_table_semgrep_reference_exists_on_disk(self):
         for cwe, entry in CWE_TO_TOOL_DISPATCH.items():
             name = entry.get("semgrep")
@@ -278,8 +285,7 @@ needs_semgrep = pytest.mark.skipif(
 
 @needs_semgrep
 class TestLiveAdjudication:
-    """The real semgrep binary adjudicates both directions through
-    run_semgrep_sweep — the exact call the tool chain dispatches."""
+    """Native confirms and class-appropriate silence through the dispatched sweep."""
 
     @pytest.mark.parametrize("cwe", sorted(_PHP_FAMILIES))
     def test_vulnerable_snippet_confirms(self, cwe: str, tmp_path: Path):
@@ -318,9 +324,33 @@ class TestLiveAdjudication:
             function_name="f",
             rule_config=rule,
         )
-        assert result.outcome == "refuted", (
-            f"{cwe}: {result.outcome} {result.errors}"
+        if cwe == "CWE-116":
+            # The rule only covers immediate quoted-attribute encoders.
+            assert result.outcome == "inconclusive", (
+                f"{cwe}: {result.outcome} {result.errors}"
+            )
+            assert "confirm-only" in (result.details or {}).get("reason", "")
+        else:
+            assert result.outcome == "refuted", (
+                f"{cwe}: {result.outcome} {result.errors}"
+            )
+
+    def test_attribute_encoding_miss_on_indirect_flow_stays_inconclusive(self, tmp_path: Path):
+        from core.audit.tests._live_transport import run_semgrep_sweep_guarded
+
+        (tmp_path / "app.php").write_text(
+            '<?php\nfunction f() {\n'
+            '  $value = htmlspecialchars($_GET["x"], ENT_COMPAT);\n'
+            '  echo "<a title=\'" . $value . "\'>x</a>";\n}\n'
         )
+        rule = resolve_semgrep_rule_for_cwe("CWE-116", "app.php")
+        assert rule
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path, file_path="app.php", function_name="f", rule_config=rule,
+        )
+        assert result.outcome == "inconclusive", result.errors
+        assert not result.matches
+        assert "confirm-only" in (result.details or {}).get("reason", "")
 
     def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
         """Live pin of the engine's ACTUAL selection for language:php

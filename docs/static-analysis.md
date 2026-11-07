@@ -269,6 +269,23 @@ as well. A silent result is not a safety verdict. Prefer JSON for
 untrusted data; class restrictions alone do not make untrusted
 `unserialize` safe. See the [PHP unserialize manual](https://www.php.net/manual/en/function.unserialize.php).
 
+PHP quoted-attribute encoding checks cover both `htmlspecialchars` and
+`htmlentities`. They check whether explicit flags protect the surrounding
+quote, including document/error flags that do not enable quoting, supported
+OR combinations of standard constants, and canonical nonnegative decimal
+masks up to nine digits. `ENT_QUOTES` protects both quote characters;
+`ENT_COMPAT` protects only double quotes. See the [PHP encoding flags](https://www.php.net/manual/en/function.htmlspecialchars.php).
+
+These checks require an immediate encoder call after a bounded HTML-tag
+literal with a quoted attribute opener. Plain configuration strings, body
+text, completed attributes and method-name lookalikes do not match.
+Indirect values, complex templates, dynamic flags and other flag expressions
+need separate review. Calls that omit flags are not diagnosed because the
+defaults vary by PHP version. The checks flag potentially insufficient
+encoding; they do not prove attacker control or account for prior encoding.
+In `/audit`, a no-match remains
+inconclusive for CWE-116 rather than refuting the whole encoding class.
+
 Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs
