@@ -199,6 +199,12 @@ without positives, and false-positive behavior is untested without negatives.
 Support includes unreviewed labels even though existing P/R metrics exclude
 errors; the report does not change those metrics or infer mode expectations
 from file-level metadata.
+Explicit mode conformance is shown separately in the terminal report.
+Each cohort and class records mismatch details (function, exercised mode,
+expected status, and actual status), using the existing mode scorer's status
+matching rules. Secondary recorded security verdicts are checked when present;
+unexercised expectations and error rows are not checked. These counts describe
+expectations, not necessarily distinct functions, and never replace raw scores.
 
 Three layers, all emitted by the run summary and recomputable offline
 with `corpus_metrics`:

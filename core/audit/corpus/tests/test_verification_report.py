@@ -68,8 +68,31 @@ def test_raw_truth_and_explicit_mode_expectations_remain_separate():
     cohort = report.build_run_report([row])["cohorts"][0]
     assert cohort["metrics"]["matrix"]["tp"] == 1
     assert cohort["availability_by_cell"]["tp"]["missing"] == 1
-    assert cohort["mode_expectations"] == {"checked": 1, "mismatches": 1}
+    assert cohort["mode_expectations"] == {"checked": 1, "mismatches": 1, "details": [{
+        "function_id": "a.c:f", "mode": "security", "expected": "clean", "actual": "suspicious",
+    }]}
     assert cohort["by_class"]["auth"]["metrics"] == cohort["metrics"]
+
+
+def test_mode_details_preserve_secondary_actuals_and_skip_unexercised_or_error_rows():
+    rows = [
+        _row(mode="quality", actual="finding", security_actual="dark",
+             expected_mode_results={"quality": "finding", "security": "clean", "unused": "finding"}),
+        _row(function_id="b.c:g", mode="quality", actual="clean", security_actual="suspicious",
+             expected_mode_results={"quality": "finding", "security": "clean"}),
+        _row(actual="error", expected_mode_results={"security": "finding"}),
+    ]
+    original = deepcopy(rows)
+    cohorts = report.build_run_report(rows)["cohorts"]
+    quality = next(c for c in cohorts if c["context"]["mode"] == "quality")
+    assert quality["mode_expectations"] == {"checked": 4, "mismatches": 2, "details": [
+        {"function_id": "b.c:g", "mode": "quality", "expected": "finding", "actual": "clean"},
+        {"function_id": "b.c:g", "mode": "security", "expected": "clean", "actual": "suspicious"},
+    ]}
+    assert quality["by_class"]["auth"]["mode_expectations"] == quality["mode_expectations"]
+    error = next(c for c in cohorts if c["context"]["mode"] == "security")
+    assert error["mode_expectations"] == {"checked": 0, "mismatches": 0, "details": []}
+    assert rows == original
 
 
 def test_label_support_counts_unreviewed_truth_without_changing_recall():
@@ -191,6 +214,13 @@ def test_cli_help_and_terminal_context_are_safe(tmp_path, capsys):
     assert caught.value.code == 0
     assert "Examples:" in capsys.readouterr().out
     source = tmp_path / "results.json"
-    source.write_text(json.dumps([_row(model="fixture\x1b[31m", bug_class="class\x1b[31m")]))
-    assert report.main([str(source)]) == 0
-    assert "\x1b" not in capsys.readouterr().out
+    source.write_text(json.dumps([_row(model="fixture\x1b[31m", bug_class="class\x1b[31m",
+                                      function_id="function\x1b[31m", expected_mode_results={"security": "clean"})]))
+    destination = tmp_path / "comparison.json"
+    assert report.main([str(source), "--output", str(destination)]) == 0
+    output = capsys.readouterr().out
+    assert "Explicit mode expectations: 1 checked, 1 mismatches" in output
+    assert "expected=clean got=suspicious" in output
+    assert "\x1b" not in output
+    saved = json.loads(destination.read_text())["runs"][0]["cohorts"][0]
+    assert saved["mode_expectations"]["details"][0]["function_id"] == "function\x1b[31m"
