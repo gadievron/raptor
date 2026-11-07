@@ -263,10 +263,10 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "Marshal.load", "readObject", "ObjectInputStream", "loads"],
         "dark_verify": True,
         "dark_verify_statuses": ("dark", "suspicious", "finding"),
-        # PHP leg: request data reaching one-arg unserialize(); the
-        # two-arg options form is out of scope (its safe variant is
-        # the rule's own remediation). Language-gated: every other
-        # target keeps the pre-existing chain byte-identical.
+        # PHP leg: request data reaching unserialize(), including the
+        # rule's bounded literal-options model for unrestricted classes.
+        # Unknown option shapes remain outside that model; silence never
+        # establishes safety. Other languages keep their existing chain.
         "semgrep": "php/unserialize-taint.yaml",
         "semgrep_langs": ("php",),
     },

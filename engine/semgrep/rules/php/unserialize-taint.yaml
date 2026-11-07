@@ -10,59 +10,59 @@ rules:
   # (\unserialize) and error-suppressed (@unserialize) spellings
   # match.
   #
-  # Two-arg calls: the options form is matched ONLY in its cheapest
-  # dangerous spelling — a literal 'allowed_classes' => true (any
-  # bracket syntax, extra keys allowed). 'allowed_classes' => false
-  # is this rule's own recommended remediation and stays silent.
+  # Two-arg calls: recognize complete flat literal arrays containing
+  # allowed_classes boolean policies and/or max_depth. Omitting the
+  # policy allows classes; repeated literal policies use the last value.
+  # Depth values are decimal integers or simple local/index reads.
+  # Options taint does not stand in for serialized-input taint.
   #
-  # Known FP modes:
-  #   - Integrity checks the rule cannot see (an hash_equals/HMAC
-  #     guard branch before the call, a preg_match shape check) still
-  #     fire — guard-shaped validation is invisible to taint mode.
-  # Scope pins: taint is single-function, and options arrays
-  #   participate only in the literal-true spelling above. The
-  #   negative fixture carries out-of-scope shape pins for both
-  #   boundaries — each flips when a matching shape lands.
+  # Known limitations: validation/integrity guards remain invisible.
+  # Taint is intraprocedural. Class lists, computed keys, unpacking,
+  # unknown options and other depth expressions are outside this narrow
+  # option model. A silent result never establishes safe deserialization.
   - id: raptor.php.unserialize-taint.request-data
     mode: taint
     languages: [php]
     severity: HIGH
     message: >
-      Request data reaches unserialize() with no class restriction. A
-      serialized-object payload instantiates any autoloadable class
-      and its magic methods run with attacker-chosen properties
-      (object injection). Pass a strict class allowlist
-      (unserialize($v, ['allowed_classes' => false])) or move the
-      format to json_decode.
+      Request data reaches unserialize() with unrestricted class
+      instantiation (object injection). Prefer a non-object data format
+      such as JSON for untrusted input. If serialized data is unavoidable,
+      authenticate it and restrict allowed classes; class restrictions
+      alone do not make untrusted deserialization safe.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
           - pattern: $_POST[...]
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
-      # Only unfiltered request reads are sources. Keep filter/options
-      # selection literal, and taint the return value rather than arguments.
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
       - patterns:
-          - pattern: $READER($INPUT, $NAME)
-          - metavariable-regex:
-              metavariable: $READER
-              constant-propagation: false
-              regex: '(?i)^\\?filter_input$'
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
           - metavariable-regex:
               metavariable: $INPUT
               constant-propagation: false
               regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
-          - pattern-not-inside: |
-              namespace $N;
-              ...
-              function $READER(...) { ... }
-              ...
-          - pattern-not-inside: |
-              namespace $N {
-                ...
-                function $READER(...) { ... }
-                ...
-              }
           - pattern-not-inside: |
               namespace $N;
               ...
@@ -75,27 +75,33 @@ rules:
                 ...
               }
         exact: true
+      # Split call spellings so shadow checks use a literal function name;
+      # global calls need no application-function shadow search.
       - patterns:
-          - pattern: $READER($INPUT, $NAME, $FILTER)
-          - metavariable-regex:
-              metavariable: $READER
-              constant-propagation: false
-              regex: '(?i)^\\?filter_input$'
+          - pattern-either:
+              - patterns:
+                  - pattern: filter_input($INPUT, $NAME, $FILTER)
+                  - pattern-not-inside: |
+                      namespace $N;
+                      $...BEFORE;
+                      function filter_input(...) { ... }
+                      $...AFTER;
+                  - pattern-not-inside: |
+                      namespace $N {
+                        ...
+                        function filter_input(...) { ... }
+                        ...
+                      }
+              - patterns:
+                  - pattern: $READER($INPUT, $NAME, $FILTER)
+                  - metavariable-regex:
+                      metavariable: $READER
+                      constant-propagation: false
+                      regex: '(?i)^\\filter_input$'
           - metavariable-regex:
               metavariable: $INPUT
               constant-propagation: false
               regex: '^\\?(?:INPUT_GET|INPUT_POST|INPUT_COOKIE)$'
-          - pattern-not-inside: |
-              namespace $N;
-              ...
-              function $READER(...) { ... }
-              ...
-          - pattern-not-inside: |
-              namespace $N {
-                ...
-                function $READER(...) { ... }
-                ...
-              }
           - pattern-not-inside: |
               namespace $N;
               ...
@@ -124,12 +130,40 @@ rules:
               }
         exact: true
     pattern-sinks:
-      - pattern-either:
-          - pattern: unserialize($DATA)
-          - pattern: \unserialize($DATA)
-          - pattern: unserialize($DATA, [..., 'allowed_classes' => true, ...])
-          - pattern: \unserialize($DATA, [..., 'allowed_classes' => true, ...])
-          - pattern: unserialize($DATA, array(..., 'allowed_classes' => true, ...))
-          - pattern: \unserialize($DATA, array(..., 'allowed_classes' => true, ...))
+      - patterns:
+          - pattern-either:
+              - pattern: $FUNCTION($DATA)
+              - patterns:
+                  - pattern: $FUNCTION($DATA, $OPTIONS)
+                  # Recognize complete flat option shapes with a default or
+                  # last-literal-true policy. Whitespace is possessive to avoid
+                  # retrying hostile runs on rejected option shapes.
+                  # PHP array(...) metavariable spans omit the array keyword.
+                  - metavariable-regex:
+                      metavariable: $OPTIONS
+                      constant-propagation: false
+                      regex: |-
+                        (?x)\A
+                        (?:\[|(?:(?i:array)(?&W))?\() (?&W)
+                        (?:
+                         ['"]max_depth['"](?&W)=>(?&W)(?:[0-9]+|\$[A-Za-z_][A-Za-z0-9_]*(?:(?&W)\[(?&W)(?:'[^'\\]*'|"[^"\\$]*")(?&W)\])?)(?:(?&W),(?&W)['"]max_depth['"](?&W)=>(?&W)(?:[0-9]+|\$[A-Za-z_][A-Za-z0-9_]*(?:(?&W)\[(?&W)(?:'[^'\\]*'|"[^"\\$]*")(?&W)\])?))*
+                         |
+                         (?:(?:['"]max_depth['"](?&W)=>(?&W)(?:[0-9]+|\$[A-Za-z_][A-Za-z0-9_]*(?:(?&W)\[(?&W)(?:'[^'\\]*'|"[^"\\$]*")(?&W)\])?)|['"]allowed_classes['"](?&W)=>(?&W)(?i:true|false))(?&W),(?&W))*
+                         ['"]allowed_classes['"](?&W)=>(?&W)(?i:true)(?:(?&W),(?&W)['"]max_depth['"](?&W)=>(?&W)(?:[0-9]+|\$[A-Za-z_][A-Za-z0-9_]*(?:(?&W)\[(?&W)(?:'[^'\\]*'|"[^"\\$]*")(?&W)\])?))*
+                        )?
+                        (?&W),?(?&W) (?:\]|\))
+                        \z
+                        (?(DEFINE)
+                          (?<W>
+                            (?:\s++|/\*(?:[^*]++|\*(?!/))*+\*/
+                              |//[^\r\n]*+(?:\r\n|[\r\n])
+                              |\#[^\r\n]*+(?:\r\n|[\r\n]))*+
+                          )
+                        )
+          - metavariable-regex:
+              metavariable: $FUNCTION
+              constant-propagation: false
+              regex: '(?i)^\\?unserialize$'
+          - focus-metavariable: $DATA
     metadata:
       cwe: ["CWE-502"]

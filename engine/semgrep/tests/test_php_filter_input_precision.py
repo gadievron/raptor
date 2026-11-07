@@ -42,6 +42,8 @@ def test_raw_input_sources_across_php_families(tmp_path, bracketed):
         positive += ["FILTER_INPUT(INPUT_GET, 'value')",
                      r"filter_input(\INPUT_GET, 'value')",
                      r"\filter_input(INPUT_GET, 'value', FILTER_UNSAFE_RAW)"]
+        positive += [r"\FILTER_INPUT(\INPUT_GET, 'value')",
+                     r"\FiLtEr_InPuT(\INPUT_POST, 'value', \FILTER_UNSAFE_RAW)"]
         controls = [
             "filter_input(INPUT_GET, 'value', FILTER_VALIDATE_INT)",
             "filter_input(INPUT_POST, 'value', FILTER_SANITIZE_SPECIAL_CHARS)",

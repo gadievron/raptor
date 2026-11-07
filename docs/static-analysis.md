@@ -254,6 +254,21 @@ map mutations require further analysis; absence of a finding does not
 establish safe validation. Index-taint propagation remains enabled, so an
 unchecked lookup into a fixed literal map can still report.
 
+The PHP object-deserialization check follows the serialized input to
+`unserialize`, including empty options and depth-only options: omitting
+`allowed_classes` still allows classes. Setting `max_depth` does not
+restrict object types. For flat literal arrays containing boolean class
+policies and depth settings, repeated policy keys use the last value.
+Taint confined to options does not flag a fixed serialized input.
+
+This options model supports decimal depth limits and simple variable or
+index reads. Class lists, computed keys, unpacked arrays, unknown option
+keys and other expressions require separate review. Function resolution
+is syntactic; imported aliases and application helpers may need review
+as well. A silent result is not a safety verdict. Prefer JSON for
+untrusted data; class restrictions alone do not make untrusted
+`unserialize` safe. See the [PHP unserialize manual](https://www.php.net/manual/en/function.unserialize.php).
+
 Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs
