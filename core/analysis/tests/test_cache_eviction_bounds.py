@@ -145,3 +145,49 @@ def test_reachability_clear_ignores_directories_and_preserves_link_targets(
     assert _reach_cache.clear_cache() == 2
     assert (root / "directory.json").exists()
     assert target.read_text() == "operator data"
+
+
+@pytest.mark.parametrize('change', ['refresh', 'replace', 'symlink', 'directory', 'unlink-error', 'post-replace'])
+def test_each_cache_routes_eviction_through_generation_checks(cache, monkeypatch, change):
+    from core.atomic_fs import cache_eviction
+    root, evict = cache
+    values = entries(root)
+    target = values[0]
+    before = target.stat()
+    preserved = root.parent / 'preserved'
+    class ChangingPath(type(target)):
+        calls = 0
+        def lstat(self):
+            type(self).calls += 1
+            if self.calls == 2:
+                if change == 'refresh':
+                    os.utime(target, (9000, 9000))
+                elif change in ('replace', 'symlink', 'directory'):
+                    target.rename(preserved)
+                    if change == 'replace':
+                        target.write_text('latest')
+                        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+                    elif change == 'directory':
+                        target.mkdir()
+                    else:
+                        target.symlink_to(preserved)
+            return super().lstat()
+        def unlink(self):
+            if change == 'unlink-error':
+                raise PermissionError('fixture refused')
+            result = super().unlink()
+            if change == 'post-replace':
+                target.write_text('latest')
+            return result
+    original = cache_eviction.evict_oldest_files
+    called = []
+    def owned_paths(paths, cap):
+        called.append(True)
+        return original([ChangingPath(p) if p == target else p for p in paths], cap)
+    monkeypatch.setattr(cache_eviction, 'evict_oldest_files', owned_paths)
+    evict()
+    assert called == [True]
+    assert target.exists()
+    assert sum(path.exists() for path in values[1:]) == (2 if change == 'directory' else 1)
+    if change in ('replace', 'post-replace'):
+        assert target.read_text() == 'latest'

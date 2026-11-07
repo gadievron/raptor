@@ -155,7 +155,7 @@ class CacheEnvelope:
     def is_fresh(self, now: float) -> bool:
         if self.ttl_seconds == TTL_FOREVER:
             return True
-        return (now - self.written_at) <= self.ttl_seconds
+        return 0 <= (now - self.written_at) <= self.ttl_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,7 +488,9 @@ class JsonCache:
         # so the memo still wins net even with the per-hit stat.
         path = self._path_for(key)
         try:
-            st = path.stat()
+            st = path.lstat()
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError("cache entry is not a regular file")
             signature = _file_signature(st)
             file_size = st.st_size
         except (OSError, ValueError):
@@ -695,8 +697,9 @@ class JsonCache:
         # Reject at parse time so the existing JSONDecodeError /
         # ValueError handler treats it as a corrupt entry and the
         # cache falls back to MISSING.
+        from core.source.gated import read_text_gated
         data = _loads(
-            path.read_text(encoding="utf-8"),
+            read_text_gated(path, max_bytes=None, follow_symlinks=False),
             parse_constant=_reject_non_finite,
         )
         if not isinstance(data, dict):

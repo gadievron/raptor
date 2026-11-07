@@ -47,6 +47,8 @@ import threading
 from pathlib import Path
 
 from core.atomic_fs import rmtree_hardened
+from core.atomic_fs.cache_eviction import file_generation
+from core.run.tmp_reaper import _dir_in_use, _live_cwds, _pid_alive
 
 logger = logging.getLogger(__name__)
 
@@ -111,57 +113,59 @@ def _inside_family(path: Path) -> bool:
     return any(part == fam for part in path.parts)
 
 
-def _sweep_dead_sessions(root: Path) -> None:
-    """Remove sibling ``session-<pid>-<rand>`` dirs whose pid is dead.
-
-    Mirrors the launcher's launch-time sweep (lstat-only, never follows
-    symlinks, same-owner only). pid reuse merely delays cleanup one
-    cycle — the safe direction. Directories carrying launcher metadata
-    belong to the session lifecycle and must never be reclaimed here.
-    Best-effort throughout.
-    """
+def _has_metadata(path: Path) -> bool:
     try:
-        entries = list(os.scandir(root))
+        os.lstat(path / "metadata")
+    except FileNotFoundError:
+        return False
     except OSError:
-        return
-    for entry in entries:
-        m = _SESSION_RE.match(entry.name)
-        if m is None:
-            continue
-        try:
-            st = entry.stat(follow_symlinks=False)
-        except OSError:
-            continue
-        if not entry.is_dir(follow_symlinks=False):
-            continue
-        if st.st_uid != os.geteuid():
-            continue
-        # Reserve any metadata entry for the launcher/session lifecycle,
-        # including partial, invalid or dangling entries. Never follow it or
-        # interpret an inspection failure as permission to delete scratch.
-        try:
-            os.lstat(os.path.join(entry.path, "metadata"))
-        except FileNotFoundError:
-            pass  # Legacy workdir without a session-lifecycle marker.
-        except OSError:
-            continue
-        else:
-            continue
-        pid = int(m.group(1))
-        if pid == os.getpid():
-            continue
-        try:
-            os.kill(pid, 0)
-        except (ProcessLookupError, OverflowError):
-            # dead — or a pid beyond pid_t (a planted huge-digit dir
-            # name), which no live process can hold; reclaim below.
-            # OverflowError is not an OSError and crashed the sweep.
-            pass
-        except OSError:
-            continue      # EPERM etc.: someone lives there; skip
-        else:
-            continue      # alive; skip
-        rmtree_hardened(entry.path)
+        return True  # Uninspectable ownership is never legacy permission.
+    return True
+
+
+def _sweep_dead_sessions(root: Path) -> None:
+    """Stream legacy same-owner siblings and remove only confirmed-dead users.
+
+    Namespace ambiguity, live cwd/socket references and any metadata marker
+    retain the tree. Revalidate ownership, generation and PID immediately
+    before removal; one entry's filesystem error must not block later ones.
+    """
+    live_cwds = None
+    cwd_probe_done = False
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                match = _SESSION_RE.fullmatch(entry.name)
+                if match is None:
+                    continue
+                try:
+                    original = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISDIR(original.st_mode) or original.st_uid != os.geteuid():
+                        continue
+                    path = Path(entry.path)
+                    if _has_metadata(path):
+                        continue
+                    pid = int(match.group(1))
+                    if pid == os.getpid() or _pid_alive(pid):
+                        continue
+                    if not cwd_probe_done:
+                        live_cwds = _live_cwds()
+                        cwd_probe_done = True
+                    if _dir_in_use(path, live_cwds):
+                        continue
+                    if _has_metadata(path):
+                        continue
+                    if file_generation(path.lstat()) != file_generation(original):
+                        continue
+                    if _pid_alive(pid):
+                        continue
+                    if not rmtree_hardened(path):
+                        logger.debug("workdir: legacy session retained after removal refusal: %s", path)
+                except OSError:
+                    logger.debug("workdir: legacy session inspection/removal failed: %s", entry.name,
+                                 exc_info=True)
+    except OSError:
+        logger.debug("workdir: cannot finish legacy session listing under %s", root, exc_info=True)
 
 
 def _create_session_dir() -> tuple[Path, tuple[int, int]] | None:

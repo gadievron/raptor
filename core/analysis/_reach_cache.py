@@ -740,36 +740,12 @@ def _cache_entries() -> list:
 
 def _evict_oldest() -> None:
     """Remove oldest cache entries (by mtime) when count exceeds cap."""
+    from core.atomic_fs.cache_eviction import evict_oldest_files
     try:
         entries = _cache_entries()
     except OSError:
         return
-    if len(entries) <= _MAX_CACHE_ENTRIES:
-        return
-
-    # Sort by mtime ascending (oldest first). lstat + per-entry
-    # fallback: a dangling symlink squatting the cache dir made a
-    # plain ``p.stat()`` sort key raise, silently disabling eviction
-    # forever (the entry cap was never enforced again). An entry we
-    # cannot stat sorts oldest and gets evicted first.
-    def _entry_mtime(p: Path) -> float:
-        try:
-            return p.lstat().st_mtime
-        except OSError:
-            return 0.0
-
-    entries.sort(key=lambda path: (_entry_mtime(path), path.name))
-    remaining = len(entries)
-    for path in entries:
-        if remaining <= _MAX_CACHE_ENTRIES:
-            break
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass  # A concurrent remover already freed this slot.
-        except OSError:
-            continue
-        remaining -= 1
+    evict_oldest_files(entries, _MAX_CACHE_ENTRIES)
 
 
 def clear_cache() -> int:
