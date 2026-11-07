@@ -76,7 +76,7 @@ def test_call_summary_axioms_remain_asserted(no_reduction):
 def test_unparsed_conditions_remain_visible(no_reduction):
     result = paths.check_path_feasibility(conditions("Value == 3", "unrecognized prose"),
                                           profile=BV_C_UINT8, reduce_constraints=False)
-    assert result.feasible is True and result.model["Value"] == 3
+    assert result.feasible is None and result.model["Value"] == 3
     assert result.unknown == ["unrecognized prose"] and result.unknown_reasons
     assert result.wp_complete is False
 

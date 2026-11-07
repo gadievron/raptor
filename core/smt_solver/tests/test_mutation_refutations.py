@@ -48,7 +48,7 @@ def test_non_mutating_parse_failure_does_not_prevent_a_contradiction_proof(reduc
 def test_sat_candidates_keep_the_mutation_warning(entry):
     result = entry(conditions("Before == 1", "Value = 2", "After == 2"),
                    profile=BV_C_UINT8, reduce_constraints=False)
-    assert result.feasible is True and result.unknown == ["Value = 2"]
+    assert result.feasible is None and result.unknown == ["Value = 2"]
     assert result.wp_complete is False
 
 

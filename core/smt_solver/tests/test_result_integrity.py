@@ -52,7 +52,7 @@ def test_auxiliary_failure_cannot_erase_a_definitive_primary_sat_model(monkeypat
 def test_unencoded_inputs_prevent_a_complete_constraint_summary():
     result = paths.check_path_feasibility([paths.PathCondition("Value > 1", 0),
                                            paths.PathCondition("unsupported @@@ expression", 1)], profile=BVProfile(8, False))
-    assert result.feasible is True and result.unknown
+    assert result.feasible is None and result.unknown
     assert result.wp_predicate is not None and result.wp_complete is False
 
 
@@ -78,3 +78,41 @@ def test_signed_objectives_are_constructed_in_the_target_context(direction, expe
     result = paths._solve_pending(pending, z3.Optimize(ctx=ctx), [], [], [], profile=BVProfile(8, True),
                                   prefer_witness=("Value", direction), vars_={"Value": value})
     assert result.feasible is True and result.model["Value"] == expected
+
+
+@pytest.mark.parametrize("check", [paths.check_path_feasibility, paths.check_path_feasibility_dual])
+@pytest.mark.parametrize("reduce_constraints", [False, True])
+def test_partial_sat_cannot_certify_an_unencoded_conjunction(check, reduce_constraints):
+    result = check([
+        paths.PathCondition("Value == 0", 0),
+        paths.PathCondition("Value / 2 == 1", 1),
+    ], profile=BVProfile(8, False), reduce_constraints=reduce_constraints)
+    assert result.feasible is None
+    assert result.model["Value"] == 0
+    assert result.unknown == ["Value / 2 == 1"]
+    assert result.unknown_reasons
+    assert result.wp_complete is False
+    assert "encoded subset is satisfiable" in result.reasoning
+
+
+def test_partial_unsat_still_refutes_a_sound_weakening():
+    result = paths.check_path_feasibility([
+        paths.PathCondition("Value == 0", 0),
+        paths.PathCondition("Value == 1", 1),
+        paths.PathCondition("Value / 2 == 1", 2),
+    ], profile=BVProfile(8, False))
+    assert result.feasible is False
+    assert result.unknown == ["Value / 2 == 1"]
+    assert result.model == {}
+
+
+def test_intrinsic_sat_with_an_unencoded_guard_is_inconclusive():
+    value = z3.BitVec("Value", 8)
+    result = paths.check_verb_feasibility(
+        [("Value == 0", value == 0)],
+        [paths.PathCondition("Value / 2 == 1", 0)],
+        vars_={"Value": value}, profile=BVProfile(8, False),
+    )
+    assert result.feasible is None
+    assert result.model["Value"] == 0
+    assert result.wp_complete is False

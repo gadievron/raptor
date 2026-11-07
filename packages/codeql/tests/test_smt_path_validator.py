@@ -894,9 +894,9 @@ class TestAssignmentShapeBarrier:
             if x.text == "input = realloc(input, n)"
         )
         assert mutation_rej.kind is RejectionKind.ASSIGNMENT_SHAPED
-        # Path is feasible — pre-D2 this returned False (false
-        # refutation under the broken SSA assumption).
-        assert r.feasible is True
+        # The encoded subset is satisfiable, but the mutation is unmodeled.
+        # Do not certify the full path or refute it through merged call values.
+        assert r.feasible is None
         # Both strlen(input) calls produced anon entries in the
         # label store so downstream tooling can render meaningful
         # witnesses.
@@ -928,7 +928,7 @@ class TestAssignmentShapeBarrier:
             PathCondition("strlen(input) > 200", 2),
             PathCondition("strlen(input) < 50", 3),
         ])
-        assert result.feasible is True
+        assert result.feasible is None
         assert len(result.anon_var_map) == 3
         assert result.unknown == ["input = realloc(input, n)"]
 
@@ -945,8 +945,8 @@ class TestAssignmentShapeBarrier:
         ])
         # All three strlen guards are individually satisfiable and
         # — because each is in its own segment with a fresh
-        # placeholder — they don't interfere. Path is feasible.
-        assert r.feasible is True
+        # placeholder — they don't interfere. The full path stays inconclusive.
+        assert r.feasible is None
         # Both mutation steps recorded.
         mutation_texts = {
             x.text for x in r.unknown_reasons
@@ -1560,8 +1560,9 @@ class TestInputLimits:
             PathCondition(huge, step_index=1),
             PathCondition("x < 100", step_index=2),
         ])
-        # The two well-formed conditions are jointly satisfiable.
-        assert r.feasible is True
+        # The two well-formed conditions are jointly satisfiable, but the
+        # rejected condition prevents a full-conjunction SAT verdict.
+        assert r.feasible is None
         # The oversize one is rejected with INPUT_TOO_LONG.
         assert huge in r.unknown
         rej = next(x for x in r.unknown_reasons if x.text == huge)

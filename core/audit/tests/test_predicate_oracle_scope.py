@@ -127,3 +127,20 @@ def test_alternative_flow_predicates_cannot_demote_a_finding(tmp_path, monkeypat
     assert not calls
     assert result.status == "finding"
     assert not grade.is_verification_evidence(result.evidence_tool or "")
+
+
+def test_partial_sat_predicates_do_not_confirm_an_audit_observation(monkeypatch):
+    pytest.importorskip("z3")
+    monkeypatch.setattr(sweep, "_extract_path_conditions", lambda *args: [
+        "count == 0", "count / 2 == 1",
+    ])
+    result = sweep._run_smt_verb_inner(
+        file_path="record.c", function_name="Read", verb="validate-path",
+        source=SOURCE, hypothesis="partial predicate set",
+    )
+    assert not result.errors
+    assert result.outcome == "inconclusive"
+    assert result.details["feasible"] is None
+    assert result.details["model"]["count"] == 0
+    assert result.details["unknown"] == ["count / 2 == 1"]
+    assert not result.matches

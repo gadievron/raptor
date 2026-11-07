@@ -12,7 +12,8 @@ they are jointly satisfiable.
 - sat   → the encoded conjunction is satisfiable under its model assumptions
 - unsat → the encoded conditions are mutually exclusive under those assumptions;
           unsat core names the specific conflicting conditions
-- None  → Z3 unavailable or all conditions unparseable; fall back to LLM
+- None  → unavailable/undecided solver or SAT with unencoded conditions;
+          the complete conjunction remains inconclusive
 
 Accepted condition forms (case-sensitive identifiers; case-insensitive English aliases):
   size > 0
@@ -197,6 +198,11 @@ WP_ORDERING = "canonical-text-lexicographic"
 @dataclass
 class PathSMTResult:
     """Result of SMT feasibility check over a set of path conditions.
+
+    SAT with unencoded conditions is inconclusive (``feasible=None``).
+    Its model and reduced predicate describe only the encoded subset and
+    remain diagnostic. UNSAT of a sound weakening can still refute the
+    complete conjunction, subject to the mutation/provenance checks.
 
     ``unknown`` keeps the original list-of-strings form for callers that
     only care which texts were dropped.  ``unknown_reasons`` carries the
@@ -1357,13 +1363,18 @@ def _solve_pending(
                 _get_logger().debug("SMT conjunct reduction unavailable", exc_info=True)
                 wp_predicate, wp_conjuncts, wp_complete = None, [text for text, _ in pending], False
             wp_complete = wp_complete and not unknown
+        # SAT of a weakening cannot establish feasibility of the full
+        # conjunction. Keep its model for diagnostics, but do not let
+        # consumers treat unencoded predicates as satisfied.
         return PathSMTResult(
-            feasible=True,
+            feasible=None if unknown else True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
             unknown_reasons=unknown_reasons,
             model=model_dict, smt_available=True,
             reasoning=(
-                f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
+                (f"indeterminate ({mode}): encoded subset is satisfiable"
+                 if unknown else
+                 f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable")
                 + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
                 + (f"; {len(unknown)} unparsed" if unknown else "")
                 + (f"; {len(_axioms)} call summar"
@@ -1659,7 +1670,7 @@ def check_path_feasibility(
 
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
-        condition was unparseable.
+        condition was unparseable, or SAT left any condition unencoded.
     """
     prefer_witness = parse_witness_preference(prefer_witness)
     require_bool(reduce_constraints, argument="reduce_constraints")
