@@ -13,6 +13,7 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 import gc
+from pathlib import Path
 import sys
 import time
 import types
@@ -21,6 +22,7 @@ import httpx
 import pytest
 
 from core.llm import http_pool
+from core.testing.standalone_cli import run_standalone_cli
 
 _KNOB_VARS = (
     "RAPTOR_HTTP_KEEPALIVE_S",
@@ -1533,6 +1535,27 @@ class TestShardedTransport:
     SDK receives ONE client object, so the blast-radius sharding
     lives inside the transport it wraps."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_scorecard(self):
+        """Override the eager client fixture: this class creates only transports."""
+
+    @staticmethod
+    def _isolated_gc_check(name):
+        # Preserve full collection and finalizers without scanning a pytest
+        # worker's accumulated objects or running unrelated finalizers.
+        script = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from core.llm.tests.test_http_pool import TestShardedTransport\n"
+            "getattr(TestShardedTransport(), sys.argv[2])()\n"
+        )
+        result = run_standalone_cli(
+            [sys.executable, "-I", "-c", script,
+             str(Path(__file__).resolve().parents[3]), name],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def _sharded(self, count, script, **kwargs):
         built = []
         handler = _scripted_handler(script)
@@ -1587,6 +1610,9 @@ class TestShardedTransport:
             transport.close()
 
     def test_abandoned_response_releases_its_hold_at_gc(self):
+        self._isolated_gc_check("_check_abandoned_response_releases_its_hold_at_gc")
+
+    def _check_abandoned_response_releases_its_hold_at_gc(self):
         # A caller that never drains nor closes the response would
         # otherwise pin its hold forever: least-in-flight keeps
         # steering around the slot and a draining shard never
@@ -1606,6 +1632,9 @@ class TestShardedTransport:
             transport.close()
 
     def test_gc_after_close_never_double_releases(self):
+        self._isolated_gc_check("_check_gc_after_close_never_double_releases")
+
+    def _check_gc_after_close_never_double_releases(self):
         # close() already returned the hold; the finalizer must see
         # that and stand down — a second release would decrement a
         # sibling hold on the same slot.
@@ -1624,6 +1653,9 @@ class TestShardedTransport:
             transport.close()
 
     def test_gc_release_cascade_retires_the_draining_shard(self):
+        self._isolated_gc_check("_check_gc_release_cascade_retires_the_draining_shard")
+
+    def _check_gc_release_cascade_retires_the_draining_shard(self):
         # The abandoned hold was the LAST thing keeping a draining
         # shard alive: the finalizer's release cascades into the
         # retire — the inner transport closes during GC (fd-level
