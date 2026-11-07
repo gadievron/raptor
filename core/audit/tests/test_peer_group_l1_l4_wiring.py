@@ -15,13 +15,14 @@ production. These exercise the real ``_compute_audit_prep`` with
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -34,9 +35,10 @@ def _build_checklist(target: Path, out: Path) -> None:
         _RAPTOR_TRUSTED="1",
         PYTHONPATH=str(_RAPTOR_DIR),
     )
-    r = subprocess.run(
+    r = run_standalone_cli(
         [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
         env=env,
+        data_home=os.environ["XDG_DATA_HOME"],
         capture_output=True,
         text=True,
         check=False,

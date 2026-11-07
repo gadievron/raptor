@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 # packages/zkpox/tests/test_libexec_raptor_zkpox.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 
@@ -55,7 +57,7 @@ def _trusted_env() -> dict:
 
 
 def _run(args, env=None):
-    return subprocess.run(
+    return run_standalone_cli(
         [str(SCRIPT), *args],
         env=env or _trusted_env(),
         capture_output=True, text=True, timeout=60, check=False,
@@ -78,7 +80,11 @@ def test_trust_marker_rejects_clean_env():
 # ----------------------------------------------------------------------
 
 
-def test_reproduce_missing_dir(tmp_path):
+@pytest.mark.parametrize("stale_launch", [False, True])
+def test_reproduce_missing_dir(tmp_path, monkeypatch, stale_launch):
+    if stale_launch:
+        monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
     r = _run(["reproduce", str(tmp_path / "nope")])
     assert r.returncode == 2
     assert "no manifest.json" in r.stderr
