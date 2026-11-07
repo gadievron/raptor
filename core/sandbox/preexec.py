@@ -114,7 +114,9 @@ def _load_user_limits() -> dict:
 
     Successful loads cache for the session. Failure (no file, parse
     error, non-regular file) caches for ``_FAIL_TTL_S`` seconds so a
-    corrected file is honoured without needing a process restart.
+    corrected file is honoured without needing a process restart. A config
+    with invalid recognized values and no usable overrides also retries.
+    Valid empty configs and configs with usable overrides remain session-cached.
 
     Example config:
     {
@@ -160,23 +162,26 @@ def _load_user_limits() -> dict:
                 # Reject negatives, floats, strings, None — those are config
                 # errors.
                 cleaned = {}
+                invalid_values = False
                 for k, v in data.items():
                     if k not in _DEFAULT_LIMITS:
                         continue
                     # bool is a subclass of int in Python — exclude explicitly
                     # so `"nproc": true` doesn't silently become nproc=1.
                     if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                        invalid_values = True
                         logger.warning(
                             "Sandbox: user limit %s=%r in %s is not a non-negative integer — ignoring, using default %s.", k, v, _CONFIG_PATH, _DEFAULT_LIMITS[k]
                         )
                         continue
                     cleaned[k] = v
                 state._user_limits_cache = cleaned  # type: ignore[assignment]
-                # +inf: successful parses never expire (session
-                # cache), including a valid config that yields no
-                # recognised keys — cleaned == {} must not be
-                # mistaken for the failure sentinel above.
-                state._user_limits_cache_decided_at = float("inf")
+                # Empty fallback after rejected known values is retryable,
+                # just like malformed JSON. Valid empty/unknown-only configs
+                # and usable overrides retain the session-cache contract.
+                state._user_limits_cache_decided_at = (
+                    time.monotonic() if invalid_values and not cleaned
+                    else float("inf"))
                 return state._user_limits_cache  # type: ignore[return-value]
         except FileNotFoundError:
             pass  # Missing operator config is the normal default-limits case.

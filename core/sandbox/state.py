@@ -82,11 +82,12 @@ _gidmap_allow_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 # `_user_limits_cache_decided_at` carries the monotonic time when the
 # cache decision was made. FAILURE paths (parse error, missing file,
-# non-regular file) stamp time.monotonic(): pre-fix they stored `{}` and
+# non-regular file, or rejected known values with no usable overrides)
+# stamp time.monotonic(): pre-fix they stored `{}` and
 # never re-read — operators correcting a malformed sandbox.json had
 # to restart every RAPTOR process to pick up the fix. `_FAIL_TTL_S`
 # bounds that negative cache so a corrected file is honoured within a
-# reasonable window. SUCCESSFUL parses stamp +inf — no TTL (session
+# reasonable window. SUCCESSFUL loads stamp +inf — no TTL (session
 # cache; the operator who edits the config accepts restarting, or
 # clearing the cache via tests / `state._user_limits_cache = None`) —
 # which also keeps a valid config that yields no recognised keys
