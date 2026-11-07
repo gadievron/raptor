@@ -43,7 +43,7 @@ from typing import Any
 
 from .prompt_defence import sanitise_for_prompt
 from typing import TYPE_CHECKING
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1133,6 +1133,23 @@ _PY_UNDERSCORE_ASSIGN_RE = re.compile(r"^\s*_\s*=[^=]")
 _SWIFT_UNDERSCORE_ASSIGN_RE = re.compile(r"^\s*(?:let\s+)?_\s*=[^=]")
 
 
+# Only bypass pure, built-in classifiers; replaced providers retain their calls.
+_REGEX_SPLIT_IMPL = split_lines
+_NO_CALL_CLASSIFIERS = (
+    _C_FUNC_HEADER_RE,
+    _GO_BLANK_ASSIGN_RE,
+    _C_VOID_CAST_RE,
+    _RUST_LET_UNDERSCORE_RE,
+    _PY_UNDERSCORE_ASSIGN_RE,
+    _SWIFT_UNDERSCORE_ASSIGN_RE,
+    _ASSIGN_LINE_RE,
+    _RETURN_LINE_RE,
+    _COND_LINE_RE,
+    _STMT_ONLY_LINE_RE,
+    _CALL_IN_LINE_RE,
+)
+
+
 def _extract_callsites_regex(
     file_path: str, source: str,
     limiter: _CensusLimiter | None = None,
@@ -1145,7 +1162,16 @@ def _extract_callsites_regex(
     ONLY extractor) is exactly where an unbounded walk would bite.
     """
     sites: list[CallSite] = []
-    lines = split_lines(source)
+    lines = (
+        iter_source_lines(source)
+        if type(source) is str and split_lines is _REGEX_SPLIT_IMPL
+        else split_lines(source)
+    )
+    native_path = type(file_path) is str
+    if native_path:
+        is_go = file_path.endswith(".go")
+        is_python = file_path.endswith(".py")
+        is_swift = file_path.endswith(".swift")
     current_func = "<module>"
 
     for lineno_0, line in enumerate(lines):
@@ -1163,6 +1189,25 @@ def _extract_callsites_regex(
             current_func = fm.group(1) or fm.group(2) or current_func
             continue
 
+        # The first header regex also accepts bare `def name` / `fn name`.
+        # Keep it and the limiter above this shortcut. Check providers per
+        # row because an overridden limiter or header can replace them.
+        if (
+            native_path and type(line) is str and "(" not in line
+            and _C_FUNC_HEADER_RE is _NO_CALL_CLASSIFIERS[0]
+            and _GO_BLANK_ASSIGN_RE is _NO_CALL_CLASSIFIERS[1]
+            and _C_VOID_CAST_RE is _NO_CALL_CLASSIFIERS[2]
+            and _RUST_LET_UNDERSCORE_RE is _NO_CALL_CLASSIFIERS[3]
+            and _PY_UNDERSCORE_ASSIGN_RE is _NO_CALL_CLASSIFIERS[4]
+            and _SWIFT_UNDERSCORE_ASSIGN_RE is _NO_CALL_CLASSIFIERS[5]
+            and _ASSIGN_LINE_RE is _NO_CALL_CLASSIFIERS[6]
+            and _RETURN_LINE_RE is _NO_CALL_CLASSIFIERS[7]
+            and _COND_LINE_RE is _NO_CALL_CLASSIFIERS[8]
+            and _STMT_ONLY_LINE_RE is _NO_CALL_CLASSIFIERS[9]
+            and _CALL_IN_LINE_RE is _NO_CALL_CLASSIFIERS[10]
+        ):
+            continue
+
         cm = _C_FUNC_HEADER_RE.match(line)
         if cm and cm.group("name") not in _KEYWORDS:
             if cm.group("tail") != ";":
@@ -1175,15 +1220,15 @@ def _extract_callsites_regex(
         stripped = line.lstrip()
         # Determine how this line consumes return values.
         is_blank_discard = (
-            file_path.endswith(".go")
+            (is_go if native_path else file_path.endswith(".go"))
             and bool(_GO_BLANK_ASSIGN_RE.match(stripped))
         )
         is_acknowledged = bool(
             _C_VOID_CAST_RE.match(stripped)
             or _RUST_LET_UNDERSCORE_RE.match(stripped)
-            or (file_path.endswith(".py")
+            or ((is_python if native_path else file_path.endswith(".py"))
                 and _PY_UNDERSCORE_ASSIGN_RE.match(stripped))
-            or (file_path.endswith(".swift")
+            or ((is_swift if native_path else file_path.endswith(".swift"))
                 and _SWIFT_UNDERSCORE_ASSIGN_RE.match(stripped))
         )
         is_assign = bool(_ASSIGN_LINE_RE.match(stripped))
