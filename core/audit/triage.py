@@ -14,6 +14,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
 from core.source import read_text_capped, split_lines
+from core.source.lines import slice_text
 
 from ._util import safe_join
 from .vendored_detector import (
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
     from .prefilter import PrefilterResult
     from pathlib import Path
     from collections.abc import Sequence
+
+
+_FUNCTION_LINES_IMPL = split_lines
 
 
 class TriageBucket(str, Enum):
@@ -758,7 +762,11 @@ def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
     got = read_text_capped(resolved, newline="")
     if got is None:
         return ""
-    lines = split_lines(got[0])
+    text = got[0]
+    if (type(text) is str and len(text) >= 16 * 1024
+            and split_lines is _FUNCTION_LINES_IMPL):
+        return slice_text(text, start, end)
+    lines = split_lines(text)
     return "\n".join(lines[start - 1:end])
 
 

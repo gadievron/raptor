@@ -31,12 +31,14 @@ from typing import Any, TYPE_CHECKING
 
 from core.coverage.edges import item_spans
 from core.coverage.journal import encode_key_file, make_function_key
-from core.source.lines import split_lines
+from core.source.lines import slice_text, split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_FUNCTION_LINES_IMPL = split_lines
 
 #: Strategy label stamped on tier-1 edge entries. Distinct from every
 #: function-review strategy so the D1 index key keeps edge history in
@@ -259,16 +261,22 @@ def _read_span(
     if got is None:
         return "(source not available)"
     text, truncated = got
-    lines = split_lines(text)
-    lo, hi = span
-    if truncated and hi >= len(lines):
-        # The requested span lies (partly) past the capped prefix, or
-        # touches its FINAL line — which can be mid-line-cut by the
-        # char cap when the file has no newline for the reader to
-        # trim back to. An empty/partial quote would misrepresent the
-        # function.
-        return "(source not available)"
-    body = "\n".join(lines[max(lo - 1, 0):hi])
+    if (type(text) is str and len(text) >= 16 * 1024
+            and split_lines is _FUNCTION_LINES_IMPL
+            and type(truncated) is bool and not truncated and type(span) is tuple and len(span) == 2
+            and type(span[0]) is int and type(span[1]) is int and span[1] >= 0):
+        body = slice_text(text, max(span[0], 1), span[1])
+    else:
+        lines = split_lines(text)
+        lo, hi = span
+        if truncated and hi >= len(lines):
+            # The requested span lies (partly) past the capped prefix, or
+            # touches its FINAL line — which can be mid-line-cut by the
+            # char cap when the file has no newline for the reader to
+            # trim back to. An empty/partial quote would misrepresent the
+            # function.
+            return "(source not available)"
+        body = "\n".join(lines[max(lo - 1, 0):hi])
     if len(body) > _BODY_CHAR_CAP:
         body = body[:_BODY_CHAR_CAP] + "\n[...truncated for prompt budget]"
     return body
