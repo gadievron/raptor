@@ -11,12 +11,18 @@ from core.audit.condition_extraction import _get_parser
 from core.audit.integer_abi import resolve_integer_abi
 from core.audit.probe_function_scope import source_binding, source_for_function
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
-def dependencies():
+def dependencies(monkeypatch):
     pytest.importorskip('z3')
     pytest.importorskip('tree_sitter')
     pytest.importorskip('tree_sitter_c')
+    from core.audit import arithmetic_prefix_obligations
+    # These cases assert expression semantics, not a machine-speed deadline.
+    # The production budget/refusal policy has its own deterministic tests.
+    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
 
 
 def source(prefix, extra='unsigned Extra'):
@@ -112,9 +118,7 @@ def test_old_worker_cannot_supply_a_compound_prefix_result(monkeypatch, verb, ve
 @pytest.mark.parametrize('expression', ['(Extra/2)+1', '(Extra*2)-1', '-(Extra/2)', '~Extra', '+Extra',
                                       '(Extra<<1)+1', '(Extra>>1)+1'])
 @pytest.mark.parametrize('spelling', ['signed char', 'unsigned char'])
-def test_compound_result_domains_contain_every_independent_integer_value(expression, spelling, monkeypatch):
-    from core.audit import arithmetic_prefix_obligations
-    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
+def test_compound_result_domains_contain_every_independent_integer_value(expression, spelling):
     data = f'int Read({spelling} Extra){{return {expression};}}'.encode()
     root = _get_parser('c').parse(data).root_node
     function = root.named_children[0]

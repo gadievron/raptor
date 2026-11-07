@@ -9,6 +9,8 @@ from core.audit import arithmetic_operation as operation, orchestrator as orch, 
 from core.audit.integer_abi import INTEGER_ABIS, IntegerABI, integer_abi_record, resolve_integer_abi
 from core.audit.probe_function_scope import source_binding, source_for_function
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 SOURCE = "long Read(long a, long b) { if (a >= 0 && b >= 0 && a <= 65535 && b <= 65535) return a * b; return 0; }"
 HYPOTHESIS = "integer overflow in `a` * `b`"

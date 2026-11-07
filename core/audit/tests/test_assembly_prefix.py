@@ -9,6 +9,8 @@ from core.audit.arithmetic_operation import bind_arithmetic_operation
 from core.audit.condition_smt import disprove_integer_overflow
 from core.audit.probe_function_scope import source_binding, source_for_function
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def grammar():

@@ -7,6 +7,8 @@ from core.audit.arithmetic_operation import bind_arithmetic_operation
 from core.audit.array_bounds import check_array_bounds
 from core.audit.literal_call import check_literal_calls
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def c_grammar():

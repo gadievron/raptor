@@ -8,6 +8,8 @@ from core.audit.condition_smt import disprove_integer_overflow
 from core.audit.integer_literals import integer_literal_value
 from core.audit.literal_call import check_literal_calls
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 @pytest.fixture(autouse=True)
 def prerequisites():

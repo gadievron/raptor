@@ -7,6 +7,8 @@ import pytest
 from core.audit.arithmetic_operation import ArithmeticOperation
 from core.audit.integer_witness import validate_integer_witness, validate_overflow_result
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 OPERATION = ArithmeticOperation("bound", type_status="bound", profile="uint32", kind="unsigned_wrap",
                                 types=(("Value", "unsigned"), ("Step", "unsigned")),
                                 premises=("Value >= 1", "Step <= 1"))

@@ -5,6 +5,8 @@ import pytest
 from core.audit import orchestrator as orch
 from core.audit.overflow_demotion import source_overflow_demotion_reason
 
+pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
+
 
 HYPOTHESIS = 'integer overflow in `Count + Step`'
 UNSAFE_SOURCES = [

@@ -216,3 +216,23 @@ def owned_smt_subprocess(monkeypatch):
                               stdout=options['stdout'], stderr=options['stderr'],
                               env=options['env'], cwd=options['cwd'], timeout=options['timeout'])
     monkeypatch.setattr(subproc_json, '_sandbox_run', run)
+
+
+@pytest.fixture
+def overflow_disproof_unit_worker(monkeypatch, request):
+    """Keep semantic unit tests at the JSON dispatch seam, without subprocesses.
+
+    Native tests exercise the actual confined worker separately. Only this
+    operation is intercepted; unrelated worker policies retain real dispatch.
+    """
+    if request.node.get_closest_marker("slow") or request.node.get_closest_marker("integration"):
+        return
+    from core.audit import condition_smt
+    original = condition_smt._run_z3_child
+
+    def dispatch(tag, args, **kwargs):
+        if tag == "overflow_disproof":
+            return condition_smt._z3_dispatch_json({"tag": tag, "args": args})
+        return original(tag, args, **kwargs)
+
+    monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)
