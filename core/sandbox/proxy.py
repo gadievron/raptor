@@ -120,6 +120,7 @@ from core.security.log_sanitisation import sanitise_for_terminal
 
 from . import audit_budget, escalation_signatures, parser_jail
 from ._request_head import CENSUS_CONNECT, CENSUS_NON_CONNECT, ParseRefusal
+from ._upstream_connect import UpstreamConnectError, negotiate_connect
 
 # Process-unique lane ids. Labels are NOT unique (two concurrent
 # contexts may share caller_label="sandbox"), so event->buffer
@@ -1415,7 +1416,7 @@ def _upstream_handshake_timeout() -> float:
     Defaults to the per-IO budget (``_PROXY_READ_TIMEOUT_S``). Slow /
     authenticated / loaded corporate proxies can legitimately need
     more; a too-small budget turns a working-but-slow proxy into a
-    502 + full SDK retry cycle. Invalid or non-positive values fall
+    502 + full SDK retry cycle. Non-finite, invalid or non-positive values fall
     back to the default.
     """
     raw = os.environ.get(_UPSTREAM_HANDSHAKE_TIMEOUT_ENV)
@@ -1429,9 +1430,9 @@ def _upstream_handshake_timeout() -> float:
             _UPSTREAM_HANDSHAKE_TIMEOUT_ENV, raw, _PROXY_READ_TIMEOUT_S,
         )
         return _PROXY_READ_TIMEOUT_S
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         logger.warning(
-            "%s=%r must be positive — using default %ss",
+            "%s=%r must be finite and positive — using default %ss",
             _UPSTREAM_HANDSHAKE_TIMEOUT_ENV, raw, _PROXY_READ_TIMEOUT_S,
         )
         return _PROXY_READ_TIMEOUT_S
@@ -3842,7 +3843,19 @@ class EgressProxy:
                 await self._write_error(writer, 408, "Request Timeout")
                 return
             hdr = await _read_line(reader, max_len=4096, timeout=remaining)
-            if hdr is None or hdr == "":
+            if hdr is None:
+                timed_out = time.monotonic() >= handshake_deadline
+                event.update(
+                    result="bad_request",
+                    reason=("handshake deadline exceeded" if timed_out
+                            else "incomplete or overlong CONNECT headers"),
+                    duration=time.monotonic() - t_start)
+                self._record(event)
+                await self._write_error(
+                    writer, 408 if timed_out else 400,
+                    "Request Timeout" if timed_out else "Bad Request")
+                return
+            if hdr == "":
                 break
             header_count += 1
             header_bytes += len(hdr) + 2  # + CRLF
@@ -3988,95 +4001,27 @@ class EgressProxy:
                 return
             up_host, up_port = self._upstream  # type: ignore[misc]
             event["resolved_ip"] = f"{up_host}:{up_port} (upstream)"
+            async def connect():
+                return await self._open_owned_connection(
+                    owner, self._upstream_handshake_timeout,
+                    host=up_host, port=up_port)
+
             try:
-                up_reader, up_writer = await self._open_owned_connection(
-                    owner, self._upstream_handshake_timeout, host=up_host, port=up_port)
-            except (OSError, asyncio.TimeoutError) as e:
+                up_reader, up_writer = await negotiate_connect(
+                    connect, host, port, self._upstream_handshake_timeout)
+            except (OSError, asyncio.TimeoutError) as exc:
+                # Stable failure classes/reasons; raw upstream response
+                # text never reaches the terminal or the event payload.
+                reason = str(exc) if isinstance(exc, UpstreamConnectError) else type(exc).__name__
                 logger.warning(
-                    "egress proxy: upstream proxy unreachable %s:%s: %s", up_host, up_port, e
-                )
-                event.update(result="upstream_failed",
-                             reason=f"upstream proxy connect: {e.__class__.__name__}: {e}",
-                             duration=time.monotonic() - t_start)
+                    "egress proxy: upstream CONNECT negotiation failed (%s)", reason)
+                event.update(
+                    result="upstream_failed",
+                    reason=f"upstream CONNECT handshake: {reason}",
+                    duration=time.monotonic() - t_start)
                 self._record(event)
                 await self._write_error(writer, 502, "Bad Gateway")
                 return
-
-            # Negotiate CONNECT with the upstream. Upstream responds with
-            # HTTP/1.1 200 Connection established on success, or 4xx/5xx
-            # with a reason we surface back to the child.
-            req = (f"CONNECT {host}:{port} HTTP/1.1\r\n"
-                   f"Host: {host}:{port}\r\n\r\n").encode("latin-1")
-            up_writer.write(req)
-            try:
-                await asyncio.wait_for(
-                    up_writer.drain(),
-                    timeout=self._upstream_handshake_timeout,
-                )
-                resp_line = await asyncio.wait_for(
-                    up_reader.readuntil(b"\r\n"),
-                    timeout=self._upstream_handshake_timeout,
-                )
-            except (asyncio.TimeoutError, asyncio.IncompleteReadError,
-                    OSError) as e:
-                # OSError (ConnectionError's superclass) so the rarer
-                # socket-failure shapes take this branch's close+502
-                # instead of escaping to the handler-error path, which
-                # writes no status line and strands up_writer.
-                logger.warning("egress proxy: upstream CONNECT failed: %s", e)
-                up_writer.close()
-                event.update(result="upstream_failed",
-                             reason=f"upstream CONNECT handshake: {e.__class__.__name__}",
-                             duration=time.monotonic() - t_start)
-                self._record(event)
-                await self._write_error(writer, 502, "Bad Gateway")
-                return
-
-            # Parse "HTTP/1.1 200 ..."
-            resp_str = resp_line.decode("latin-1", errors="replace").rstrip()
-            status_parts = resp_str.split(None, 2)
-            if len(status_parts) < 2 or status_parts[1] != "200":
-                logger.warning(
-                    "egress proxy: upstream rejected CONNECT %s:%s — %r", host, port, resp_str)
-                up_writer.close()
-                event.update(result="upstream_failed",
-                             reason=f"upstream returned: {resp_str!r}",
-                             duration=time.monotonic() - t_start)
-                self._record(event)
-                await self._write_error(writer, 502, "Bad Gateway")
-                return
-
-            # Drain remaining upstream headers up to blank line.
-            # Timeout/EOF keep the historical best-effort break (the
-            # relay loop surfaces a dead upstream immediately); a
-            # socket error (upstream RST mid-drain) means the tunnel
-            # is already dead — close the backend leg and give the
-            # client the documented 502 instead of letting the error
-            # escape to the handler-error path (no status line, and
-            # up_writer stranded until proxy stop).
-            while True:
-                try:
-                    hdr = await asyncio.wait_for(
-                        up_reader.readuntil(b"\r\n"), timeout=5.0,  # type: ignore[arg-type]
-                    )
-                except (asyncio.TimeoutError, asyncio.IncompleteReadError):
-                    break
-                except OSError as e:
-                    logger.warning(
-                        "egress proxy: upstream reset during header "
-                        "drain: %s", e)
-                    with contextlib.suppress(OSError, RuntimeError):
-                        up_writer.close()
-                    event.update(
-                        result="upstream_failed",
-                        reason=("upstream header drain: "
-                                f"{e.__class__.__name__}"),
-                        duration=time.monotonic() - t_start)
-                    self._record(event)
-                    await self._write_error(writer, 502, "Bad Gateway")
-                    return
-                if hdr == b"\r\n":
-                    break
         else:
             # Direct path — resolve target, reject private/loopback IPs,
             # open connection via happy-eyeballs.

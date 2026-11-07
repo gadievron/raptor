@@ -240,8 +240,9 @@ def test_oversized_upstream_line_cannot_strand_a_connected_backend(proxy, monkey
             async def connect(**kwargs):
                 return backend[:2]
             with mock_module_attribute(proxy_mod, "asyncio", "open_connection", connect):
-                with pytest.raises(asyncio.LimitOverrunError):
-                    await proxy._serve_tunnel(reader, client[1])
+                await proxy._serve_tunnel(reader, client[1])
+            status = await asyncio.wait_for(client[2].readuntil(b"\r\n"), 2)
+            assert status.startswith(b"HTTP/1.1 502 ")
             assert backend[1].is_closing()
             assert not proxy._upstream_writers
     run(proxy, scenario())
