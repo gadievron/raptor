@@ -224,9 +224,19 @@ def _node(row):
     original = ast.parse(row["call"], mode="eval").body
     changed = copy.deepcopy(original)
     changed.args[0] = ast.parse(row["new_target"], mode="eval").body
+    candidates = {ast.dump(original), ast.dump(changed)}
+    # A migrated dotted binding copies the entire consumer-local module path.
+    owner, binding = row["new_target"].split(".", 1)
+    owned = ast.Call(
+        func=ast.Name(id="patch_module_attribute", ctx=ast.Load()),
+        args=[copy.deepcopy(original.func.value), ast.Name(id=owner, ctx=ast.Load()),
+              ast.Constant(value=binding), *copy.deepcopy(original.args[1:])],
+        keywords=copy.deepcopy(original.keywords),
+    )
+    candidates.add(ast.dump(owned))
     matches = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or ast.dump(node) not in {ast.dump(original), ast.dump(changed)}:
+        if not isinstance(node, ast.Call) or ast.dump(node) not in candidates:
             continue
         chain = []
         parent = parents.get(node)
@@ -263,13 +273,18 @@ def test_native_fault_namespace_is_owned(index, borrowed, exit_mode):
                     namespace["det"] = detector
                 node = _node(row)
                 fake = MagicMock(name="private_fault")
-                node.args[2] = ast.Name(id="_fake", ctx=ast.Load())
+                owned = getattr(node.func, "id", "") == "patch_module_attribute"
+                node.args[4 if owned else 2] = ast.Name(id="_fake", ctx=ast.Load())
                 namespace["_fake"] = fake
                 eval(compile(ast.fix_missing_locations(ast.Expression(node)), row["file"], "eval"), namespace)
                 for module, before in snapshots:
                     if module is not detector:
                         _namespace(module, before)
-                target = eval(compile(ast.Expression(node.args[0]), row["file"], "eval"), namespace)
+                target_node = node.args[1] if owned else node.args[0]
+                target = eval(compile(ast.Expression(target_node), row["file"], "eval"), namespace)
+                if owned:
+                    for part in node.args[2].value.split("."):
+                        target = getattr(target, part)
                 assert getattr(target, row["attribute"]) is fake
                 if exit_mode != "normal":
                     raise RuntimeError("local lookup exit") if exit_mode == "error" else KeyboardInterrupt("local lookup exit")
