@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: sandbox-wrappers-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   PYTHON_VERSION: '3.14'
@@ -24,6 +24,9 @@ env:
 
 jobs:
   scope:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -33,12 +36,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve verified push base
+        id: push_base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci_push_base.py --workflow sandbox-wrappers.yml
+
       - name: Check registration and select affected wrappers
         id: scope
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_SHA: ${{ github.event_name != 'push' && (github.event.pull_request.base.sha || github.event.merge_group.base_sha) || steps.push_base.outputs.base }}
         run: python3 .github/scripts/sandbox_wrapper_scope.py
+
+      - name: Record verified push scope v1
+        if: github.event_name == 'push'
+        run: echo 'Cumulative push scope completed.'
 
   acceptance:
     needs: scope

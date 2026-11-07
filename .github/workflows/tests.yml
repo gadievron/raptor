@@ -21,7 +21,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish active main runs; GitHub coalesces newer pending pushes.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   PYTHON_VERSION: '3.14'
@@ -118,6 +119,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve verified push base
+        id: push_base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci_push_base.py --workflow tests.yml --compare-out "$RUNNER_TEMP/verified-push-compare.json"
+
       - id: force
         env:
           EVENT: ${{ github.event_name }}
@@ -136,8 +144,9 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
+          BEFORE: ${{ steps.push_base.outputs.base }}
           AFTER: ${{ github.event.after }}
+          VERIFIED_COMPARE: ${{ steps.push_base.outputs.compare }}
         run: |
           set -euo pipefail
           out=/tmp/changed_files.txt
@@ -161,7 +170,7 @@ jobs:
                 --jq '(. // [])[]? | .filename, (.previous_filename // empty)' >> "$out"
               ;;
             push)
-              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+              if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
                 # First push to a new branch — no diff base. Fall through
                 # to the no-list path so compute_filters forces all true.
                 rm -f "$out"
@@ -176,9 +185,11 @@ jobs:
                 # the list and fall through to full dispatch. Only
                 # ``.filename`` entries count toward the cap check —
                 # ``previous_filename`` rename companions don't.
-                resp=/tmp/compare_response.json
-                gh api --paginate \
-                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                resp=${VERIFIED_COMPARE:-/tmp/compare_response.json}
+                if [[ -z "${VERIFIED_COMPARE:-}" ]]; then
+                  gh api --paginate \
+                    "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                fi
                 jq -r '(.files // [])[]? | .filename, (.previous_filename // empty)' \
                   "$resp" >> "$out"
                 files_n=$(jq -r '(.files // [])[]?.filename' "$resp" | wc -l)
@@ -289,6 +300,10 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write("python_matrix=" + json.dumps(matrix) + "\n")
           PYTHON
+
+      - name: Record verified push scope v1
+        if: github.event_name == 'push'
+        run: echo 'Cumulative push scope completed.'
 
   deps:
     needs: [changes]

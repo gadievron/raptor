@@ -17,7 +17,7 @@ REVIEWED_PINS = {'ruff==0.15.12'}
 
 CONFIG_NAMES = {'pyproject.toml', 'ruff.toml', '.ruff.toml', '.gitignore', '.ignore', '.gitmodules', '.gitattributes'}
 HARNESS = {'.github/workflows/lint.yml', '.github/scripts/ruff_scope.py',
-           '.github/scripts/ci_change_scope.py', 'uv.lock', 'uv.toml'}
+           '.github/scripts/ci_change_scope.py', '.github/scripts/ci_push_base.py', 'uv.lock', 'uv.toml'}
 
 
 def full(reason: str) -> dict:

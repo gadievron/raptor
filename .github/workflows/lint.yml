@@ -16,7 +16,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   PYTHON_VERSION: '3.14'
@@ -148,6 +148,9 @@ jobs:
   command-metadata:
     outputs:
       ruff_run: ${{ steps.ruff_scope.outputs.ruff_run }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -157,15 +160,26 @@ jobs:
           # Belt-and-braces: no step in this job needs git credentials.
           persist-credentials: false
 
+      - name: Resolve verified push base
+        id: push_base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci_push_base.py --workflow lint.yml
+
       - name: Select Ruff work before allocating lint runners
         id: ruff_scope
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_SHA: ${{ github.event_name != 'push' && (github.event.pull_request.base.sha || github.event.merge_group.base_sha) || steps.push_base.outputs.base }}
         run: python3 .github/scripts/ruff_scope.py
 
       - name: Lint slash-command metadata
         run: python3 .github/scripts/check_command_metadata.py
+
+      - name: Record verified push scope v1
+        if: github.event_name == 'push'
+        run: echo 'Cumulative push scope completed.'
 
   # Repo-invariant detectors as a PR gate. Every detector below also
   # runs in the daily scheduled sweep (miswiring-scan.yml, kept as
@@ -186,6 +200,9 @@ jobs:
   # Pure stdlib Python plus pytest for the ReDoS rider. Allow ten minutes
   # for the global checks; each selected detector reports its own failure.
   repo-invariants:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -199,11 +216,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Resolve verified push base
+        id: push_base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci_push_base.py --workflow lint.yml
+
       - name: Select invariant steps from complete changes
         id: invariant_scope
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_SHA: ${{ github.event_name != 'push' && (github.event.pull_request.base.sha || github.event.merge_group.base_sha) || steps.push_base.outputs.base }}
         run: python3 .github/scripts/repo_invariant_scope.py
 
       # Invocations are verbatim (no flags, pipes, or wrappers) so a

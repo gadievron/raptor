@@ -541,5 +541,5 @@ def test_wrapper_workflow_passes_merge_group_base_to_scope():
     assert environment is not None, 'scope inputs must remain explicit'
     fields = dict(re.findall(r'^          ([A-Z_]+): (.+)$', environment[1], re.M))
     assert fields['BASE_SHA'] == (
-        '${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}')
+        "${{ github.event_name != 'push' && (github.event.pull_request.base.sha || github.event.merge_group.base_sha) || steps.push_base.outputs.base }}")
     assert fields['EVENT'] == '${{ github.event_name }}'
