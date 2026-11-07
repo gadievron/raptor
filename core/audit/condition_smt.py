@@ -395,23 +395,6 @@ class SignedMismatchResult:
 # Comparison extraction
 # ---------------------------------------------------------------------------
 
-# Matches comparisons: var <op> value, value <op> var
-# \b pins each scan to a token start (an unpinned identifier head
-# re-scans every suffix of a long hostile word — quadratic) and the
-# dotted-path depth is bounded: 32 segments sits far above real
-# code while an unbounded chain re-splits against the scan loop.
-_COMPARISON_RE = re.compile(
-    r"\b([a-zA-Z_]\w*(?:\.\w+){0,32})\s*(==|!=|<=|>=|<|>)\s*"
-    r"([a-zA-Z_]\w*(?:\.\w+){0,32}|0x[0-9a-fA-F]+|\d+(?:\.\d+)?)",
-)
-
-# Reverse comparisons: value <op> var (same pinning/bounding)
-_COMPARISON_REV_RE = re.compile(
-    r"\b(0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\s*(==|!=|<=|>=|<|>)\s*"
-    r"([a-zA-Z_]\w*(?:\.\w+){0,32})",
-)
-
-
 @dataclass
 class BoundsConstraint:
     """A concrete bounds constraint extracted from a guard."""
@@ -426,55 +409,13 @@ def extract_bounds_constraints(
 ) -> list[BoundsConstraint]:
     """Extract numeric bounds constraints from a guard condition.
 
-    Uses concrete_values when available for constant resolution.
+    Uses concrete_values for integer-atom constant resolution. Requires a
+    complete supported conjunction; returns [] for unsupported source text.
     """
-    constraints: list[BoundsConstraint] = []
-    text = guard.text
+    from .guard_integer_constraints import integer_conjunction
 
-    # Resolve constants in the text
-    resolved_text = text
-    for name, value in sorted(guard.concrete_values.items(), key=lambda kv: -len(kv[0])):
-        resolved_text = re.sub(r'\b' + re.escape(name) + r'\b', value, resolved_text)
-
-    # Forward: var op value
-    for m in _COMPARISON_RE.finditer(resolved_text):
-        var, op, val_str = m.group(1), m.group(2), m.group(3)
-        val = _try_parse_int(val_str)
-        if val is not None:
-            constraints.append(BoundsConstraint(
-                variable=var, operator=op, bound_value=val,
-                source_text=m.group(0),
-            ))
-
-    # Reverse: value op var → flip operator
-    for m in _COMPARISON_REV_RE.finditer(resolved_text):
-        val_str, op, var = m.group(1), m.group(2), m.group(3)
-        val = _try_parse_int(val_str)
-        if val is not None:
-            flipped_op = _flip_operator(op)
-            if flipped_op:
-                constraints.append(BoundsConstraint(
-                    variable=var, operator=flipped_op, bound_value=val,
-                    source_text=m.group(0),
-                ))
-
-    return constraints
-
-
-def _try_parse_int(s: str) -> int | None:
-    """Try to parse an integer from string (decimal or hex)."""
-    try:
-        if s.startswith(("0x", "0X")):
-            return int(s, 16)
-        return int(s)
-    except (ValueError, TypeError):
-        return None
-
-
-def _flip_operator(op: str) -> str | None:
-    """Flip a comparison operator for reversed operands."""
-    flips = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}
-    return flips.get(op)
+    atoms = integer_conjunction(guard.text, guard.concrete_values)
+    return [BoundsConstraint(var, op, value, guard.text) for var, op, value in atoms] if atoms is not None else []
 
 
 # ---------------------------------------------------------------------------
@@ -516,28 +457,14 @@ def _constraints_from_guard_text(
 ) -> list[BoundsConstraint] | None:
     """Conjunction atoms parsed from a raw guard text.
 
-    Returns ``None`` when the guard's boolean structure cannot be
-    modeled as a conjunction of comparisons (``||`` / ``!`` / ternary)
-    — callers must NOT feed such guards to a conjunctive solver query,
-    because a resulting UNSAT would be an artifact of the mis-model,
-    not a proof about the code.
+    Returns None unless the entire guard is a supported conjunction of
+    identifier/literal comparisons. Arithmetic, partial numeric literals,
+    calls and unsupported Boolean structure never contribute fragments.
     """
-    if not _boolean_structure_tractable(guard_text):
-        return None
-    constraints: list[BoundsConstraint] = []
-    for var, op, val_str in _COMPARISON_RE.findall(guard_text):
-        val = _try_parse_int(val_str)
-        if val is not None:
-            constraints.append(BoundsConstraint(var, op, val, guard_text))
-    for val_str, op, var in _COMPARISON_REV_RE.findall(guard_text):
-        val = _try_parse_int(val_str)
-        if val is not None:
-            flipped = _flip_operator(op)
-            if flipped:
-                constraints.append(
-                    BoundsConstraint(var, flipped, val, guard_text)
-                )
-    return constraints
+    from .guard_integer_constraints import integer_conjunction
+
+    atoms = integer_conjunction(guard_text)
+    return [BoundsConstraint(var, op, value, guard_text) for var, op, value in atoms] if atoms is not None else None
 
 
 def constraints_for_guard(
@@ -555,8 +482,8 @@ def constraints_for_guard(
     Returns ``None`` when the constraints cannot faithfully represent
     the guard:
 
-    * the guard text contains ``||`` / ``!`` / ternary structure the
-      flat conjunction cannot model, or
+    * any guard operand or Boolean structure lies outside the complete
+      identifier/literal conjunction grammar, or
     * polarity is "excluded"/"negated_guard" and more than one atom
       was extracted —
       by De Morgan ``NOT (A AND B)`` is ``NOT A OR NOT B``, a
@@ -567,6 +494,8 @@ def constraints_for_guard(
     if not _boolean_structure_tractable(guard.text):
         return None
     raw = extract_bounds_constraints(guard)
+    if not raw:
+        return None  # No complete supported conjunction, never a partial proof.
     if not respect_polarity or guard.polarity not in (
         "excluded", "negated_guard",
     ):
@@ -600,7 +529,8 @@ def check_path_feasibility(
 
     Results concern the extracted unbounded-integer constraint model.
     They do not establish C widths, conversions, or source reachability.
-    SAT may carry a witness for the modeled fragment only.
+    Unmodeled guards prevent a SAT verdict for the complete conjunction;
+    a retained subset model is diagnostic only.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
@@ -610,8 +540,8 @@ def check_path_feasibility(
     for g in guards:
         cs = constraints_for_guard(g, respect_polarity=True)
         if cs is None:
-            # Guard has boolean structure (||, !, ternary, negated
-            # conjunction) the flat conjunction cannot represent.
+            # The complete guard is outside the supported grammar or
+            # its polarity requires an unmodeled disjunction.
             # Dropping its atoms keeps the remaining conjunction a
             # weakening of the real path condition — an UNSAT on the
             # rest is still a sound infeasibility proof — but the
@@ -623,8 +553,7 @@ def check_path_feasibility(
 
     if not all_constraints:
         reason = (
-            "guard boolean structure (||/!/ternary) not modeled — "
-            "inconclusive"
+            "guard expression outside supported conjunction model — inconclusive"
             if unmodeled
             else "no extractable constraints"
         )
@@ -636,26 +565,30 @@ def check_path_feasibility(
 
     z3_result = _try_z3_path_feasibility(all_constraints)
     if z3_result is not None:
-        return PathFeasibilityResult(
+        result = PathFeasibilityResult(
             feasible=z3_result[0],
             reasoning=z3_result[1],
             witness=z3_result[2],
             guard_count=len(guards),
         )
-
-    return _arithmetic_path_feasibility(all_constraints, len(guards))
+    else:
+        result = _arithmetic_path_feasibility(all_constraints, len(guards))
+    if unmodeled and result.feasible is True:
+        result.feasible = None
+        result.reasoning = "encoded guard subset is satisfiable; unmodeled guards — inconclusive"
+    return result
 
 
 def _try_z3_path_feasibility(
     constraints: list[BoundsConstraint],
-) -> tuple[bool, str, dict[str, int] | None] | None:
+) -> tuple[bool | None, str, dict[str, int] | None] | None:
     """Z3 path feasibility check. Returns None if Z3 unavailable."""
     if not _z3_importable():
         return None
     out = _run_z3_child("path_feasibility", {
         "constraints": [asdict(c) for c in constraints],
     })
-    return _verdict_tuple_from_child(out)  # type: ignore[return-value]
+    return _verdict_tuple_from_child(out)
 
 
 def _arithmetic_path_feasibility(
@@ -974,8 +907,8 @@ def check_guard_sufficiency(
                 guard_text=guard.text,
                 feasible=None,
                 reasoning=(
-                    "guard boolean structure (||/!/ternary) not "
-                    "modeled — sufficiency inconclusive"
+                    "guard expression outside supported conjunction model "
+                    "— sufficiency inconclusive"
                 ),
                 concrete_values=guard.concrete_values,
             ))
@@ -1117,24 +1050,26 @@ def _z3_child_env() -> dict:
         pin_raptor_dir(RaptorConfig.get_safe_env()))
 
 
+_BUFFER_COPY_SINKS = frozenset({
+    "memcpy", "memmove", "strncpy", "strncat", "bcopy",
+    "copy_from_user", "copy_to_user", "wmemcpy",
+    "CopyMemory", "RtlCopyMemory",
+})
+
+
 def _z3_dispatch(
     constraints: list[BoundsConstraint],
     buffer_size: int | None,
     sink_api: str,
 ) -> tuple[bool | None, str, dict[str, int] | None] | None:
     """Route to the appropriate Z3 check."""
-    memcpy_sinks = {
-        "memcpy", "memmove", "strncpy", "strncat", "bcopy",
-        "copy_from_user", "copy_to_user", "wmemcpy",
-        "CopyMemory", "RtlCopyMemory",
-    }
     alloc_sinks = {
         "malloc", "calloc", "realloc", "kmalloc", "kzalloc",
     }
 
     api_base = sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api else sink_api
 
-    if api_base in memcpy_sinks and buffer_size is not None:
+    if api_base in _BUFFER_COPY_SINKS and buffer_size is not None:
         return _z3_overflow_check(constraints, buffer_size)
     if api_base in alloc_sinks:
         return _z3_alloc_overflow_check(constraints)
@@ -1143,6 +1078,17 @@ def _z3_dispatch(
 
 
 _OVERFLOW_BV_WIDTH = 64
+
+
+def _signed_guard_bounds_fit(constraints: list[BoundsConstraint]) -> bool:
+    """Do not silently reduce mathematical guard bounds modulo 2**64."""
+    limit = 1 << (_OVERFLOW_BV_WIDTH - 1)
+    return bool(constraints) and all(
+        isinstance(c.variable, str) and bool(c.variable)
+        and c.operator in _NEGATE_OP
+        and type(c.bound_value) is int and -limit <= c.bound_value < limit
+        for c in constraints
+    )
 
 
 def _bv_signed(value: int, width: int = _OVERFLOW_BV_WIDTH) -> int:
@@ -1155,7 +1101,7 @@ def _bv_signed(value: int, width: int = _OVERFLOW_BV_WIDTH) -> int:
 def _z3_overflow_check(
     constraints: list[BoundsConstraint],
     buffer_size: int,
-) -> tuple[bool, str, dict[str, int] | None]:
+) -> tuple[bool | None, str, dict[str, int] | None]:
     """Z3: Can length still overflow given the guard constraints?
 
     Bitvector model with explicit signedness.  Guard atoms use SIGNED
@@ -1167,6 +1113,11 @@ def _z3_overflow_check(
     reaches ``memcpy`` as ``SIZE_MAX``.  The previous ``z3.Int`` model
     had no wrap at all and declared such guards sufficient.
     """
+    if not _signed_guard_bounds_fit(constraints):
+        return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
+    if type(buffer_size) is not int or not 0 <= buffer_size < (1 << _OVERFLOW_BV_WIDTH):
+        return (None, "buffer size does not fit the unsigned 64-bit model — inconclusive", None)
+
     import z3
 
     solver = z3.Solver()
@@ -1229,7 +1180,7 @@ def _z3_overflow_check(
             )
         if result == z3.unknown:
             solver.pop()
-            return (True, "solver timeout — conservatively assume guard insufficient", None)
+            return (None, "solver returned unknown — guard sufficiency inconclusive", None)
         solver.pop()
 
     return (
@@ -1255,6 +1206,9 @@ def _z3_alloc_overflow_check(
     "allocation size cannot overflow" from a mis-modeled guard.  The
     wrap question itself stays on the unsigned (size_t) product.
     """
+    if not _signed_guard_bounds_fit(constraints):
+        return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
+
     import z3
 
     solver = z3.Solver()
@@ -1310,7 +1264,7 @@ def _z3_alloc_overflow_check(
                     return (True, "integer overflow in allocation size is possible", witness or None)
                 solver.pop()
                 if result == z3.unknown:
-                    return (True, "solver timeout — conservatively assume overflow possible", None)
+                    return (None, "solver returned unknown — allocation overflow inconclusive", None)
         return (False, "allocation size cannot overflow given constraints", None)
 
     # A single constrained variable gives the multiplication model
@@ -1443,7 +1397,7 @@ def _z3_dispatch_json(request: dict) -> Any:
 
 def _z3_path_feasibility_check(
     constraints: list[BoundsConstraint],
-) -> tuple[bool, str, dict[str, int] | None]:
+) -> tuple[bool | None, str, dict[str, int] | None]:
     """Z3: Check if all constraints can be satisfied simultaneously.
 
     Uses z3.Int (integer sort) rather than bitvectors because guards
@@ -1490,7 +1444,7 @@ def _z3_path_feasibility_check(
                 except AttributeError:
                     pass
         return (True, "path feasible", witness or None)
-    return (True, "solver timeout — conservatively assume path feasible", None)
+    return (None, "solver returned unknown — path feasibility inconclusive", None)
 
 
 def _z3_signed_mismatch_check(
@@ -1658,93 +1612,52 @@ def _arithmetic_check(
     constraints: list[BoundsConstraint],
     guard: GuardCondition,
     buffer_size: int | None,
-    _sink_api: str,
+    sink_api: str,
 ) -> SmtSufficiencyResult:
-    """Simple arithmetic reasoning when Z3 is unavailable.
+    """Exact fallback for the native copy check's signed-64 guard model.
 
-    For `len < MAX_SIZE` where MAX_SIZE=4096 and buffer=256:
-    The guard allows len up to 4095, but buffer is only 256 → insufficient.
-
-    When multiple upper-bound constraints exist (conjunctive guard),
-    the tightest (minimum max_allowed) determines sufficiency.
+    Each constrained variable is considered independently as an unsigned
+    copy length, just as in _z3_overflow_check. This establishes neither
+    source argument identity nor C type/conversion semantics. Allocation
+    and unknown sink models remain inconclusive without Z3.
     """
+    def result(feasible, reasoning, witness=None):
+        return SmtSufficiencyResult(
+            guard_text=guard.text, feasible=feasible, reasoning=reasoning,
+            concrete_values=guard.concrete_values, witness=witness,
+        )
+
     if buffer_size is None:
-        return SmtSufficiencyResult(
-            guard_text=guard.text,
-            feasible=None,
-            reasoning="no buffer size known for arithmetic check",
-            concrete_values=guard.concrete_values,
-        )
+        return result(None, "no buffer size known for arithmetic check")
+    if sink_api.rsplit(".", 1)[-1] not in _BUFFER_COPY_SINKS:
+        return result(None, "no arithmetic sufficiency model for this sink")
+    if not _signed_guard_bounds_fit(constraints):
+        return result(None, "guard bounds do not fit the signed 64-bit model — inconclusive")
+    if type(buffer_size) is not int or not 0 <= buffer_size < (1 << _OVERFLOW_BV_WIDTH):
+        return result(None, "buffer size does not fit the unsigned 64-bit model — inconclusive")
 
-    tightest_max: int | None = None
-    tightest_var: str = ""
-
-    for c in constraints:
-        max_allowed: int | None = None
-        if c.operator == "<":
-            max_allowed = c.bound_value - 1
-        elif c.operator == "<=":
-            max_allowed = c.bound_value
-
-        if max_allowed is not None and (
-            tightest_max is None or max_allowed < tightest_max
-        ):
-            tightest_max = max_allowed
-            tightest_var = c.variable
-
-    if tightest_max is None:
-        return SmtSufficiencyResult(
-            guard_text=guard.text,
-            feasible=None,
-            reasoning="no upper-bound constraint found for arithmetic check",
-            concrete_values=guard.concrete_values,
-        )
-
-    if tightest_max > buffer_size:
-        return SmtSufficiencyResult(
-            guard_text=guard.text,
-            feasible=True,
-            reasoning=(
-                f"guard allows {tightest_var} up to {tightest_max}, "
-                f"but buffer is only {buffer_size} bytes"
-            ),
-            concrete_values=guard.concrete_values,
-        )
-
-    # Same signedness rule as the Z3 bitvector model: an upper bound
-    # alone does not exclude negative values, and a signed negative
-    # length wraps to a huge size_t at the sink.  Sufficiency needs a
-    # non-negative lower bound on the same variable.
-    has_lower = any(
-        c.variable == tightest_var
-        and (
-            (c.operator in (">", ">=") and c.bound_value >= 0)
-            or (c.operator == "==" and 0 <= c.bound_value <= buffer_size)
-        )
-        for c in constraints
-    )
-    if not has_lower:
-        return SmtSufficiencyResult(
-            guard_text=guard.text,
-            feasible=True,
-            reasoning=(
-                f"guard limits {tightest_var} to ≤{tightest_max} but has "
-                f"no non-negative lower bound — a negative (signed) value "
-                f"passes the guard and wraps to a huge size_t at the sink"
-            ),
-            concrete_values=guard.concrete_values,
-            witness={tightest_var: -1},
-        )
-
-    return SmtSufficiencyResult(
-        guard_text=guard.text,
-        feasible=False,
-        reasoning=(
-            f"guard limits {tightest_var} to ≤{tightest_max}, "
-            f"within buffer size {buffer_size}"
-        ),
-        concrete_values=guard.concrete_values,
-    )
+    modulus = 1 << _OVERFLOW_BV_WIDTH
+    variables = sorted({c.variable for c in constraints})
+    domains = [
+        BoundsConstraint(var, op, value)
+        for var in variables
+        for op, value in ((">=", -(modulus // 2)), ("<", modulus // 2))
+    ]
+    base = list(constraints) + domains
+    for var in variables:
+        # Negative signed values become value + 2**64 at the sink.
+        # Positive values retain their integer value. Query both ranges,
+        # always retaining every guard constraint on every variable.
+        for lower, upper in ((buffer_size - modulus, 0), (buffer_size, modulus // 2)):
+            candidate = _arithmetic_path_feasibility(
+                base + [BoundsConstraint(var, ">", lower), BoundsConstraint(var, "<", upper)],
+                1,
+            )
+            if candidate.feasible is True:
+                return result(True, f"unsigned copy-length model exceeds {buffer_size}", candidate.witness)
+            if candidate.feasible is None:
+                return result(None, "arithmetic copy-length model inconclusive")
+    return result(False, f"all constrained copy-length values fit {buffer_size} in the signed-64 guard model")
 
 
 # ---------------------------------------------------------------------------
