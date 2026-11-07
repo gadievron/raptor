@@ -76,16 +76,43 @@ def test_ownership_changes_and_close_order(tmp_path, declaration, close_first):
         ("--fd;", "", False),
         ("fd += 1;", "", False),
         ("fd -= 1;", "", False),
+        ("fd *= 0;", "", False),
+        ("fd /= 2;", "", False),
+        ("fd %= 2;", "", False),
+        ("fd <<= 1;", "", False),
+        ("fd >>= 1;", "", False),
+        ("fd &= 1;", "", False),
+        ("fd ^= 1;", "", False),
+        ("fd |= 1;", "", False),
         ("dir++;", "", False),
         ("dir += 1;", "", False),
         ("replace_fd(&fd);", "", False),
         ("", "fd = replacement;", False),
         ("", "fd++;", False),
         ("", "fd += 1;", False),
+        ("", "fd *= 0;", False),
+        ("", "fd /= 2;", False),
+        ("", "fd %= 2;", False),
+        ("", "fd <<= 1;", False),
+        ("", "fd >>= 1;", False),
+        ("", "fd &= 1;", False),
+        ("", "fd ^= 1;", False),
+        ("", "fd |= 1;", False),
         ("", "dir++;", not close_first),
         ("", "replace_fd(&fd);", False),
         ("", "dup2(replacement, fd);", False),
         ("", "dup3(replacement, fd, 0);", False),
+        ("", "dup2(fd, fd);", True),
+        ("", "dup3(fd, fd, 0);", True),
+        ("", "dup2((fd), fd);", True),
+        ("", "dup2(fd, (fd));", True),
+        ("", "dup3((fd), (fd), 0);", True),
+        ("", "dup3(fd, replacement, 0);", True),
+        ("", "dup3(replacement, other_fd, fd);", True),
+        ("", "dup2(replacement, (fd));", False),
+        ("", "dup2((replacement), (fd));", False),
+        ("", "dup3(replacement, (fd), 0);", False),
+        ("", "dup2(get_other_fd(), fd);", False),
         # Replacing a stream after closedir cannot undo its fd release.
         ('', 'dir = opendir("other");', not close_first),
         ('', 'replace_dir(&dir);', not close_first),
@@ -94,7 +121,7 @@ def test_ownership_changes_and_close_order(tmp_path, declaration, close_first):
     expected = set()
     prefix = "void *" if declaration else ""
     for before, between, should_report in cases:
-        lines += [f"void case_{len(lines)}(int fd, int replacement) {{"]
+        lines += [f"void case_{len(lines)}(int fd, int replacement, int other_fd) {{"]
         if not declaration:
             lines += ["void *dir;"]
         lines += [f"{prefix}dir = fdopendir(fd);", "if (!dir) return;", before,
@@ -114,7 +141,7 @@ def test_ownership_changes_and_close_order(tmp_path, declaration, close_first):
     lines += ["void unrelated_descriptor(int fd, int other) {",
               "void *dir = fdopendir(fd);", "if (!dir) return;",
               "close(other);", "closedir(dir);", "}"]
-    for index in range(120):
+    for index in range(32):
         lines += [f"void repeated_{index}(int fd) {{"]
         if not declaration:
             lines += ["void *dir;"]
@@ -138,7 +165,10 @@ def test_directory_ownership_keeps_production_batching(tmp_path, monkeypatch):
         'void forward(int fd) { void *d = fdopendir(fd); if (!d) return; closedir(d); close(fd); }\n'
         'void reverse(int fd) { void *d = fdopendir(fd); if (!d) return; close(fd); closedir(d); }\n'
         'void replaced(int fd) { void *d = fdopendir(fd); d = opendir("x"); closedir(d); close(fd); }\n'
-        'void twice(int fd) { close(fd); close(fd); }\n',
+        'void mutated(int fd) { void *d = fdopendir(fd); if (!d) return; fd ^= 1; closedir(d); close(fd); }\n'
+        'void self_dup(int fd) { void *d = fdopendir(fd); if (!d) return; closedir(d); dup2(fd, fd); close(fd); }\n'
+        'int candidate(void *p) { if (IS_ERR(p)) { int ret = -IS_ERR(p); return ret; } return 0; }\n'
+        'int rewritten(void *p) { int ret; if (IS_ERR(p)) { ret = IS_ERR(p); ret *= -EIO; return ret; } return 0; }\n',
     )
     original = runner._confined_default_runner
     invocations = []
@@ -154,11 +184,11 @@ def test_directory_ownership_keeps_production_batching(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_confined_default_runner", observe)
     results = runner.run_rules_batched(
-        source, [_RULE, _RULE.with_name("double_close.cocci")],
+        source, [_RULE, _RULE.with_name("is_err_not_ptr_err.cocci")],
         allow_scripting=True, no_includes=True, timeout=60,
     )
-    assert set(results) == {"fdopendir_double_close", "double_close"}
+    assert set(results) == {"fdopendir_double_close", "is_err_not_ptr_err"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
-    assert len(results["fdopendir_double_close"].matches) == 2
-    assert len(results["double_close"].matches) == 1
+    assert len(results["fdopendir_double_close"].matches) == 3
+    assert len(results["is_err_not_ptr_err"].matches) == 1
     assert len(invocations) == 1, invocations

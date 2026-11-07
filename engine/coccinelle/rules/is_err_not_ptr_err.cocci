@@ -23,18 +23,17 @@ position p;
 
 @is_err_return@
 expression P;
+assignment operator op_p;
 position p != boolean_predicate.p;
 @@
 
   if (IS_ERR(P)) {
-    ... when != P = ...
+    ... when != P op_p ...
         when != &P
         when != P++
         when != ++P
         when != P--
         when != --P
-        when != P += ...
-        when != P -= ...
 *   return IS_ERR(P)@p;
   }
 
@@ -53,18 +52,17 @@ print("COCCIRESULT:" + json.dumps(msg))
 
 @is_err_return_neg@
 expression P;
+assignment operator op_p;
 position p != boolean_predicate.p;
 @@
 
   if (IS_ERR(P)) {
-    ... when != P = ...
+    ... when != P op_p ...
         when != &P
         when != P++
         when != ++P
         when != P--
         when != --P
-        when != P += ...
-        when != P -= ...
 *   return -IS_ERR(P)@p;
   }
 
@@ -85,18 +83,18 @@ print("COCCIRESULT:" + json.dumps(msg))
 expression P;
 identifier RET;
 type T;
+assignment operator op_ret;
+assignment operator op_p;
 position p != boolean_predicate.p;
 @@
 
   if (IS_ERR(P)) {
-    ... when != P = ...
+    ... when != P op_p ...
         when != &P
         when != P++
         when != ++P
         when != P--
         when != --P
-        when != P += ...
-        when != P -= ...
 (
 *   RET = IS_ERR(P)@p;
 |
@@ -106,18 +104,8 @@ position p != boolean_predicate.p;
 |
 *   T RET = -IS_ERR(P)@p;
 )
-    ... when != RET = ...
+    ... when != RET op_ret ...
         when != &RET
-        when != RET += ...
-        when != RET -= ...
-        when != RET *= ...
-        when != RET /= ...
-        when != RET %= ...
-        when != RET <<= ...
-        when != RET >>= ...
-        when != RET &= ...
-        when != RET ^= ...
-        when != RET |= ...
         when != RET++
         when != ++RET
         when != RET--
