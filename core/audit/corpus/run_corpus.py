@@ -1400,6 +1400,9 @@ def _run_audit(
                     "error_reason": error_reason,
                 })
 
+            from .verification import annotate_verification
+
+            annotate_verification(group_rows, repo_labels, audit_dir)
             results.extend(group_rows)
             group_cost = sum(r.get("cost_usd", 0.0) for r in group_rows)
             attributed_total += group_cost
@@ -1420,6 +1423,10 @@ def _run_audit(
     finally:
         pass
 
+    from .verification import unavailable_verification
+
+    for row in results:
+        row.setdefault("verification", unavailable_verification())
     return results, run_dirs
 
 

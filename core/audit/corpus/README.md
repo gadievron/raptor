@@ -63,6 +63,17 @@ python3 -m core.audit.corpus.run_corpus --out out/corpus-run --output results.js
 python3 -m core.audit.corpus.corpus_metrics results.json --check-gate
 ```
 
+Result rows include a `verification` snapshot from the group's normal audit
+exports. Recorded snapshots contain counts for checks matching the row's final
+claim and for other linked claims, plus references back to the audit directory.
+Missing, ambiguous, mismatched, or unreadable data remains unavailable; clean
+functions may have no graded finding to join. Older result files without this
+field likewise have unknown coverage. These are reporting snapshots whose
+artifact integrity and source freshness are not revalidated. They do not alter
+verdict scoring, mechanism attribution, or gates, and a recorded tool outcome
+is not a proof that the labeled defect was found. Checkpointed and spliced rows
+retain their saved snapshots.
+
 `sources.json` is the URL registry (repo key → primary URL, mirrors,
 post-clone symlinks, notes). `--fetch` creates missing clones from it —
 shallow, at the pinned ref, with mirror fallback. It lives next to the
