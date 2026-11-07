@@ -14,6 +14,13 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+import shutil
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+from core.testing.module_bindings import mock_module_attribute
+
+
+_local_imports = ModuleType("configuration_fixture_imports")
 
 
 @pytest.fixture(autouse=True)
@@ -40,14 +47,18 @@ def _isolated_env(monkeypatch, tmp_path):
     )
     import core.llm.config as cfg
     import core.llm.detection as det
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
-    monkeypatch.setattr(cfg, "_operator_primary_override", None)
-    yield
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
+    from core.testing.llm_state import isolated_llm_resolution
+
+    with (
+        isolated_llm_resolution(cfg, det),
+        scoped_function_imports(cfg, ("_entry_auth_resolvable", "_build_claudecode_config"),
+                                {"shutil": shutil}) as imports,
+    ):
+        try:
+            monkeypatch.setitem(globals(), "_local_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _entry_config(entry):
@@ -285,9 +296,9 @@ def test_claudecode_entry_auth_resolvable_via_binary(monkeypatch):
     CLI — resolvable exactly when the binary exists."""
     from core.llm.config import ModelConfig, _entry_auth_resolvable
     mc = ModelConfig(provider="claudecode", model_name="session-default")
-    with patch("shutil.which", return_value="/usr/bin/claude"):
+    with mock_module_attribute(_local_imports, "shutil", "which", return_value="/usr/bin/claude"):
         assert _entry_auth_resolvable(mc) is True
-    with patch("shutil.which", return_value=None):
+    with mock_module_attribute(_local_imports, "shutil", "which", return_value=None):
         assert _entry_auth_resolvable(mc) is False
 
 
@@ -313,7 +324,7 @@ def test_claudecode_fallback_behind_bedrock_primary(monkeypatch):
     monkeypatch.setattr(cfg, "_get_best_thinking_model", lambda: None)
     primary = cfg._get_default_primary_model()
     assert primary is not None and primary.provider == "bedrock"
-    with patch("shutil.which", return_value="/usr/bin/claude"), \
+    with mock_module_attribute(_local_imports, "shutil", "which", return_value="/usr/bin/claude"), \
          patch.object(cfg, "detect_llm_availability") as av, \
          patch.object(cfg, "_get_available_ollama_models",
                       return_value=[]):

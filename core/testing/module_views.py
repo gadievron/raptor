@@ -1,6 +1,8 @@
 """Private function globals for tests that exercise local imports or helpers."""
 
 import builtins
+from contextlib import contextmanager
+from functools import partial
 from types import FunctionType, ModuleType
 
 
@@ -49,3 +51,43 @@ def module_function_view(module, *, bindings=None, import_hook=None):
             clones[id(value)] = clone
         namespace[name] = clones[id(value)]
     return private
+
+
+@contextmanager
+def scoped_function_imports(module, functions, imports):
+    """Own exact absolute local imports for selected module functions.
+
+    Capture current globals at each invocation so body-installed mocks remain
+    visible. Imported module namespaces are private shallow copies. The supplied
+    functions must be unwrapped Python functions defined in the module; other
+    module users and the inherited import hook remain untouched.
+    """
+    import pytest
+
+    originals = {name: getattr(module, name) for name in functions}
+    if any(not isinstance(fn, FunctionType) or fn.__globals__ is not vars(module)
+           for fn in originals.values()):
+        raise TypeError("functions must be defined in the supplied module")
+    owned = ModuleType("scoped_imports")
+    for name, borrowed in imports.items():
+        if not isinstance(borrowed, ModuleType):
+            raise TypeError("imports must be module namespaces")
+        private = ModuleType(borrowed.__name__)
+        vars(private).update(vars(borrowed))
+        setattr(owned, name, private)
+    inherited = vars(module).get("__builtins__", builtins)
+    original_import = inherited.__import__ if isinstance(inherited, ModuleType) else inherited["__import__"]
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name in imports:
+            return getattr(owned, name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    def invoke(name, *args, **kwargs):
+        view = module_function_view(module, bindings=originals, import_hook=import_local)
+        return getattr(view, name)(*args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as scope:
+        for name in originals:
+            scope.setattr(module, name, partial(invoke, name))
+        yield owned

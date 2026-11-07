@@ -18,6 +18,13 @@ from __future__ import annotations
 import json
 
 import pytest
+import shutil
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
+from core.testing.module_bindings import patch_module_attribute
+
+
+_local_imports = ModuleType("configuration_fixture_imports")
 
 
 @pytest.fixture(autouse=True)
@@ -26,8 +33,13 @@ def _isolated_env(monkeypatch, tmp_path):
     import core.llm.detection as det
     from core.testing.llm_state import isolated_llm_resolution
 
-    with isolated_llm_resolution(cfg, det):
+    with (
+        isolated_llm_resolution(cfg, det),
+        scoped_function_imports(cfg, ("_entry_auth_resolvable", "_build_claudecode_config"),
+                                {"shutil": shutil}) as imports,
+    ):
         try:
+            monkeypatch.setitem(globals(), "_local_imports", imports)
             for var in (
                 "ANTHROPIC_API_KEY",
                 "OPENAI_API_KEY",
@@ -56,7 +68,7 @@ def _isolated_env(monkeypatch, tmp_path):
                 lambda: det.LLMAvailability(external_llm=True, claude_code=False, llm_available=True),
             )
             # No live `claude` binary → claudecode never resolves as a competitor.
-            monkeypatch.setattr("shutil.which", lambda _bin: None)
+            patch_module_attribute(monkeypatch, _local_imports, "shutil", "which", lambda _bin: None)
             yield
         finally:
             monkeypatch.undo()
@@ -205,8 +217,8 @@ class TestClaudeCodeConfigPrimary:
 
     @pytest.fixture(autouse=True)
     def _claude_on_path(self, monkeypatch):
-        monkeypatch.setattr(
-            "shutil.which",
+        patch_module_attribute(
+            monkeypatch, _local_imports, "shutil", "which",
             lambda b: "/usr/local/bin/claude" if b == "claude" else None,
         )
         import core.llm.config as cfg
