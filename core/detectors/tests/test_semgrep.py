@@ -156,7 +156,8 @@ def test_engine_failure_result_does_not_keep_traceback_artifacts_alive(tmp_path,
     result = run_analysis(prepare=prepare, rule_config="x", timeout=5)
     assert result.status == "error"
     assert result.value.invocation_error == "tool crashed"
-    gc.collect()
+    # Released sentinels are acyclic; do not scan unrelated old worker objects.
+    gc.collect(0)
     assert references[0]() is None
 
 

@@ -1,6 +1,7 @@
 """Borrower identity and finalization over the graph-service transport."""
 
 import gc
+import weakref
 
 from packages.joern import lifecycle
 from packages.joern.client import GraphClient
@@ -10,8 +11,15 @@ from packages.joern.tunables import JoernTunables
 
 def _clients(monkeypatch, controller):
     owner, graph, workers = controller
-    factory = lambda *a, **kw: GraphClient(tunables=JoernTunables(), endpoint=(owner.root, owner.token))
-    monkeypatch.setattr(lifecycle.GraphClient, "from_tunables", factory)
+    original_factory = vars(GraphClient)["from_tunables"]
+
+    class BoundGraphClient(GraphClient):
+        @classmethod
+        def from_tunables(cls, *args, **kwargs):
+            return GraphClient(tunables=JoernTunables(), endpoint=(owner.root, owner.token))
+
+    monkeypatch.setattr(lifecycle, "GraphClient", BoundGraphClient)
+    assert vars(GraphClient)["from_tunables"] is original_factory
     first = lifecycle.joern_acquire()
     second = lifecycle.joern_acquire()
     first.bind_graph(graph)
@@ -23,8 +31,11 @@ def test_release_and_finalization_cannot_stop_another_borrower(monkeypatch, cont
     first, second, workers = _clients(monkeypatch, controller)
     try:
         lifecycle.joern_release(token=first._lifecycle_token, srv=first)
+        reference = weakref.ref(first)
         del first
-        gc.collect()
+        # The released client is acyclic; avoid scanning the old worker heap.
+        gc.collect(0)
+        assert reference() is None
         assert second.query("query").ok
         assert workers[0].stops == 0
     finally:
