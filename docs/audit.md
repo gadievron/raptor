@@ -410,6 +410,14 @@ not an exhaustive check history or a fresh validation of the source. Checks
 outside the recorded tool-chain path and results from older runs can remain
 unavailable.
 
+The graded JSON's `verification_summary` counts findings with and without
+matching observations, separates other claims and unlinked records, and
+summarizes outcomes by tool. It also exposes partial payloads and unavailable
+source identities or checker assumptions. `verification-checks.json` includes
+a summary of all retained records. These counts describe recorded observations,
+not distinct tool executions or proven defects; they do not measure source
+freshness or turn a missing record into evidence of safety.
+
 
 ## Integration
 
