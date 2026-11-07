@@ -20,6 +20,8 @@ from core.audit.invariant_smt import (
     find_mutation_sites,
 )
 
+pytestmark = pytest.mark.usefixtures("invariant_unit_worker")
+
 z3 = pytest.importorskip("z3")
 
 

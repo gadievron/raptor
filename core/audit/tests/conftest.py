@@ -236,3 +236,19 @@ def overflow_disproof_unit_worker(monkeypatch, request):
         return original(tag, args, **kwargs)
 
     monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)
+
+
+@pytest.fixture
+def invariant_unit_worker(monkeypatch, request):
+    """Keep mathematical unit tests at dispatch; native cases retain confinement."""
+    if request.node.get_closest_marker("slow") or request.node.get_closest_marker("integration"):
+        return
+    from core.audit import condition_smt
+    original = condition_smt._run_z3_child
+
+    def dispatch(tag, args, **kwargs):
+        if tag == "invariant_preservation":
+            return condition_smt._z3_dispatch_json({"tag": tag, "args": args})
+        return original(tag, args, **kwargs)
+
+    monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)

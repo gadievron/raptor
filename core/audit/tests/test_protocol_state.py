@@ -33,6 +33,8 @@ from core.audit.protocol_state import (
     run_protocol_state_prepass,
 )
 
+pytestmark = pytest.mark.usefixtures("invariant_unit_worker")
+
 pytest.importorskip("tree_sitter_c", reason="CFG guard leg needs tree-sitter")
 pytest.importorskip("z3", reason="leg 3 needs z3")
 
