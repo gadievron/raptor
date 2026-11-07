@@ -8,6 +8,9 @@ operator-proxy inversion with it (see the last test).
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import json
 import socket
 from typing import Any
@@ -93,20 +96,24 @@ def test_health_result_as_row_escapes_hostile_error_text() -> None:
 # -- DNS canary -----------------------------------------------------------
 
 
-@patch("cve_env.infra.service_health.socket.gethostbyname")
-def test_probe_dns_ok(mock_resolve: Any) -> None:
-    mock_resolve.return_value = "1.2.3.4"
-    r = probe_dns()
-    assert r.ok is True
-    assert r.name == "DNS resolution"
+def test_probe_dns_ok() -> None:
+    with (
+        mock_module_attribute(_mock_owner('cve_env.infra.service_health'), 'socket', 'gethostbyname') as mock_resolve,
+    ):
+        mock_resolve.return_value = "1.2.3.4"
+        r = probe_dns()
+        assert r.ok is True
+        assert r.name == "DNS resolution"
 
 
-@patch("cve_env.infra.service_health.socket.gethostbyname")
-def test_probe_dns_fails(mock_resolve: Any) -> None:
-    mock_resolve.side_effect = socket.gaierror("dns offline")
-    r = probe_dns()
-    assert r.ok is False
-    assert "resolve failure" in r.detail
+def test_probe_dns_fails() -> None:
+    with (
+        mock_module_attribute(_mock_owner('cve_env.infra.service_health'), 'socket', 'gethostbyname') as mock_resolve,
+    ):
+        mock_resolve.side_effect = socket.gaierror("dns offline")
+        r = probe_dns()
+        assert r.ok is False
+        assert "resolve failure" in r.detail
 
 
 # -- NVD probe ------------------------------------------------------------

@@ -6,6 +6,9 @@ is exercised by the e2e test.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import json
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -26,26 +29,10 @@ from cve_env.tools.verify import (
 )
 
 from core.container.proc import RunOutcome
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import cve_env.tools.verify as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_socket_patch_targets(monkeypatch):
-    import core.env.verify as consumer
-
-    patch_module_attribute(
-        monkeypatch, consumer, "socket", "create_connection", consumer.socket.create_connection,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -217,19 +204,19 @@ def test_stability_wait_rejects_out_of_range() -> None:
     assert "out of range" in r["reason"]
 
 
-@patch("cve_env.tools.verify.time.sleep", return_value=None)
-@patch("cve_env.tools.verify.check_container_status")
-def test_stability_wait_passes_when_still_running(
-    mock_status: Any, mock_sleep: Any
-) -> None:
-    mock_status.return_value = {
-        "passed": True,
-        "details": {},
-        "type": "container_status",
-    }
-    r = stability_wait("cid", wait_seconds=1)
-    assert r["passed"] is True
-    mock_sleep.assert_called_once_with(1)
+def test_stability_wait_passes_when_still_running() -> None:
+    with (
+        patch('cve_env.tools.verify.check_container_status') as mock_status,
+        mock_module_attribute(_mock_owner('cve_env.tools.verify'), 'time', 'sleep', return_value=None) as mock_sleep,
+    ):
+        mock_status.return_value = {
+            "passed": True,
+            "details": {},
+            "type": "container_status",
+        }
+        r = stability_wait("cid", wait_seconds=1)
+        assert r["passed"] is True
+        mock_sleep.assert_called_once_with(1)
 
 
 @patch("cve_env.tools.verify.check_container_status")
@@ -865,104 +852,118 @@ class _FakeTCPSocket:
         self.closed = True
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_passes_on_marker_present(mock_conn: Any) -> None:
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="*1\r\n$4\r\nPING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is True
-    assert r["type"] == "tcp_probe_check"
-    assert r["details"]["host_port"] == 6379
-    assert r["details"]["response_size_bytes"] == len(b"+PONG\r\n")
+def test_tcp_probe_check_passes_on_marker_present() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="*1\r\n$4\r\nPING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is True
+        assert r["type"] == "tcp_probe_check"
+        assert r["details"]["host_port"] == 6379
+        assert r["details"]["response_size_bytes"] == len(b"+PONG\r\n")
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_fails_on_marker_absent(mock_conn: Any) -> None:
-    mock_conn.return_value = _FakeTCPSocket(response=b"-ERR unknown command\r\n")
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="WHATEVER\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is False
-    assert "missing expected response marker" in r["reason"]
-    assert "hint" in r["details"]
-    assert r["details"]["response_tail_ascii"].startswith("-ERR")
+def test_tcp_probe_check_fails_on_marker_absent() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"-ERR unknown command\r\n")
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="WHATEVER\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is False
+        assert "missing expected response marker" in r["reason"]
+        assert "hint" in r["details"]
+        assert r["details"]["response_tail_ascii"].startswith("-ERR")
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_hex_payload_and_marker(mock_conn: Any) -> None:
+def test_tcp_probe_check_hex_payload_and_marker() -> None:
     """Hex payload + hex marker — used for binary protocols (DNS, raw RTSP)."""
-    mock_conn.return_value = _FakeTCPSocket(response=bytes.fromhex("deadbeef"))
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=53,
-        send_hex="cafebabe",
-        expected_response_hex="deadbeef",
-    )
-    assert r["passed"] is True
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=bytes.fromhex("deadbeef"))
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=53,
+            send_hex="cafebabe",
+            expected_response_hex="deadbeef",
+        )
+        assert r["passed"] is True
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_banner_grab_no_payload(mock_conn: Any) -> None:
+def test_tcp_probe_check_banner_grab_no_payload() -> None:
     """SSH/MySQL/Postgres send first — no payload needed."""
-    fake = _FakeTCPSocket(response=b"SSH-2.0-OpenSSH_8.2p1\r\n")
-    mock_conn.return_value = fake
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=22,
-        expected_response_contains="SSH-2.0-",
-    )
-    assert r["passed"] is True
-    assert fake.sent == b""  # banner-grab sends nothing
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        fake = _FakeTCPSocket(response=b"SSH-2.0-OpenSSH_8.2p1\r\n")
+        mock_conn.return_value = fake
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=22,
+            expected_response_contains="SSH-2.0-",
+        )
+        assert r["passed"] is True
+        assert fake.sent == b""  # banner-grab sends nothing
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_connection_refused_hint(mock_conn: Any) -> None:
-    mock_conn.side_effect = ConnectionRefusedError("Connection refused")
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="PING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is False
-    assert r["reason"] == "connection refused"
-    assert "ss -tlnp" in r["details"]["hint"]
+def test_tcp_probe_check_connection_refused_hint() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.side_effect = ConnectionRefusedError("Connection refused")
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="PING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is False
+        assert r["reason"] == "connection refused"
+        assert "ss -tlnp" in r["details"]["hint"]
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_timeout_hint(mock_conn: Any) -> None:
-    mock_conn.return_value = _FakeTCPSocket(raise_on_recv=TimeoutError)
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="PING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is False
-    assert "timeout" in r["reason"]
-    assert "wrong protocol or wrong port" in r["details"]["hint"]
+def test_tcp_probe_check_timeout_hint() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(raise_on_recv=TimeoutError)
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="PING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is False
+        assert "timeout" in r["reason"]
+        assert "wrong protocol or wrong port" in r["details"]["hint"]
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_tcp_probe_check_empty_response_hint(mock_conn: Any) -> None:
+def test_tcp_probe_check_empty_response_hint() -> None:
     """Service closed connection without responding."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"")
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="PING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is False
-    assert "closed connection" in r["reason"]
-    assert "protocol mismatch" in r["details"]["hint"]
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"")
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="PING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is False
+        assert "closed connection" in r["reason"]
+        assert "protocol mismatch" in r["details"]["hint"]
 
 
 def test_tcp_probe_check_rejects_dual_payload() -> None:
@@ -1008,45 +1009,51 @@ def test_tcp_probe_check_rejects_invalid_hex() -> None:
 # meaningful against published container ports (loopback or Docker bridge).
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_phase61_check_tcp_probe_rejects_public_ip(mock_conn: Any) -> None:
+def test_phase61_check_tcp_probe_rejects_public_ip() -> None:
     """tcp_probe_check refuses to connect to a public IP (e.g., 8.8.8.8)."""
-    r = check_tcp_probe(
-        host_ip="8.8.8.8",
-        host_port=443,
-        send_text="hello",
-        expected_response_contains="ok",
-    )
-    assert r["passed"] is False
-    assert "host_ip" in r["reason"]
-    # Must never even open the socket.
-    assert mock_conn.call_count == 0
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        r = check_tcp_probe(
+            host_ip="8.8.8.8",
+            host_port=443,
+            send_text="hello",
+            expected_response_contains="ok",
+        )
+        assert r["passed"] is False
+        assert "host_ip" in r["reason"]
+        # Must never even open the socket.
+        assert mock_conn.call_count == 0
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_phase61_check_tcp_probe_allows_loopback(mock_conn: Any) -> None:
+def test_phase61_check_tcp_probe_allows_loopback() -> None:
     """Sanity: 127.0.0.1 still passes the gate (will then proceed to socket)."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    r = check_tcp_probe(
-        host_ip="127.0.0.1",
-        host_port=6379,
-        send_text="PING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is True
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        r = check_tcp_probe(
+            host_ip="127.0.0.1",
+            host_port=6379,
+            send_text="PING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is True
 
 
-@patch("core.env.verify.socket.create_connection")
-def test_phase61_check_tcp_probe_allows_docker_bridge_ip(mock_conn: Any) -> None:
+def test_phase61_check_tcp_probe_allows_docker_bridge_ip() -> None:
     """A Docker bridge IP (172.17.0.x is RFC 1918 private) is permitted."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    r = check_tcp_probe(
-        host_ip="172.17.0.2",
-        host_port=6379,
-        send_text="PING\r\n",
-        expected_response_contains="+PONG",
-    )
-    assert r["passed"] is True
+    with (
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        r = check_tcp_probe(
+            host_ip="172.17.0.2",
+            host_port=6379,
+            send_text="PING\r\n",
+            expected_response_contains="+PONG",
+        )
+        assert r["passed"] is True
 
 
 @patch("core.env.verify._http_exchange")
@@ -1058,48 +1065,38 @@ def test_phase61_check_http_rejects_public_ip(mock_req: Any) -> None:
     assert mock_req.call_count == 0
 
 
-@patch("core.env.verify.socket.create_connection")
-@patch("cve_env.tools.verify._published_run_ports",
-       return_value=frozenset({6379}))
-def test_verify_dispatches_tcp_probe_check_with_port_target_alias(
-    _mock_ports: Any,
-    mock_conn: Any,
-    running_cli: Any,
-) -> None:
+def test_verify_dispatches_tcp_probe_check_with_port_target_alias(running_cli: Any) -> None:
     """S29 Phase A (2026-05-04): `port_target` aliased to `host_port`. Surfaced
     by the S28 kwarg-frequency scan (CVE-2014-0160 prior bench, manual-1777*
     turn 27 — 1 historical use). Same B8-class alias pattern as `host`/`port`/
     `data`/`marker`. Was xfail-strict until the alias landed in
     _TCP_PROBE_KEY_ALIASES (verify.py); now a positive lock-test."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    out = verify(
-        container_id="cid",
-        host_ip="127.0.0.1",
-        host_port=8080,
-        plan=[
-            {
-                "type": "tcp_probe_check",
-                "port_target": 6379,  # alias for host_port (S29 Phase A)
-                "data": "PING",
-                "marker": "+PONG",
-            }
-        ],
-    )
-    assert out["passed"] is True, out
-    args, _ = mock_conn.call_args
-    assert args[0] == ("127.0.0.1", 6379)
+    with (
+        patch('cve_env.tools.verify._published_run_ports', return_value=frozenset({6379})) as _mock_ports,
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        out = verify(
+            container_id="cid",
+            host_ip="127.0.0.1",
+            host_port=8080,
+            plan=[
+                {
+                    "type": "tcp_probe_check",
+                    "port_target": 6379,  # alias for host_port (S29 Phase A)
+                    "data": "PING",
+                    "marker": "+PONG",
+                }
+            ],
+        )
+        assert out["passed"] is True, out
+        args, _ = mock_conn.call_args
+        assert args[0] == ("127.0.0.1", 6379)
 
 
 
 
-@patch("core.env.verify.socket.create_connection")
-@patch("cve_env.tools.verify._published_run_ports",
-       return_value=frozenset({6379}))
-def test_verify_dispatches_tcp_probe_check_with_host_alias(
-    _mock_ports: Any,
-    mock_conn: Any,
-    running_cli: Any,
-) -> None:
+def test_verify_dispatches_tcp_probe_check_with_host_alias(running_cli: Any) -> None:
     """E1.1 (S28, 2026-05-04): `host` is a common LLM-synonym for `host_ip`.
     bench50-20260504-010418 CVE-2018-2628 turn 19 hit
     `check_tcp_probe() got an unexpected keyword argument 'host'`;
@@ -1107,59 +1104,60 @@ def test_verify_dispatches_tcp_probe_check_with_host_alias(
     failure burned a turn. Add `host` to the alias dict to translate the
     synonym at dispatch time. Same precedent as B8 (check_exec workdir
     fix at test_verify.py:261-273)."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    out = verify(
-        container_id="cid",
-        host_ip="127.0.0.1",
-        host_port=8080,
-        plan=[
-            {
-                "type": "tcp_probe_check",
-                "host": "127.0.0.1",  # alias for host_ip (E1.1)
-                "port": 6379,  # alias for host_port (existing)
-                "data": "PING",  # alias for send_text (existing)
-                "marker": "+PONG",  # alias for expected_response_contains (existing)
-            }
-        ],
-    )
-    assert out["passed"] is True, out
-    assert out["results"][0]["type"] == "container_status"
-    assert out["results"][1]["type"] == "tcp_probe_check"
-    args, _ = mock_conn.call_args
-    assert args[0] == ("127.0.0.1", 6379)
+    with (
+        patch('cve_env.tools.verify._published_run_ports', return_value=frozenset({6379})) as _mock_ports,
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        out = verify(
+            container_id="cid",
+            host_ip="127.0.0.1",
+            host_port=8080,
+            plan=[
+                {
+                    "type": "tcp_probe_check",
+                    "host": "127.0.0.1",  # alias for host_ip (E1.1)
+                    "port": 6379,  # alias for host_port (existing)
+                    "data": "PING",  # alias for send_text (existing)
+                    "marker": "+PONG",  # alias for expected_response_contains (existing)
+                }
+            ],
+        )
+        assert out["passed"] is True, out
+        assert out["results"][0]["type"] == "container_status"
+        assert out["results"][1]["type"] == "tcp_probe_check"
+        args, _ = mock_conn.call_args
+        assert args[0] == ("127.0.0.1", 6379)
 
 
 
 
-@patch("core.env.verify.socket.create_connection")
-@patch("cve_env.tools.verify._published_run_ports",
-       return_value=frozenset({6379}))
-def test_verify_dispatches_tcp_probe_check_with_aliases(
-    _mock_ports: Any,
-    mock_conn: Any,
-    running_cli: Any,
-) -> None:
+def test_verify_dispatches_tcp_probe_check_with_aliases(running_cli: Any) -> None:
     """LLM aliases: port→host_port, data→send_text, marker→expected_response_contains."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    out = verify(
-        container_id="cid",
-        host_ip="127.0.0.1",
-        host_port=8080,
-        plan=[
-            {
-                "type": "tcp_probe_check",
-                "port": 6379,  # alias for host_port
-                "data": "*1\r\n$4\r\nPING\r\n",  # alias for send_text
-                "marker": "+PONG",  # alias for expected_response_contains
-            }
-        ],
-    )
-    assert out["passed"] is True
-    assert out["results"][0]["type"] == "container_status"
-    assert out["results"][1]["type"] == "tcp_probe_check"
-    # mock_conn called with the tcp_payload's host_port, not the verify-level one
-    args, _ = mock_conn.call_args
-    assert args[0] == ("127.0.0.1", 6379)
+    with (
+        patch('cve_env.tools.verify._published_run_ports', return_value=frozenset({6379})) as _mock_ports,
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        out = verify(
+            container_id="cid",
+            host_ip="127.0.0.1",
+            host_port=8080,
+            plan=[
+                {
+                    "type": "tcp_probe_check",
+                    "port": 6379,  # alias for host_port
+                    "data": "*1\r\n$4\r\nPING\r\n",  # alias for send_text
+                    "marker": "+PONG",  # alias for expected_response_contains
+                }
+            ],
+        )
+        assert out["passed"] is True
+        assert out["results"][0]["type"] == "container_status"
+        assert out["results"][1]["type"] == "tcp_probe_check"
+        # mock_conn called with the tcp_payload's host_port, not the verify-level one
+        args, _ = mock_conn.call_args
+        assert args[0] == ("127.0.0.1", 6379)
 
 
 
@@ -1704,65 +1702,59 @@ if __name__ == "__main__":  # pragma: no cover
 # ── tcp probe destination pinning (agent plans are untrusted) ─────────
 
 
-@patch("core.env.verify.socket.create_connection")
-@patch("cve_env.tools.verify._published_run_ports",
-       return_value=frozenset())
-def test_verify_tcp_probe_unpublished_port_fails_closed(
-    _mock_ports: Any,
-    mock_conn: Any,
-    running_cli: Any,
-) -> None:
+def test_verify_tcp_probe_unpublished_port_fails_closed(running_cli: Any) -> None:
     """A plan-supplied host_port that no cve-env container publishes is
     refused before any socket is opened — a hostile plan cannot aim
     probe payloads at unrelated host-local services."""
-    out = verify(
-        container_id="cid",
-        host_ip="127.0.0.1",
-        host_port=8080,
-        plan=[
-            {
-                "type": "tcp_probe_check",
-                "host_port": 9999,
-                "send_text": "PING",
-                "expected_response_contains": "+PONG",
-            }
-        ],
-    )
-    assert out["passed"] is False
-    assert "not a published endpoint" in out["reason"]
-    mock_conn.assert_not_called()
+    with (
+        patch('cve_env.tools.verify._published_run_ports', return_value=frozenset()) as _mock_ports,
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        out = verify(
+            container_id="cid",
+            host_ip="127.0.0.1",
+            host_port=8080,
+            plan=[
+                {
+                    "type": "tcp_probe_check",
+                    "host_port": 9999,
+                    "send_text": "PING",
+                    "expected_response_contains": "+PONG",
+                }
+            ],
+        )
+        assert out["passed"] is False
+        assert "not a published endpoint" in out["reason"]
+        mock_conn.assert_not_called()
 
 
 
 
-@patch("core.env.verify.socket.create_connection")
-@patch("cve_env.tools.verify._published_run_ports",
-       return_value=frozenset({6379}))
-def test_verify_tcp_probe_host_ip_pinned_to_endpoint(
-    _mock_ports: Any,
-    mock_conn: Any,
-    running_cli: Any,
-) -> None:
+def test_verify_tcp_probe_host_ip_pinned_to_endpoint(running_cli: Any) -> None:
     """A plan-supplied host_ip (private-range SSRF steering) is
     discarded; the probe connects to the verify-level endpoint address."""
-    mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
-    out = verify(
-        container_id="cid",
-        host_ip="127.0.0.1",
-        host_port=8080,
-        plan=[
-            {
-                "type": "tcp_probe_check",
-                "host_ip": "192.168.1.1",  # target-controlled steering
-                "host_port": 6379,
-                "send_text": "PING",
-                "expected_response_contains": "+PONG",
-            }
-        ],
-    )
-    assert out["passed"] is True, out
-    args, _ = mock_conn.call_args
-    assert args[0] == ("127.0.0.1", 6379)  # pinned address, allowed port
+    with (
+        patch('cve_env.tools.verify._published_run_ports', return_value=frozenset({6379})) as _mock_ports,
+        mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection') as mock_conn,
+    ):
+        mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
+        out = verify(
+            container_id="cid",
+            host_ip="127.0.0.1",
+            host_port=8080,
+            plan=[
+                {
+                    "type": "tcp_probe_check",
+                    "host_ip": "192.168.1.1",  # target-controlled steering
+                    "host_port": 6379,
+                    "send_text": "PING",
+                    "expected_response_contains": "+PONG",
+                }
+            ],
+        )
+        assert out["passed"] is True, out
+        args, _ = mock_conn.call_args
+        assert args[0] == ("127.0.0.1", 6379)  # pinned address, allowed port
 
 
 

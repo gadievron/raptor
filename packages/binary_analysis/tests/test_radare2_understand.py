@@ -1,5 +1,8 @@
 """Tests for binary-level adversarial analysis via radare2."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import json
 import tempfile
 import threading
@@ -21,27 +24,10 @@ from packages.binary_analysis.radare2_understand import (
     probe_capability,
 )
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_launch_patches(monkeypatch):
-    """Keep launch mocks on consumer-owned subprocess module bindings."""
-    import packages.binary_analysis.radare2_understand as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_shutil_patch_targets(monkeypatch):
-    """Keep shutil patch decorators and contexts on consumer-owned views."""
-    import packages.binary_analysis.radare2_understand as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -52,42 +38,50 @@ def _isolated_defense_telemetry(monkeypatch):
 
 
 class TestProbeCapability(unittest.TestCase):
-    @patch("packages.binary_analysis.radare2_understand.shutil.which")
-    def test_no_radare2(self, mock_which):
-        mock_which.return_value = None
-        cap = probe_capability()
-        self.assertFalse(cap["available"])
-        self.assertIsNone(cap["decompiler"])
-
-    @patch("packages.binary_analysis.radare2_understand.shutil.which")
-    def test_radare2_without_r2pipe(self, mock_which):
-        mock_which.return_value = "/usr/bin/r2"
-        # Force ImportError by pretending the module is None
-        with patch.dict("sys.modules", {"r2pipe": None}), \
-                patch("builtins.__import__", side_effect=ImportError):
+    def test_no_radare2(self):
+        with (
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = None
             cap = probe_capability()
-        self.assertFalse(cap["has_r2pipe"])
-        self.assertFalse(cap["available"])
+            self.assertFalse(cap["available"])
+            self.assertIsNone(cap["decompiler"])
 
-    @patch("packages.binary_analysis.radare2_understand.shutil.which")
-    @patch("packages.binary_analysis.radare2_understand.subprocess.run")
-    def test_radare2_with_r2pipe_no_ghidra(self, mock_run, mock_which):
-        mock_which.return_value = "/usr/bin/r2"
-        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
-            cap = probe_capability()
-        self.assertTrue(cap["available"])
-        self.assertEqual(cap["decompiler"], "pdc")
+    def test_radare2_without_r2pipe(self):
+        with (
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = "/usr/bin/r2"
+            # Force ImportError by pretending the module is None
+            with patch.dict("sys.modules", {"r2pipe": None}), \
+                    patch("builtins.__import__", side_effect=ImportError):
+                cap = probe_capability()
+            self.assertFalse(cap["has_r2pipe"])
+            self.assertFalse(cap["available"])
 
-    @patch("packages.binary_analysis.radare2_understand.shutil.which")
-    @patch("packages.binary_analysis.radare2_understand.subprocess.run")
-    def test_radare2_with_r2ghidra(self, mock_run, mock_which):
-        mock_which.return_value = "/usr/bin/r2"
-        mock_run.return_value = MagicMock(stdout="r2ghidra plugin loaded", returncode=0)
-        with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
-            cap = probe_capability()
-        self.assertTrue(cap["has_r2ghidra"])
-        self.assertEqual(cap["decompiler"], "r2ghidra")
+    def test_radare2_with_r2pipe_no_ghidra(self):
+        with (
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'subprocess', 'run') as mock_run,
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = "/usr/bin/r2"
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
+                cap = probe_capability()
+            self.assertTrue(cap["available"])
+            self.assertEqual(cap["decompiler"], "pdc")
+
+    def test_radare2_with_r2ghidra(self):
+        with (
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'subprocess', 'run') as mock_run,
+            mock_module_attribute(_mock_owner('packages.binary_analysis.radare2_understand'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = "/usr/bin/r2"
+            mock_run.return_value = MagicMock(stdout="r2ghidra plugin loaded", returncode=0)
+            with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
+                cap = probe_capability()
+            self.assertTrue(cap["has_r2ghidra"])
+            self.assertEqual(cap["decompiler"], "r2ghidra")
 
 
 class TestBinaryContextMap(unittest.TestCase):

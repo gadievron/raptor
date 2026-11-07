@@ -4,6 +4,7 @@ from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
 
+
 import subprocess
 import unittest
 from pathlib import Path
@@ -20,14 +21,6 @@ import pytest
 from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_subprocess_run_patches(monkeypatch):
-    """Keep subprocess run mocks on consumer-owned module bindings."""
-    import packages.fuzzing.capability as consumer_0
-
-    patch_module_attribute(
-        monkeypatch, consumer_0, "subprocess", "run", consumer_0.subprocess.run,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -90,29 +83,33 @@ class TestCapabilityReport(unittest.TestCase):
 
 
 class TestProbe(unittest.TestCase):
-    @patch("packages.fuzzing.capability.shutil.which")
-    def test_probe_returns_report(self, mock_which):
+    def test_probe_returns_report(self):
         # Pin the tool probes (same seams as the no-fuzzer test
         # below): the real probe runs shutil.which over the fuzzing
         # toolchain plus a live clang sanitiser-compile per sanitiser
         # — host-dependent latency and side effects inside a unit
         # test. The asserted fields are platform-derived either way.
-        mock_which.return_value = None
-        with patch("packages.fuzzing.capability._probe_clang_sanitiser",
-                   return_value=False):
-            report = probe()
-        self.assertIsInstance(report, CapabilityReport)
-        self.assertIsNotNone(report.platform)
-        self.assertIsNotNone(report.arch)
+        with (
+            mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = None
+            with patch("packages.fuzzing.capability._probe_clang_sanitiser",
+                       return_value=False):
+                report = probe()
+            self.assertIsInstance(report, CapabilityReport)
+            self.assertIsNotNone(report.platform)
+            self.assertIsNotNone(report.arch)
 
-    @patch("packages.fuzzing.capability.shutil.which")
-    def test_probe_detects_no_fuzzer_available(self, mock_which):
-        mock_which.return_value = None
-        with patch("packages.fuzzing.capability._probe_clang_sanitiser",
-                   return_value=False):
-            report = probe()
-        self.assertFalse(report.has_any_fuzzer())
-        self.assertTrue(any("No fuzzer available" in i for i in report.issues))
+    def test_probe_detects_no_fuzzer_available(self):
+        with (
+            mock_module_attribute(_mock_owner('packages.fuzzing.capability'), 'shutil', 'which') as mock_which,
+        ):
+            mock_which.return_value = None
+            with patch("packages.fuzzing.capability._probe_clang_sanitiser",
+                       return_value=False):
+                report = probe()
+            self.assertFalse(report.has_any_fuzzer())
+            self.assertTrue(any("No fuzzer available" in i for i in report.issues))
 
     def test_macos_afl_shmem_probe_detects_runtime_failure(self):
         completed = subprocess.CompletedProcess(

@@ -19,6 +19,9 @@ S28 follow-up tests (test-quality audit):
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import inspect
 import json
 import re
@@ -29,17 +32,8 @@ import pytest
 from cve_env.agent.prompts import SYSTEM_PROMPT
 from cve_env.tools import verify as _verify_mod
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_container_run_patches(monkeypatch):
-    """Keep the container runner's subprocess mocks local to its binding."""
-    import core.container.proc as container_proc
-
-    patch_module_attribute(
-        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
-    )
 
 
 def test_prompt_warns_plan_must_be_list_not_string() -> None:
@@ -332,14 +326,14 @@ def _all_check_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(patch("core.container.proc.subprocess.run", subproc))
+        stack.enter_context(mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', subproc))
         # HTTP (requests.request)
         req_mock = MagicMock(return_value=(200, b"hello"))
         stack.enter_context(patch("core.env.verify._http_exchange", req_mock))
         # TCP (socket.create_connection)
         sock_factory = MagicMock(return_value=_FakeTCPSocket(response=b"+PONG\r\n"))
         stack.enter_context(
-            patch("core.env.verify.socket.create_connection", sock_factory)
+            mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection', sock_factory)
         )
         # Container exec (run_in_container.run_in_container)
         exec_mock = MagicMock(

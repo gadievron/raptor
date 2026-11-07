@@ -1,6 +1,7 @@
 """Exercise native clock-patch fixtures without running their I/O bodies."""
 from contextlib import contextmanager, nullcontext
 import ast
+from core.testing.mock_sources import as_patch_call
 import copy
 from functools import lru_cache
 from pathlib import Path
@@ -15,15 +16,8 @@ from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
 _SPECS = [('core/env/tests/test_provision.py', 'core.container.containers'),
- ('core/http/tests/test_urllib_backend.py', 'core.http.urllib_backend'),
  ('core/llm/tests/test_resource_governor.py', 'core.llm.client'),
  ('core/sage/tests/test_rowmac.py', 'core.security.mac_key'),
- ('core/sage/tests/test_sage_hooks.py', 'core.sage.hooks'),
- ('packages/cve_env/tests/unit/test_bench_replay_verify.py', 'cve_env.tools.verify'),
- ('packages/cve_env/tests/unit/test_docker_run.py', 'core.container.containers'),
- ('packages/cve_env/tests/unit/test_image_resolve_arch.py',
-  'cve_env.tools.image_resolve'),
- ('packages/cve_env/tests/unit/test_verify.py', 'cve_env.tools.verify'),
  ('packages/joern/tests/test_relaunch_on_death.py', 'packages.joern.server'),
  ('packages/web/tests/test_oob_expectations.py', 'packages.web.oob')]
 
@@ -35,7 +29,8 @@ def _tree(file):
 
 def _patches(file):
     calls = []
-    for node in ast.walk(_tree(file)):
+    for original in ast.walk(_tree(file)):
+        node = as_patch_call(original)
         if not isinstance(node, ast.Call) or not node.args:
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")

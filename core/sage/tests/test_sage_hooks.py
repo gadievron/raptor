@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Tests for SAGE pipeline hooks (mechanical consumers only)."""
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import secrets
 import tempfile
 import unittest
@@ -9,18 +12,8 @@ from unittest.mock import MagicMock, patch
 
 from core.sage import rowmac
 
-import pytest
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import core.sage.hooks as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
 # All hooks now mint/verify row MACs. Point the key at a module-scoped
@@ -396,34 +389,42 @@ class TestThrottle(unittest.TestCase):
     """SAGE_PROPOSE_DELAY_MS behaviour (default 0, no sleep)."""
 
     @patch.dict("os.environ", {}, clear=False)
-    @patch("core.sage.hooks.time.sleep")
-    def test_noop_when_env_unset(self, mock_sleep):
-        import os
-        os.environ.pop("SAGE_PROPOSE_DELAY_MS", None)
-        from core.sage.hooks import _throttle
-        _throttle()
-        mock_sleep.assert_not_called()
+    def test_noop_when_env_unset(self):
+        with (
+            mock_module_attribute(_mock_owner('core.sage.hooks'), 'time', 'sleep') as mock_sleep,
+        ):
+            import os
+            os.environ.pop("SAGE_PROPOSE_DELAY_MS", None)
+            from core.sage.hooks import _throttle
+            _throttle()
+            mock_sleep.assert_not_called()
 
     @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "0"}, clear=False)
-    @patch("core.sage.hooks.time.sleep")
-    def test_noop_when_env_zero(self, mock_sleep):
-        from core.sage.hooks import _throttle
-        _throttle()
-        mock_sleep.assert_not_called()
+    def test_noop_when_env_zero(self):
+        with (
+            mock_module_attribute(_mock_owner('core.sage.hooks'), 'time', 'sleep') as mock_sleep,
+        ):
+            from core.sage.hooks import _throttle
+            _throttle()
+            mock_sleep.assert_not_called()
 
     @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "50"}, clear=False)
-    @patch("core.sage.hooks.time.sleep")
-    def test_sleeps_when_env_set(self, mock_sleep):
-        from core.sage.hooks import _throttle
-        _throttle()
-        mock_sleep.assert_called_once_with(0.05)
+    def test_sleeps_when_env_set(self):
+        with (
+            mock_module_attribute(_mock_owner('core.sage.hooks'), 'time', 'sleep') as mock_sleep,
+        ):
+            from core.sage.hooks import _throttle
+            _throttle()
+            mock_sleep.assert_called_once_with(0.05)
 
     @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "not-a-number"}, clear=False)
-    @patch("core.sage.hooks.time.sleep")
-    def test_invalid_value_is_noop(self, mock_sleep):
-        from core.sage.hooks import _throttle
-        _throttle()
-        mock_sleep.assert_not_called()
+    def test_invalid_value_is_noop(self):
+        with (
+            mock_module_attribute(_mock_owner('core.sage.hooks'), 'time', 'sleep') as mock_sleep,
+        ):
+            from core.sage.hooks import _throttle
+            _throttle()
+            mock_sleep.assert_not_called()
 
 
 class TestGetClientThreadSafety(unittest.TestCase):

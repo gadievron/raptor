@@ -4,6 +4,9 @@ verification of non-HTTP / local-exec CVEs.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import subprocess
 from typing import Any, Generator
 from unittest.mock import patch
@@ -16,14 +19,6 @@ from core.testing.module_bindings import patch_module_attribute
 from cve_env.tools.run_in_container import run_in_container
 
 
-@pytest.fixture(autouse=True)
-def _isolate_container_run_patches(monkeypatch):
-    """Keep the container runner's subprocess mocks local to its binding."""
-    import core.container.proc as container_proc
-
-    patch_module_attribute(
-        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -78,23 +73,27 @@ def test_exec_nonzero_exit_is_not_ok(mock_cli: Any) -> None:
 
 
 
-@patch("core.container.proc.subprocess.run")
-def test_exec_timeout_returns_structured_failure(mock_run: Any) -> None:
-    mock_run.side_effect = subprocess.TimeoutExpired(
-        cmd=["docker", "exec"], timeout=1.0
-    )
-    r = run_in_container(container_id="cid", command="sleep 60", timeout_seconds=1.0)
-    assert r.ok is False
-    assert "timeout" in r.reason
-    assert r.exit_code == -1
+def test_exec_timeout_returns_structured_failure() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run') as mock_run,
+    ):
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["docker", "exec"], timeout=1.0
+        )
+        r = run_in_container(container_id="cid", command="sleep 60", timeout_seconds=1.0)
+        assert r.ok is False
+        assert "timeout" in r.reason
+        assert r.exit_code == -1
 
 
-@patch("core.container.proc.subprocess.run")
-def test_docker_cli_not_found(mock_run: Any) -> None:
-    mock_run.side_effect = FileNotFoundError()
-    r = run_in_container(container_id="cid", command="echo hi")
-    assert r.ok is False
-    assert "docker CLI not found" in r.reason
+def test_docker_cli_not_found() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run') as mock_run,
+    ):
+        mock_run.side_effect = FileNotFoundError()
+        r = run_in_container(container_id="cid", command="echo hi")
+        assert r.ok is False
+        assert "docker CLI not found" in r.reason
 
 
 @patch("core.container.exec.run_cli")
@@ -220,12 +219,14 @@ def test_reason_class_unknown_for_generic_failure(mock_cli: Any) -> None:
 
 
 
-@patch("core.container.proc.subprocess.run")
-def test_reason_class_transport_on_timeout(mock_run: Any) -> None:
-    mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker exec", timeout=30)
-    r = run_in_container(container_id="cid", command="long_running")
-    assert r.ok is False
-    assert r.reason_class == "transport"
+def test_reason_class_transport_on_timeout() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run') as mock_run,
+    ):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker exec", timeout=30)
+        r = run_in_container(container_id="cid", command="long_running")
+        assert r.ok is False
+        assert r.reason_class == "transport"
 
 
 # -- Ownership validation ------------------------------------------------

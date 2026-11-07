@@ -12,6 +12,9 @@ green without needing a pre-seeded corpus.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 import json
 import pathlib
 from contextlib import ExitStack
@@ -23,27 +26,10 @@ import pytest
 from cve_env.tools.run_in_container import ExecResult
 from cve_env.tools.verify import verify
 
-from core.testing.module_bindings import patch_module_attribute
 
 
-@pytest.fixture(autouse=True)
-def _isolate_container_run_patches(monkeypatch):
-    """Keep the container runner's subprocess mocks local to its binding."""
-    import core.container.proc as container_proc
-
-    patch_module_attribute(
-        monkeypatch, container_proc, "subprocess", "run", container_proc.subprocess.run,
-    )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import cve_env.tools.verify as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -136,23 +122,17 @@ def _verify_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(patch("core.container.proc.subprocess.run", subproc))
+        stack.enter_context(mock_module_attribute(_mock_owner('core.container.proc'), 'subprocess', 'run', subproc))
 
         # stability_wait calls time.sleep — mock it so plans with 90-120s
         # waits don't hit the pytest 60s timeout.
-        stack.enter_context(patch("cve_env.tools.verify.time.sleep", MagicMock()))
+        stack.enter_context(mock_module_attribute(_mock_owner('cve_env.tools.verify'), 'time', 'sleep', MagicMock()))
 
-        req_mock = MagicMock()
-        req_mock.return_value.status_code = 200
-        req_mock.return_value.content = b"ok"
-        req_mock.return_value.text = "ok"
-        stack.enter_context(patch("cve_env.tools.verify.requests.request", req_mock))
+        req_mock = MagicMock(return_value=(200, b"ok"))
+        stack.enter_context(patch("core.env.verify._http_exchange", req_mock))
 
         stack.enter_context(
-            patch(
-                "cve_env.tools.verify.socket.create_connection",
-                MagicMock(return_value=_FakeTCPSocket()),
-            )
+            mock_module_attribute(_mock_owner('core.env.verify'), 'socket', 'create_connection', MagicMock(return_value=_FakeTCPSocket()))
         )
 
         exec_mock = MagicMock(

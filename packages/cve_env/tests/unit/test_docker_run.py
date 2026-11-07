@@ -7,6 +7,9 @@ CVE-2018-7600.
 
 from __future__ import annotations
 
+from pkgutil import resolve_name as _mock_owner
+from core.testing.module_bindings import mock_module_attribute
+
 from typing import Any
 from unittest.mock import patch
 
@@ -15,18 +18,9 @@ import pytest
 from cve_env.tools.docker_run import RunError, _normalize_ports
 
 from core.container.proc import RunOutcome
-from core.testing.module_bindings import patch_module_attribute
 from core.testing.poll_clock import install_poll_clock
 
 
-@pytest.fixture(autouse=True)
-def _isolate_clock_patch_targets(monkeypatch):
-    """Keep clock patch decorators and contexts on this consumer's view."""
-    import core.container.containers as clock_consumer
-
-    patch_module_attribute(
-        monkeypatch, clock_consumer, "time", "sleep", clock_consumer.time.sleep,
-    )
 
 
 def test_normalize_ports_accepts_bind_dict() -> None:
@@ -287,30 +281,32 @@ def test_docker_run_failure_payload_includes_next_step_hint(
 # wall-guard. docker_run must turn that into a fast, pivot-able failure.
 
 
-@patch("core.container.containers.run_cli")
-@patch("core.container.containers.time.sleep")  # don't burn the retry backoff
-def test_docker_run_pull_timeout_surfaces_pivot(mock_sleep: Any, mock_rwt: Any) -> None:
-    from cve_env.tools.docker_run import docker_run, reset_failed_attempts
-    from cve_env.utils.run import RunOutcome
+def test_docker_run_pull_timeout_surfaces_pivot() -> None:
+    with (
+        mock_module_attribute(_mock_owner('core.container.containers'), 'time', 'sleep') as _mock_sleep,
+        patch('core.container.containers.run_cli') as mock_rwt,
+    ):
+        from cve_env.tools.docker_run import docker_run, reset_failed_attempts
+        from cve_env.utils.run import RunOutcome
 
-    reset_failed_attempts()
-    # Simulate a slow/stalled registry pull on every attempt.
-    mock_rwt.return_value = RunOutcome(
-        returncode=None, stdout="", stderr="", timed_out=True
-    )
-    r = docker_run(image="vulhub/confluence:7.13.6", container_port=8090)
+        reset_failed_attempts()
+        # Simulate a slow/stalled registry pull on every attempt.
+        mock_rwt.return_value = RunOutcome(
+            returncode=None, stdout="", stderr="", timed_out=True
+        )
+        r = docker_run(image="vulhub/confluence:7.13.6", container_port=8090)
 
-    assert r.ok is False
-    assert r.reason == "pull_timeout"
-    assert r.reason_class == "transport"
-    # Hint must steer the agent to pivot rather than re-pull.
-    hint = r.next_step_hint.lower()
-    assert "source_build" in hint
-    assert "pivot" in hint or "do not retry" in hint
-    # MED-1 (judge): a stalled pull must FAIL FAST — exactly ONE attempt, no
-    # internal retry. A 2nd full timeout window (600s) would push the docker_run
-    # budget to ~1205s, risking the 1440s wall-guard the timeout exists to beat.
-    assert mock_rwt.call_count == 1
+        assert r.ok is False
+        assert r.reason == "pull_timeout"
+        assert r.reason_class == "transport"
+        # Hint must steer the agent to pivot rather than re-pull.
+        hint = r.next_step_hint.lower()
+        assert "source_build" in hint
+        assert "pivot" in hint or "do not retry" in hint
+        # MED-1 (judge): a stalled pull must FAIL FAST — exactly ONE attempt, no
+        # internal retry. A 2nd full timeout window (600s) would push the docker_run
+        # budget to ~1205s, risking the 1440s wall-guard the timeout exists to beat.
+        assert mock_rwt.call_count == 1
 
 
 # -- session container registry (verify tcp-probe allowlist scope) -----------

@@ -16,15 +16,11 @@ from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
 _SPECS = [('core/audit/tests/test_validate.py', 'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_skill_dispatch_checklist_timeout.py',
-  'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_skill_dispatch.py', 'core.orchestration.skill_dispatch'),
+ ('core/orchestration/tests/test_skill_dispatch_checklist_timeout.py', 'core.orchestration.skill_dispatch'),
  ('core/orchestration/tests/test_lifecycle_trust_marker.py', 'core.orchestration.skill_dispatch'),
- ('core/orchestration/tests/test_agentic_passes_integration.py',
-  'core.orchestration.skill_dispatch'),
+ ('core/orchestration/tests/test_agentic_passes_integration.py', 'core.orchestration.skill_dispatch'),
  ('core/orchestration/tests/test_agentic_passes.py', 'core.orchestration.skill_dispatch'),
- ('packages/fuzzing/tests/test_cargofuzz_runner.py', 'packages.fuzzing.cargofuzz_runner'),
- ('packages/fuzzing/tests/test_capability.py', 'packages.fuzzing.capability')]
+ ('packages/fuzzing/tests/test_cargofuzz_runner.py', 'packages.fuzzing.cargofuzz_runner')]
 
 
 @lru_cache(maxsize=None)
