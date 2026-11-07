@@ -258,6 +258,8 @@ _FUNC_DEF_RE = re.compile(
 )
 
 
+_FUNC_DEF_IMPL = _FUNC_DEF_RE
+
 def find_enclosing_function(lines: list, target_line: int) -> str:
     """Walk backwards from *target_line* (0-indexed) to find the enclosing def."""
     for i in range(target_line, -1, -1):
@@ -274,11 +276,19 @@ def extract_functions_from_source(source: str) -> list:
     per-function source slices without a full AST parse.
     """
     funcs: list = []
-    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     native_source = type(source) is str
+    # Every default definition match contains this exact literal.
+    if native_source and _FUNC_DEF_RE is _FUNC_DEF_IMPL and "def" not in source:
+        return funcs
+    # Declaration/data-only native sources need no line-list copy.
+    lines = [] if native_source else source.split("\n")  # line-model: preserve the original raw LF model and adapter operations
+    prepared = not native_source
     line = 1
     line_offset = 0
     for m in _FUNC_DEF_RE.finditer(source):
+        if not prepared:
+            lines = source.split("\n")  # line-model: same raw LF body-slicing model as the eager path
+            prepared = True
         name = m.group("name")
         indent = len(m.group("indent"))
         if native_source:
