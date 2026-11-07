@@ -224,7 +224,12 @@ def classify_protocol_state_hypothesis(
     invariant = None
     try:
         from .invariant_smt import extract_invariants
-        for cand in extract_invariants(text):
+        candidates = extract_invariants(text)
+        # This channel checks one invariant, not an arbitrary first part
+        # of a statement containing several independent comparisons.
+        if len(candidates) != 1:
+            candidates = []
+        for cand in candidates:
             m = _STATE_INVARIANT_COMPARISON_RE.search(cand)
             if not m:
                 continue
@@ -1470,7 +1475,7 @@ def run_protocol_state_prepass(
                 continue
             statement = str(entry.get("statement") or "")
             cands = extract_invariants(statement)
-            if not cands:
+            if len(cands) != 1:
                 continue
             invariant = cands[0]
             if _invariant_receipt(domain_model, invariant) is None:

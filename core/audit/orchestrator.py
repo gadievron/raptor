@@ -20601,7 +20601,7 @@ def _hypothesis_to_tool_chain(
             pass
         else:
             _invs = extract_invariants(hypothesis)
-            if _invs:
+            if len(_invs) == 1:
                 chain.append({
                     "type": "smt_invariant",
                     "config": {"invariant": _invs[0]},
