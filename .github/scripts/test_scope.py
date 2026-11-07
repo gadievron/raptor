@@ -427,32 +427,38 @@ def _resolve_path_div_chain(node: ast.expr) -> list[str]:
     return parts
 
 
-def _extract_fixture_dirs(path: Path, repo: Path) -> list[Path]:
+def _extract_fixture_dirs(
+    path: Path, repo: Path, *, source: str | None = None,
+    source_tree: ast.Module | None = None,
+) -> list[Path]:
     """Find fixture/data directories referenced by a test file.
 
     Parses the AST for ``Path(__file__).parent / "fixtures" / "sub"``
     chains, resolving the deepest directory that exists on disk.
     Falls back to scanning for sibling fixture directories when the
-    AST doesn't yield results.
+    AST doesn't yield results. A graph consumer can supply the matching
+    source and read-only tree to avoid another file read and parse.
     """
-    try:
-        source = (repo / path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    if source is None:
+        try:
+            source = (repo / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
     if not any(p in source for p in _FIXTURE_PATTERNS):
         return []
 
     dirs: set[Path] = set()
     test_dir = (repo / path).parent
 
-    try:
-        tree = ast.parse(source, filename=str(path))
-    except (SyntaxError, ValueError):
-        return []
+    if source_tree is None:
+        try:
+            source_tree = ast.parse(source, filename=str(path))
+        except (SyntaxError, ValueError):
+            return []
 
     # Collect BinOp / nodes that are NOT the left child of another /.
     # This gives us only the outermost (longest) chain, not sub-chains.
-    divisions = [node for node in ast.walk(tree)
+    divisions = [node for node in ast.walk(source_tree)
                  if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
     inner_lefts = {id(node.left) for node in divisions}
 
@@ -494,14 +500,17 @@ def _discover_data_files(dirs: list[Path], repo: Path) -> set[Path]:
 
 def build_data_file_map(
     test_files: list[Path], repo: Path,
+    *, fixture_dirs_by_test: dict[Path, list[Path]] | None = None,
 ) -> dict[Path, set[Path]]:
-    """Map data files → test files that use them."""
+    """Map data files → tests, optionally reusing per-dispatch AST results."""
     data_to_tests: dict[Path, set[Path]] = defaultdict(set)
     # Many tests share the same fixtures tree. Inventory it once per dispatch;
     # retain every consumer, and refresh listings on the next invocation.
     directory_files: dict[Path, set[Path]] = {}
     for tf in test_files:
-        fixture_dirs = _extract_fixture_dirs(tf, repo)
+        fixture_dirs = (fixture_dirs_by_test[tf]
+                        if fixture_dirs_by_test is not None and tf in fixture_dirs_by_test
+                        else _extract_fixture_dirs(tf, repo))
         if not fixture_dirs:
             continue
         for directory in fixture_dirs:
@@ -879,13 +888,29 @@ def compute_tier_dispatch(
     }
     if changed_py or resource_files or script_literals:
         print(f"Building import graph for {total} Python files...")
+    fixture_dirs_by_test = None
     if script_literals:
         # Collect references during the existing AST walk: reparsing the tree
         # here costs tens of seconds on this repository's complete source set.
         reverse_graph, parse_failures = build_graph(
             all_py, repo, literal_references=script_literals,
         )
-    elif changed_py or resource_files:
+    elif resource_files:
+        # The resource lane will need fixture consumers after the graph.
+        # Collect only directory paths while each tree is already live;
+        # failed parses keep empty entries, matching the standalone census.
+        fixture_dirs_by_test = {f: [] for f in all_py if is_test_file(f)}
+
+        def collect_fixture_dirs(path, source, tree):
+            if path in fixture_dirs_by_test:
+                fixture_dirs_by_test[path] = _extract_fixture_dirs(
+                    path, repo, source=source, source_tree=tree,
+                )
+
+        reverse_graph, parse_failures = build_graph(
+            all_py, repo, on_parsed=collect_fixture_dirs,
+        )
+    elif changed_py:
         reverse_graph, parse_failures = build_graph(all_py, repo)
     else:
         # Metadata and tier-owned data have no graph seeds. Tier-specific extra
@@ -927,6 +952,7 @@ def compute_tier_dispatch(
         if data_map is None:
             data_map = build_data_file_map(
                 [f for f in all_py if is_test_file(f)], repo,
+                fixture_dirs_by_test=fixture_dirs_by_test,
             )
         mapped_tests = data_map.get(rp)
         if mapped_tests:

@@ -861,7 +861,7 @@ class TestOnRealRepo:
             return list(fast_files)
 
         def _build_graph_cached(all_py, repo_arg, **kwargs):
-            if repo_arg == repo:
+            if repo_arg == repo and kwargs.get("on_parsed") is None:
                 for literal, paths in kwargs.get("literal_references", {}).items():
                     paths.update(references.get(literal, ()))
                 return cached

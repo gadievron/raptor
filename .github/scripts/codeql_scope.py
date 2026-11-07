@@ -35,6 +35,7 @@ import ast
 import os
 import sys
 from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -352,10 +353,14 @@ def extract_imports(
 def build_graph(
     py_files: list[Path], repo: Path,
     *, literal_references: dict[str, set[Path]] | None = None,
+    on_parsed: Callable[[Path, str, ast.Module], None] | None = None,
 ) -> tuple[dict[Path, set[Path]], int]:
     """Build a reverse dependency graph: file → files that depend on it.
 
-    Returns (reverse_graph, parse_failure_count).
+    Returns (reverse_graph, parse_failure_count). An optional read-only
+    ``on_parsed`` consumer runs once per successfully parsed file, before
+    import extraction, so another census can reuse the source and tree
+    without retaining the repository's entire AST forest.
     """
     # Module name → file path mapping.
     mod_to_file: dict[str, Path] = {}
@@ -369,7 +374,19 @@ def build_graph(
 
     root_modules = frozenset(p.stem for p in discover_root_modules(repo))
     for f in py_files:
-        imports = extract_imports(f, repo, root_modules, literal_references)
+        if on_parsed is None:
+            imports = extract_imports(f, repo, root_modules, literal_references)
+        else:
+            try:
+                source = (repo / f).read_text(encoding="utf-8", errors="replace")
+                tree = ast.parse(source, filename=str(f))
+            except (OSError, SyntaxError, ValueError):
+                imports = None
+            else:
+                on_parsed(f, source, tree)
+                imports = extract_imports(
+                    f, repo, root_modules, literal_references, source_tree=tree,
+                )
         if imports is None:
             parse_failures += 1
             continue
