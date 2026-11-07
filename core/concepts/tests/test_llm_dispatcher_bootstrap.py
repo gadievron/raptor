@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -173,9 +175,8 @@ class TestMinConfidenceValidation:
 
     def test_invalid_grade_rejected(self):
         import os
-        import subprocess
         env = dict(os.environ, _RAPTOR_TRUSTED="1")
-        res = subprocess.run(
+        res = run_standalone_cli(
             [sys.executable,
              str(RAPTOR_DIR / "libexec" / "raptor-compile-invariants"),
              "/nonexistent", "--min-confidence", "bogus"],
