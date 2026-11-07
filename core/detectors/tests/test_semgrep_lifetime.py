@@ -80,7 +80,8 @@ def test_returned_outcome_releases_report_and_callback_owners(tmp_path, monkeypa
         assert result.value.invocation_error == "tool unavailable"
     assert events == (["analyze", "cleanup"] if mode in ("complete", "partial")
                       else [] if mode == "skipped" else ["cleanup"])
-    gc.collect()
+    # Released sentinels are acyclic; do not scan unrelated old worker objects.
+    gc.collect(0)
     assert references and all(reference() is None for reference in references)
     assert result.value._raw is result.value._input is None
     assert result.value.prepare is result.value.env_factory is None

@@ -133,7 +133,8 @@ class TestTeardownWithoutInit:
         try:
             with pytest.raises(TypeError):
                 JoernServer(nonexistent_kwarg=1)
-            gc.collect()
+            # Argument binding drops this acyclic, uninitialised instance.
+            gc.collect(0)
         finally:
             sys.unraisablehook = prev_hook
         assert not seen, f"unraisable during teardown: {seen}"
