@@ -1,11 +1,24 @@
 """Included C implementations share static helpers with their wrappers."""
 
+from core.testing.reachability_state import isolated_reachability_caches
+
+
 from copy import deepcopy
 
 import pytest
 
 from core.analysis.reachability import InternalFunction, callers_of, callees_of
 from core.audit.context import _find_callers
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def inventory():

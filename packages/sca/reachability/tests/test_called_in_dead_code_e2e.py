@@ -10,6 +10,9 @@ downstream consumers of the verdict.
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+import pytest
+
 from typing import Any, Dict, List
 
 
@@ -23,6 +26,17 @@ from packages.sca.models import (
     Reachability,
     VulnFinding,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 
 def _file(path: str, source: str) -> Dict[str, Any]:

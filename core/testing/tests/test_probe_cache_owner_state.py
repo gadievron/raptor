@@ -9,13 +9,30 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.testing.module_state import isolated_module_state
+
 
 
 SPECS = json.loads((Path(__file__).parent / 'data/probe_cache_owners.json').read_text())
 
 
+# Capability skip markers probe these bindings while their native module loads.
+_IMPORT_PROBE_STATE = (
+    '_landlock_cache', '_net_available_cache', '_mount_available_cache',
+    '_mount_ns_available_cache', '_unshare_path_cache', '_newuidmap_path_cache',
+    '_newgidmap_path_cache', '_mount_unavailable_warned',
+)
+
+
 def _fixture(spec):
-    module = importlib.import_module(spec['file'][:-3].replace('/', '.'))
+    from core.sandbox import state
+
+    # Loading belongs to the harness, before the measured fixture lifetime.
+    # Keep real capability probes, but restore any caller values they populate.
+    with isolated_module_state(state, {
+        name: getattr(state, name) for name in _IMPORT_PROBE_STATE
+    }, lock=state._cache_lock):
+        module = importlib.import_module(spec['file'][:-3].replace('/', '.'))
     owner = getattr(module, spec['class']) if spec['class'] else module
     return module, owner, getattr(owner, spec['fixture']).__wrapped__
 

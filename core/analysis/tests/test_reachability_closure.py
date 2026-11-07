@@ -21,6 +21,10 @@ the same mental model. Each test pins one design decision:
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+import pytest
+
+
 from typing import Any, Dict, List
 
 
@@ -34,6 +38,16 @@ from core.analysis.reachability import (
     reverse_closure,
     shortest_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # ---------------------------------------------------------------------------

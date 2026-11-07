@@ -18,12 +18,25 @@ This file pins the C++-specific extensions:
 
 from __future__ import annotations
 
+from core.testing.reachability_state import isolated_reachability_caches
+
 import pytest
 
 from core.inventory.call_graph import (
     INDIRECTION_FN_POINTER,
     extract_call_graph_cpp,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_reachability_caches(monkeypatch):
+    """Own inventory indexes while retaining warm caller state."""
+    with isolated_reachability_caches():
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 
 pytest.importorskip("tree_sitter_cpp")
