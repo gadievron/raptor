@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from core.llm.prompt_budget import estimate_tokens
+from core.source.lines import slice_text, split_lines as _FUNCTION_LINES_IMPL
 
 logger = logging.getLogger(__name__)
 
@@ -515,11 +516,19 @@ def _read_function_source(
 
     from core.source.lines import split_lines
 
-    lines = split_lines(text)
-    start = max(0, func_info["line_start"] - 1)
-    end = func_info.get("line_end") or len(lines)
-    func_lines = lines[start:end]
-    source = "\n".join(func_lines)
+    if (type(text) is str and len(text) >= 16 * 1024
+            and split_lines is _FUNCTION_LINES_IMPL
+            and type(func_info) is dict and all(type(key) is str for key in func_info)
+            and type(func_info.get("line_start")) is int
+            and type(func_info.get("line_end")) is int
+            and func_info["line_end"] > 0):
+        source = slice_text(text, max(1, func_info["line_start"]), func_info["line_end"])
+    else:
+        lines = split_lines(text)
+        start = max(0, func_info["line_start"] - 1)
+        end = func_info.get("line_end") or len(lines)
+        func_lines = lines[start:end]
+        source = "\n".join(func_lines)
 
     if estimate_tokens(source) <= max_tokens:
         return source

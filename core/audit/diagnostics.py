@@ -12,6 +12,7 @@ from typing import Any, TYPE_CHECKING
 from pathlib import Path
 
 from core.json import load_json, save_json
+from core.source.lines import slice_text, split_lines as _FUNCTION_LINES_IMPL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,6 +74,9 @@ def read_function_source(
     if line_start > 0 and line_end >= line_start:
         # \n-model split (core.source.lines contract): the span comes
         # from the pinned checklist, whose inventory counts \n.
+        if (type(text) is str and len(text) >= 16 * 1024 and type(line_start) is int and type(line_end) is int
+                and split_lines is _FUNCTION_LINES_IMPL):
+            return slice_text(text, line_start, line_end)
         return "\n".join(split_lines(text)[line_start - 1:line_end])
     # Whole-file fallback: trim exactly one \r before each \n — the
     # same per-line content the span path's split_lines join hands

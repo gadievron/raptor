@@ -257,6 +257,36 @@ def join_lf_slice(text: str, start: int, end: int) -> str:
                 return text[lower:]
             upper = found + 1
         return text[lower:upper - 1]
+    if start > 128:
+        # Sample a bounded prefix before paying for a full LF count. Early
+        # windows should keep the prefix path's existing cost. This estimate
+        # only selects a traversal strategy, never a source coordinate.
+        sample_size = 4096
+        sample_breaks = text.count("\n", 0, sample_size)
+        if sample_breaks and start > len(text) * sample_breaks // (2 * sample_size):
+            line_count = text.count("\n") + 1
+            if start >= line_count:
+                return ""
+            if line_count - start <= 128:
+                # A short EOF window needs no prefix or line-list copies.
+                lower = len(text)
+                for _ in range(line_count - start):
+                    lower = text.rfind("\n", 0, lower)
+                lower += 1
+                upper = lower
+                for _ in range(min(end, line_count) - start):
+                    found = text.find("\n", upper)
+                    if found < 0:
+                        return text[lower:]
+                    upper = found + 1
+                return text[lower:upper - 1]
+            if start > line_count // 2:
+                # Split from the closer end. Release the unsplit head before
+                # slicing/joining the selected suffix; retain raw CR and EOF.
+                parts = text.rsplit("\n", line_count - start)  # line-model: raw LF slice, including the trailing empty element
+                parts.pop(0)
+                return "\n".join(parts[:end - start])
+
     # Split only the prefix through the requested end. Discard the
     # unsplit tail before joining, and clamp huge Python slice bounds
     # before passing them to split's Py_ssize_t maxsplit argument.
