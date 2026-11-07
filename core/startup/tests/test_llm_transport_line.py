@@ -20,6 +20,27 @@ from core.llm import config as llm_config
 from core.startup import init as startup_init
 
 
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.config as owner
+    import core.llm.detection as detection
+    from core.testing.llm_state import scoped_claudecode_discovery
+
+    with scoped_claudecode_discovery(owner, detection) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture
 def isolated_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -33,7 +54,7 @@ def isolated_home(monkeypatch, tmp_path):
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
                 "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr("shutil.which", lambda _bin: None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _bin: None)
     return tmp_path
 
 

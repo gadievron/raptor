@@ -543,6 +543,11 @@ remain borrowed. Existing literal dotted bindings from
 `scoped_function_imports` retain their existing meaning. The complete private
 path is built before publication,
 so an invalid nested binding cannot leave a partially replaced root.
+For function-local imports, use `scoped_function_imports`. If a dictionary
+registry already stores the selected functions, pass its module binding in
+`registries=("registry_name",)` so dispatch uses private wrappers too. The
+registry is shallow copied and restored by identity with the function bindings;
+unselected entries retain their original values.
 
 For a change involving shared state, run the affected tests alone and with
 their related tests in one process. Then exercise randomized order and

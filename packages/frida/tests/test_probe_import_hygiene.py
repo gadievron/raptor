@@ -12,6 +12,26 @@ from packages.frida import sandboxed
 from core.testing.module_bindings import patch_module_attribute
 
 
+from types import ModuleType
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import packages.frida.sandboxed as owner
+    import shutil
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('_find_frida_site',), {'shutil': shutil}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 def test_discovery_does_not_execute_target_frida(tmp_path, monkeypatch):
     marker = tmp_path/'executed'
     (tmp_path/'frida.py').write_text(
@@ -88,7 +108,7 @@ def test_cli_interpreter_discovery_supports_linux_and_macos_paths(tmp_path, monk
     (site/'frida').mkdir(parents=True)
     (site/'frida/__init__.py').write_text('')
     patch_module_attribute(monkeypatch, sandboxed, 'sys', 'executable', '/nonexistent-fixture-python')
-    monkeypatch.setattr('shutil.which', lambda name: str(cli) if name == 'frida' else None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda name: str(cli) if name == 'frida' else None)
     patch_module_attribute(monkeypatch, sandboxed, 'os.path', 'isfile', lambda path: path == interpreter)
     def probe(executable, source, **kwargs):
         assert executable == interpreter

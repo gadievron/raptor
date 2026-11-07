@@ -23,7 +23,7 @@ class TestCheckPrereqs:
         assert isinstance(result, list)
 
     def test_missing_joern_reported(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda x: None)
         prereqs.reset_path_cache()
         try:
             result = prereqs.check_prereqs()
@@ -34,7 +34,7 @@ class TestCheckPrereqs:
 
 class TestVersion:
     def test_returns_none_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda x: None)
         prereqs.reset_path_cache()
         try:
             assert prereqs.version() is None
@@ -42,7 +42,7 @@ class TestVersion:
             prereqs.reset_path_cache()
 
     def test_version_tuple_none_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda x: None)
         prereqs.reset_path_cache()
         try:
             assert prereqs.version_tuple() is None
@@ -117,7 +117,7 @@ class TestMeetsMinVersion:
         assert not prereqs.meets_min_version()
 
     def test_false_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda x: None)
+        patch_module_attribute(monkeypatch, prereqs, 'shutil', 'which', lambda x: None)
         prereqs.reset_path_cache()
         try:
             assert not prereqs.meets_min_version()

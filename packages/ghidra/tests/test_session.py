@@ -18,6 +18,26 @@ import packages.ghidra.session as _tool_lookup_consumer
 from core.testing.module_bindings import mock_module_attribute
 
 
+from types import ModuleType
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import packages.ghidra.detect as owner
+    import importlib.util
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('pyghidra_available',), {'importlib.util': importlib.util}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 MINIMAL_GPR = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <FILE_INFO>
@@ -250,7 +270,7 @@ class TestDetectPyGhidra:
 
     def test_pyghidra_unavailable(self):
         from packages.ghidra.detect import pyghidra_available
-        with patch("importlib.util.find_spec", return_value=None):
+        with mock_module_attribute(_discovery_imports, 'importlib.util', 'find_spec', return_value=None):
             assert pyghidra_available() is False
 
 

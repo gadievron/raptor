@@ -14,6 +14,27 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import packages.codeql.query_runner as owner
+    import shutil
+    from core.testing.module_views import scoped_function_imports
+
+    with scoped_function_imports(owner, ('_bundled_stdlib_roots',), {'shutil': shutil}) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -236,7 +257,7 @@ class TestVendoredStdlibRoots:
         from packages.codeql import query_runner as qr
 
         monkeypatch.delenv("CODEQL_CLI", raising=False)
-        monkeypatch.setattr("shutil.which", lambda _name: None)
+        patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _name: None)
         assert qr._bundled_stdlib_roots("cpp") == []
 
 

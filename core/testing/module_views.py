@@ -54,13 +54,18 @@ def module_function_view(module, *, bindings=None, import_hook=None):
 
 
 @contextmanager
-def scoped_function_imports(module, functions, imports):
+def scoped_function_imports(module, functions, imports, *, registries=()):
     """Own exact absolute local imports for selected module functions.
 
     Capture current globals at each invocation so body-installed mocks remain
     visible. Imported module namespaces are private shallow copies. The supplied
     functions must be unwrapped Python functions defined in the module; other
     module users and the inherited import hook remain untouched.
+
+    Named dictionary registries receive private shallow copies with selected
+    function values redirected by identity. This includes aliases captured
+    before entry; unrelated values and the borrowed dictionaries stay intact.
+    Registry and function bindings restore together, even if setup fails.
     """
     import pytest
 
@@ -91,7 +96,18 @@ def scoped_function_imports(module, functions, imports):
         return getattr(view, name)(*args, **kwargs)
 
     wrappers = {name: partial(invoke, name) for name in originals}
+    redirects = {id(original): wrappers[name] for name, original in originals.items()}
+    private_registries = {}
+    for name in registries:
+        registry = getattr(module, name)
+        if not isinstance(registry, dict):
+            raise TypeError("registries must name module dictionaries")
+        private_registries[name] = {
+            key: redirects.get(id(value), value) for key, value in registry.items()
+        }
     with pytest.MonkeyPatch.context() as scope:
+        for name, registry in private_registries.items():
+            scope.setitem(vars(module), name, registry)
         for name, wrapper in wrappers.items():
             scope.setitem(vars(module), name, wrapper)
         yield owned

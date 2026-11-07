@@ -52,7 +52,7 @@ def _isolated_env(monkeypatch, tmp_path):
     with (
         isolated_llm_resolution(cfg, det),
         scoped_function_imports(cfg, ("_entry_auth_resolvable", "_build_claudecode_config"),
-                                {"shutil": shutil}) as imports,
+                                {"shutil": shutil}, registries=("_PROVIDER_BUILDERS",)) as imports,
     ):
         try:
             monkeypatch.setitem(globals(), "_local_imports", imports)

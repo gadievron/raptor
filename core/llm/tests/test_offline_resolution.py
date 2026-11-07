@@ -19,6 +19,27 @@ from core.llm import config as llm_config
 from core.llm.config import _get_default_primary_model
 
 
+from types import ModuleType
+from core.testing.module_bindings import patch_module_attribute
+
+_discovery_imports = ModuleType("discovery_fixture_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_discovery_imports(monkeypatch):
+    import core.llm.config as owner
+    import core.llm.detection as detection
+    from core.testing.llm_state import scoped_claudecode_discovery
+
+    with scoped_claudecode_discovery(owner, detection) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_discovery_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
+
 @pytest.fixture
 def clean_resolution(monkeypatch):
     """Neutralise ambient resolution sources so each test controls
@@ -36,7 +57,7 @@ def clean_resolution(monkeypatch):
     monkeypatch.setattr(llm_config, "_operator_primary_override", None)
     monkeypatch.setattr(llm_config, "_get_best_thinking_model", lambda: None)
     monkeypatch.setattr(llm_config, "_config_bedrock_primary", lambda: None)
-    monkeypatch.setattr("shutil.which", lambda _bin: None)
+    patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _bin: None)
     return monkeypatch
 
 

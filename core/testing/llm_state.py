@@ -22,3 +22,30 @@ def isolated_llm_resolution(config, detection):
             "_operator_primary_override": None,
         }, lock=config._thinking_model_lock))
         yield
+
+
+@contextmanager
+def scoped_claudecode_discovery(config, detection):
+    """Own Claude PATH discovery through local imports and provider dispatch.
+
+    Detection's module lookup follows the current private import view, including
+    body-installed mocks. Cache ownership remains the caller's responsibility.
+    """
+    import shutil
+    import pytest
+
+    from core.testing.module_bindings import patch_module_attribute
+    from core.testing.module_views import scoped_function_imports
+
+    with (
+        scoped_function_imports(
+            config, ("_entry_auth_resolvable", "_build_claudecode_config"),
+            {"shutil": shutil}, registries=("_PROVIDER_BUILDERS",),
+        ) as imports,
+        pytest.MonkeyPatch.context() as scope,
+    ):
+        patch_module_attribute(
+            scope, detection, "shutil", "which",
+            lambda *args, **kwargs: imports.shutil.which(*args, **kwargs),
+        )
+        yield imports

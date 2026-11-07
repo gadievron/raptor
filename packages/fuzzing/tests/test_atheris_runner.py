@@ -25,6 +25,11 @@ from packages.fuzzing.atheris_runner import (
     parse_python_exception,
 )
 
+
+from core.testing.module_bindings import mock_module_attribute
+import packages.fuzzing.atheris_runner as _discovery_owner
+
+
 # Realistic atheris streams, matching observed real-campaign
 # placement: libFuzzer banner, stats grammar, crash handling, and the
 # -print_final_stats summary on STDERR; the uncaught-Python-exception
@@ -287,7 +292,7 @@ class TestAtherisRunnerContract(unittest.TestCase):
         venv_bin.mkdir(parents=True)
         venv_python = venv_bin / "python3"
         venv_python.symlink_to(sys.executable)
-        with patch("importlib.util.find_spec", return_value=None):
+        with mock_module_attribute(_discovery_owner, 'importlib.util', 'find_spec', return_value=None):
             # In-process interpreter has no atheris, but the venv
             # interpreter is a different one — optimistic pass.
             runner = AtherisRunner(
