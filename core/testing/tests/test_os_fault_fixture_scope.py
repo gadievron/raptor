@@ -8,10 +8,11 @@ import importlib
 import os
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from core.testing.mock_sites import patch_site, patch_target
 from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -475,6 +476,12 @@ def _nodes(file):
     for node in ast.walk(_tree(file)):
         if not isinstance(node, ast.Call) or not node.args:
             continue
+        owned_target = patch_target(node)
+        if getattr(node.func, "id", "") == "mock_module_attribute" and any(
+                owned_target == row["module"] + "." + row["target"]
+                for row in _SPECS if row["file"] == file):
+            result.append(node)
+            continue
         if getattr(node.func, "id", "") == "patch_module_attribute" and len(node.args) >= 5:
             if isinstance(node.args[1], ast.Name) and node.args[1].id.startswith("_os_fault_consumer"):
                 result.append(node)
@@ -539,8 +546,8 @@ def _exercise(row, index, borrowed, exit_mode, mock=True):
                 if mock:
                     node = copy.deepcopy(_nodes(row["file"])[index])
                     if row["kind"] == "string":
-                        target = node.args[0].value
-                        patches.enter_context(patch(target, new=fake))
+                        target = patch_target(node)
+                        patches.enter_context(patch_site(node, target, fake))
                     else:
                         # Execute the actual native target/scope/attribute expression,
                         # substituting only the fault value; no syscall is executed.

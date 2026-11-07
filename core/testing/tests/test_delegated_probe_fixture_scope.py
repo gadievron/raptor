@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.testing.mock_sites import patch_site, patch_target
 from core.testing.module_bindings import patch_module_attribute
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -44,14 +45,12 @@ def _patches(file):
                (("subprocess", "run"), ("shutil", "which")) if binding in bindings}
     targets |= {module + "." + target for target in targets}
     return sorted((n for n in ast.walk(_tree(file))
-                   if isinstance(n, ast.Call) and n.args
-                   and (getattr(n.func, "id", "") == "patch" or getattr(n.func, "attr", "") == "patch")
-                   and isinstance(n.args[0], ast.Constant) and n.args[0].value in targets),
-                  key=lambda n: n.lineno)
+                   if patch_target(n) in targets), key=lambda n: n.lineno)
+
 
 
 def _cases():
-    return [pytest.param(file, *node.args[0].value.split(".")[-2:], node.args[0].value,
+    return [pytest.param(file, *patch_target(node).split(".")[-2:], patch_target(node),
                          id=module + "-" + str(index))
             for file, (module, _, _) in _SPECS.items()
             for index, node in enumerate(_patches(file))]
@@ -59,8 +58,8 @@ def _cases():
 
 def _delegated_cases():
     return [pytest.param(file, binding, "run" if binding == "subprocess" else "which",
-                         next(n.args[0].value for n in _patches(file)
-                              if n.args[0].value.split(".")[-2] == binding),
+                         next(patch_target(n) for n in _patches(file)
+                              if patch_target(n).split(".")[-2] == binding),
                          id=module + "-" + binding)
             for file, (module, bindings, delegated) in _SPECS.items() if delegated
             for binding in bindings]
@@ -123,7 +122,8 @@ def _exercise(file, binding, attribute, target, borrowed, exit_mode, delegated=F
         try:
             with pytest.MonkeyPatch.context() as scope:
                 _fixture(file)(scope)
-                with patch(target, new=fake):
+                node = next(n for n in _patches(file) if patch_target(n) == target)
+                with patch_site(node, target, fake):
                     for owner, before in shared + inherited:
                         _assert_namespace(owner, before)
                     assert getattr(getattr(primary, binding), attribute) is fake
