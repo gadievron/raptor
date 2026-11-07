@@ -2096,7 +2096,7 @@ class EgressProxy:
 
         future = _submit_to_loop(_bind(), self._loop)
         future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
-        logger.info("egress proxy: unix socket bound at %s", path)
+        logger.debug("egress proxy: unix socket bound at %s", path)
 
     def bind_tcp_lane(self, *, label: str = "sandbox",
                       allowed_hosts: "Iterable[str] | None" = None,
@@ -2257,7 +2257,7 @@ class EgressProxy:
             _os.unlink(path)
         except OSError:
             pass
-        logger.info("egress proxy: unix socket unbound at %s", path)
+        logger.debug("egress proxy: unix socket unbound at %s", path)
 
     async def _handle_unix_client(
         self, reader: asyncio.StreamReader,
