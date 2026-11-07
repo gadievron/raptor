@@ -28,11 +28,12 @@ import os
 import re
 import shutil
 import stat
-import tempfile
 import uuid
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from pathlib import Path
 
+from core.atomic_fs import rename_without_replace
 from core.env.spec import ToolchainSpec
 from core.run.scratch import scratch_dir
 
@@ -215,7 +216,7 @@ def containerized_build(
             pass
         raise
     try:
-        with scratch_dir("raptor-rootfs-build-", dir=keep.parent) as scratch:
+        with scratch_dir("raptor-rootfs-build-", dir=keep.parent, keepalive=True) as scratch:
             rootfs = scratch / "rootfs"
             product = build(rootfs)
             if product.ok:
@@ -246,6 +247,55 @@ def containerized_build(
             pass
 
 
+@contextmanager
+def _image_cleanup(build_id: str):
+    """Attempt both exact-scope cleanups without masking raised build errors."""
+    from core.container.lifecycle import prune_labeled_dangling, remove_labeled_images
+
+    failed = False
+    try:
+        yield
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        first_error = None
+        for action in (
+            lambda: remove_labeled_images(BUILD_LABEL, build_id,
+                                          tag_repo="raptor-env-build", tag_value=build_id),
+            lambda: prune_labeled_dangling(BUILD_LABEL, build_id),
+        ):
+            try:
+                action()
+            except BaseException as exc:
+                logger.warning("Build image cleanup failed for %s", build_id, exc_info=True)
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None and not failed:
+            raise first_error
+
+
+@contextmanager
+def _artifact_outputs(product: BuildProduct):
+    """Roll back only files this extraction published if the operation fails."""
+    receipts = []
+    try:
+        yield receipts
+    except BaseException:
+        for path, identity in reversed(receipts):
+            try:
+                info = path.lstat()
+                if (info.st_dev, info.st_ino) == identity:
+                    path.unlink()
+            except FileNotFoundError:
+                continue
+            except BaseException:
+                logger.warning("Partial build artifact retained at %s", path, exc_info=True)
+        product.artifacts.clear()
+        product.checksums.clear()
+        raise
+
+
 def _containerized_build(
     repo_dir: Path | str,
     command: str,
@@ -261,10 +311,6 @@ def _containerized_build(
 ) -> BuildProduct:
     from core.container.build import build_image
     from core.container.export import export_rootfs
-    from core.container.lifecycle import (
-        prune_labeled_dangling,
-        remove_labeled_images,
-    )
 
     repo = Path(repo_dir)
     out = Path(out_dir)
@@ -291,14 +337,26 @@ def _containerized_build(
         product.reason, product.detail = "rejected_input", str(exc)[:500]
         return product
 
-    with tempfile.TemporaryDirectory(prefix="raptor-env-build-") as tmp:
-        ctx = Path(tmp) / "context"
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        product.reason, product.detail = "export_failed", str(exc)[:500]
+        return product
+
+    # Large source/rootfs copies belong on the selected artifact filesystem,
+    # not a potentially RAM-backed system temp mount. The private workspace
+    # may live inside the source tree; exclude exactly it to prevent recursion.
+    with scratch_dir("raptor-env-build-", dir=out, keepalive=True) as tmp:
+        ctx = tmp / "context"
         try:
-            shutil.copytree(
-                repo, ctx / "src",
-                ignore=shutil.ignore_patterns(".git"),
-                symlinks=True,
-            )
+            copy_source = repo.resolve()
+            workspace = tmp.resolve()
+
+            def ignored(directory, names):
+                return {name for name in names
+                        if name == ".git" or Path(directory) / name == workspace}
+
+            shutil.copytree(copy_source, ctx / "src", ignore=ignored, symlinks=True)
         except OSError as exc:
             product.reason, product.detail = "copy_failed", str(exc)[:500]
             return product
@@ -341,71 +399,68 @@ def _containerized_build(
                             _flag_prefix(toolchain), command)
             )
         try:
-            built = build_image(
-                context_dir=str(ctx), tag=tag, dockerfile_text=dockerfile,
-                timeout_seconds=timeout_seconds,
-                labels={BUILD_LABEL: build_id},
-                # The RUN step executes the UNTRUSTED build system:
-                # consent-to-build is not consent to egress (metadata
-                # credential theft, bridge pivot, exfiltration).
-                # Dependency-fetching builds fail here and take the
-                # documented degrade path.
-                network="none",
-                force_rm=True,
-            )
-            if not built.ok:
-                product.reason = "build_failed"
-                # Both streams: under the legacy builder the failing
-                # step's output (`configure: error: ...`) is on STDOUT
-                # — a stderr-only detail showed just the deprecation
-                # banner and hid the real error.
-                product.detail = "\n".join(
-                    tail for tail in ((built.stderr_tail or "")[-1000:],
-                                      (built.logs_tail or "")[-1000:])
-                    if tail.strip())
-                return product
+            with _artifact_outputs(product) as receipts, _image_cleanup(build_id):
+                built = build_image(
+                    context_dir=str(ctx), tag=tag, dockerfile_text=dockerfile,
+                    timeout_seconds=timeout_seconds,
+                    labels={BUILD_LABEL: build_id},
+                    # The RUN step executes the UNTRUSTED build system:
+                    # consent-to-build is not consent to egress (metadata
+                    # credential theft, bridge pivot, exfiltration).
+                    # Dependency-fetching builds fail here and take the
+                    # documented degrade path.
+                    network="none",
+                    force_rm=True,
+                )
+                if not built.ok:
+                    product.reason = "build_failed"
+                    # Both streams: under the legacy builder the failing
+                    # step's output (`configure: error: ...`) is on STDOUT
+                    # — a stderr-only detail showed just the deprecation
+                    # banner and hid the real error.
+                    product.detail = "\n".join(
+                        tail for tail in ((built.stderr_tail or "")[-1000:],
+                                          (built.logs_tail or "")[-1000:])
+                        if tail.strip())
+                    return product
 
-            rootfs = Path(keep_rootfs) if keep_rootfs else Path(tmp) / "rootfs"
-            exported = export_rootfs(tag, rootfs)
-            if not exported.ok:
-                product.reason = "export_failed"
-                # ExportOutcome carries the diagnostics in reason +
-                # stderr (there is no 'detail' field — the old getattr
-                # shipped every failure with an empty detail).
-                product.detail = (
-                    f"{exported.reason}: {exported.stderr}".strip(": ")
-                )[:500]
-                return product
+                rootfs = Path(keep_rootfs) if keep_rootfs else Path(tmp) / "rootfs"
+                exported = export_rootfs(tag, rootfs)
+                if not exported.ok:
+                    product.reason = "export_failed"
+                    # ExportOutcome carries the diagnostics in reason +
+                    # stderr (there is no 'detail' field — the old getattr
+                    # shipped every failure with an empty detail).
+                    product.detail = (
+                        f"{exported.reason}: {exported.stderr}".strip(": ")
+                    )[:500]
+                    return product
 
-            out.mkdir(parents=True, exist_ok=True)
-            for rel, src in _elf_executables(rootfs / "src").items():
-                dest = out / _dest_name(rel, out)
-                shutil.copy2(src, dest)
-                # Strip execute/setuid/setgid: the bytes came from the
-                # attacker's build; analysis needs content, never an
-                # executable (let alone setuid) file in the run dir.
-                dest.chmod(0o444)
-                product.artifacts[rel] = dest
-                product.checksums[rel] = _sha256(dest)
+                for rel, src in _elf_executables(rootfs / "src").items():
+                    staged = tmp / f"artifact-{len(product.artifacts)}"
+                    shutil.copy2(src, staged)
+                    # Analysis needs content, never an executable/setuid file.
+                    staged.chmod(0o444)
+                    checksum = _sha256(staged)
+                    info = staged.lstat()
+                    identity = (info.st_dev, info.st_ino)
+                    for _attempt in range(16):
+                        dest = out / _dest_name(rel, out)
+                        # Register before the syscall: cancellation can arrive
+                        # after a successful rename but before Python resumes.
+                        receipts.append((dest, identity))
+                        try:
+                            rename_without_replace(staged, dest)
+                            break
+                        except FileExistsError:
+                            continue
+                    else:
+                        raise OSError("artifact publication repeatedly collided")
+                    product.artifacts[rel] = dest
+                    product.checksums[rel] = checksum
         except OSError as exc:
             product.reason, product.detail = "export_failed", str(exc)[:500]
             return product
-        finally:
-            # Exact-scope cleanup on EVERY path (a failed or timed-out
-            # client can still leave a daemon-side tagged image; the
-            # tag kill-path covers label-less leftovers). The image is
-            # a means, not a product.
-            remove_labeled_images(BUILD_LABEL, build_id,
-                                  tag_repo="raptor-env-build",
-                                  tag_value=build_id)
-            # Then the dangling residue: failed/superseded step layers
-            # are untagged cache images (label-inherited via the
-            # LABEL-first Dockerfile) that remove_labeled_images
-            # deliberately skips. Scoped prune — a hostile build's
-            # disk burst is reclaimed at run end; the burst DURING the
-            # 600s build window remains unbounded (daemon-level quota
-            # territory, documented).
-            prune_labeled_dangling(BUILD_LABEL, build_id)
 
     if not product.artifacts:
         product.reason = "no_artifacts"
@@ -433,7 +488,7 @@ def _dest_name(rel: str, out: Path) -> str:
     """
     base = rel.replace("/", "__")
     name, i = base, 1
-    while (out / name).exists():
+    while os.path.lexists(out / name):
         name = f"{base}.{i}"
         i += 1
     return name
