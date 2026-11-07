@@ -662,11 +662,14 @@ a classification the worker returns with each verdict.
 If `HTTPS_PROXY` is set in the parent environment (e.g. corporate
 proxy), the RAPTOR proxy forwards its `CONNECT` tunnels through that
 upstream, honouring `NO_PROXY`. This is transparent to callers. The
-upstream handshake has its own budget (default 10 s); slow or
+upstream handshake has one total budget (default 10 s) covering the TCP
+connection, request write, status line and response headers; slow or
 authenticated corporate proxies can widen it with
 `RAPTOR_PROXY_UPSTREAM_HANDSHAKE_TIMEOUT_S` — the signal you need it is
 `upstream_failed` events in `proxy-events.jsonl` on a proxy that is
-otherwise working.
+otherwise working. A complete HTTP/1.0 or HTTP/1.1 200 response head is
+required before the client receives success. Incomplete, malformed or
+over-budget responses produce a 502 and an `upstream_failed` event.
 
 ### Proxy events
 

@@ -7,9 +7,8 @@ holds slots indefinitely and starves every other consumer of the
 proxy singleton. Three bounds are under test:
 
 - absolute deadline over request line + all headers
-  (`_PROXY_HANDSHAKE_DEADLINE_S`) — breach responds 408 (or, when the
-  deadline lands mid-line, falls through to the policy gates with
-  whatever was parsed: either way the slot is released on schedule);
+  (`_PROXY_HANDSHAKE_DEADLINE_S`) — breach responds 408, including
+  expiry while waiting for a complete header line;
 - aggregate header byte budget (`_PROXY_HANDSHAKE_MAX_HEADER_BYTES`)
   — breach responds 400;
 - header count cap (`_PROXY_HANDSHAKE_MAX_HEADERS`) — breach
@@ -125,12 +124,8 @@ class TestHandshakeDeadline:
                     f"handshake not bounded: still trickling after "
                     f"{elapsed:.1f}s (deadline was 1.0s)"
                 )
-                # 408 when a completed line trips the loop-top check;
-                # 403 when the deadline expired mid-line and the drain
-                # fell through to the (denying) hostname gate. Both
-                # terminate the handshake on schedule.
-                assert status in (408, 403), (
-                    f"expected 408/403 at the deadline, got {status!r}"
+                assert status == 408, (
+                    f"expected 408 at the handshake deadline, got {status!r}"
                 )
             finally:
                 s.close()
@@ -167,8 +162,7 @@ class TestHandshakeDeadline:
             events = proxy.unregister_sandbox(token)
         finally:
             proxy.stop()
-        terminal = [e for e in events
-                    if e["result"] in ("bad_request", "denied_host")]
+        terminal = [e for e in events if e["result"] == "bad_request"]
         assert terminal, (
             f"no terminal handshake event recorded, got: {events}"
         )
