@@ -210,7 +210,7 @@ def test_confined_literal_call_frame_keeps_mixed_width_parameter_guards(tmp_path
     decision = evaluate_caller_gate(tmp_path, "unit.c", "Read", "check-array-bounds", "Data[Index] out-of-bounds read",
                                     source=source, integer_abi="lp64")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v4"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v5"
     assert decision.details["callee_obligation"]["profile"] == "int64"
 
 
