@@ -13,6 +13,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-startup-check"
@@ -24,12 +25,22 @@ HOSTILE_SEGMENT = "evil-\x1b[2A\x1b[K-dir"
 
 class TestMismatchMenuDisplay(unittest.TestCase):
     def test_mismatch_menu_escapes_target_paths(self):
+        self._assert_mismatch_menu()
+
+    def test_mismatch_menu_owns_state_despite_stale_runner_launch(self):
+        with patch.dict(os.environ, {"TMPDIR": "/missing-runner-scratch",
+                                    "_RAPTOR_SCRATCH_AUTH": "invalid-runner-authorization"}):
+            self._assert_mismatch_menu()
+
+    def _assert_mismatch_menu(self):
         from core.project import ProjectManager
 
         with TemporaryDirectory() as d:
             root = Path(d)
             home = root / "home"
             home.mkdir()
+            scratch = root / "tmp"
+            scratch.mkdir()
             hostile_target = root / HOSTILE_SEGMENT
             hostile_target.mkdir()
             caller = root / "caller-project"
@@ -43,6 +54,12 @@ class TestMismatchMenuDisplay(unittest.TestCase):
             mgr.set_active("proja")
 
             env = dict(os.environ)
+            # The new startup has its own home/registry, not the runner's launch.
+            for name in ("_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN"):
+                env.pop(name, None)
+            env.update(TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch),
+                       XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"),
+                       XDG_DATA_HOME=str(home / ".local/share"), XDG_STATE_HOME=str(home / ".local/state"))
             env["HOME"] = str(home)
             env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
             env["_RAPTOR_TRUSTED"] = "1"
