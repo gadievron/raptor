@@ -3,7 +3,8 @@
 // string read is a candidate, not proof: source length, existing termination,
 // and formatted-argument conversion/bounds require independent review.
 // Track direct destinations, ending at replacement, update, address escape,
-// another strncpy or an explicit NUL write. Alias writes remain outside scope.
+// another strncpy. A recognized terminator excludes reads only while its
+// termination evidence remains intact. Alias writes remain outside scope.
 // strncmp and the source of strncat bounded by the unchanged copy count do not
 // need NUL within that range; the destination of strncat is still unbounded.
 // Formatted uses are checked against supported literal conversion slots.
@@ -13,17 +14,245 @@
 // https://man7.org/linux/man-pages/man3/strncmp.3.html
 // @role: detection
 
-// Match the copied prefix on every path, not a same-spelled count changed
-// after copying. Explicit forall keeps a clean path from hiding a changed one.
-@bounded_use forall@
-expression DST, SRC, OTHER;
-identifier N;
-assignment operator op_dst, op_n;
+@zero_preserving@
+expression DST, INDEX;
 position p;
 @@
 
-strncpy(DST, SRC, N);
-... when != DST op_dst ...
+(
+DST[INDEX] =@p \( 0 \| '\0' \);
+|
+  *DST =@p \( 0 \| '\0' \);
+|
+  (*DST) =@p \( 0 \| '\0' \);
+|
+memset@p(DST, \( 0 \| '\0' \), ...);
+|
+memcpy@p(DST, ..., 0);
+|
+memmove@p(DST, ..., 0);
+|
+memset@p(DST, ..., 0);
+|
+snprintf@p(DST, 0, ...);
+|
+vsnprintf@p(DST, 0, ...);
+)
+
+// A source-length-plus-one copy starts terminated, but later writes may
+// invalidate it. The two candidate branches below model both starting states.
+@copy_includes_nul@
+expression DST, SRC;
+position p;
+@@
+
+strncpy@p(DST, SRC, strlen(SRC) + 1);
+
+// Report an actual unterminated path, not the absence of a file-wide proof.
+// A later destructive write can restore a candidate; a subsequent recognized
+// NUL store ends that path again. Reads do not stop matching later reads.
+@strncpy_then_string_use exists@
+expression DST, SRC, N, F, SZ, FN, ALIAS;
+identifier NAME;
+type T;
+assignment operator op_dst, op_byte;
+expression INDEX !~ "^[ \t(]*-";
+constant COUNT =~ "^[1-9][0-9]*[uUlL]*$";
+position unterm_copy != copy_includes_nul.p;
+position overwrite != zero_preserving.p;
+position p_copy;
+position p_use;
+@@
+
+(
+strncpy@p_copy@unterm_copy(DST, SRC, N);
+|
+strncpy@p_copy(DST, SRC, N);
+... when any
+    when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+(
+DST[...] op_byte@overwrite ...;
+|
+DST[...]++;
+|
+  ++DST[...];
+|
+DST[...]--;
+|
+  --DST[...];
+|
+  (*DST) op_byte@overwrite ...;
+|
+  (*DST)++;
+|
+  ++(*DST);
+|
+  (*DST)--;
+|
+  --(*DST);
+|
+FN(..., &DST[...], ...);
+|
+ALIAS = &DST[...];
+|
+T NAME = &DST[...];
+|
+memset@overwrite(DST, ...);
+|
+memcpy@overwrite(DST, ...);
+|
+memmove@overwrite(DST, ...);
+|
+snprintf@overwrite(DST, ...);
+|
+vsnprintf@overwrite(DST, ...);
+)
+)
+... when any
+    when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+    when != DST[INDEX] = \( 0 \| '\0' \)
+    when != *DST = \( 0 \| '\0' \)
+    when != (*DST) = \( 0 \| '\0' \)
+    when != memset(DST, \( 0 \| '\0' \), COUNT)
+    when != memset(DST, \( 0 \| '\0' \), sizeof(...))
+
+(
+* strlen(DST@p_use)
+|
+* strcmp(DST@p_use, ...)
+|
+* strcmp(..., DST@p_use)
+|
+* strncmp(DST@p_use, ...)
+|
+* strncmp(F, DST@p_use, SZ)
+|
+* strcat(DST@p_use, ...)
+|
+* strcat(..., DST@p_use)
+|
+* strncat(DST@p_use, ...)
+|
+* strncat(F, DST@p_use, SZ)
+|
+* printf(DST@p_use, ...)
+|
+* fprintf(F, DST@p_use, ...)
+|
+* snprintf(F, SZ, DST@p_use, ...)
+|
+* syslog(F, DST@p_use, ...)
+)
+@strncpy_then_format_use exists@
+expression DST, SRC, N, F, SZ, FMT, FN, ALIAS;
+identifier NAME;
+type T;
+expression list BEFORE, AFTER;
+assignment operator op_dst, op_byte;
+expression INDEX !~ "^[ \t(]*-";
+constant COUNT =~ "^[1-9][0-9]*[uUlL]*$";
+position unterm_copy != copy_includes_nul.p;
+position overwrite != zero_preserving.p;
+position p_copy;
+position p_use;
+@@
+
+(
+strncpy@p_copy@unterm_copy(DST, SRC, N);
+|
+strncpy@p_copy(DST, SRC, N);
+... when any
+    when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+(
+DST[...] op_byte@overwrite ...;
+|
+DST[...]++;
+|
+  ++DST[...];
+|
+DST[...]--;
+|
+  --DST[...];
+|
+  (*DST) op_byte@overwrite ...;
+|
+  (*DST)++;
+|
+  ++(*DST);
+|
+  (*DST)--;
+|
+  --(*DST);
+|
+FN(..., &DST[...], ...);
+|
+ALIAS = &DST[...];
+|
+T NAME = &DST[...];
+|
+memset@overwrite(DST, ...);
+|
+memcpy@overwrite(DST, ...);
+|
+memmove@overwrite(DST, ...);
+|
+snprintf@overwrite(DST, ...);
+|
+vsnprintf@overwrite(DST, ...);
+)
+)
+... when any
+    when != DST op_dst ...
+    when != &DST
+    when != DST++
+    when != ++DST
+    when != DST--
+    when != --DST
+    when != strncpy(DST, ...)
+    when != DST[INDEX] = \( 0 \| '\0' \)
+    when != *DST = \( 0 \| '\0' \)
+    when != (*DST) = \( 0 \| '\0' \)
+    when != memset(DST, \( 0 \| '\0' \), COUNT)
+    when != memset(DST, \( 0 \| '\0' \), sizeof(...))
+
+(
+* printf(FMT, BEFORE, DST@p_use, AFTER)
+|
+* fprintf(F, FMT, BEFORE, DST@p_use, AFTER)
+|
+* snprintf(F, SZ, FMT, BEFORE, DST@p_use, AFTER)
+|
+* syslog(F, FMT, BEFORE, DST@p_use, AFTER)
+)
+@bounded_local forall@
+expression strncpy_then_string_use.DST, strncpy_then_string_use.SRC;
+position strncpy_then_string_use.p_copy, strncpy_then_string_use.p_use;
+expression OTHER;
+identifier N;
+assignment operator op_dst, op_n;
+@@
+
+strncpy@p_copy(DST, SRC, N);
+... when any
+    when != DST op_dst ...
     when != &DST
     when != DST++
     when != ++DST
@@ -37,22 +266,24 @@ strncpy(DST, SRC, N);
     when != N--
     when != --N
 (
-strncmp(DST, OTHER, N)@p
+strncmp(DST@p_use, OTHER, N)
 |
-strncmp(OTHER, DST, N)@p
+strncmp(OTHER, DST@p_use, N)
 |
-strncat(OTHER, DST, N)@p
+strncat(OTHER, DST@p_use, N)
 )
 
-@bounded_constant_use forall@
-expression DST, SRC, OTHER;
+@bounded_constant forall@
+expression strncpy_then_string_use.DST, strncpy_then_string_use.SRC;
+position strncpy_then_string_use.p_copy, strncpy_then_string_use.p_use;
+expression OTHER;
 constant N;
 assignment operator op_dst;
-position p;
 @@
 
-strncpy(DST, SRC, N);
-... when != DST op_dst ...
+strncpy@p_copy(DST, SRC, N);
+... when any
+    when != DST op_dst ...
     when != &DST
     when != DST++
     when != ++DST
@@ -60,68 +291,14 @@ strncpy(DST, SRC, N);
     when != --DST
     when != strncpy(DST, ...)
 (
-strncmp(DST, OTHER, N)@p
+strncmp(DST@p_use, OTHER, N)
 |
-strncmp(OTHER, DST, N)@p
+strncmp(OTHER, DST@p_use, N)
 |
-strncat(OTHER, DST, N)@p
+strncat(OTHER, DST@p_use, N)
 )
 
-@strncpy_then_string_use@
-expression DST, SRC, N, F, SZ;
-assignment operator op_dst;
-constant COUNT =~ "^[1-9][0-9]*[uUlL]*$";
-position p_copy;
-position p_use != {bounded_use.p, bounded_constant_use.p};
-@@
-
-(
-  strncpy(DST, SRC, strlen(SRC) + 1);
-|
-  strncpy@p_copy(DST, SRC, N);
-... when != DST op_dst ...
-    when != &DST
-    when != DST++
-    when != ++DST
-    when != DST--
-    when != --DST
-    when != strncpy(DST, ...)
-    when != DST[...] = '\0'
-    when != DST[...] = 0
-    when != memset(DST, 0, sizeof(...))
-    when != memset(DST, '\0', sizeof(...))
-    when != memset(DST, 0, COUNT)
-    when != memset(DST, '\0', COUNT)
-(
-* strlen(DST)@p_use
-|
-* strcmp(DST, ...)@p_use
-|
-* strcmp(..., DST)@p_use
-|
-* strncmp(DST, ...)@p_use
-|
-* strncmp(F, DST, SZ)@p_use
-|
-* strcat(DST, ...)@p_use
-|
-* strcat(..., DST)@p_use
-|
-* strncat(DST, ...)@p_use
-|
-* strncat(F, DST, SZ)@p_use
-|
-* printf(DST, ...)@p_use
-|
-* fprintf(F, DST, ...)@p_use
-|
-* snprintf(F, SZ, DST, ...)@p_use
-|
-* syslog(F, DST, ...)@p_use
-)
-)
-
-@script:python strncpy_nul_report depends on strncpy_then_string_use@
+@script:python strncpy_nul_report depends on strncpy_then_string_use && !bounded_local && !bounded_constant@
 p_copy << strncpy_then_string_use.p_copy;
 p_use << strncpy_then_string_use.p_use;
 @@
@@ -132,43 +309,6 @@ for pos in p_use:
         "line": int(pos.line), "col": int(pos.column),
         "message": "Candidate: buffer from strncpy (line %s) reaches a string or format argument; review source length, termination, conversion and read bounds (CWE-170)" % p_copy[0].line,
     }))
-
-@strncpy_then_format_use@
-expression DST, SRC, N, F, SZ, FMT;
-expression list BEFORE, AFTER;
-assignment operator op_dst;
-constant COUNT =~ "^[1-9][0-9]*[uUlL]*$";
-position p_copy;
-position p_use;
-@@
-
-(
-  strncpy(DST, SRC, strlen(SRC) + 1);
-|
-  strncpy@p_copy(DST, SRC, N);
-... when != DST op_dst ...
-    when != &DST
-    when != DST++
-    when != ++DST
-    when != DST--
-    when != --DST
-    when != strncpy(DST, ...)
-    when != DST[...] = '\0'
-    when != DST[...] = 0
-    when != memset(DST, 0, sizeof(...))
-    when != memset(DST, '\0', sizeof(...))
-    when != memset(DST, 0, COUNT)
-    when != memset(DST, '\0', COUNT)
-(
-* printf(FMT, BEFORE, DST@p_use, AFTER)
-|
-* fprintf(F, FMT, BEFORE, DST@p_use, AFTER)
-|
-* snprintf(F, SZ, FMT, BEFORE, DST@p_use, AFTER)
-|
-* syslog(F, FMT, BEFORE, DST@p_use, AFTER)
-)
-)
 
 @script:python strncpy_format_report depends on strncpy_then_format_use@
 p_copy << strncpy_then_format_use.p_copy;
