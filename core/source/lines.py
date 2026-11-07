@@ -15,6 +15,7 @@ diagnostics, git hunks, editors — must split on ``\\n`` only, never
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    "iter_source_lines",
     "iter_splitlines",
     "join_lf_slice",
     "join_lines_prefix",
@@ -48,6 +50,7 @@ _NON_NL_BREAKERS: tuple[str, ...] = ("\r", *_SPLITLINES_ONLY_TERMINATORS)
 # Python's display-line model, separate from source-coordinate LF splitting.
 _DISPLAY_LINE_BREAKERS = ("\n", *_NON_NL_BREAKERS)
 _SPLITLINES_CHUNK_CHARS = 4096
+_SOURCE_LINES_CHUNK_CHARS = 4096
 
 
 def iter_splitlines(text: str) -> Iterator[str]:
@@ -132,6 +135,48 @@ def split_lines(text: str) -> list[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+_SOURCE_SPLIT_IMPL = split_lines
+
+
+def iter_source_lines(text: str) -> Iterator[str]:
+    """Yield ``split_lines(text)`` values without a whole-source line list.
+
+    LF alone separates lines, one trailing CR per line is removed, and
+    the final empty element is omitted (including a final CR-only tail).
+    Temporary splitting is chunked, except for a single long line.
+    String adapters retain the original split/trim operations.
+    """
+    if type(text) is not str:
+        return iter(split_lines(text))
+    if len(text) <= _SOURCE_LINES_CHUNK_CHARS:
+        return iter(_SOURCE_SPLIT_IMPL(text))
+    # Let a C iterator consume each chunk's list; a Python generator frame
+    # per line adds avoidable overhead to consumers that scan through EOF.
+    return chain.from_iterable(_source_line_chunks(text))
+
+
+def _source_line_chunks(text: str) -> Iterator[list[str]]:
+    """Yield bounded, complete LF-line lists for the public iterator."""
+    start = scan = 0
+    while scan < len(text):
+        stop = min(scan + _SOURCE_LINES_CHUNK_CHARS, len(text))
+        end = text.rfind("\n", scan, stop) + 1
+        if not end:
+            scan = stop
+            continue
+        chunk = text[start:end]
+        lines = chunk.split("\n")  # line-model: this is the LF-only iteration chokepoint
+        lines.pop()  # chunk always ends at a complete LF
+        if "\r" in chunk:
+            lines = [line.removesuffix("\r") for line in lines]
+        yield lines
+        start = scan = end
+    if start < len(text):
+        tail = text[start:].removesuffix("\r")
+        if tail:
+            yield [tail]
 
 
 def splitlines_prefix(text: str, limit: int) -> list[str]:

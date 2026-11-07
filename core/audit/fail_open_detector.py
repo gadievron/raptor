@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 from typing import Any
 
 from .run_memo import BoundedMemo
@@ -635,8 +635,20 @@ def _detect_consumer_fail_open(
 
 def _function_start_line(source: str, func_name: str) -> int:
     """Return the 1-based line number of a function definition in source."""
-    for i, line in enumerate(split_lines(source), 1):
-        if re.search(rf"\b{re.escape(func_name)}\s*\(", line):
+    lines = (iter_source_lines(source)
+             if type(source) is str and split_lines is _START_LINES_IMPL else split_lines(source))
+    native_match = (type(source) is str and type(func_name) is str
+                    and split_lines is _START_LINES_IMPL and iter_source_lines is _START_ITER_IMPL)
+    pattern = None
+    for i, line in enumerate(lines, 1):
+        if (native_match and re is _START_RE_MODULE
+                and re.search is _START_SEARCH_IMPL and re.escape is _START_ESCAPE_IMPL
+                and re.compile is _START_COMPILE_IMPL):
+            if pattern is None:
+                pattern = re.compile(rf"\b{re.escape(func_name)}\s*\(")
+            if pattern.search(line):
+                return i
+        elif re.search(rf"\b{re.escape(func_name)}\s*\(", line):
             return i
     return 1
 
@@ -645,6 +657,9 @@ _START_LINE_IMPL = _function_start_line
 _START_LINES_IMPL = split_lines
 _START_SEARCH_IMPL = re.search
 _START_ESCAPE_IMPL = re.escape
+_START_RE_MODULE = re
+_START_COMPILE_IMPL = re.compile
+_START_ITER_IMPL = iter_source_lines
 
 
 def _extract_caller_body(

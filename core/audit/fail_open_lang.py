@@ -78,7 +78,7 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -669,6 +669,9 @@ def _classify_ignored_return_site(
 
 
 # Regex fallback for the ignored-return leg: a bare call statement.
+_FALLBACK_LINES_IMPL = split_lines
+
+
 def _ignored_return_regex(
     source: str, callee: str, span: tuple[int, int] | None,
 ) -> list[CallSiteOutcome]:
@@ -683,7 +686,13 @@ def _ignored_return_regex(
         rf"(?:=|\breturn\b|\bif\b|\bwhile\b|[!=<>]=|&&|\|\|)"
         rf"[^;]{{0,250}}\b{re.escape(callee)}\s*\(",
     )
-    for idx, line in enumerate(split_lines(source), 1):
+    streaming = type(source) is str and split_lines is _FALLBACK_LINES_IMPL
+    stop_line = (span[1] if streaming and type(span) is tuple and len(span) == 2
+                 and type(span[0]) is int and type(span[1]) is int else None)
+    lines = iter_source_lines(source) if streaming else split_lines(source)
+    for idx, line in enumerate(lines, 1):
+        if stop_line is not None and idx > stop_line:
+            break
         if span and not (span[0] <= idx <= span[1]):
             continue
         if callee not in line:
@@ -872,7 +881,13 @@ def _tristate_regex(
     truth_re = re.compile(
         _TRISTATE_LINE_RE_TEMPLATE.format(callee=re.escape(callee)),
     )
-    for idx, line in enumerate(split_lines(source), 1):
+    streaming = type(source) is str and split_lines is _FALLBACK_LINES_IMPL
+    stop_line = (span[1] if streaming and type(span) is tuple and len(span) == 2
+                 and type(span[0]) is int and type(span[1]) is int else None)
+    lines = iter_source_lines(source) if streaming else split_lines(source)
+    for idx, line in enumerate(lines, 1):
+        if stop_line is not None and idx > stop_line:
+            break
         if span and not (span[0] <= idx <= span[1]):
             continue
         if callee not in line:
