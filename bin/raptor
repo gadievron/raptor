@@ -1131,6 +1131,7 @@ if [ -n "$USE_CODEX" ]; then
         exit 1
     fi
     while IFS= read -r _codex_setting; do
+        [ -n "$_codex_setting" ] || continue
         CODEX_ARGS+=(-c "$_codex_setting")
     done <<< "$_codex_launch_config"
     unset _codex_launch_config _codex_setting
