@@ -106,6 +106,11 @@ def test_failed_sidecar_write_does_not_publish_stale_links_or_block_findings(tmp
     write_graded_findings(export_findings([finding]), tmp_path)
     trace = json.loads((tmp_path / "findings-graded.json").read_text())["findings"][0]["verification_trace"]
     assert trace["check_results"] == {"artifact": None, "references": [], "status": "export_error"}
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    summary = graded["verification_summary"]
+    assert summary["export_status"] == "export_error"
+    assert summary["observations"]["retained"]["records"] == 0
+    assert summary["findings"]["without_matching_observations"] == 1
 
 
 @pytest.mark.parametrize("sample", FIXTURES, ids=lambda x: x["outcome"])
@@ -190,3 +195,79 @@ def test_ambiguous_function_location_does_not_link_unrelated_checks(tmp_path):
         assert finding["verification_trace"]["check_results"]["references"] == []
         assert finding["verification_trace"]["check_results"]["status"] == "ambiguous_scope"
     assert len(json.loads((tmp_path / "verification-checks.json").read_text())["checks"]) == 1
+    assert graded["verification_summary"]["findings"]["trace_statuses"] == {"ambiguous_scope": 2}
+    assert graded["verification_summary"]["observations"]["not_linked_to_findings"]["records"] == 1
+
+
+def test_summary_separates_matching_earlier_and_unlinked_observations(tmp_path):
+    _record(tmp_path, FIXTURES[0], hypothesis="Current assertion")
+    _record(tmp_path, FIXTURES[1], hypothesis="Earlier assertion")
+    _record(tmp_path, FIXTURES[2], hypothesis="Current assertion")
+    _record(tmp_path, FIXTURES[3], hypothesis="Earlier assertion", line=40)
+    _record(tmp_path, FIXTURES[4], line=90)
+    findings = [
+        ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                      hypothesis="Current assertion"),
+        ReviewOutcome(file="a.c", function="f", line=40, status="suspicious", body="Fixture",
+                      hypothesis="Different assertion"),
+        ReviewOutcome(file="a.c", function="g", line=10, status="dark", body="Fixture",
+                      hypothesis="Unrecorded assertion"),
+    ]
+    write_graded_findings(export_findings(findings), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    summary = graded["verification_summary"]
+    assert summary["findings"] == {
+        "total": 3, "with_matching_observations": 1, "without_matching_observations": 2,
+        "trace_statuses": {"recorded": 2, "unavailable": 1},
+    }
+    groups = summary["observations"]
+    assert groups["retained"]["records"] == 5
+    assert groups["matching_final_claim"]["outcomes"] == {"confirmed": 1, "inconclusive": 1}
+    assert groups["other_claims"]["outcomes"] == {"refuted": 1, "error": 1}
+    assert groups["not_linked_to_findings"]["outcomes"] == {"skipped": 1}
+    assert sum(groups[k]["records"] for k in ("matching_final_claim", "other_claims", "not_linked_to_findings")) == 5
+    assert groups["retained"]["by_tool"] == {"semgrep": {s["outcome"]: 1 for s in FIXTURES}}
+    assert groups["retained"]["checker_assumptions"] == {"reported": 2, "unavailable": 3}
+    assert json.loads((tmp_path / "verification-checks.json").read_text())["summary"] == groups["retained"]
+
+
+def test_marker_without_observations_does_not_inflate_summary(tmp_path):
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            evidence_tool="semgrep:fixture-rule")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    summary = json.loads((tmp_path / "findings-graded.json").read_text())["verification_summary"]
+    assert summary["findings"]["with_matching_observations"] == 0
+    assert summary["findings"]["without_matching_observations"] == 1
+    assert summary["observations"]["matching_final_claim"]["outcomes"] == {}
+    assert summary["observations"]["retained"]["records"] == 0
+
+
+def test_summary_keeps_conflicting_outcomes_without_adjudicating_them(tmp_path):
+    _record(tmp_path, FIXTURES[0])
+    _record(tmp_path, FIXTURES[1])
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            hypothesis="Fixture assertion")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    summary = graded["verification_summary"]
+    assert summary["observations"]["matching_final_claim"]["outcomes"] == {"confirmed": 1, "refuted": 1}
+    assert summary["findings"]["with_matching_observations"] == 1
+    assert graded["findings"][0]["status"] == finding.status == "suspicious"
+    assert graded["findings"][0]["discovery"]["confirmed_by"] == []
+
+
+def test_summary_reports_partial_payloads_and_unavailable_source_identity(tmp_path):
+    sample = {**FIXTURES[0], "details": {"reason": "fixture", "assumptions": []}}
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion")
+    check_trace.record_check_observation(tmp_path, results, tool="semgrep", verdict="confirmed",
+                                       rule_id="fixture-rule", result=_result(sample))
+    large = {**sample, "details": {"reason": "fixture", "data": "x" * (check_trace._PAYLOAD_BYTES + 1)}}
+    _record(tmp_path, large)
+    write_graded_findings(export_findings([]), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    summary = graded["verification_summary"]["observations"]["retained"]
+    assert summary["payloads"] == {"complete": 1, "partial": 1, "unavailable": 0}
+    assert summary["source_identity"] == {"recorded": 1, "unavailable": 1}
+    assert summary["checker_assumptions"] == {"reported": 1, "unavailable": 1}
+    assert graded["verification_summary"]["findings"]["total"] == 0
+    assert graded["verification_summary"]["observations"]["not_linked_to_findings"]["records"] == 2

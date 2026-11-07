@@ -67,6 +67,42 @@ def record_check_observation(out_dir, results, *, tool, verdict, rule_id, reason
         logger.warning("could not record verification check", exc_info=True)
 
 
+def _summarize_observations(checks: list[dict]) -> dict:
+    """Count retained records, not executions, unique defects, or proofs.
+
+    Payload completeness describes serialization only. An explicit empty
+    assumptions list is still a report from the checker; an absent field
+    does not mean that the check required no assumptions.
+    """
+    outcomes = Counter()
+    by_tool = defaultdict(Counter)
+    payloads = Counter()
+    identities = Counter()
+    assumptions = Counter()
+    for check in checks:
+        tool = str(check.get("tool") or "unknown")
+        outcome = str(check.get("outcome") or "unknown")
+        outcomes[outcome] += 1
+        by_tool[tool][outcome] += 1
+        payload = check.get("result")
+        payload = payload if isinstance(payload, dict) else {}
+        complete = payload.get("complete")
+        payloads["complete" if complete is True else "partial" if complete is False else "unavailable"] += 1
+        identity = check["scope"].get("source_identity")
+        identities["recorded" if isinstance(identity, dict) and identity.get("sha256") else "unavailable"] += 1
+        data = payload.get("data")
+        details = data.get("details") if isinstance(data, dict) else None
+        reported = isinstance(details, dict) and details.get("assumptions") is not None
+        assumptions["reported" if reported else "unavailable"] += 1
+    return {
+        "records": len(checks), "outcomes": dict(outcomes),
+        "by_tool": {tool: dict(counts) for tool, counts in by_tool.items()},
+        "payloads": {state: payloads[state] for state in ("complete", "partial", "unavailable")},
+        "source_identity": {state: identities[state] for state in ("recorded", "unavailable")},
+        "checker_assumptions": {state: assumptions[state] for state in ("reported", "unavailable")},
+    }
+
+
 def write_check_results(export: dict, out_dir: Path) -> None:
     """Export run-bound check observations and link them to graded findings.
 
@@ -78,6 +114,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     status = "unavailable"
     checks = []
     artifact = None
+    retained_summary = _summarize_observations([])
     try:
         for row in load_verified_audit_log(out_dir):
             if row.get("action") != "verification_check" or row.get("schema_version") != 1:
@@ -85,8 +122,10 @@ def write_check_results(export: dict, out_dir: Path) -> None:
             if not isinstance(row.get("scope"), dict) or not isinstance(row.get("id"), str):
                 continue
             checks.append({k: v for k, v in row.items() if k != "integrity"})
+        retained_summary = _summarize_observations(checks)
         save_json(out_dir / CHECK_RESULTS_FILENAME, {
             "schema_version": 1, "history_complete": False, "checks": checks,
+            "summary": retained_summary,
             "limitations": [
                 "Only retained tool-chain observations are included; missing checks are unavailable.",
                 "Source identities are captured at dispatch, not revalidated at export.",
@@ -99,6 +138,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     except Exception:
         status = "export_error"
         checks = []
+        retained_summary = _summarize_observations([])
         logger.warning("could not export verification checks", exc_info=True)
 
     by_location = defaultdict(list)
@@ -108,6 +148,10 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         by_location[key].append(check)
     findings = export.get("findings", [])
     locations = Counter((f.get("file"), f.get("function"), f.get("line")) for f in findings)
+    matching = []
+    other_claims = []
+    linked_objects = set()
+    findings_with_matches = 0
     for finding in findings:
         trace = finding.get("verification_trace")
         if not isinstance(trace, dict):
@@ -120,5 +164,31 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         refs = [{"id": check["id"],
                  "matches_final_claim": check["scope"].get("hypothesis") == finding.get("hypothesis")}
                 for check in by_location.get(key, [])]
+        findings_with_matches += any(ref["matches_final_claim"] for ref in refs)
+        for check, ref in zip(by_location.get(key, []), refs):
+            linked_objects.add(id(check))
+            (matching if ref["matches_final_claim"] else other_claims).append(check)
         trace["check_results"] = {"artifact": artifact, "references": refs,
                                   "status": status if refs or status == "export_error" else "unavailable"}
+    trace_statuses = Counter(
+        finding["verification_trace"]["check_results"]["status"]
+        if isinstance(finding.get("verification_trace"), dict) else "unavailable"
+        for finding in findings
+    )
+    export["verification_summary"] = {
+        "schema_version": 1, "history_complete": False, "artifact": artifact, "export_status": status,
+        "findings": {"total": len(findings), "with_matching_observations": findings_with_matches,
+                     "without_matching_observations": len(findings) - findings_with_matches,
+                     "trace_statuses": dict(trace_statuses)},
+        "observations": {
+            "retained": retained_summary,
+            "matching_final_claim": _summarize_observations(matching),
+            "other_claims": _summarize_observations(other_claims),
+            "not_linked_to_findings": _summarize_observations([c for c in checks if id(c) not in linked_objects]),
+        },
+        "limitations": [
+            "Counts describe retained observations, not distinct executions or proven defects.",
+            "Matching compares claim text and location; source freshness is not revalidated.",
+            "Missing observations do not establish that no check ran.",
+        ],
+    }
