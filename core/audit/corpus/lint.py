@@ -833,6 +833,11 @@ def main(argv: list[str] | None = None) -> int:
 
     files = collect_label_files(paths)
     if not files:
+        # The public repository ships the directory, while labels stay local.
+        if (len(paths) == 1 and paths[0].resolve() == LABELS_DIR.resolve()
+                and (LABELS_DIR / ".gitkeep").is_file()):
+            print("lint: no labels published; nothing to lint")
+            return EXIT_OK
         print("lint: no .label.json files found", file=sys.stderr)
         return EXIT_INFRA
 

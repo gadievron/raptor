@@ -853,3 +853,16 @@ def test_kernel_view_preserves_nonascii_identifier_continuations():
     from core.inventory.extractors import _ts_parser_for
     text = "int f\u0301__user(void) { f\u0301scoped_guard(mutex, &lock); return 0; }\n"
     assert kernel_parse_view(text, _ts_parser_for("c")) == text
+
+
+@pytest.mark.parametrize("mode", ["schema", "pins"])
+def test_public_placeholder_allows_empty_default_label_directory(tmp_path, monkeypatch, mode):
+    labels = tmp_path / "labels"
+    labels.mkdir()
+    (labels / ".gitkeep").touch()
+    monkeypatch.setattr(lint, "LABELS_DIR", labels)
+    assert lint.main(["--mode", mode, str(labels)]) == 0
+    # A typo or a different empty selection remains an infrastructure error.
+    other = tmp_path / "other"
+    other.mkdir()
+    assert lint.main(["--mode", mode, str(other)]) == lint.EXIT_INFRA
