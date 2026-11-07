@@ -29,4 +29,6 @@ from core.analysis.gadget_oracle_cli import main  # noqa: E402
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        raise SystemExit(main())

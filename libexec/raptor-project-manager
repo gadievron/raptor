@@ -32,10 +32,12 @@ import core.startup.process_init  # noqa: E402,F401
 from core.project.cli import main  # noqa: E402
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        try:
+            main()
+        except KeyboardInterrupt:
+            sys.exit(130)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)

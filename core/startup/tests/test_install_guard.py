@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -37,6 +38,43 @@ def test_grants_cannot_cover_code(tmp_path, monkeypatch):
     alias.symlink_to(root, target_is_directory=True)
     with pytest.raises(guard.ProtectionError):
         guard.checked_write_path(alias / 'core', protected, root / 'out')
+
+
+def test_codex_mountpoint_is_prepared_without_copying_user_state(tmp_path, monkeypatch):
+    root = tmp_path / 'install'
+    root.mkdir()
+    monkeypatch.setattr(guard, 'ROOT', root)
+    guard.prepare_frontend_mountpoints('codex')
+    assert (root / '.aws').is_dir()
+    assert stat.S_IMODE((root / '.aws').stat().st_mode) == 0o700
+    assert list((root / '.aws').iterdir()) == []
+    marker = root / '.aws' / 'existing'
+    marker.write_text('keep')
+    guard.prepare_frontend_mountpoints('codex')
+    assert marker.read_text() == 'keep'
+
+
+@pytest.mark.parametrize('kind', ['file', 'symlink', 'dangling-link'])
+def test_codex_mountpoint_refuses_unsafe_existing_paths(tmp_path, monkeypatch, kind):
+    root = tmp_path / 'install'
+    root.mkdir()
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    if kind == 'file':
+        (root / '.aws').write_text('keep')
+    else:
+        (root / '.aws').symlink_to(outside if kind == 'symlink' else tmp_path / 'missing')
+    monkeypatch.setattr(guard, 'ROOT', root)
+    with pytest.raises(guard.ProtectionError, match='must be a real directory'):
+        guard.prepare_frontend_mountpoints('codex')
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize('frontend', [None, 'claude'])
+def test_other_frontends_do_not_prepare_codex_mountpoint(tmp_path, monkeypatch, frontend):
+    monkeypatch.setattr(guard, 'ROOT', tmp_path)
+    guard.prepare_frontend_mountpoints(frontend)
+    assert not (tmp_path / '.aws').exists()
 
 
 def test_precompile_is_hashed_and_refreshes_after_pull(tmp_path, monkeypatch):
@@ -168,6 +206,31 @@ print(json.dumps({'blocked': len(blocked), 'child': child.returncode}))
     assert report['child'] != 0
     assert (root / 'source.py').read_text() == 'VALUE = 1\n'
     assert (root / 'out/result').read_text() == 'ok'
+
+
+def test_codex_mountpoint_remains_read_only(tmp_path, require_install_mounts):
+    root, script, env = _fixture(tmp_path)
+    code = '''
+import errno, pathlib, sys
+path = pathlib.Path(sys.argv[1]) / '.aws'
+assert path.is_dir()
+try:
+    (path / 'must-not-write').write_text('blocked')
+except OSError as exc:
+    assert exc.errno in (errno.EACCES, errno.EROFS, errno.EPERM)
+else:
+    raise AssertionError('Codex mount point became writable')
+print('prepared and read-only')
+'''
+    result = subprocess.run(
+        [KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--frontend', 'codex', '--',
+         KERNEL_PYTHON, '-I', '-c', code, str(root)],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'prepared and read-only'
+
+
 
 
 def test_inherited_writable_fd_cannot_bypass_policy(tmp_path, require_install_mounts):
@@ -869,3 +932,20 @@ def test_precompile_without_affinity_validates_all_sources_serially(tmp_path, mo
     for index in range(10):
         source = tmp_path / f'module{index}.py'
         assert Path(importlib.util.cache_from_source(str(source))).read_bytes() == guard._compile_bytecode(source.read_bytes(), str(source))
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_codex_user_configuration_must_remain_outside_protected_code(tmp_path, monkeypatch, override):
+    home = tmp_path / 'home'
+    home.mkdir()
+    root = tmp_path / 'install'
+    root.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(guard, 'ROOT', root)
+    configuration = tmp_path / 'codex-state' if override else home / '.codex'
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    if override:
+        monkeypatch.setenv('CODEX_HOME', str(configuration))
+    guard.validate_user_state([root], 'codex')
+    with pytest.raises(guard.ProtectionError, match='Codex user configuration'):
+        guard.validate_user_state([root, configuration], 'codex')

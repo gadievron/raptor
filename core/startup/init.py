@@ -838,7 +838,7 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
             f"RAPTOR_DIR not set in this process; expected "
             f"{REPO_ROOT} based on checkout location. Affects "
             f"direct ``python3 raptor.py …`` invocations only — "
-            f"bin/raptor and claude sessions set it automatically."
+            f"bin/raptor and agent sessions set it automatically."
         )
     else:
         resolved = Path(raptor_dir).resolve()
@@ -1254,6 +1254,8 @@ def main() -> None:
             env_warnings + lang_warnings,
             project_line, lang_line,
             tool_updates=tool_updates,
+            codex=bool(os.environ.get("CODEX") and (
+                os.environ.get("RAPTOR_CODEX_HOOK") == "1" or not os.environ.get("CLAUDECODE"))),
             protection_notice=notice,
         )
     except Exception:  # noqa: BLE001

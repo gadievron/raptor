@@ -100,6 +100,14 @@ def validate_user_state(paths: list[Path], frontend: str | None = None) -> None:
     for path in paths:
         if path == home or path in home.parents:
             raise ProtectionError('protected code covers the user home; keep installation and user state separate')
+    if frontend == 'codex':
+        configuration = physical_path(Path(os.environ.get('CODEX_HOME') or home / '.codex'), strict=False)
+        for path in paths:
+            covers_config = path == configuration or path in configuration.parents
+            foreign_config = configuration in path.parents and not (path == ROOT or ROOT in path.parents)
+            if covers_config or foreign_config:
+                raise ProtectionError('protected code overlaps Codex user configuration; use independent installation content')
+        return
     if frontend != 'claude':
         return
     configuration = physical_path(Path(os.environ.get('CLAUDE_CONFIG_DIR') or home / '.claude'), strict=False)
@@ -109,6 +117,32 @@ def validate_user_state(paths: list[Path], frontend: str | None = None) -> None:
         foreign_config = configuration in path.parents and not (path == ROOT or ROOT in path.parents)
         if covers_config or foreign_config or path == account or path in account.parents:
             raise ProtectionError('protected code overlaps Claude user configuration; use independent installation content')
+
+
+def prepare_frontend_mountpoints(frontend: str | None) -> None:
+    """Prepare native sandbox mount points before the installation is sealed."""
+    if frontend != 'codex':
+        return
+    # Codex protects workspace .aws independently of the outer mount policy.
+    # Its sandbox cannot create this missing mount point after ROOT is read-only.
+    # Keep it empty on creation; never copy or redirect operator credentials.
+    root = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    node = None
+    try:
+        try:
+            node = os.open('.aws', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        except FileNotFoundError:
+            try:
+                os.mkdir('.aws', mode=0o700, dir_fd=root)
+            except FileExistsError:
+                pass  # A concurrent launch still has to pass the no-follow open.
+            node = os.open('.aws', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+    except OSError as exc:
+        raise ProtectionError('Codex sandbox mount point .aws must be a real directory') from exc
+    finally:
+        if node is not None:
+            os.close(node)
+        os.close(root)
 
 
 def _reject_stdio(message: str) -> None:
@@ -751,7 +785,7 @@ def main() -> int:
             return 0
         frontend = None
         if arguments[:1] == ["--frontend"]:
-            if len(arguments) < 4 or arguments[1] != "claude":
+            if len(arguments) < 4 or arguments[1] not in {"claude", "codex"}:
                 raise ProtectionError("invalid frontend identity")
             frontend = arguments[1]
             arguments = arguments[2:]
@@ -762,6 +796,7 @@ def main() -> int:
         protected = protected_paths()
         validate_user_state(protected, frontend)
         close_inherited_fds(protected, ROOT / "out")
+        prepare_frontend_mountpoints(frontend)
         protected = audit_protected_paths(protected)
         validate_user_state(protected, frontend)
         close_inherited_fds(protected, ROOT / "out")
