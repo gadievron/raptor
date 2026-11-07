@@ -321,6 +321,12 @@ History listings and comparisons distinguish label-attributed cost from recorded
 total spend. Missing or invalid totals stay unknown; a total-spend delta requires
 valid recorded totals on both sides. Whole-run costs are not allocated to shared
 labels, and splice records retain their existing cost scopes.
+The automatic full-run delta searches earlier runs of the same label kind for
+shared labels. It prefers the newest overlapping run with matching recorded
+profile and configuration, then falls back to the newest overlap with context
+warnings. Explicit comparisons and selective per-label deltas keep their
+existing selection behavior. Matching recorded settings does not establish
+identical cache contents or unchanged label expectations.
 
 **Reporting-only, by design**: nothing in the audit/corpus pipeline
 reads this store to alter behavior — the read side is the history
