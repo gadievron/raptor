@@ -90,16 +90,39 @@ class CorpusBudget:
     Provider reservations are estimates; an in-flight request may exceed a
     dispatch cap. External supervision is needed for a hard process deadline.
     """
-    def __init__(self, max_cost=None, max_seconds=None, *, started=None, group_cap=None):
+    def __init__(self, max_cost=None, max_seconds=None, *, started=None, group_cap=None,
+                 max_group_seconds=None):
         self.max_cost = max_cost
         self.max_seconds = max_seconds
         self.group_cap = group_cap
+        self.max_group_seconds = max_group_seconds
+        self.group_deadline = None
         self.deadline = ((time.monotonic() if started is None else started) + max_seconds
                          if max_seconds is not None else None)
         self.run_dirs = []
         self.spent = 0.0
         self.accounted = True
         self.group_stop_reason = ""
+        self.group_pipeline_started = False
+
+    def begin_group(self):
+        """Start one repository's window before checklist preparation."""
+        self.group_deadline = (time.monotonic() + self.max_group_seconds
+                               if self.max_group_seconds is not None else None)
+        self.group_stop_reason = ""
+        self.group_pipeline_started = False
+
+    def group_remaining_seconds(self):
+        deadlines = [d for d in (self.deadline, self.group_deadline) if d is not None]
+        return max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
+
+    def group_dispatch_stop_reason(self):
+        reason = self.stop_reason()
+        if reason:
+            return reason
+        if self.group_deadline is not None and time.monotonic() >= self.group_deadline:
+            return "group_wall_budget_exhausted"
+        return ""
 
     def group_cost_limit(self, labels):
         limits = [_group_max_cost(labels)]
@@ -109,10 +132,14 @@ class CorpusBudget:
             limits.append(self.remaining_cost())
         return min(limits)
 
-    def observe(self, directory):
-        if directory is not None and Path(directory) not in self.run_dirs:
+    def observe(self, directory, *, mechanical_only=False):
+        # Only an explicitly pre-pipeline stop establishes zero new LLM spend.
+        # Missing telemetry after pipeline dispatch must still fail closed.
+        if not mechanical_only and directory is not None and Path(directory) not in self.run_dirs:
             self.run_dirs.append(Path(directory))
         if self.max_cost is not None:
+            if mechanical_only and not self.run_dirs:
+                return
             spend = _aggregate_spend(self.run_dirs)
             if spend is None or not math.isfinite(spend["total_usd"]) or spend["total_usd"] < 0:
                 self.accounted = False
@@ -1102,6 +1129,7 @@ def _run_audit(
         stamp["max_cost"] = run_budget.max_cost
         stamp["max_time"] = run_budget.max_seconds
         stamp["max_group_cost"] = run_budget.group_cap
+        stamp["max_group_time"] = run_budget.max_group_seconds
     if checkpoint_stamp:
         stamp.update(checkpoint_stamp)
     ckpt_groups: dict[str, list[dict[str, Any]]] = {}
@@ -1228,8 +1256,15 @@ def _run_audit(
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
+            mechanical_only = (
+                run_budget is not None
+                and not run_budget.group_pipeline_started
+                and run_budget.group_stop_reason in {
+                    "wall_budget_exhausted", "group_wall_budget_exhausted",
+                }
+            )
             if run_budget is not None:
-                run_budget.observe(audit_dir)
+                run_budget.observe(audit_dir, mechanical_only=mechanical_only)
 
             inventoried = _load_inventoried_functions(audit_dir)
 
@@ -1273,7 +1308,7 @@ def _run_audit(
                     hypothesis = ""
                     cost = 0.0
                     dur = 0.0
-                    if run_budget is not None and (budget_reason := run_budget.stop_reason() or run_budget.group_stop_reason):
+                    if run_budget is not None and (budget_reason := run_budget.stop_reason() or run_budget.group_stop_reason or run_budget.group_dispatch_stop_reason()):
                         actual = "error"
                         evidence_tool = ""
                         error_reason = f"not_reviewed:{budget_reason}"
@@ -1370,7 +1405,12 @@ def _run_audit(
             attributed_total += group_cost
             _print_attributed(group_cost)
             if checkpoint is not None:
-                ckpt_groups[repo_key] = group_rows
+                # A pre-pipeline stop has no review or spend receipts to
+                # resume as a completed group. Retry it on continuation.
+                if mechanical_only:
+                    ckpt_groups.pop(repo_key, None)
+                else:
+                    ckpt_groups[repo_key] = group_rows
                 _checkpoint_write(
                     checkpoint,
                     {"stamp": stamp, "groups": ckpt_groups},
@@ -1555,12 +1595,15 @@ def _run_audit_on_target(
 
     Returns (outcomes_by_function_id, bare_key_entries, audit_output_dir).
     """
+    if run_budget is not None:
+        run_budget.begin_group()
     if out_dir is None:
         out_dir = Path(f"out/audit-corpus-{int(time.time())}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     _build_checklist(target_dir, out_dir)
-    if run_budget is not None and run_budget.stop_reason():
+    if run_budget is not None and (reason := run_budget.group_dispatch_stop_reason()):
+        run_budget.group_stop_reason = reason
         return {}, {}, out_dir
 
     # A repo-root label (a top-level ``index.js`` / ``main.c``) has parent
@@ -1630,6 +1673,13 @@ def _run_audit_on_target(
             except ValueError:
                 pass
 
+        # Never pass an expired zero window to a pipeline that may interpret
+        # zero as unlimited. Setup after the checklist also consumes the cap.
+        pipeline_seconds = run_budget.group_remaining_seconds() if run_budget is not None else None
+        if run_budget is not None and (reason := run_budget.group_dispatch_stop_reason()):
+            run_budget.group_stop_reason = reason
+            return {}, {}, out_dir
+
         pipeline_opts = AuditPipelineOpts(
             target_path=target_dir.resolve(),
             out_dir=out_dir,
@@ -1663,7 +1713,7 @@ def _run_audit_on_target(
             # review loop so prep can never starve the labels.
             max_cost_usd=(run_budget.group_cost_limit(len(labels)) if run_budget is not None
                           else _group_max_cost(len(labels))),
-            max_seconds=run_budget.remaining_seconds() if run_budget is not None else None,
+            max_seconds=pipeline_seconds,
             review_reserve_fraction=GROUP_REVIEW_RESERVE_FRACTION,
             no_binary_oracle=True,
             joern_server=joern_server,
@@ -1686,11 +1736,22 @@ def _run_audit_on_target(
             # reservation ledger. Keep paid study on the governed parent client.
             study_concept_seeding=(run_budget is None or (run_budget.max_cost is None and run_budget.group_cap is None)),
         )
+        if run_budget is not None:
+            run_budget.group_pipeline_started = True
         pipeline_result = run_audit_pipeline(pipeline_opts)
         if run_budget is not None:
             terminated = getattr(pipeline_result, "terminated_by", "complete")
             if terminated in {"llm_budget_exceeded", "max_cost_usd", "max_seconds", "shutdown"}:
-                run_budget.group_stop_reason = str(terminated)
+                group_time_limited = (
+                    run_budget.group_deadline is not None
+                    and (run_budget.deadline is None
+                         or run_budget.group_deadline < run_budget.deadline)
+                )
+                run_budget.group_stop_reason = (
+                    "group_wall_budget_exhausted"
+                    if terminated == "max_seconds" and group_time_limited
+                    else str(terminated)
+                )
         rc = 0
     except Exception:
         logger.exception("Audit pipeline failed")
@@ -3015,6 +3076,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Additional per-repository LLM USD dispatch cap, useful for balanced slices (default: existing label-weighted cap)")
     parser.add_argument("--max-time", type=_positive_limit, default=None,
                         help="Whole-run cooperative wall-clock limit in seconds, including preparation (default: unlimited). Use external supervision for a hard process deadline.")
+    parser.add_argument("--max-group-time", type=_positive_limit, default=None,
+                        help="Per-repository cooperative wall-clock limit in seconds, including checklist and audit preparation (default: no separate group limit). Later groups can continue within the whole-run budget; this is not a hard process deadline.")
     parser.add_argument("--max-workers", type=int, default=0,
                         help="Concurrent review workers (0: transport default; 1: serial)")
     parser.add_argument("--static-only", action="store_true",
@@ -3022,11 +3085,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not 0 <= args.max_workers <= 32:
         parser.error("--max-workers must be between 0 and 32")
-    if args.probe and any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost)):
-        parser.error("whole-run budget flags require audit mode, not --probe")
+    if args.probe and any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost, args.max_group_time)):
+        parser.error("budget flags require audit mode, not --probe")
     run_budget = (CorpusBudget(args.max_cost, args.max_time, started=invocation_started,
-                               group_cap=args.max_group_cost)
-                  if any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost)) else None)
+                               group_cap=args.max_group_cost, max_group_seconds=args.max_group_time)
+                  if any(value is not None for value in (args.max_cost, args.max_time, args.max_group_cost, args.max_group_time)) else None)
     args.integer_abi = select_integer_abi(args.integer_abi)
 
     # Pin RAPTOR_DIR to THIS tree for the runner's OWN process, not
@@ -3320,7 +3383,8 @@ def main(argv: list[str] | None = None) -> int:
         "label_kind": run_kind,
     }
     run_stamp.update(open_discovery=args.open_discovery, static_only=args.static_only,
-                     max_cost=args.max_cost, max_time=args.max_time, max_group_cost=args.max_group_cost)
+                     max_cost=args.max_cost, max_time=args.max_time, max_group_cost=args.max_group_cost,
+                     max_group_time=args.max_group_time)
     wall_path, wall_segments = _wall_segment_open(
         None if args.probe else args.out, run_stamp,
     )
@@ -3554,6 +3618,7 @@ def main(argv: list[str] | None = None) -> int:
     meta["max_cost_usd"] = args.max_cost
     meta["max_seconds"] = args.max_time
     meta["max_group_cost_usd"] = args.max_group_cost
+    meta["max_group_seconds"] = args.max_group_time
     meta["static_only"] = args.static_only
     meta["max_workers"] = args.max_workers
     meta["study_concept_seeding"] = args.max_cost is None and args.max_group_cost is None
@@ -3621,6 +3686,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_cost_usd": args.max_cost,
                 "max_seconds": args.max_time,
                 "max_group_cost_usd": args.max_group_cost,
+                "max_group_seconds": args.max_group_time,
                 "static_only": args.static_only,
                 "open_discovery": args.open_discovery,
             },
