@@ -1608,6 +1608,48 @@ def _submit_to_loop(coroutine, loop):
         raise
 
 
+class _ProxyStreamOwner:
+    """Own dial results through cancellation and explicit handoff.
+
+    Adoption happens inside the connector, before its result crosses an
+    await boundary. Late results after scope exit are closed immediately.
+    Abandoned streams have no useful queued application data: abort after
+    close so stalled transport shutdown cannot retain their descriptors.
+    """
+
+    def __init__(self, registry: set):
+        self._registry = registry
+        self._writers: set = set()
+        self._closed = False
+
+    def adopt(self, writer) -> None:
+        self._writers.add(writer)
+        self._registry.add(writer)
+        if self._closed:
+            self.close()
+            raise asyncio.CancelledError
+
+    def transfer(self, writer, destination=None) -> None:
+        if destination is not None:
+            destination.adopt(writer)
+        self._writers.discard(writer)
+        if destination is None:
+            self._registry.discard(writer)
+
+    def close(self) -> None:
+        self._closed = True
+        for writer in tuple(self._writers):
+            with contextlib.suppress(OSError, RuntimeError):
+                writer.close()
+            # Keep failures registered for the proxy's final cleanup retry.
+            try:
+                writer.transport.abort()
+            except (OSError, RuntimeError):
+                continue
+            self._writers.discard(writer)
+            self._registry.discard(writer)
+
+
 class EgressProxy:
     """HTTPS CONNECT proxy with hostname allowlist.
 
@@ -1909,6 +1951,7 @@ class EgressProxy:
         self._loop_exiting = False
         self._shutdown_complete = False
         self._client_writers: set = set()
+        self._upstream_writers: set = set()
         self._startup_cancelled = threading.Event()
         self._startup_task: "asyncio.Task[asyncio.Server] | None" = None
 
@@ -2926,8 +2969,28 @@ class EgressProxy:
                 return candidate
         return None
 
+    async def _open_owned_connection(self, owner, timeout, **kwargs):
+        """Register a stream before timeout/cancellation can hide its result."""
+        async def dial():
+            reader, writer = await asyncio.open_connection(**kwargs)
+            owner.adopt(writer)
+            return reader, writer
+        return await asyncio.wait_for(dial(), timeout=timeout)
+
+    async def _retire_connectors(self, tasks) -> None:
+        """Await bounded cancellation, including a late successful loser."""
+        pending = {task for task in tasks if not task.done()}
+        for _ in range(2):
+            for task in pending:
+                task.cancel()
+            if pending:
+                _, pending = await asyncio.wait(pending, timeout=1.0)
+        for task in tasks:
+            if task.done() and not task.cancelled():
+                task.exception()
+
     async def _happy_eyeballs_connect(
-        self, addrinfo: list, port: int,
+        self, addrinfo: list, port: int, *, owner=None,
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
         """RFC 8305 happy-eyeballs dial across an addrinfo list.
 
@@ -2950,130 +3013,89 @@ class EgressProxy:
         won't slip the bad one in via the race.
         """
         v6, v4 = _split_addrinfo_by_family(addrinfo)
+        streams = _ProxyStreamOwner(self._upstream_writers)
+        tasks = []
+        winner = None
+        handed_off = False
+        gate2_error = last_error = None
 
-        # Gate-2 (resolved-IP block) lives in _attempt so EVERY dialed
-        # address — raced or walked as fallback — is re-checked.
-        # A hit raises the typed _Gate2BlockedError (never a plain
-        # OSError) so the caller classifies it as a policy denial
-        # (denied_resolved_ip: banner + audit record + 403), not a
-        # connect failure (upstream_failed + 502) that hides the
-        # rebinding/metadata-probe signal from triage.
-        async def _attempt(entry):
+        async def attempt(entry):
             family, _socktype, _proto, _, sockaddr = entry
             ip = sockaddr[0]
             if _ip_is_blocked(ip):
                 raise _Gate2BlockedError(ip)
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host=ip, port=port,
-                                         family=family),
-                timeout=_PROXY_READ_TIMEOUT_S,
-            )
+            reader, writer = await self._open_owned_connection(
+                streams, _PROXY_READ_TIMEOUT_S,
+                host=ip, port=port, family=family)
             return reader, writer, ip
 
-        async def _walk_serial(entries):
-            last_exc: Exception | None = None
-            gate2_exc: _Gate2BlockedError | None = None
+        def result(task):
+            nonlocal gate2_error, last_error
+            try:
+                return task.result()
+            except _Gate2BlockedError as exc:
+                gate2_error = exc
+            except (OSError, asyncio.TimeoutError) as exc:
+                last_error = exc
+            return None
+
+        async def walk(entries):
+            nonlocal gate2_error, last_error
             for entry in entries:
                 try:
-                    return await _attempt(entry)
-                except _Gate2BlockedError as e:
-                    # Policy denial outranks connect failures: when the
-                    # whole walk fails, surface the gate-2 hit even if a
-                    # later address failed with an ordinary OSError.
-                    gate2_exc = e
-                    continue
-                except (OSError, asyncio.TimeoutError) as e:
-                    last_exc = e
-                    continue
-            if gate2_exc is not None:
-                raise gate2_exc
-            raise last_exc if last_exc is not None else OSError(
-                "no addresses to dial"
-            )
-
-        # Single-family path: no race needed, just walk in order.
-        if not v6 or not v4:
-            return await _walk_serial(v6 or v4)
-
-        # Dual-family: race v6 first, kick v4 _HAPPY_EYEBALLS_DELAY later.
-        # Take the first connector to succeed; cancel the other. We only
-        # race the FIRST address of each family — if both fail, the
-        # remaining addresses (interleaved v6/v4, preserving resolver
-        # order within each family) are walked serially below. (Most
-        # upstream registries return one address per family, so the
-        # common case is exactly two attempts and an empty remainder.)
-        remainder = []
-        for i in range(1, max(len(v6), len(v4))):
-            if i < len(v6):
-                remainder.append(v6[i])
-            if i < len(v4):
-                remainder.append(v4[i])
-
-        v6_task = asyncio.ensure_future(_attempt(v6[0]))
-        v4_task: asyncio.Task | None = None
+                    return await attempt(entry)
+                except _Gate2BlockedError as exc:
+                    gate2_error = exc
+                except (OSError, asyncio.TimeoutError) as exc:
+                    last_error = exc
+            if gate2_error is not None:
+                raise gate2_error
+            raise last_error if last_error is not None else OSError("no addresses to dial")
 
         try:
-            done, pending = await asyncio.wait(
-                {v6_task},
-                timeout=_HAPPY_EYEBALLS_DELAY,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            # If v6 finished within the delay (success OR failure), and
-            # it succeeded, take it. If it failed, race v4 directly.
-            if v6_task in done:
-                try:
-                    return v6_task.result()
-                except (OSError, asyncio.TimeoutError):
-                    try:
-                        return await _attempt(v4[0])
-                    except (OSError, asyncio.TimeoutError):
-                        if not remainder:
-                            raise
-                        return await _walk_serial(remainder)
-            # v6 still pending after delay: kick off v4 in parallel.
-            v4_task = asyncio.ensure_future(_attempt(v4[0]))
-            done, pending = await asyncio.wait(
-                {v6_task, v4_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            # First to finish — if it succeeded, take it; close/cancel
-            # the loser. When both land in `done` simultaneously,
-            # cancel() is a no-op — close the writer explicitly.
-            winner = None
-            for t in done:
-                try:
-                    result = t.result()
+            if not v6 or not v4:
+                winner = await walk(v6 or v4)
+            else:
+                v6_task = asyncio.create_task(attempt(v6[0]))
+                tasks.append(v6_task)
+                done, _ = await asyncio.wait(
+                    {v6_task}, timeout=_HAPPY_EYEBALLS_DELAY,
+                    return_when=asyncio.FIRST_COMPLETED)
+                if done:
+                    winner = result(v6_task)
+                if winner is None:
+                    tasks.append(asyncio.create_task(attempt(v4[0])))
+                    pending = {task for task in tasks if not task.done()}
+                    while pending and winner is None:
+                        done, pending = await asyncio.wait(
+                            pending, return_when=asyncio.FIRST_COMPLETED)
+                        # Stable preference when both succeed in one turn;
+                        # every successful result remains owned until handoff.
+                        for task in tasks:
+                            if task in done:
+                                candidate = result(task)
+                                if candidate is not None and winner is None:
+                                    winner = candidate
                     if winner is None:
-                        winner = result
-                    else:
-                        result[1].close()
-                except (OSError, asyncio.TimeoutError):
-                    pass
-            if winner is not None:
-                for p in pending:
-                    p.cancel()
-                return winner
-            # Both done in this iteration with failures? Wait the rest.
-            last_err: Exception | None = None
-            for t in pending:
-                try:
-                    return await t
-                except (OSError, asyncio.TimeoutError) as e:
-                    last_err = e
-            # First address of each family failed — walk the rest
-            # serially before giving up.
-            if remainder:
-                return await _walk_serial(remainder)
-            raise last_err if last_err is not None else OSError(
-                "all dual-stack attempts failed"
-            )
+                        remainder = []
+                        for index in range(1, max(len(v6), len(v4))):
+                            if index < len(v6):
+                                remainder.append(v6[index])
+                            if index < len(v4):
+                                remainder.append(v4[index])
+                        winner = await walk(remainder)
+            # Retirement is part of the transaction. Cancellation here must
+            # close the provisional winner too, rather than leaking it.
+            await self._retire_connectors(tasks)
+            streams.transfer(winner[1], owner)
+            handed_off = True
+            return winner
         finally:
-            # Best-effort: ensure no task is left dangling. Tasks that
-            # already returned a result are no-op'd on cancel; in-flight
-            # tasks get torn down so we don't leak a half-open socket.
-            for t in (v6_task, v4_task):  # type: ignore[assignment]
-                if t is not None and not t.done():
-                    t.cancel()
+            try:
+                if not handed_off:
+                    await self._retire_connectors(tasks)
+            finally:
+                streams.close()
 
     def stop(self, *, drain_timeout: float = 5.0) -> None:
         """Stop accepting, drain all lanes, and join the loop's cleanup.
@@ -3104,7 +3126,7 @@ class EgressProxy:
                 loop.call_soon_threadsafe(request_stop)
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=min(drain_timeout + 3.0, threading.TIMEOUT_MAX))
+            thread.join(timeout=min(drain_timeout + 4.0, threading.TIMEOUT_MAX))
         if loop is not None and loop.is_closed():
             self._release_unix_paths()
 
@@ -3171,11 +3193,16 @@ class EgressProxy:
             task.cancel()
         if pending:
             _, pending = await asyncio.wait(pending, timeout=1.0)
-        for writer in tuple(self._client_writers):
+        for writer in tuple(self._client_writers | self._upstream_writers):
             with contextlib.suppress(OSError, RuntimeError):
                 writer.close()
-                if pending:
+            if pending or writer in self._upstream_writers:
+                try:
                     writer.transport.abort()
+                except (OSError, RuntimeError):
+                    pass
+                else:
+                    self._upstream_writers.discard(writer)
         for task in pending:
             task.cancel()
         if pending:
@@ -3186,7 +3213,12 @@ class EgressProxy:
             task for task in tuple(self._client_tasks) if task.done())
         self._unix_tasks.difference_update(
             task for task in tuple(self._unix_tasks) if task.done())
-        return not pending
+        # Parser RPC and peer lookup run in this loop's executor. Closing
+        # a loop only requests executor shutdown; join idle workers here so
+        # they cannot outlive a completed proxy stop. Busy workers retain
+        # asyncio's bounded timeout warning rather than blocking forever.
+        await self._loop.shutdown_default_executor(timeout=1.0)
+        return not pending and not self._upstream_writers
 
     def _stop_thread_best_effort(self) -> None:
         """Cancel startup even if the worker has not created its loop yet."""
@@ -3694,6 +3726,13 @@ class EgressProxy:
     async def _serve_tunnel(self, reader: asyncio.StreamReader,
                             writer: asyncio.StreamWriter,
                             lane: "_Lane | None" = None) -> None:
+        owner = _ProxyStreamOwner(self._upstream_writers)
+        try:
+            return await self._serve_tunnel_owned(reader, writer, lane=lane, owner=owner)
+        finally:
+            owner.close()
+
+    async def _serve_tunnel_owned(self, reader, writer, lane=None, *, owner):
         t_start = time.monotonic()
         event = {
             "t": t_start, "host": None, "port": None,
@@ -3950,10 +3989,8 @@ class EgressProxy:
             up_host, up_port = self._upstream  # type: ignore[misc]
             event["resolved_ip"] = f"{up_host}:{up_port} (upstream)"
             try:
-                up_reader, up_writer = await asyncio.wait_for(
-                    asyncio.open_connection(host=up_host, port=up_port),
-                    timeout=self._upstream_handshake_timeout,
-                )
+                up_reader, up_writer = await self._open_owned_connection(
+                    owner, self._upstream_handshake_timeout, host=up_host, port=up_port)
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
                     "egress proxy: upstream proxy unreachable %s:%s: %s", up_host, up_port, e
@@ -4145,7 +4182,7 @@ class EgressProxy:
 
             try:
                 up_reader, up_writer, dialed_ip = (
-                    await self._happy_eyeballs_connect(addrinfo, port)
+                    await self._happy_eyeballs_connect(addrinfo, port, owner=owner)
                 )
             except _Gate2BlockedError as e:
                 # Belt-and-braces per-attempt gate-2 hit (the pre-vet
