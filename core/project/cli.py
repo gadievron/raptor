@@ -1786,8 +1786,11 @@ def main() -> None:
             result = import_project(zip_path, mgr.projects_dir,
                                     force=args.force)
             print(f"Imported project '{result['name']}'")
-            if result.get("orphaned_output"):
-                print(f"  Note: previous output retained at {result['orphaned_output']}")
+            for field, label in (("orphaned_output", "previous output"),
+                                 ("retained_backup", "output recovery backup"),
+                                 ("retained_registry_backup", "registration recovery backup")):
+                if result.get(field):
+                    print(f"  Note: {label} retained at {sanitise_for_terminal(result[field])}")
 
         elif args.subcommand == "clean":
             name = args.name or _get_active_project()

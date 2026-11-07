@@ -285,7 +285,7 @@ def split_setting_key(key: str):
 
 
 @contextlib.contextmanager
-def project_file_lock(project_file: Path):
+def project_file_lock(project_file: Path, *, required: bool = False):
     """Cross-process exclusive lock guarding a project-JSON
     read-modify-write window.
 
@@ -312,7 +312,7 @@ def project_file_lock(project_file: Path):
     # removed it — the lock degrades loudly to the unlocked path
     # instead of resurrecting the directory as a side effect.
     with artifact_lock(path, subject="project file",
-                       create_parent=False):
+                       create_parent=False, required=required):
         yield
 
 
@@ -931,14 +931,13 @@ class ProjectManager:
             )
             raise ValueError(msg)
 
-    def _output_dir_claim_lock(self, output_dir: str | Path):
-        """Cross-NAME serialisation of an output-dir claim.
+    @contextlib.contextmanager
+    def _output_dir_claim_lock(self, output_dir: str | Path, *, required: bool = False):
+        """Serialize exact and ancestor/descendant output claims across names.
 
-        Keyed by the RESOLVED output dir (hashed into a dot-file in the
-        registry dir, invisible to the ``*.json`` listing glob), so two
-        creates of different names contending for one directory
-        serialise regardless of which registry files they hold. Same
-        flock idiom and fail direction as :func:`project_file_lock`.
+        A registry-wide lock covers overlapping paths; the historical hashed
+        exact-path lock remains for cooperating older processes. Ownership
+        transitions request required locks instead of an unlocked fallback.
         """
         import hashlib
         try:
@@ -946,11 +945,15 @@ class ProjectManager:
         except OSError:
             key = str(output_dir)
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-        return project_file_lock(self.projects_dir / f".outdir-{digest}")
+        # Serialize ancestor/descendant claims as well as exact paths. Keep
+        # the historical exact-path lock for cooperating older processes.
+        with project_file_lock(self.projects_dir / ".output-claims", required=required):
+            with project_file_lock(self.projects_dir / f".outdir-{digest}", required=required):
+                yield
 
     def _output_dir_owner(self, output_dir: str | Path,
                           exclude: str | None = None) -> str | None:
-        """Name of the registered project already claiming *output_dir*
+        """Name of a project claiming or overlapping *output_dir*
         (resolved-path comparison), or ``None``. ``exclude`` skips one
         project name (rename compares against everyone else)."""
         try:
@@ -964,7 +967,8 @@ class ProjectManager:
                 other = str(Path(p.output_dir).resolve())
             except OSError:
                 other = p.output_dir
-            if other == needle:
+            if (other == needle or Path(other).is_relative_to(needle)
+                    or Path(needle).is_relative_to(other)):
                 return p.name
         return None
 
@@ -1011,16 +1015,10 @@ class ProjectManager:
                 binaries=binaries,
             )
 
-    def _create_locked(self, *, name: str, project_file: Path,
-                       target: str, description: str,
-                       output_dir: str | None, resolve_target: bool,
-                       created: str | None,
-                       binaries: list[str] | None) -> Project:
-        """Body of :meth:`create`; caller holds the registry-file lock."""
-        if project_file.exists():
-            msg = f"Project '{name}' already exists"
-            raise ValueError(msg)
-
+    def _make_project(self, *, name: str, target: str, description: str,
+                      output_dir: str | None, resolve_target: bool,
+                      created: str | None, binaries: list[str] | None) -> Project:
+        """Build registration data without publishing files or claiming output."""
         if not output_dir:
             output_dir = str((DEFAULT_OUTPUT_BASE / name).resolve())
 
@@ -1040,7 +1038,7 @@ class ProjectManager:
             resolved_target = str(Path(target).resolve())
         else:
             resolved_target = target
-        project = Project(
+        return Project(
             name=name,
             target=resolved_target,
             output_dir=output_dir,
@@ -1048,6 +1046,24 @@ class ProjectManager:
             description=description,
             binaries=resolved_binaries,
         )
+
+    def _create_locked(self, *, name: str, project_file: Path,
+                       target: str, description: str,
+                       output_dir: str | None, resolve_target: bool,
+                       created: str | None,
+                       binaries: list[str] | None) -> Project:
+        """Body of :meth:`create`; caller holds the registry-file lock."""
+        if project_file.exists():
+            msg = f"Project '{name}' already exists"
+            raise ValueError(msg)
+
+        project = self._make_project(
+            name=name, target=target, description=description,
+            output_dir=output_dir, resolve_target=resolve_target,
+            created=created, binaries=binaries,
+        )
+        output_dir = project.output_dir
+        resolved_target = project.target
 
         # Two projects must never share one output dir: status/findings
         # would interleave, and `/project clean` or `delete --purge` on
@@ -1130,6 +1146,40 @@ class ProjectManager:
         with self._mutation_lock(name):
             self._delete_locked(name, purge=purge, force=force)
 
+    def _refuse_live_delete(self, project: Project, *, operation: str = "delete",
+                           force_hint: bool = True) -> None:
+        """Refuse destructive replacement while local or external runs are live."""
+        from core.project.clean import split_live_runs
+        run_dirs = []
+        if project.output_path.exists():
+            run_dirs = [d for d in project.output_path.iterdir()
+                        if d.is_dir()
+                        and not d.name.startswith((".", "_"))]
+        # External pinned runs are checked even when the output
+        # dir is missing (half-purged, unmounted) — they are the
+        # runs a registry-only delete would orphan.
+        try:
+            from core.project.sessions import ledger_runs_pinned_to
+            known = {str(d.resolve()) for d in run_dirs}
+            run_dirs.extend(
+                Path(rec["run_dir"])
+                for rec in ledger_runs_pinned_to(project.name)
+                if rec["run_dir"] not in known
+                and Path(rec["run_dir"]).is_dir())
+        except Exception:  # noqa: BLE001 — ledger scan best-effort
+            pass
+        _rest, live = split_live_runs(run_dirs)
+        if live:
+            names = ", ".join(d.name for d in live[:3])
+            hint = ("Wait for them, or pass --force." if force_hint
+                    else "Wait for these runs to finish before importing.")
+            msg = (
+                f"Refusing to {operation} '{project.name}': {len(live)} live "
+                f"run(s) under it ({names}{'…' if len(live) > 3 else ''}) "
+                f"— possibly another session's. {hint}"
+            )
+            raise ValueError(msg)
+
     def _delete_locked(self, name: str, *, purge: bool,
                        force: bool) -> None:
         project = self.load(name)
@@ -1155,35 +1205,7 @@ class ProjectManager:
         # so its completion-time journal/coverage merges are silently
         # suppressed. force=True overrides, as documented.
         if not force:
-            from core.project.clean import split_live_runs
-            run_dirs = []
-            if project.output_path.exists():
-                run_dirs = [d for d in project.output_path.iterdir()
-                            if d.is_dir()
-                            and not d.name.startswith((".", "_"))]
-            # External pinned runs are checked even when the output
-            # dir is missing (half-purged, unmounted) — they are the
-            # runs a registry-only delete would orphan.
-            try:
-                from core.project.sessions import ledger_runs_pinned_to
-                known = {str(d.resolve()) for d in run_dirs}
-                run_dirs.extend(
-                    Path(rec["run_dir"])
-                    for rec in ledger_runs_pinned_to(name)
-                    if rec["run_dir"] not in known
-                    and Path(rec["run_dir"]).is_dir())
-            except Exception:  # noqa: BLE001 — ledger scan best-effort
-                pass
-            _rest, live = split_live_runs(run_dirs)
-            if live:
-                names = ", ".join(d.name for d in live[:3])
-                msg = (
-                    f"Refusing to delete '{name}': {len(live)} live "
-                    f"run(s) under it ({names}{'…' if len(live) > 3 else ''}) "
-                    f"— possibly another session's. Wait for them, or "
-                    f"pass --force."
-                )
-                raise ValueError(msg)
+            self._refuse_live_delete(project)
 
         if purge:
             self._purge_output(project, purge_identity)
@@ -1315,7 +1337,8 @@ class ProjectManager:
             raise ValueError(msg)
         first, second = sorted((old_name, new_name))
         with self._mutation_lock(first), self._mutation_lock(second):
-            return self._rename_locked(old_name, new_name, force)
+            with self._output_dir_claim_lock(DEFAULT_OUTPUT_BASE / new_name):
+                return self._rename_locked(old_name, new_name, force)
 
     def _rename_locked(self, old_name: str, new_name: str,
                        force: bool) -> Project:

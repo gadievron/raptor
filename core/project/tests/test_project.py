@@ -699,10 +699,10 @@ class TestRegistryMutationLockDiscipline(unittest.TestCase):
         real = project_mod.project_file_lock
 
         @contextlib.contextmanager
-        def _recording(path):
+        def _recording(path, **kwargs):
             p = Path(path)
             records.append(("enter", p.name))
-            with real(path):
+            with real(path, **kwargs):
                 try:
                     yield
                 finally:

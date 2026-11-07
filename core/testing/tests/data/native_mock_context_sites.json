@@ -466,7 +466,7 @@
     ],
     "owner": "core.project.oplock",
     "binding": "os",
-    "attribute": "stat",
+    "attribute": "lstat",
     "ordinal": 0
   },
   {

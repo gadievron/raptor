@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from core.project import export, report
+from core.project import export, report, import_transaction
 from core.run import scratch
 from core.project.tests import test_archive_staging_lifecycle as archive_cases
 
@@ -30,7 +30,7 @@ def artifact(request, tmp_path, monkeypatch, archive):
             yield root
 
     def observe():
-        root = roots[-1]
+        root = roots[0]
         assert root.exists()
         assert str(root) in scratch._keepalive_paths
         nested = root / "restricted-debris"
@@ -42,16 +42,18 @@ def artifact(request, tmp_path, monkeypatch, archive):
 
     monkeypatch.setattr(consumer, "scratch_dir", workspace)
     if request.param == "import":
-        publish = export.publish_new_directory
+        publish = import_transaction.publish_new_directory
+
+        monkeypatch.setattr(import_transaction, "scratch_dir", workspace)
 
         def publish_child(child, destination):
-            assert child.parent == roots[-1]
-            assert child != roots[-1]
+            assert child.parent == roots[0]
+            assert child != roots[0]
             observe()
             publish(child, destination)
-            assert roots[-1].is_dir()
+            assert roots[0].is_dir()
 
-        monkeypatch.setattr(export, "publish_new_directory", publish_child)
+        monkeypatch.setattr(import_transaction, "publish_new_directory", publish_child)
         invoke = lambda: export.import_project(archive, tmp_path / "registry", output_base=output)
     elif request.param == "export":
         write = export._write_project_zip
@@ -76,9 +78,10 @@ def artifact(request, tmp_path, monkeypatch, archive):
     return request.param, state, invoke, roots, source
 
 
-def reclaimed(roots, source):
-    assert len(roots) == 1 and not roots[0].exists()
-    assert str(roots[0]) not in scratch._keepalive_paths
+def reclaimed(roots, source, role):
+    assert len(roots) == (2 if role == "import" else 1)
+    assert all(not root.exists() for root in roots)
+    assert all(str(root) not in scratch._keepalive_paths for root in roots)
     assert (source / "data").read_bytes() == b"artifact data"
 
 
@@ -92,7 +95,7 @@ def test_staging_releases_roots_on_success_and_failure(artifact, error_type):
         assert caught.value is state["error"]
     else:
         invoke()
-    reclaimed(roots, source)
+    reclaimed(roots, source, role)
 
 
 @pytest.mark.parametrize("error_type", [OSError, KeyboardInterrupt, SystemExit])
@@ -113,8 +116,8 @@ def test_staging_preserves_original_error(artifact, monkeypatch, error_type, cle
     with pytest.raises(error_type) as caught:
         invoke()
     assert caught.value is state["error"]
-    assert calls == roots
-    reclaimed(roots, source)
+    assert calls == list(reversed(roots))
+    reclaimed(roots, source, role)
 
 
 def test_cleanup_oserror_preserves_successful_artifact(artifact, monkeypatch):
@@ -130,8 +133,8 @@ def test_cleanup_oserror_preserves_successful_artifact(artifact, monkeypatch):
     monkeypatch.setattr(report if role == "report" else scratch,
                         "_clear_generated_findings_dir" if role == "report" else "rmtree_hardened", clean)
     invoke()
-    assert calls == roots
-    reclaimed(roots, source)
+    assert calls == list(reversed(roots))
+    reclaimed(roots, source, role)
 
 
 @pytest.mark.parametrize("shape", ["empty", "populated", "file", "symlink", "dangling", "fifo"])
@@ -139,7 +142,7 @@ def test_import_publication_preserves_late_contender(tmp_path, monkeypatch, arch
     import os
 
     output = tmp_path / "output"
-    publish = export.publish_new_directory
+    publish = import_transaction.publish_new_directory
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "data").write_bytes(b"preserve")
@@ -160,7 +163,7 @@ def test_import_publication_preserves_late_contender(tmp_path, monkeypatch, arch
         occupied.append(destination.lstat().st_ino)
         publish(source, destination)
 
-    monkeypatch.setattr(export, "publish_new_directory", race)
+    monkeypatch.setattr(import_transaction, "publish_new_directory", race)
     with pytest.raises(OSError):
         export.import_project(archive, tmp_path / "registry", output_base=output)
     assert (output / "demo").lstat().st_ino == occupied[0]

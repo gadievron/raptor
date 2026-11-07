@@ -393,7 +393,7 @@ class VerifyAfterLockTest(unittest.TestCase):
             # once (a purge landing between open and verify) and pin
             # that the lock re-mints instead of holding a dead inode.
             first = {"done": False}
-            real_stat = os.stat
+            real_stat = os.lstat
 
             def swapping_stat(path, *a, **k):
                 st = real_stat(path, *a, **k)
@@ -408,7 +408,7 @@ class VerifyAfterLockTest(unittest.TestCase):
                     return _St()
                 return st
 
-            with mock_module_attribute(_mock_owner('core.project.oplock'), 'os', 'stat', swapping_stat):
+            with mock_module_attribute(_mock_owner('core.project.oplock'), 'os', 'lstat', swapping_stat):
                 with project_op_lock(pdir, "merge"):
                     pass
             self.assertTrue(first["done"])

@@ -50,10 +50,23 @@ def test_failed_export_preserves_previous_archive(project, tmp_path, monkeypatch
         proxy.__dict__.update(vars(zipfile))
 
         class FailingZip(zipfile.ZipFile):
-            def write(self, *args, **kwargs):
-                super().write(*args, **kwargs)
-                if phase == "write":
-                    fail()
+            def open(self, name, mode="r", *args, **kwargs):
+                stream = super().open(name, mode, *args, **kwargs)
+                if phase != "write" or mode != "w":
+                    return stream
+
+                class FailingWrite:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *exc):
+                        return stream.__exit__(*exc)
+
+                    def write(self, value):
+                        stream.write(value)
+                        fail()
+
+                return FailingWrite()
 
             def close(self):
                 armed = self.fp is not None and self.mode == "w"

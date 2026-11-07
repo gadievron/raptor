@@ -37,7 +37,7 @@ def _patches(file):
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
         target = node.args[0]
-        if name == "patch" and isinstance(target, ast.Constant) and isinstance(target.value, str) and ".os." in target.value and target.value.rsplit(".os.", 1)[1] in {"sched_getaffinity", "cpu_count", "sysconf", "fstat", "stat", "rename", "replace", "fsync"}:
+        if name == "patch" and isinstance(target, ast.Constant) and isinstance(target.value, str) and ".os." in target.value and target.value.rsplit(".os.", 1)[1] in {"sched_getaffinity", "cpu_count", "sysconf", "fstat", "stat", "lstat", "rename", "replace", "fsync"}:
             calls.append(node)
     return sorted(calls, key=lambda node: node.lineno)
 

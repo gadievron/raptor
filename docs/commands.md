@@ -1206,6 +1206,19 @@ session record demoting corroboration; re-run from a plain interactive
 shell to earn human grade.  LLM review outcomes are recorded in the
 review journal instead.
 
+Project archive exports stream regular files and omit symlinks and special
+nodes. Exports enforce the import limits: 10,000 members, 10 GiB of expanded
+data, and 1 MiB for root project metadata. An unreadable source subtree fails
+the export rather than silently omitting its data. Nested `.project.json` data
+files remain ordinary archive content.
+
+Forced project imports preserve the previous output and registration until
+publication can complete. They retain the active bookmark and session bindings,
+refuse live runs and overlapping project outputs, and restore the old project
+on failure where possible. If recovery or post-import cleanup cannot finish,
+RAPTOR reports the retained recovery paths; do not delete those backups until
+you have checked which project data they contain.
+
 **Imported archives and human-grade notes.**  `/project import` demotes
 every annotation restored from an archive to `provenance=imported`
 (hint tier) — archives are unsigned, so a stamp inside one carries no

@@ -520,3 +520,23 @@ def test_status_corrupt_parked_marker_never_wedges(tmp_path, capsys):
     assert "Runs: 1" in out
     for raw in RAW:
         assert raw not in out
+
+
+def test_import_recovery_paths_are_reported_and_terminal_safe(tmp_path, monkeypatch, capsys):
+    import sys
+    from core.project import cli, export
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'state'))
+    monkeypatch.setattr(sys, 'argv', ['raptor-project', 'import', str(tmp_path / 'archive.zip')])
+    monkeypatch.setattr(export, 'import_project', lambda *args, **kwargs: {
+        'name': 'demo', 'output_dir': str(tmp_path / 'output'),
+        'orphaned_output': str(tmp_path / ('orphan-' + HOSTILE)),
+        'retained_backup': str(tmp_path / ('backup-' + HOSTILE)),
+        'retained_registry_backup': str(tmp_path / ('record-' + HOSTILE)),
+    })
+    cli.main()
+    output = capsys.readouterr().out
+    assert 'previous output' in output
+    assert 'output recovery backup' in output
+    assert 'registration recovery backup' in output
+    for raw in RAW:
+        assert raw not in output
