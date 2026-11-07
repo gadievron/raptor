@@ -615,7 +615,7 @@ def _persist_proxy_events(
             _norm_out = os.path.realpath(output)
             _norm_tgt = os.path.realpath(target)
             if _norm_out == _norm_tgt or _norm_out.startswith(
-                _norm_tgt + os.sep
+                _norm_tgt.rstrip(os.sep) + os.sep
             ):
                 logger.debug(
                     "Sandbox: output (%s) lies within target (%s); "
