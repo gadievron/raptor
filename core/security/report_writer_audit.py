@@ -547,6 +547,9 @@ _REPORT_WRITER_FILES = (
     # assembly is structured JSON data, audited separately below.
     "core/audit/corpus/actor_identity.py",
     "core/audit/corpus/receipt_replay.py",
+    # Offline corpus evidence tables: result paths and stored model/regime
+    # strings are terminal-sanitised; structured JSON is written via save_json.
+    "core/audit/corpus/verification_report.py",
     # Standalone container-build helper: _term caps metadata names and uses
     # json.dumps(ensure_ascii=True) to escape terminal controls and Unicode.
     ".devcontainer/install-python-notices.py",
