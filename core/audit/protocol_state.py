@@ -702,7 +702,8 @@ def check_invariant_multi_site(
     unavailable (a violable outcome then may NOT confirm:
     ``census-degraded``). Bare-field projection also requires consistent
     scalar/object bindings; ambiguous sites retain an explicit refusal
-    receipt and do not enter the solver batch."""
+    receipt and do not enter the solver batch. Source-backed census code
+    must match the selected mutation and cannot add guards absent from it."""
     t0 = time.monotonic()
     variables = _invariant_variables(invariant)
     fields = index.get("fields") or {}
@@ -735,7 +736,7 @@ def check_invariant_multi_site(
         }
 
     from .invariant_smt import SiteResult, check_site_batch
-    from .protocol_invariant_bindings import projection_refusal
+    from .protocol_invariant_bindings import census_source_refusal, projection_refusal
     from .invariant_outcomes import aggregate_verdicts
 
     guard_leg = True
@@ -754,8 +755,11 @@ def check_invariant_multi_site(
         if unavailable_guards:
             guard_leg = False
             guards = []
-        refusal = ("source guard binding unavailable or unsupported" if unavailable_guards
-                   else projection_refusal(site["code"], guards, variables))
+        refusal = "source guard binding unavailable or unsupported" if unavailable_guards else ""
+        if not refusal and site["function"]:
+            refusal = census_source_refusal(source, site["function"], site["line"], site["code"])
+        if not refusal:
+            refusal = projection_refusal(site["code"], guards, variables)
         if refusal:
             guard_leg = False
         # Guards over other values can still exclude this mutation; retain
