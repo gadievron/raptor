@@ -1,11 +1,7 @@
 """Fixture tests for the rcu_no_lock rule.
 
-Verification-role rule (fires mint confirmed CWE-416 verdicts):
-this rule matches the assignment form ptr = rcu_dereference(x)
-with position discipline (safe set bound first, bugs are the
-complement) and reports on stderr — _run_rule scans both streams.
-The positive pins an unlocked assignment; the negative pins the
-same assignment inside the lock/unlock pair.
+Detection-role rule: callers may already hold a read-side lock. Explicit
+check/protected APIs carry their own protection contracts and stay out of scope.
 """
 
 from __future__ import annotations
@@ -60,3 +56,8 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+def test_checked_dereference_does_not_require_a_local_read_lock(tmp_path):
+    rows = _run_rule(tmp_path, "void *f(void *head) { void *p; p = rcu_dereference_check(head, lockdep_is_held(&lock)); return p; }")
+    assert rows == []

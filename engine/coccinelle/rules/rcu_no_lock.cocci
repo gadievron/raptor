@@ -1,55 +1,92 @@
-// rcu_no_lock.cocci — Find RCU-protected dereference without
-// rcu_read_lock held.
-//
-// The pattern: rcu_dereference is called outside an rcu_read_lock /
-// rcu_read_unlock region.
-//
-// Position discipline (format_string.cocci technique): first bind the
-// positions of every rcu_dereference that IS preceded by
-// rcu_read_lock (safe set), then report every rcu_dereference at a
-// position NOT in the safe set. A rule-level `depends on !safe` would
-// be evaluated file-wide — one locked dereference anywhere in the
-// file would suppress every unlocked one (measured FN class).
-//
-// Covers CWE-416: use-after-free via RCU grace period violation.
-// @role: verification
+// Review local RCU read-side protection at dereference sites.
+// Caller-held locks, alternate protection and lifetime require independent
+// review, so these are candidates, not verified use-after-free findings.
+// Check/protected APIs carry explicit assertions and are outside this check.
+// Track matching local lock/unlock APIs. Simple two-level nesting is recognized;
+// complex nesting, wrappers and post-dereference lifetime are not proved.
+// https://www.kernel.org/doc/html/latest/RCU/lockdep.html
+// @role: detection
 
-// Safe set: rcu_dereference reached from rcu_read_lock without an
-// intervening rcu_read_unlock.
-@safe_rcu@
-expression ptr, rcu_ptr;
+// A release known to have at least two mandatory local acquisitions before
+// it does not end the outer section. Conditional nesting is not assumed.
+@rcu_assignment_nested_release forall@
+identifier FUNC;
+position release;
+@@
+FUNC(...) {
+... when any
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_unlock@release();
+... when any
+}
+
+@no_lock exists@
+expression ptr, E;
 position p;
 @@
+* ptr = rcu_dereference@p(E)
 
-rcu_read_lock()
-... when != rcu_read_unlock()
-(
-  ptr = rcu_dereference@p(rcu_ptr)
-|
-  ptr = rcu_dereference_check@p(rcu_ptr, ...)
-)
-
-// Bug set: every other rcu_dereference position.
-@no_lock@
-expression ptr, rcu_ptr;
-position p != safe_rcu.p;
+@rcu_assignment_held exists@
+expression no_lock.E;
+position no_lock.p;
 @@
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_dereference@p(E)
 
-(
-* ptr = rcu_dereference@p(rcu_ptr)
-|
-* ptr = rcu_dereference_check@p(rcu_ptr, ...)
-)
+@rcu_assignment_nested_held exists@
+expression no_lock.E;
+position no_lock.p;
+@@
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_lock();
+... when any
+    when != rcu_read_unlock()
+rcu_read_unlock();
+... when any
+    when != rcu_read_unlock()
+rcu_dereference@p(E)
 
-@script:python@
+// A possible held path is insufficient when an unprotected path also exists.
+@rcu_assignment_entry_path exists@
+identifier FUNC;
+expression no_lock.E;
+position no_lock.p;
+@@
+FUNC(...) {
+... when any
+    when != rcu_read_lock()
+rcu_dereference@p(E)
+... when any
+}
+
+@rcu_assignment_released_path exists@
+expression no_lock.E;
+position no_lock.p;
+position release != rcu_assignment_nested_release.release;
+@@
+rcu_read_unlock@release();
+... when any
+    when != rcu_read_lock()
+rcu_dereference@p(E)
+
+@script:python depends on no_lock && ((!rcu_assignment_held && !rcu_assignment_nested_held) || rcu_assignment_entry_path || rcu_assignment_released_path)@
 p << no_lock.p;
-rcu_ptr << no_lock.rcu_ptr;
+E << no_lock.E;
 @@
-
 import json, sys
-for _p in p:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-           "rule": "rcu_no_lock",
-           "message": "rcu_dereference('%s') without rcu_read_lock held — potential use-after-free" % rcu_ptr}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+for pos in p:
+    sys.stderr.write("COCCIRESULT:" + json.dumps({
+        "file": pos.file, "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
+        "rule": "rcu_no_lock",
+        "message": "Candidate: rcu_dereference(%s) lacks established local read-side protection; review caller-held locks, nesting and lifetime (CWE-416)" % E,
+    }) + "\n")
