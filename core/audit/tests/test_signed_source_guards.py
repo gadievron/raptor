@@ -120,7 +120,7 @@ def test_confined_overflow_worker_checks_negative_counterexample():
     assert result.outcome == "confirmed", result.errors
     assert result.details["witness_validated"] is True
     assert result.details["mathematical_result"] < -2147483648
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v13"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v14"
 
 
 @pytest.mark.slow
