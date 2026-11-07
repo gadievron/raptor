@@ -323,6 +323,16 @@ optimization. The separate ordinary-`memset`-before-`free` check reports a
 compiler-removal candidate. Review sensitivity, ranges, aliases and compiler
 behavior before treating either signal as a security defect.
 
+The allocation-product check recognizes common overflow guards only when
+an overflow branch returns before allocation on every relevant path.
+Ignored checked-multiply results, log-only branches, and recognized operand
+writes after a check keep the candidate visible. Both operand orders are
+recognized for checked multiplication. Result storage that overwrites an
+operand does not protect a later recomputation. Caller bounds, aliases,
+operand types and more complex cleanup paths still require review. The
+existing exclusions for literal products and products with a `sizeof`
+factor remain; absence of a candidate does not establish overflow safety.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,

@@ -1306,10 +1306,10 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 21,
+    "count": 22,
     "kind": "literal",
-    "note": "Closed target-environment security policy: trust/session markers, framework identity and sanitizer-cut transport names. Includes RAPTOR_REGISTRY_HOME, _RAPTOR_LAUNCH_METADATA and RAPTOR_LLM_TRANSCRIPT, which must not leak operator paths or framework identity to targets; these are infrastructure variables, not learned target vocabulary.",
-    "reviewed": "2026-11-01"
+    "note": "Closed target-environment security policy: trust/session markers, framework identity and sanitizer-cut transport names. Includes RAPTOR_REGISTRY_HOME, _RAPTOR_LAUNCH_METADATA and RAPTOR_LLM_TRANSCRIPT, which must not leak operator paths or framework identity to targets; these are infrastructure variables, not learned target vocabulary. RAPTOR_SCORECARD_PATH is the operator scorecard path override; strip it from target environments under the same closed policy.",
+    "reviewed": "2026-11-07"
   },
   "core/config/__init__.py::TOOL_DEPS": {
     "count": 11,
@@ -2242,10 +2242,10 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 23,
+    "count": 24,
     "kind": "literal",
-    "note": "Closed macOS target-environment security policy mirroring core.config.TARGET_ENV_STRIP_SET, plus the private status/death FD variables. Includes the registry, launch-metadata and LLM-transcript names; infrastructure/security identifiers, not learned target vocabulary.",
-    "reviewed": "2026-11-01"
+    "note": "Closed macOS target-environment security policy mirroring core.config.TARGET_ENV_STRIP_SET, plus the private status/death FD variables. Includes the registry, launch-metadata and LLM-transcript names; infrastructure/security identifiers, not learned target vocabulary. RAPTOR_SCORECARD_PATH is the operator scorecard path override; strip it from target environments under the same closed policy.",
+    "reviewed": "2026-11-07"
   },
   "libexec/raptor-self-test::_LLM_ENV_VARS": {
     "count": 10,
