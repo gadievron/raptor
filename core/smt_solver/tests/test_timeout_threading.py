@@ -26,9 +26,9 @@ def _record_solver_builds(monkeypatch):
     calls: list[int | None] = []
     real = pf._new_solver
 
-    def _recording(timeout_ms=None):
+    def _recording(timeout_ms=None, *, ctx=None):
         calls.append(timeout_ms)
-        return real(timeout_ms) if timeout_ms is not None else real()
+        return real(timeout_ms, ctx=ctx) if timeout_ms is not None else real(ctx=ctx)
 
     monkeypatch.setattr(pf, "_new_solver", _recording)
     return calls

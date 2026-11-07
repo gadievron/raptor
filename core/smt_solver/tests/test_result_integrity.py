@@ -26,8 +26,8 @@ def test_unsigned_witness_preferences_keep_unsigned_order(direction, expected):
 
 
 def test_undecided_redundancy_keeps_constraints_and_marks_the_summary_incomplete(monkeypatch):
-    def auxiliary(timeout_ms):
-        solver = new_solver(timeout_ms)
+    def auxiliary(timeout_ms, *, ctx=None):
+        solver = new_solver(timeout_ms, ctx=ctx)
         monkeypatch.setattr(solver, "check", lambda: z3.unknown)
         return solver
     monkeypatch.setattr(paths, "_new_solver", auxiliary)
