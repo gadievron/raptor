@@ -10,6 +10,7 @@ from packages.coccinelle import runner
 
 BASE = "@r@\nexpression E;\nposition p;\n@@\nfree@p(E);\n"
 PUTS = '@r@\nposition p;\n@@\nputs@p("script:python position phantom; @phantom@");\n'
+PUTS_BASELINE = "@r@\nposition p;\n@@\nputs@p(...);\n"
 CASES = [
     pytest.param("// script:python is only documentation\n" + BASE, BASE, id="script-comment"),
     pytest.param("// position phantom; @phantom@\n" + BASE, BASE, id="line-comment"),
@@ -17,8 +18,37 @@ CASES = [
     pytest.param("// position __import__;\n" + BASE, BASE, id="reserved-name-comment"),
     pytest.param(BASE.replace("position p;", "position /* note */ p;"), BASE, id="comment-in-declaration"),
     pytest.param(BASE.replace("@r@", "@/* note */r@"), BASE, id="comment-in-header"),
-    pytest.param(PUTS, "@r@\nposition p;\n@@\nputs@p(...);\n", id="string-literal"),
+    pytest.param(PUTS, PUTS_BASELINE, id="string-literal"),
 ]
+
+
+def _positions(result):
+    return tuple((m.file, m.line, m.column, m.line_end, m.column_end)
+                 for m in result.matches)
+
+
+@pytest.fixture(scope="module")
+def reference_matches(tmp_path_factory):
+    """Run each unchanged baseline once; share only immutable observations."""
+    root = tmp_path_factory.mktemp("lexical-reference")
+    source = root / "input.c"
+    source.write_text('void f(void *p) { free(p); }\n'
+                      'void g(void) { puts("script:python position phantom; @phantom@"); }\n')
+    references = {}
+
+    def reference(baseline):
+        # Laziness also avoids unused native runs for a single selected case
+        # or a worker that receives only one of the two baseline families.
+        if baseline not in references:
+            original = root / f"original-{len(references)}.cocci"
+            original.write_text(baseline)
+            expected = runner.run_rule(source, original, no_includes=True, timeout=20)
+            assert expected.ok, expected.errors
+            assert expected.match_count == 1
+            references[baseline] = (_positions(expected), tuple(expected.files_examined))
+        return source, *references[baseline]
+
+    return reference
 
 
 @pytest.mark.parametrize("rule,baseline", CASES)
@@ -52,23 +82,17 @@ def test_reserved_live_position_names_remain_refused(name):
 
 @pytest.mark.skipif(not runner.is_available(), reason="spatch not installed")
 @pytest.mark.parametrize("rule,baseline", CASES)
-def test_real_spatch_recovers_the_same_match_as_the_undecorated_rule(tmp_path, rule, baseline):
-    source = tmp_path / "input.c"
-    source.write_text('void f(void *p) { free(p); }\n'
-                      'void g(void) { puts("script:python position phantom; @phantom@"); }\n')
-    original = tmp_path / "original.cocci"
+def test_real_spatch_recovers_the_same_match_as_the_undecorated_rule(
+    tmp_path, rule, baseline, reference_matches,
+):
+    source, expected_positions, expected_files = reference_matches(baseline)
     decorated = tmp_path / "decorated.cocci"
-    original.write_text(baseline)
     decorated.write_text(rule)
-    expected = runner.run_rule(source, original, no_includes=True, timeout=20)
     actual = runner.run_rule(source, decorated, no_includes=True, timeout=20)
-    assert expected.ok, expected.errors
     assert actual.ok, actual.errors
-    assert expected.match_count == actual.match_count == 1
-    def positions(result):
-        return [(m.file, m.line, m.column, m.line_end, m.column_end) for m in result.matches]
-    assert positions(actual) == positions(expected)
-    assert actual.files_examined == expected.files_examined
+    assert actual.match_count == 1
+    assert _positions(actual) == expected_positions
+    assert tuple(actual.files_examined) == expected_files
 
 
 def test_comment_only_script_mention_still_gets_a_generated_reporter(tmp_path, monkeypatch):
