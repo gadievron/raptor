@@ -23,6 +23,9 @@ from core.sandbox.errors import SandboxSetupError
 from core.sandbox.tests.capability import requires_landlock
 
 
+from core.testing.module_bindings import mock_module_attribute
+
+
 class TestDarwinUntrustedGate(unittest.TestCase):
     """Unit-level: the darwin arm of _require_userns_or_optin."""
 
@@ -31,13 +34,13 @@ class TestDarwinUntrustedGate(unittest.TestCase):
                                             restrict_reads=True)
 
     def test_darwin_with_seatbelt_available_is_exempt(self):
-        with patch.object(ctx.sys, "platform", "darwin"), \
+        with mock_module_attribute(ctx, 'sys', "platform", "darwin"), \
              patch.object(ctx, "check_seatbelt_available",
                           return_value=True):
             self.assertFalse(self._call())
 
     def test_darwin_without_seatbelt_fails_closed(self):
-        with patch.object(ctx.sys, "platform", "darwin"), \
+        with mock_module_attribute(ctx, 'sys', "platform", "darwin"), \
              patch.object(ctx, "check_seatbelt_available",
                           return_value=False), \
              patch.dict(ctx.os.environ,
@@ -46,7 +49,7 @@ class TestDarwinUntrustedGate(unittest.TestCase):
                 self._call()
 
     def test_darwin_operator_override_engages_degraded_mode(self):
-        with patch.object(ctx.sys, "platform", "darwin"), \
+        with mock_module_attribute(ctx, 'sys', "platform", "darwin"), \
              patch.object(ctx, "check_seatbelt_available",
                           return_value=False), \
              patch.dict(ctx.os.environ,
@@ -165,7 +168,7 @@ class TestUntrustedRequiresSeccomp(unittest.TestCase):
     def test_darwin_arm_untouched_by_seccomp_gate(self):
         """macOS has no libseccomp; the seatbelt arm must return
         before the seccomp gate is consulted."""
-        with patch.object(ctx.sys, "platform", "darwin"), \
+        with mock_module_attribute(ctx, 'sys', "platform", "darwin"), \
              patch.object(ctx, "check_seatbelt_available",
                           return_value=True), \
              patch.object(ctx._seccomp, "check_seccomp_available",

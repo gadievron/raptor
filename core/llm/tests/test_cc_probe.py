@@ -143,7 +143,7 @@ class TestProbe:
         assert probe_cc_session_model("/usr/bin/true") is None
 
     def test_missing_binary_returns_none(self, monkeypatch):
-        monkeypatch.setattr(cc_probe.shutil, "which", lambda _: None)
+        patch_module_attribute(monkeypatch, cc_probe, 'shutil', "which", lambda _: None)
         assert probe_cc_session_model(None) is None
 
     def test_kill_switch_returns_none_without_spawning(self, monkeypatch):
@@ -238,16 +238,16 @@ class TestCachedRead:
             raise AssertionError("cache-only read must not spawn claude")
 
         patch_module_attribute(monkeypatch, cc_probe, "subprocess", "run", boom)
-        monkeypatch.setattr(
-            cc_probe.shutil, "which", lambda name: "/usr/bin/claude",
+        patch_module_attribute(monkeypatch,
+            cc_probe, 'shutil', "which", lambda name: "/usr/bin/claude",
         )
         assert cached_cc_session_model() is None
 
     def test_warm_cache_returns_model(self, monkeypatch):
         from core.llm.cc_probe import cached_cc_session_model
 
-        monkeypatch.setattr(
-            cc_probe.shutil, "which", lambda name: "/usr/bin/claude",
+        patch_module_attribute(monkeypatch,
+            cc_probe, 'shutil', "which", lambda name: "/usr/bin/claude",
         )
         sig = cc_probe._backend_signature("/usr/bin/claude")
         cc_probe._write_cache(sig, "backend.claude-model-id")
@@ -260,5 +260,5 @@ class TestCachedRead:
     def test_no_claude_binary_returns_none(self, monkeypatch):
         from core.llm.cc_probe import cached_cc_session_model
 
-        monkeypatch.setattr(cc_probe.shutil, "which", lambda name: None)
+        patch_module_attribute(monkeypatch, cc_probe, 'shutil', "which", lambda name: None)
         assert cached_cc_session_model() is None

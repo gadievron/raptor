@@ -21,6 +21,9 @@ from packages.llm_analysis.dataflow_query_builder import (
 # Tier 1 — discovery ---------------------------------------------------------
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _isolated_query_discovery_cache(monkeypatch, tmp_path):
     """Own discovery memoization and keep incidental host-tool lookup local."""
@@ -1020,7 +1023,7 @@ class TestResolvedPackPointersImportGuard:
     def test_core_config_import_failure_returns_empty(self, monkeypatch):
         import packages.llm_analysis.dataflow_query_builder as dqb
         # codeql "on PATH" so the import site is actually reached.
-        monkeypatch.setattr(dqb.shutil, "which",
+        patch_module_attribute(monkeypatch, dqb, 'shutil', "which",
                             lambda name: "/usr/bin/codeql")
         # A None sys.modules entry makes `from core.config import ...`
         # raise ImportError without touching the real module state.

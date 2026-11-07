@@ -31,6 +31,10 @@ from core.audit.orchestrator import (
 # Question concept extraction (dotted / qualified shapes)
 # ------------------------------------------------------------------
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestExtractConceptDotted:
     def test_c_shape_unchanged(self) -> None:
         assert _extract_concept_from_question("what is sk_buff?") == "sk_buff"
@@ -577,7 +581,7 @@ def _stub_prep(monkeypatch, out_dir, calls=None):
         }))
         return types.SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr(_orch.subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, _orch, 'subprocess', "run", fake_run)
     return recorded
 
 

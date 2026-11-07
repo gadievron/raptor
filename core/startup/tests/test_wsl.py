@@ -16,6 +16,11 @@ import pytest
 
 from core.startup import wsl
 
+
+import core.startup.wsl as _host_platform_consumer
+from core.testing.module_bindings import mock_module_attribute
+
+
 pytestmark = pytest.mark.wsl
 
 
@@ -50,7 +55,7 @@ class TestIsWsl:
             calls.append(1)
             return "5.15.167.4-microsoft-standard-WSL2\n"
 
-        with mock.patch.object(sys, "platform", "linux"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"), \
              mock.patch.object(wsl, "_read_kernel_id", fake_read):
             assert wsl.is_wsl() is True
             assert wsl.is_wsl() is True
@@ -61,13 +66,13 @@ class TestIsWsl:
         assert wsl.is_wsl("microsoft-standard") is True
 
     def test_probe_failure_reads_false(self):
-        with mock.patch.object(sys, "platform", "linux"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"), \
              mock.patch.object(wsl, "_read_kernel_id",
                                side_effect=OSError("masked /proc")):
             assert wsl.is_wsl() is False
 
     def test_non_linux_reads_false(self):
-        with mock.patch.object(sys, "platform", "darwin"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "darwin"), \
              mock.patch.object(wsl, "_read_kernel_id") as read:
             assert wsl.is_wsl() is False
         read.assert_not_called()
@@ -151,7 +156,7 @@ class TestWslFlavourDiscriminators:
             calls.append(1)
             return _WSL2_ID
 
-        with mock.patch.object(sys, "platform", "linux"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"), \
              mock.patch.object(wsl, "_read_kernel_id", fake_read):
             assert wsl.is_wsl2() is True
             assert wsl.is_wsl2() is True
@@ -167,7 +172,7 @@ class TestWslFlavourDiscriminators:
 
     def test_probe_failure_reads_false(self):
         wsl._is_wsl_cache = True  # WSL established, flavour probe fails
-        with mock.patch.object(sys, "platform", "linux"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"), \
              mock.patch.object(wsl, "_read_kernel_id",
                                side_effect=OSError("masked /proc")):
             assert wsl.is_wsl2() is False
@@ -175,7 +180,7 @@ class TestWslFlavourDiscriminators:
             assert wsl.is_wsl1() is True
 
     def test_off_wsl_filesystem_answers(self):
-        with mock.patch.object(sys, "platform", "linux"), \
+        with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "linux"), \
              mock.patch.object(wsl, "_read_kernel_id",
                                return_value=_MAINLINE_ID):
             assert wsl.is_wsl2() is False

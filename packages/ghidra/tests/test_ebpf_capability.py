@@ -12,7 +12,6 @@ failed features — degrades with a reason and never raises.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -33,6 +32,9 @@ from packages.ghidra.ebpf_capability import (
     record_path,
     save_capability_record,
 )
+
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 def _make_install(root: Path, *, version: str = "12.1.2",
@@ -57,7 +59,7 @@ def install(tmp_path, monkeypatch):
     """Fake install discovered via GHIDRA_INSTALL_DIR; records under
     a test-local dir; the host's real analyzeHeadless never leaks in."""
     root = _make_install(tmp_path / "ghidra")
-    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    patch_module_attribute(monkeypatch, cap, 'shutil', "which", lambda *a, **k: None)
     monkeypatch.setenv("GHIDRA_INSTALL_DIR", str(root))
     from core.config import RaptorConfig
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path / "out")
@@ -84,21 +86,21 @@ class TestDiscovery:
         assert ghidra_install_root() == install.resolve()
 
     def test_install_root_absent(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, cap, 'shutil', "which", lambda *a, **k: None)
         monkeypatch.delenv("GHIDRA_INSTALL_DIR", raising=False)
         assert ghidra_install_root() is None
 
     def test_env_dir_without_headless_rejected(self, tmp_path,
                                                monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, cap, 'shutil', "which", lambda *a, **k: None)
         monkeypatch.setenv("GHIDRA_INSTALL_DIR", str(tmp_path))
         assert ghidra_install_root() is None
 
     def test_which_resolves_support_parent(self, tmp_path, monkeypatch):
         root = _make_install(tmp_path / "g2")
         headless = root / "support" / "analyzeHeadless"
-        monkeypatch.setattr(
-            shutil, "which",
+        patch_module_attribute(monkeypatch,
+            cap, 'shutil', "which",
             lambda name: str(headless) if name == "analyzeHeadless"
             else None,
         )
@@ -189,7 +191,7 @@ class TestRecordPath:
 
 class TestConsult:
     def test_no_ghidra_downgraded(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, cap, 'shutil', "which", lambda *a, **k: None)
         monkeypatch.delenv("GHIDRA_INSTALL_DIR", raising=False)
         result = ebpf_lifter_capability()
         assert result.tier == TIER_DOWNGRADED

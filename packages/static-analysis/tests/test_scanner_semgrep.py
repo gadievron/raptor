@@ -22,6 +22,10 @@ from unittest.mock import patch
 
 
 # packages/static-analysis has a hyphen — load via importlib.
+
+from core.testing.module_bindings import patch_module_attribute
+import pytest
+
 _SCANNER_PATH = Path(__file__).parent.parent / "scanner.py"
 _spec = importlib.util.spec_from_file_location(
     "static_analysis_scanner_semgrep", _SCANNER_PATH,
@@ -37,7 +41,7 @@ run_single_semgrep = _scanner_mod.run_single_semgrep
 class TestRunSingleSemgrep:
     """Tests for run_single_semgrep function."""
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_creates_output_files(self, mock_validate, mock_run, mock_which, tmp_path):
@@ -59,7 +63,7 @@ class TestRunSingleSemgrep:
         assert (tmp_path / "semgrep_test_scan.stderr.log").exists()
         assert (tmp_path / "semgrep_test_scan.exit").exists()
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_sanitizes_name_with_slashes(self, mock_validate, mock_run, mock_which, tmp_path):
@@ -79,7 +83,7 @@ class TestRunSingleSemgrep:
         # Name should be sanitized (slashes replaced)
         assert "p_security-audit" in sarif_path
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_progress_callback_called(self, mock_validate, mock_run, mock_which, tmp_path):
@@ -124,7 +128,7 @@ class TestSandboxFakeHomeWiring:
     ``fake_home=True``); the env-merge correctness is owned + tested
     by the sandbox layer itself."""
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_run_called_with_fake_home_true(
@@ -141,7 +145,7 @@ class TestSandboxFakeHomeWiring:
 
         assert mock_run.call_args.kwargs.get("fake_home") is True
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_run_called_with_target_and_output_for_fake_home(
@@ -165,7 +169,7 @@ class TestSandboxFakeHomeWiring:
             tmp_path / "semgrep-child")
         assert mock_run.call_args.kwargs.get("target") == str(tmp_path)
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_extra_config_paths_forwarded_as_readable_paths(
@@ -399,7 +403,7 @@ class TestChildJsonPromotion:
     downstream readers keep their paths while the child never holds a
     grant on the coverage-record-bearing directory."""
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_child_json_is_promoted_to_out_dir(
@@ -428,7 +432,7 @@ class TestChildJsonPromotion:
         assert not (tmp_path / "semgrep-child"
                     / "semgrep_test_scan.json").exists()
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_symlink_at_child_json_is_not_promoted(
@@ -456,7 +460,7 @@ class TestChildJsonPromotion:
         )
         assert not (tmp_path / "semgrep_test_scan.json").exists()
 
-    @patch('shutil.which')
+    @patch('_raptor_scanner_semgrep_mock_target.shutil.which')
     @patch.object(_scanner_mod, "run")
     @patch.object(_scanner_mod, "validate_sarif")
     def test_stale_child_json_from_previous_run_is_cleared(
@@ -478,7 +482,7 @@ class TestChildJsonPromotion:
         assert not (tmp_path / "semgrep_test_scan.json").exists()
 
 
-@patch('shutil.which', return_value='/usr/bin/semgrep')
+@patch('_raptor_scanner_semgrep_mock_target.shutil.which', return_value='/usr/bin/semgrep')
 @patch.object(_scanner_mod, 'run', return_value=(0, '  ', ''))
 @patch.object(_scanner_mod, 'validate_sarif', return_value=True)
 def test_empty_output_cannot_become_a_successful_replacement_report(validate, run, which, tmp_path):
@@ -488,3 +492,10 @@ def test_empty_output_cannot_become_a_successful_replacement_report(validate, ru
     assert not success
     assert Path(sarif_path).read_text() == '{"runs": []}'
     assert (tmp_path / 'semgrep_empty.exit').read_text() == '0'
+
+
+@pytest.fixture(autouse=True)
+def _private_discovery_patch_target(monkeypatch):
+    """Resolve unittest decorators late against this test's private scanner view."""
+    monkeypatch.setitem(sys.modules, "_raptor_scanner_semgrep_mock_target", _scanner_mod)
+    patch_module_attribute(monkeypatch, _scanner_mod, "shutil", "which", _scanner_mod.shutil.which)

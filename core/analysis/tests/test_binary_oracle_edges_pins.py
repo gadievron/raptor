@@ -29,6 +29,10 @@ import core.sandbox as sandbox_mod
 from core.config import RaptorConfig
 from core.hash import sha256_file
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 _IMPL = "_extract_direct_call_edges_impl"
 
 
@@ -74,7 +78,7 @@ class TestLaunchGate:
         # so the only thing standing between the demotion and the
         # launch is the pin gate.
         with patch.object(sandbox_mod, "run", rec), \
-             patch.object(edges_mod.shutil, "which",
+             mock_module_attribute(edges_mod, 'shutil', "which",
                           lambda _name: "/usr/bin/r2"):
             idx = edges_mod.extract_direct_call_edges(
                 b, use_cache=False)
@@ -89,7 +93,7 @@ class TestLaunchGate:
 
         rec = _SandboxRecorder()
         with patch.object(sandbox_mod, "run", rec), \
-             patch.object(edges_mod.shutil, "which",
+             mock_module_attribute(edges_mod, 'shutil', "which",
                           lambda _name: "/usr/bin/r2"):
             idx = edges_mod.extract_direct_call_edges(
                 b, use_cache=False)
@@ -104,7 +108,7 @@ class TestLaunchGate:
 
         rec = _SandboxRecorder()
         with patch.object(sandbox_mod, "run", rec), \
-             patch.object(edges_mod.shutil, "which",
+             mock_module_attribute(edges_mod, 'shutil', "which",
                           lambda _name: "/usr/bin/r2"):
             edges_mod.extract_direct_call_edges(b, use_cache=False)
         assert len(rec.calls) >= 1
@@ -117,7 +121,7 @@ class TestLaunchGate:
 
         rec = _SandboxRecorder()
         with patch.object(sandbox_mod, "run", rec), \
-             patch.object(edges_mod.shutil, "which",
+             mock_module_attribute(edges_mod, 'shutil', "which",
                           lambda _name: "/usr/bin/r2"):
             edges_mod.extract_direct_call_edges(b, use_cache=False)
         assert len(rec.calls) >= 1

@@ -7,6 +7,10 @@ import pytest
 from core.atomic_fs import fs_lock
 from packages.joern import broker, heap_ledger, runner
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(not fs_lock._HAS_FCNTL, reason="requires flock")
 
 
@@ -16,7 +20,7 @@ def test_contended_controller_does_not_start_another_owner(tmp_path, monkeypatch
     monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.01)
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.001)
     start = Mock()
-    monkeypatch.setattr(broker.subprocess, "Popen", start)
+    patch_module_attribute(monkeypatch, broker, 'subprocess', "Popen", start)
     with fs_lock.sidecar_flock(family / "controllers.lock", required=True):
         with pytest.raises(TimeoutError):
             broker.discover(tmp_path)
@@ -31,7 +35,7 @@ def test_unsafe_controller_lock_never_starts_an_unconfined_fallback(tmp_path, mo
     victim.write_text("unchanged")
     (family / "controllers.lock").symlink_to(victim)
     start = Mock()
-    monkeypatch.setattr(broker.subprocess, "Popen", start)
+    patch_module_attribute(monkeypatch, broker, 'subprocess', "Popen", start)
     with pytest.raises(OSError, match="refusing unlocked operation"):
         broker.discover(tmp_path)
     start.assert_not_called()

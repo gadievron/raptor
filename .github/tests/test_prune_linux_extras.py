@@ -1,8 +1,12 @@
 """Linux cleanup keeps runtime functionality and refuses unfamiliar layouts."""
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
+
+
+from core.testing.module_bindings import patch_module_attribute
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -86,7 +90,7 @@ def test_unrecognized_nvm_layout_is_retained(tmp_path, capsys):
 
 def test_non_linux_invocation_keeps_packages(tmp_path, monkeypatch):
     root, scope = package(tmp_path)
-    monkeypatch.setattr(tool.sys, "platform", "win32")
-    monkeypatch.setattr(tool.sys, "argv", ["prune-linux-extras.py", "--pnpm-root", str(root)])
+    patch_module_attribute(monkeypatch, tool, 'sys', "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["prune-linux-extras.py", "--pnpm-root", str(root)])
     tool.main()
     assert scope.exists()

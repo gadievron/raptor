@@ -32,6 +32,10 @@ from core.sandbox.tests.capability import (
     requires_userns,
 )
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="Linux spawn backend",
 )
@@ -197,7 +201,7 @@ class TestDarwinUntrustedTmpPosture(unittest.TestCase):
             captured.update(kw)
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        with patch.object(ctx.sys, "platform", "darwin"), \
+        with mock_module_attribute(ctx, 'sys', "platform", "darwin"), \
              patch.object(ctx, "check_seatbelt_available",
                           return_value=True), \
              patch.object(ctx, "run", fake_run):

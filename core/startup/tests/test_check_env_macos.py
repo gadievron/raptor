@@ -16,6 +16,10 @@ import pytest
 from core.startup import init as startup_init
 
 
+import core.startup.init as _host_platform_consumer
+from core.testing.module_bindings import mock_module_attribute
+
+
 @pytest.fixture
 def reset_seatbelt_cache(monkeypatch):
     """Pin a fresh probe result and restore the caller's cached answer."""
@@ -26,7 +30,7 @@ def reset_seatbelt_cache(monkeypatch):
 def test_check_env_macos_seatbelt_available(reset_seatbelt_cache):
     """When seatbelt smoke test passes, the banner shows
     'sandbox ✓ (seatbelt)' and emits no sandbox warning."""
-    with mock.patch.object(sys, "platform", "darwin"), \
+    with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "darwin"), \
          mock.patch("core.sandbox.check_seatbelt_available",
                      return_value=True):
         parts, warnings = startup_init.check_env(set())
@@ -45,7 +49,7 @@ def test_check_env_macos_seatbelt_unavailable(reset_seatbelt_cache):
     """When seatbelt smoke test fails, the banner shows 'sandbox ✗'
     and emits a macOS-specific warning naming the diagnostic
     command operators can run."""
-    with mock.patch.object(sys, "platform", "darwin"), \
+    with mock_module_attribute(_host_platform_consumer, 'sys', "platform", "darwin"), \
          mock.patch("core.sandbox.check_seatbelt_available",
                      return_value=False):
         parts, warnings = startup_init.check_env(set())

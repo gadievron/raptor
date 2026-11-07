@@ -14,6 +14,10 @@ from packages.binary_analysis.blamed_lines import (
     render_section,
 )
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 REPORT = """# Root cause
 
 ### Step 1: Allocation
@@ -167,7 +171,7 @@ class TestCheckerProvenance:
             build_cmds.append(argv)
             return self._fake_proc(returncode=1)  # build "fails": stop early
 
-        with patch.object(bl.subprocess, "run", side_effect=fake_build):
+        with mock_module_attribute(bl, 'subprocess', "run", side_effect=fake_build):
             check_blamed_lines([("x.c", 10)], cov, raptor_dir=root)
         assert build_cmds, "checker build was never attempted"
         out_path = Path(build_cmds[0][build_cmds[0].index("-o") + 1])

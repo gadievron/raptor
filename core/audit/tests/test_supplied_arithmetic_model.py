@@ -9,6 +9,10 @@ from core.audit import evidence_grade as grade, orchestrator as orch, sweep
 from core.audit.refutation_source import SourceIdentity
 from core.audit.verification_results import ClaimRefutation, ProbeOutcome
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 VERBS = ("check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass")
 
 
@@ -17,7 +21,7 @@ VERBS = ("check-overflow", "check-oob", "check-overflow-to-oob", "check-negative
 def test_shim_math_is_retained_without_a_source_verdict(tmp_path, monkeypatch, verb, feasible):
     (tmp_path / sweep._SMT_VERBS[verb]).write_text("")
     monkeypatch.setattr(sweep, "_SMT_SHIM_DIR", tmp_path)
-    monkeypatch.setattr(sweep.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
+    patch_module_attribute(monkeypatch, sweep, 'subprocess', "run", lambda *a, **kw: subprocess.CompletedProcess(
         args=[], returncode=0, stdout=json.dumps({"feasible": feasible}), stderr=""))
     result = sweep.run_smt_sweep(file_path="record.c", function_name="Read", verb=verb,
                                  smt_args={"guard": ["a <= 10"], "profile": "uint32"})

@@ -9,6 +9,9 @@ import pytest
 from core.binary import elf_worker as worker
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def facts(**changes):
     result = dict(arch='amd64', bits=64, endian='little', os_abi='SYSV', relro='Full',
                   pie=True, nx=True, canary=True, fortify=True, has_gnu_stack=True,
@@ -169,7 +172,7 @@ def test_address_space_refusal_is_advisory_only_on_darwin(monkeypatch, capsys, p
         calls.append((resource_id, value))
         if resource_id == child.resource.RLIMIT_AS:
             raise error_type('owned address-space refusal')
-    monkeypatch.setattr(child.sys, 'platform', platform)
+    patch_module_attribute(monkeypatch, child, 'sys', 'platform', platform)
     monkeypatch.setattr(child, '_limit', limit)
     if platform == 'darwin':
         child._install_limits()
@@ -191,7 +194,7 @@ def test_cpu_refusal_still_aborts_worker(monkeypatch, platform):
         calls.append((resource_id, value))
         if resource_id == child.resource.RLIMIT_CPU:
             raise ValueError('owned CPU refusal')
-    monkeypatch.setattr(child.sys, 'platform', platform)
+    patch_module_attribute(monkeypatch, child, 'sys', 'platform', platform)
     monkeypatch.setattr(child, '_limit', limit)
     with pytest.raises(ValueError, match='owned CPU refusal'):
         child._install_limits()

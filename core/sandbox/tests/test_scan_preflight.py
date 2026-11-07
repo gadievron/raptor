@@ -9,9 +9,12 @@ from core.sandbox import preflight, probes, seccomp
 from core.sandbox.errors import SandboxSetupError
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def backends(monkeypatch):
-    monkeypatch.setattr(preflight.sys, 'platform', 'linux')
+    patch_module_attribute(monkeypatch, preflight, 'sys', 'platform', 'linux')
     calls = []
     flags = dict(network=True, mount=True, seccomp=True, seatbelt=True)
     for module, name, key in (
@@ -74,7 +77,7 @@ def test_separator_data_cannot_change_strict_policy(backends):
 @pytest.mark.parametrize('available', [False, True])
 def test_macos_uses_seatbelt_without_linux_requirements(backends, monkeypatch, available):
     flags, calls = backends
-    monkeypatch.setattr(preflight.sys, 'platform', 'darwin')
+    patch_module_attribute(monkeypatch, preflight, 'sys', 'platform', 'darwin')
     flags['seatbelt'] = available
     if available:
         preflight.preflight_scan_cli(['--sandbox=strict'])

@@ -10,7 +10,6 @@ the eBPF processor module and is marked ``slow`` (real JVM spawn).
 from __future__ import annotations
 
 import re
-import shutil
 
 import pytest
 
@@ -42,6 +41,20 @@ from packages.ghidra.model import REDatabase
 # Captured llvm-objdump -d --triple=bpfel output (LLVM 21): includes
 # a 16-byte lddw (objdump's leading counter is the instruction SLOT,
 # not the byte offset — the parser must accumulate byte counts).
+
+from core.testing.module_bindings import patch_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _forward_host_interface_mock(monkeypatch):
+    """Keep delegated lookups on the same fault without sharing module state."""
+    import packages.ghidra.ebpf_probe as primary
+    import packages.ghidra.ebpf_capability as delegated
+
+    patch_module_attribute(monkeypatch, delegated, "shutil", "which",
+                           lambda *args, **kwargs: primary.shutil.which(*args, **kwargs))
+
+
 GT_SAMPLE = """\
 lddw.o:\tfile format elf64-bpf
 
@@ -370,16 +383,16 @@ class TestProbeCorpusInvariants:
 
 class TestToolDiscovery:
     def test_plain_name_preferred(self, monkeypatch):
-        monkeypatch.setattr(
-            shutil, "which",
+        patch_module_attribute(monkeypatch,
+            probe_mod, 'shutil', "which",
             lambda name: f"/usr/bin/{name}"
             if name in ("clang", "clang-21") else None,
         )
         assert _find_versioned("clang") == "/usr/bin/clang"
 
     def test_versioned_suffix_found(self, monkeypatch):
-        monkeypatch.setattr(
-            shutil, "which",
+        patch_module_attribute(monkeypatch,
+            probe_mod, 'shutil', "which",
             lambda name: "/usr/bin/clang-19"
             if name == "clang-19" else None,
         )
@@ -388,23 +401,23 @@ class TestToolDiscovery:
     def test_suffix_range_two_directions(self, monkeypatch):
         # At the range floor: found.
         floor = probe_mod.TOOL_SUFFIX_MIN
-        monkeypatch.setattr(
-            shutil, "which",
+        patch_module_attribute(monkeypatch,
+            probe_mod, 'shutil', "which",
             lambda name: f"/usr/bin/{name}"
             if name == f"clang-{floor}" else None,
         )
         assert _find_versioned("clang") == f"/usr/bin/clang-{floor}"
         # Below the floor: never probed (pre-v4 clangs cannot
         # assemble the corpus).
-        monkeypatch.setattr(
-            shutil, "which",
+        patch_module_attribute(monkeypatch,
+            probe_mod, 'shutil', "which",
             lambda name: f"/usr/bin/{name}"
             if name == f"clang-{floor - 1}" else None,
         )
         assert _find_versioned("clang") is None
 
     def test_absent_everywhere(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        patch_module_attribute(monkeypatch, probe_mod, 'shutil', "which", lambda *a, **k: None)
         assert find_toolchain() is None
 
 

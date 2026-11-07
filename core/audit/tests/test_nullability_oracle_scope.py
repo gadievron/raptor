@@ -9,6 +9,9 @@ from core.audit.refutation_source import SourceIdentity
 from core.audit.verification_results import ClaimRefutation, ProbeOutcome, ToolChainResult
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize("source", ["", "int Read(void) { return 0; }"])
 def test_free_pointer_sat_does_not_verify_even_without_a_dereference(source):
     pytest.importorskip("z3")
@@ -102,7 +105,7 @@ def test_cli_adapter_caps_nullability_math(monkeypatch, feasible):
     from types import SimpleNamespace
 
     monkeypatch.setattr(sweep.Path, "exists", lambda self: True)
-    monkeypatch.setattr(sweep.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+    patch_module_attribute(monkeypatch, sweep, 'subprocess', "run", lambda *a, **kw: SimpleNamespace(
         returncode=0, stdout=json.dumps({"feasible": feasible}), stderr=""))
     result = sweep.run_smt_sweep(
         file_path="record.c", function_name="Read", verb="check-null-deref",

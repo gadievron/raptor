@@ -4,6 +4,9 @@ import subprocess
 import pytest
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('adapter', ['autodetect', 'capabilities', 'addr2line', 'ebpf', 'ghidra', 'scanner', 'objdump'])
 def test_small_parser_adapter_reaches_sandbox(tmp_path, monkeypatch, adapter):
     from core import sandbox
@@ -61,7 +64,7 @@ def test_corpus_workload_dispatches_owned_build_through_sandbox(tmp_path, monkey
     seen = []
     monkeypatch.setattr(git, 'clone_repository', lambda *a, **k: True)
     monkeypatch.setattr(git, 'get_safe_git_env', lambda: {})
-    monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0))
+    patch_module_attribute(monkeypatch, driver, 'subprocess', 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0))
     monkeypatch.setattr(driver, 'run_build_step', lambda *a, **k: None)
     build = tmp_path / 'build-o0'
     def run(command, **options):

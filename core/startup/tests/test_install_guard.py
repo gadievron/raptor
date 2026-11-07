@@ -79,7 +79,7 @@ def test_precompile_rejects_cache_symlinks(tmp_path, monkeypatch):
 
 
 def test_unavailable_kernel_fails_closed(monkeypatch):
-    monkeypatch.setattr(guard.sys, 'platform', 'darwin')
+    patch_module_attribute(monkeypatch, guard, 'sys', 'platform', 'darwin')
     with pytest.raises(guard.ProtectionError, match='requires Linux'):
         guard.require_platform()
 
@@ -170,8 +170,6 @@ print(json.dumps({'blocked': len(blocked), 'child': child.returncode}))
     assert (root / 'out/result').read_text() == 'ok'
 
 
-
-
 def test_inherited_writable_fd_cannot_bypass_policy(tmp_path, require_install_mounts):
     root, script, env = _fixture(tmp_path)
     with (root / 'source.py').open('r+') as inherited:
@@ -211,18 +209,6 @@ def test_legacy_database_path_changes_only_in_protected_context(tmp_path, monkey
     # Simulate context restoration after config has already been imported.
     monkeypatch.setenv('RAPTOR_INSTALL_PROTECTED', '1')
     assert RaptorConfig.get_codeql_db_dir() == tmp_path / 'output/codeql_dbs'
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux O_PATH grants')
@@ -283,17 +269,6 @@ else: raise AssertionError('FIFO cache accepted')
     assert result.returncode == 0, result.stderr
 
 
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux O_PATH grants')
 def test_descriptor_identity_cannot_alias_a_protected_root(tmp_path, monkeypatch):
     root = tmp_path / 'install'
@@ -309,7 +284,6 @@ def test_native_helper_is_loaded_from_the_trusted_installation():
     module = guard.native_namespace()
     assert Path(module.__file__).resolve() == GUARD.with_name('_install_namespace.py')
     assert module.USER == 0x10000000
-
 
 
 @pytest.mark.parametrize('alias', ['state', 'install/out'])
@@ -382,9 +356,6 @@ else: raise AssertionError('host directory descriptor accepted')
     assert result.returncode == 0, result.stderr
 
 
-
-
-
 def test_source_submounts_cannot_hide_writable_bind_aliases(tmp_path, monkeypatch):
     root = tmp_path / 'install'
     (root / 'out').mkdir(parents=True)
@@ -405,7 +376,6 @@ def test_state_override_cannot_restore_host_proc_or_devices(path, tmp_path):
         guard.checked_write_path(Path(path), [tmp_path], tmp_path / 'out')
 
 
-
 def test_stdio_cannot_hide_registered_file_handles_in_an_anon_inode(tmp_path, monkeypatch):
     def refuse(message):
         raise guard.ProtectionError(message)
@@ -414,12 +384,6 @@ def test_stdio_cannot_hide_registered_file_handles_in_an_anon_inode(tmp_path, mo
     monkeypatch.setattr(guard.os, 'readlink', lambda _: 'anon_inode:[io_uring]')
     with pytest.raises(guard.ProtectionError, match='anonymous kernel object'):
         guard.close_inherited_fds([tmp_path], tmp_path / 'out')
-
-
-
-
-
-
 
 
 @pytest.mark.linux_native
@@ -684,7 +648,6 @@ def test_existing_bind_aliases_are_sealed_without_writable_grant(tmp_path, monke
     assert alias in guard.protected_mount_aliases([root])
 
 
-
 def test_ancestor_bindings_include_aliases_on_a_different_install_mount(tmp_path, monkeypatch):
     root = tmp_path / 'home/user/install'
     inventory = (f'1 0 8:1 / / rw - ext4 /dev/home rw\n'
@@ -695,7 +658,6 @@ def test_ancestor_bindings_include_aliases_on_a_different_install_mount(tmp_path
     assert tmp_path / 'home/user' in bindings
     assert tmp_path / 'alias-home/user' in bindings
     assert Path('/') not in bindings
-
 
 
 def test_external_python_environment_is_protected_without_sealing_home(tmp_path, monkeypatch):
@@ -712,7 +674,6 @@ def test_external_python_environment_is_protected_without_sealing_home(tmp_path,
     assert environment / 'pyvenv.cfg' in paths
     assert libraries.parent in paths
     assert environment not in paths
-
 
 
 @pytest.mark.parametrize('nested', [False, True])
@@ -821,7 +782,6 @@ def test_metadata_walk_tolerates_retired_atomic_files_without_skipping_other_ent
             guard.audit_protected_paths([root])
 
 
-
 @pytest.mark.parametrize("forced_platform", [None, "darwin"], ids=["host", "unsupported-platform"])
 def test_refusal_never_reports_into_another_protected_stdio_file(tmp_path, forced_platform):
     root, script, env = _fixture(tmp_path)
@@ -843,7 +803,6 @@ def test_refusal_never_reports_into_another_protected_stdio_file(tmp_path, force
     assert other.read_text() == 'OTHER = 1\n'
 
 
-
 def test_output_exception_survives_a_protected_library_ancestor(tmp_path, monkeypatch):
     library = tmp_path / 'library'
     root = library / 'raptor'
@@ -853,7 +812,6 @@ def test_output_exception_survives_a_protected_library_ancestor(tmp_path, monkey
     assert guard.checked_write_path(output / 'result', [root, library], output) == output / 'result'
     with pytest.raises(guard.ProtectionError, match='inside protected code'):
         guard.checked_write_path(root / 'core/new.py', [root, library], output)
-
 
 
 @pytest.mark.linux_native
@@ -877,7 +835,6 @@ finally:
     assert result.returncode == 0, result.stderr
 
 
-
 def test_stacked_parent_cannot_substitute_a_local_install_mount(tmp_path, monkeypatch):
     root = tmp_path / 'install'
     inventory = ('1 0 0:1 / / rw - overlay overlay rw\n'
@@ -885,7 +842,6 @@ def test_stacked_parent_cannot_substitute_a_local_install_mount(tmp_path, monkey
     monkeypatch.setattr(guard.Path, 'read_text', lambda *args, **kwargs: inventory)
     with pytest.raises(guard.ProtectionError, match='unsupported installation filesystem overlay'):
         guard.ancestor_bindings([root])
-
 
 
 def test_protection_refuses_to_seal_user_configuration_instead_of_migrating_it(tmp_path, monkeypatch):

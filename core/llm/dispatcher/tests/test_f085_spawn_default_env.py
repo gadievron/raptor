@@ -30,6 +30,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+from core.testing.module_bindings import mock_module_attribute
+
+
 @pytest.fixture
 def fake_dispatcher():
     d = MagicMock()
@@ -51,7 +54,7 @@ def test_spawn_worker_env_none_defaults_to_safe_env(fake_dispatcher):
         def __init__(self, *args, **kwargs):
             captured_env.update(kwargs.get("env") or {})
 
-    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+    with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
             patch("os.close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
@@ -95,7 +98,7 @@ def test_spawn_worker_env_none_preserves_operator_proxy(
         def __init__(self, *args, **kwargs):
             captured_env.update(kwargs.get("env") or {})
 
-    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+    with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
             patch("os.close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
@@ -138,7 +141,7 @@ def test_spawn_worker_env_none_carries_routing_family_not_secrets(
         def __init__(self, *args, **kwargs):
             captured_env.update(kwargs.get("env") or {})
 
-    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+    with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
             patch("os.close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,
@@ -173,7 +176,7 @@ def test_spawn_worker_explicit_env_not_overlaid(fake_dispatcher, monkeypatch):
         def __init__(self, *args, **kwargs):
             captured_env.update(kwargs.get("env") or {})
 
-    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+    with mock_module_attribute(spawn_mod, 'subprocess', "Popen", FakePopen), \
             patch("os.close"):
         spawn_mod.spawn_worker(
             fake_dispatcher,

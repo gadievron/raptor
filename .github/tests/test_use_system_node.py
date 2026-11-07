@@ -10,6 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("use_system_node", ROOT / ".devcontainer/use-system-node.py")
 NODE = importlib.util.module_from_spec(SPEC)
@@ -44,7 +48,7 @@ def installation(tmp_path, monkeypatch):
                            files=[PurePosixPath("playwright-1.dist-info/RECORD")])
     calls = []
     monkeypatch.setenv("PLAYWRIGHT_NODEJS_PATH", "/usr/bin/node")
-    monkeypatch.setattr(NODE.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    patch_module_attribute(monkeypatch, NODE, 'subprocess', "run", lambda *args, **kwargs: calls.append((args, kwargs)))
     return dist, executable, record, cli, calls
 
 
@@ -100,7 +104,7 @@ def test_failed_runtime_validation_preserves_bundle(installation, monkeypatch, p
     else:
         def fail(*args, **kwargs):
             raise subprocess.CalledProcessError(1, args[0])
-        monkeypatch.setattr(NODE.subprocess, "run", fail)
+        patch_module_attribute(monkeypatch, NODE, 'subprocess', "run", fail)
     with pytest.raises((ValueError, subprocess.CalledProcessError)):
         NODE.configure(dist)
     assert executable.exists()

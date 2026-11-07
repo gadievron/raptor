@@ -24,6 +24,10 @@ from core.symbolic import _availability
 from core.symbolic._availability import _probe, clear_probe_cache
 
 
+import core.security.python_probe as _python_probe_consumer
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
     """Probe results are memoized per process — isolate every test.
@@ -178,7 +182,7 @@ def test_probe_child_module_rides_as_argv() -> None:
         return real_run(cmd, **kwargs)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_availability.subprocess, "run", _spy_run)
+        patch_module_attribute(mp, _python_probe_consumer, 'subprocess', "run", _spy_run)
         assert _probe("scratch-argv", "json") is True
     cmd = captured["cmd"]
     assert cmd == [

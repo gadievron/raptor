@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_bindings import patch_module_attribute, mock_module_attribute
 
 import core.security.rule_of_two as r2
 from core.security.rule_of_two import (
@@ -36,17 +36,17 @@ class TestIsInteractive:
             monkeypatch.delenv(name, raising=False)
 
     def test_true_when_tty(self):
-        with patch("sys.stdin") as mock_stdin:
+        with mock_module_attribute(r2, 'sys', 'stdin') as mock_stdin:
             mock_stdin.isatty.return_value = True
             assert is_interactive() is True
 
     def test_false_when_not_tty(self):
-        with patch("sys.stdin") as mock_stdin:
+        with mock_module_attribute(r2, 'sys', 'stdin') as mock_stdin:
             mock_stdin.isatty.return_value = False
             assert is_interactive() is False
 
     def test_false_when_no_isatty(self):
-        with patch("sys.stdin", new=io.StringIO()):
+        with mock_module_attribute(r2, 'sys', 'stdin', new=io.StringIO()):
             assert is_interactive() is False
 
     def test_false_when_tty_but_ci_env_set(self, monkeypatch):
@@ -55,7 +55,7 @@ class TestIsInteractive:
         # rule-of-two gate. The CI-env probe added in batch 076
         # closes that gap.
         monkeypatch.setenv("CI", "true")
-        with patch("sys.stdin") as mock_stdin:
+        with mock_module_attribute(r2, 'sys', 'stdin') as mock_stdin:
             mock_stdin.isatty.return_value = True
             assert is_interactive() is False
 
@@ -301,7 +301,7 @@ class TestSessionHumanTerminal:
             monkeypatch.delenv(name, raising=False)
 
     def test_true_when_terminal_ancestor(self, monkeypatch):
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(r2, "_has_terminal_ancestor", lambda: True)
         assert r2._session_has_human_terminal() is True
 
@@ -313,19 +313,19 @@ class TestSessionHumanTerminal:
         assert r2._session_has_human_terminal() is False
 
     def test_falls_back_to_stdin_tty_when_no_ancestor(self, monkeypatch):
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(r2, "_has_terminal_ancestor", lambda: False)
-        with patch("sys.stdin") as mock_stdin:
+        with mock_module_attribute(r2, 'sys', 'stdin') as mock_stdin:
             mock_stdin.isatty.return_value = True
             assert r2._session_has_human_terminal() is True
 
     def test_fail_closed_on_error(self, monkeypatch):
         def boom():
             raise RuntimeError("proc walk exploded")
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(r2, "_has_terminal_ancestor", boom)
         # stdin.isatty also raises → overall fail-closed to False.
-        with patch("sys.stdin") as mock_stdin:
+        with mock_module_attribute(r2, 'sys', 'stdin') as mock_stdin:
             mock_stdin.isatty.side_effect = RuntimeError("nope")
             assert r2._session_has_human_terminal() is False
 
@@ -347,7 +347,7 @@ class TestSandboxWillContain:
         from core.sandbox import state
         monkeypatch.setattr(state, "_cli_sandbox_disabled", False, raising=False)
         monkeypatch.setattr(state, "_cli_sandbox_profile", None, raising=False)
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(
             "core.sandbox.context.check_landlock_available", lambda: True
         )
@@ -357,7 +357,7 @@ class TestSandboxWillContain:
         from core.sandbox import state
         monkeypatch.setattr(state, "_cli_sandbox_disabled", False, raising=False)
         monkeypatch.setattr(state, "_cli_sandbox_profile", None, raising=False)
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(
             "core.sandbox.context.check_landlock_available", lambda: False
         )
@@ -371,7 +371,7 @@ class TestSandboxWillContain:
         monkeypatch.setattr(state, "_cli_sandbox_disabled", False, raising=False)
         monkeypatch.setattr(state, "_cli_sandbox_profile", "network-only",
                             raising=False)
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(
             "core.sandbox.context.check_landlock_available", lambda: True
         )
@@ -383,7 +383,7 @@ class TestSandboxWillContain:
         from core.sandbox import state
         monkeypatch.setattr(state, "_cli_sandbox_disabled", False, raising=False)
         monkeypatch.setattr(state, "_cli_sandbox_profile", "debug", raising=False)
-        monkeypatch.setattr(r2.sys, "platform", "linux")
+        patch_module_attribute(monkeypatch, r2, 'sys', "platform", "linux")
         monkeypatch.setattr(
             "core.sandbox.context.check_landlock_available", lambda: True
         )

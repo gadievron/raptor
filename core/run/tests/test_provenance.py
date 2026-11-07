@@ -37,6 +37,20 @@ from core.run.provenance import (
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute, mock_module_attribute
+
+
+@pytest.fixture(autouse=True)
+def _forward_host_interface_mock(monkeypatch):
+    """Keep delegated lookups on the same fault without sharing module state."""
+    import core.run.provenance as primary
+    import core.run.toolprobe as delegated
+
+    patch_module_attribute(monkeypatch, delegated, "subprocess", "run",
+                           lambda *args, **kwargs: primary.subprocess.run(*args, **kwargs))
+
+
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
@@ -291,7 +305,7 @@ class TestTargetSnapshot(unittest.TestCase):
             return real_run(cmd, *a, **k)
 
         with TemporaryDirectory() as d, \
-                mock.patch.object(prov.subprocess, "run", side_effect=spy):
+                mock_module_attribute(prov, 'subprocess', "run", side_effect=spy):
             prov.target_snapshot(Path(d))
         joined = " ".join(" ".join(map(str, c)) for c in seen)
         self.assertTrue(seen, "no git invocation captured")
@@ -370,7 +384,7 @@ class TestTargetSnapshot(unittest.TestCase):
             return real_run(cmd, *a, **k)
 
         with TemporaryDirectory() as d, \
-                mock.patch.object(prov.subprocess, "run", side_effect=spy):
+                mock_module_attribute(prov, 'subprocess', "run", side_effect=spy):
             prov.source_control_snapshot(Path(d))
         joined = " ".join(" ".join(map(str, c)) for c in seen)
         self.assertNotIn("core.fsmonitor=", joined)
@@ -461,10 +475,10 @@ class TestToolVersion(unittest.TestCase):
             args=["semgrep", "--version"], returncode=0,
             stdout="1.99.0\nextra probe noise\n", stderr="",
         )
-        with mock.patch.object(
-            toolprobe.shutil, "which", return_value="/opt/probe/semgrep",
-        ), mock.patch.object(
-            prov.subprocess, "run", return_value=fake,
+        with mock_module_attribute(
+            toolprobe, 'shutil', "which", return_value="/opt/probe/semgrep",
+        ), mock_module_attribute(
+            prov, 'subprocess', "run", return_value=fake,
         ):
             v = tool_version("semgrep")
         self.assertEqual(v, "1.99.0")
@@ -477,10 +491,10 @@ class TestToolVersion(unittest.TestCase):
         # this test exists for.
         import core.run.provenance as prov
         import core.run.toolprobe as toolprobe
-        with mock.patch.object(
-            toolprobe.shutil, "which", return_value="/opt/probe/semgrep",
-        ), mock.patch.object(
-            prov.subprocess, "run",
+        with mock_module_attribute(
+            toolprobe, 'shutil', "which", return_value="/opt/probe/semgrep",
+        ), mock_module_attribute(
+            prov, 'subprocess', "run",
             side_effect=subprocess.TimeoutExpired(
                 cmd=["semgrep", "--version"], timeout=5.0,
             ),
