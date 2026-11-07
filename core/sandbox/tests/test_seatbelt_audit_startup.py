@@ -12,12 +12,21 @@ from core.sandbox import seatbelt_audit
 from core.testing.module_bindings import patch_module_attribute
 
 @pytest.fixture
-def setup_streamer(tmp_path, monkeypatch):
+def setup_streamer(tmp_path, monkeypatch, request):
     proc = Mock(stdout=io.StringIO())
     proc.wait.return_value = 0
     launch = Mock(return_value=proc)
     patch_module_attribute(monkeypatch, seatbelt_audit, "subprocess", "Popen", launch)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
+
+    def finish():
+        proc.wait.side_effect = None
+        proc.wait.return_value = 0
+        if isinstance(streamer._reader, Mock):
+            streamer._reader.is_alive.return_value = False
+        streamer.stop(drain_timeout=0)
+
+    request.addfinalizer(finish)
     monkeypatch.setattr(streamer, "_warm_up_until_attached", lambda: True)
     return streamer, proc, launch
 
@@ -79,6 +88,7 @@ def test_reap_failure_preserves_original_startup_exception(setup_streamer, monke
 def test_duplicate_start_keeps_original_process(setup_streamer, monkeypatch):
     streamer, proc, launch = setup_streamer
     reader = Mock()
+    reader.is_alive.return_value = False
     patch_module_attribute(monkeypatch, seatbelt_audit, "threading", "Thread", Mock(return_value=reader))
     streamer.start()
     with pytest.raises(RuntimeError, match="already been started"):
