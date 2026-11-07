@@ -2176,9 +2176,6 @@ class TestDispatchWiring:
             (RULE_HANDLER_OUTCOME, "permissive error handler"),
             (RULE_IGNORED_RETURN, "neither assigned nor compared"),
             (RULE_TRISTATE, "tri-state"),
-            # Detection-grade -naming variants render only inside a
-            # composite that carries a qualifying receipt.
-            (RULE_HANDLER_OUTCOME + "-naming+coccinelle", "fail-open"),
         ):
             items = grade_review_result(
                 {"hypothesis": "h"}, evidence_tool=rule_id,
@@ -2189,6 +2186,18 @@ class TestDispatchWiring:
             ]
             assert tool_items, rule_id
             assert needle in tool_items[0].description, rule_id
+
+    @pytest.mark.parametrize("suffix", ["", "+coccinelle"])
+    def test_naming_component_does_not_inherit_receipt_grade(self, suffix):
+        from core.audit.evidence_grade import EvidenceSource, grade_review_result
+
+        items = grade_review_result(
+            {"hypothesis": "h"},
+            evidence_tool=RULE_HANDLER_OUTCOME + "-naming" + suffix,
+        )
+        sources = {item.source for item in items}
+        assert EvidenceSource.TREE_SITTER not in sources
+        assert (EvidenceSource.COCCINELLE in sources) == bool(suffix)
 
     def test_degradation_row_present(self):
         from core.audit.degradation import get_fallback
