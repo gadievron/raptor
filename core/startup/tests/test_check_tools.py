@@ -132,10 +132,7 @@ def _run_check_tools(*, on_path, versions=None, module_present=False):
     with deps_patch, groups_patch, mock_module_attribute(
         _mock_owner('core.startup.init'), 'shutil', 'which',
         side_effect=lambda b: f"/usr/bin/{b}" if b in on_path else None,
-    ), mock.patch(
-        "core.startup.init.importlib.util.find_spec",
-        return_value=object() if module_present else None,
-    ), mock.patch(
+    ), mock_module_attribute(_mock_owner('core.startup.init'), 'importlib.util', 'find_spec', return_value=object() if module_present else None), mock.patch(
         "core.startup.init._tool_version",
         side_effect=lambda name: versions.get(name),
     ):

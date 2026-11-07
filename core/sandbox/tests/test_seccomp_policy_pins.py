@@ -19,6 +19,9 @@ child and would turn the diagnostic write itself into an abort).
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import ctypes
 import ctypes.util
 import re
@@ -76,11 +79,9 @@ class _NoAttrLib:
 def _probe(monkeypatch: pytest.MonkeyPatch, *, libname: Any = "seccomp",
            lib: Any = None, selftest: bool = True) -> bool:
     monkeypatch.setattr(state, "_libseccomp_cache", None)
-    monkeypatch.setattr(ctypes.util, "find_library",
-                        lambda name: libname)
+    patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: libname)
     if lib is not None:
-        monkeypatch.setattr(ctypes, "CDLL",
-                            mock.Mock(return_value=lib))
+        patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(return_value=lib))
     monkeypatch.setattr(sc, "_seccomp_functional_selftest",
                         lambda lib: selftest)
     try:
@@ -97,10 +98,8 @@ def test_probe_reports_unavailable_without_library(
 def test_probe_reports_unavailable_on_load_failure(
         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(state, "_libseccomp_cache", None)
-    monkeypatch.setattr(ctypes.util, "find_library",
-                        lambda name: "seccomp")
-    monkeypatch.setattr(ctypes, "CDLL",
-                        mock.Mock(side_effect=OSError("bad build")))
+    patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: 'seccomp')
+    patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(side_effect=OSError('bad build')))
     assert sc.check_seccomp_available() is False
 
 
@@ -125,9 +124,8 @@ def test_probe_success_caches_the_library_handle(
         seccomp_release=1, seccomp_syscall_resolve_name=1,
         seccomp_attr_set=1)
     monkeypatch.setattr(state, "_libseccomp_cache", None)
-    monkeypatch.setattr(ctypes.util, "find_library",
-                        lambda name: "seccomp")
-    monkeypatch.setattr(ctypes, "CDLL", mock.Mock(return_value=lib))
+    patch_module_attribute(monkeypatch, sc, 'ctypes.util', 'find_library', lambda name: 'seccomp')
+    patch_module_attribute(monkeypatch, sc, 'ctypes', 'CDLL', mock.Mock(return_value=lib))
     monkeypatch.setattr(sc, "_seccomp_functional_selftest",
                         lambda _lib: True)
     assert sc.check_seccomp_available() is True

@@ -9,6 +9,9 @@ that outlives the gap and gives every SDK the same tunable pool.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import gc
 import sys
 import time
@@ -146,19 +149,14 @@ class TestHttp2Gate:
 
     def test_opted_in_with_h2_installed(self, monkeypatch):
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec",
-            lambda name: object() if name == "h2" else None,
-        )
+        patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)
         assert http_pool.http2_enabled() is True
 
     def test_opted_in_without_h2_warns_once_and_stays_http1(
         self, monkeypatch, caplog,
     ):
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: None)
         with caplog.at_level("WARNING", logger="core.llm.http_pool"):
             assert http_pool.http2_enabled() is False
             assert http_pool.http2_enabled() is False
@@ -169,9 +167,7 @@ class TestHttp2Gate:
         """With the gate closed the client must be constructible even
         when h2 is absent — the whole point of gating."""
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec", lambda name: None,
-        )
+        patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: None)
         client = http_pool.sdk_http_client(10)
         client.close()
 
@@ -299,10 +295,7 @@ class TestUpstreamShardCount:
 
     def _force_h2(self, monkeypatch):
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec",
-            lambda name: object() if name == "h2" else None,
-        )
+        patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)
 
     def test_default_one_when_http2_off(self):
         assert http_pool.upstream_shard_count() == 1
@@ -505,10 +498,7 @@ class TestShardLifecycleKnobs:
 
     def _force_h2(self, monkeypatch):
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec",
-            lambda name: object() if name == "h2" else None,
-        )
+        patch_module_attribute(monkeypatch, http_pool, 'importlib.util', 'find_spec', lambda name: object() if name == 'h2' else None)
 
     def test_failure_threshold_default_and_override(self, monkeypatch):
         assert (

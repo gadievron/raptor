@@ -21,6 +21,9 @@ statement.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import errno
 import os
 import sys
@@ -151,10 +154,7 @@ class TestBindPinnedSource:
         victim.rmdir()
         (tmp_path / "shared" / "out").symlink_to(stolen)
 
-        monkeypatch.setattr(
-            mount_ns.os.path, "realpath",
-            lambda p, **_kw: pre_swap_answer,
-        )
+        patch_module_attribute(monkeypatch, mount_ns, 'os.path', 'realpath', lambda p, **_kw: pre_swap_answer)
         calls: list[tuple] = []
         monkeypatch.setattr(
             mount_ns, "_mount",

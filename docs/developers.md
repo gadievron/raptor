@@ -534,6 +534,16 @@ if it also mutates process state. A module-scoped fixture cannot depend on
 the function-scoped `monkeypatch` fixture: use `pytest.MonkeyPatch.context()`
 with the required lifetime instead.
 
+For mocks on borrowed modules, use `core.testing.module_bindings` to own
+only the consumer's binding. Both `patch_module_attribute` and
+`mock_module_attribute` accept dotted bindings such as `"os.path"` or
+`"importlib.util"`. They copy every module in that path and restore the
+original root binding when the owning scope exits. Unselected branches
+remain borrowed. Existing literal dotted bindings from
+`scoped_function_imports` retain their existing meaning. The complete private
+path is built before publication,
+so an invalid nested binding cannot leave a partially replaced root.
+
 For a change involving shared state, run the affected tests alone and with
 their related tests in one process. Then exercise randomized order and
 multiple workers, for example:

@@ -106,7 +106,7 @@ def test_runtime_base_never_falls_back_from_explicit_invalid_directory(tmp_path,
 def test_unset_macos_temp_uses_private_os_directory(tmp_path, monkeypatch):
     from packages.joern import client
     monkeypatch.setattr(client, "_INITIAL_BASE", None)
-    monkeypatch.setattr(client.os.sys, "platform", "darwin")
+    patch_module_attribute(monkeypatch, client, 'os.sys', 'platform', 'darwin')
     patch_module_attribute(monkeypatch, client, 'os', "confstr", lambda name: str(tmp_path))
     assert client.runtime_base() == tmp_path
 

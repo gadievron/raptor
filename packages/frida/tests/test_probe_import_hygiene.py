@@ -89,7 +89,7 @@ def test_cli_interpreter_discovery_supports_linux_and_macos_paths(tmp_path, monk
     (site/'frida/__init__.py').write_text('')
     patch_module_attribute(monkeypatch, sandboxed, 'sys', 'executable', '/nonexistent-fixture-python')
     monkeypatch.setattr('shutil.which', lambda name: str(cli) if name == 'frida' else None)
-    monkeypatch.setattr(sandboxed.os.path, 'isfile', lambda path: path == interpreter)
+    patch_module_attribute(monkeypatch, sandboxed, 'os.path', 'isfile', lambda path: path == interpreter)
     def probe(executable, source, **kwargs):
         assert executable == interpreter
         assert kwargs['timeout'] == 5

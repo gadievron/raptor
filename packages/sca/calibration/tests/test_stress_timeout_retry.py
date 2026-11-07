@@ -11,6 +11,9 @@ of one project would race on the same clone dir and caches.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import concurrent.futures
 import logging
 import threading
@@ -104,10 +107,7 @@ def recording_executor(
     class RecordingExecutor(_RecordingExecutor, stress_mod.concurrent.futures.ThreadPoolExecutor):
         pass
 
-    monkeypatch.setattr(
-        stress_mod.concurrent.futures, "ThreadPoolExecutor",
-        RecordingExecutor,
-    )
+    patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'ThreadPoolExecutor', RecordingExecutor)
     return RecordingExecutor
 
 
@@ -203,10 +203,7 @@ def test_orphan_still_running_skips_retry_and_keeps_error(
             shutdowns.append(wait)
 
     executor = RunningExecutor()
-    monkeypatch.setattr(
-        stress_mod.concurrent.futures, "ThreadPoolExecutor",
-        lambda **kwargs: executor,
-    )
+    patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'ThreadPoolExecutor', lambda **kwargs: executor)
 
     def poll(futures, **kwargs):
         assert not polls, "the expired scan must be abandoned on its first poll"
@@ -222,7 +219,7 @@ def test_orphan_still_running_skips_retry_and_keeps_error(
     # expired start time. This branch test must not depend on wall-clock
     # scheduling or the process-global scan registry; real timeout and
     # worker cleanup behavior is covered by the sweep integration tests.
-    monkeypatch.setattr(stress_mod.concurrent.futures, "wait", poll)
+    patch_module_attribute(monkeypatch, stress_mod, 'concurrent.futures', 'wait', poll)
     monkeypatch.setattr(stress_mod, "_scan_started_at", scan_started)
     results = stress_mod.run_stress_sweep(
         samples=[_sample("slow")],
