@@ -151,7 +151,7 @@ from core.smt_solver import (
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
 from core.smt_solver.assertion_frames import track_frames
-from core.smt_solver.call_arguments import find_call_end, split_call_arguments
+from core.smt_solver.call_arguments import find_call_end, mask_quoted_text, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
@@ -688,6 +688,37 @@ _ASSIGNMENT_SHAPED_RE = re.compile(
     r'|\+\+|--'                  # post/pre-increment, decrement
 )
 
+_STATE_EFFECT_KINDS = frozenset({RejectionKind.ASSIGNMENT_SHAPED, RejectionKind.UNMODELED_STATE_EFFECT})
+_ADDRESS_ARGUMENT_RE = re.compile(r"(?<!&)&(?!&)")
+
+
+def _call_may_expose_state(masked: str) -> bool:
+    """Decline ambiguous address/bitwise syntax inside opaque arguments.
+
+    A single ampersand can expose an object's address; opaque call argument
+    text has no C type/effect model. Quoted bytes have already been masked.
+    Non-call bitmasks and logical && do not create this barrier.
+    """
+    index = 0
+    while index < len(masked):
+        head = _CALL_HEAD_RE.match(masked, index)
+        if head is None:
+            index += 1
+            continue
+        opening = head.end()
+        while opening < len(masked) and masked[opening].isspace():
+            opening += 1
+        if opening < len(masked) and masked[opening] == "(":
+            end = find_call_end(masked, opening)
+            if _ADDRESS_ARGUMENT_RE.search(masked[opening + 1:end if end is not None else len(masked)]):
+                return True
+            if end is None:
+                return False
+            index = end
+        else:
+            index = head.end()
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Call summaries — axioms for recognised libc/POSIX calls
@@ -953,6 +984,7 @@ def _parse_condition(
             ),
         )
     canonicalised = _canonicalise(text)
+    effect_text = mask_quoted_text(canonicalised)
     # Reject program-statement shapes (assignment, compound assignment,
     # increment/decrement) BEFORE call substitution — they aren't
     # Boolean guards and routing them to ASSIGNMENT_SHAPED lets
@@ -960,7 +992,7 @@ def _parse_condition(
     # than proving a contradiction across an unmodeled mutation.
     # The detection is purely textual; the regex
     # carefully excludes the `==` / `<=` / `>=` / `!=` relational ops.
-    if _ASSIGNMENT_SHAPED_RE.search(canonicalised):
+    if _ASSIGNMENT_SHAPED_RE.search(effect_text):
         return Rejection(
             text, RejectionKind.ASSIGNMENT_SHAPED,
             "condition is assignment-shaped (program statement, not a "
@@ -972,6 +1004,12 @@ def _parse_condition(
                 "later references denote the post-mutation value "
                 "(e.g. `strlen(input_pre)` then `strlen(input_post)`)"
             ),
+        )
+    if _call_may_expose_state(effect_text):
+        return Rejection(
+            text, RejectionKind.UNMODELED_STATE_EFFECT,
+            "opaque call arguments may expose mutable state; scalar value flow is unmodeled",
+            hint="use explicit post-call SSA values or a source-bound call-effect model",
         )
     t = _substitute_calls(
         canonicalised, vars_, profile=profile,
@@ -1165,7 +1203,7 @@ def _classify_conditions(
     """Parse a complete guard frame without dropping its background theory.
 
     Reserve source names before allocating fresh call occurrences. An
-    assignment-shaped rejection advances the scalar value-flow segment
+    state-effect rejection advances the scalar value-flow segment
     without erasing labels or axioms. Every rejection remains visible.
     Each predicate and axiom retains its mutation-free segment so a native
     unsat core can establish an independent contradiction. A None solver
@@ -1191,7 +1229,7 @@ def _classify_conditions(
         elif rejection is not None:
             batch.unknown.append(cond.text)
             batch.rejections.append(rejection)
-            if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
+            if rejection.kind in _STATE_EFFECT_KINDS:
                 epoch += 1
         else:
             assert pending_pair is not None
@@ -1471,7 +1509,7 @@ def _solve_pending(
         # symbol. Only a native core owned by one mutation-free segment can
         # establish a refutation independently of the unmodeled transition.
         has_mutation = any(
-            reason.kind == RejectionKind.ASSIGNMENT_SHAPED
+            reason.kind in _STATE_EFFECT_KINDS
             for reason in unknown_reasons
         )
         core_epoch = tracked.single_core_origin(solver) if has_mutation else None
@@ -1479,7 +1517,7 @@ def _solve_pending(
         if unmodeled_mutation:
             reasoning = (
                 f"indeterminate ({mode}): encoded constraints are unsatisfiable, "
-                "but assignment-shaped input has unmodeled scalar value flow; "
+                "but rejected state effects have unmodeled scalar value flow; "
                 "refusing the refutation"
             )
         else:
@@ -1551,12 +1589,17 @@ def make_call_operand(
     Matching operand or guard text never establishes execution identity.
     The same optional summaries used by guards constrain only this fresh
     result. Argument variables retain the shared uniform-profile model.
+    Explicit mutation and ambiguous address/bitwise argument syntax require
+    a state-effect model and decline before allocating a call occurrence.
     """
     text = text.strip()
     if len(text) > _MAX_CONDITION_CHARS:
         raise ValueError("call operand exceeds the condition character limit")
     if not is_balanced_call(text):
         raise ValueError("call operand must be one balanced function call")
+    effect_text = mask_quoted_text(text)
+    if _ASSIGNMENT_SHAPED_RE.search(effect_text) or _call_may_expose_state(effect_text):
+        raise ValueError("call operand has unmodeled scalar state effects")
     head = _CALL_HEAD_RE.match(text)
     assert head is not None
     variable = make_anon_call_var(vars_, profile=profile)
@@ -2081,7 +2124,7 @@ def check_path_feasibility_dual(
                 timeout_ms, use_call_summaries=use_call_summaries,
                 mutation_texts=frozenset(
                     reason.text for reason in primary.unknown_reasons
-                    if reason.kind is RejectionKind.ASSIGNMENT_SHAPED
+                    if reason.kind in _STATE_EFFECT_KINDS
                 ),
             )
             if proof is not None:
