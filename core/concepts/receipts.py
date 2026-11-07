@@ -129,6 +129,25 @@ def _confine(source_root: Path, file_path: str) -> Path | None:
     return confine(source_root, file_path)
 
 
+def locate_quote_in_snippets(quote: str, snippets) -> tuple[str, int | None] | None:
+    """Locate an omitted file in the request's supplied (file, line, text) tuples.
+
+    Exact whitespace-normalised matches only, in one unambiguous file.
+    This supplies a locator, never proof: the caller must still verify the
+    quote against the confined on-disk source. No repository-wide search.
+    """
+    norm = _normalise(quote)
+    if len(norm) < MIN_QUOTE_CHARS:
+        return None
+    locations = {}
+    for file, line, text in snippets:
+        if file and text and norm in _normalise(text):
+            locations.setdefault(file, line)
+    if len(locations) != 1:
+        return None
+    return next(iter(locations.items()))
+
+
 def verify_receipt(
     source_root: Path,
     file_path: str,
@@ -157,6 +176,9 @@ def verify_receipt(
         return receipt
     receipt.sha256 = hashlib.sha256(norm.encode()).hexdigest()[:16]
 
+    if not file_path:
+        receipt.note = "source file locator missing"
+        return receipt
     resolved = _confine(source_root, file_path)
     if resolved is None or not resolved.is_file():
         receipt.note = "file not found inside source root"

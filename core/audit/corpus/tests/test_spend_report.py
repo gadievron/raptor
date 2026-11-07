@@ -153,3 +153,23 @@ class TestRunHeader:
         # Timestamped banner.
         import re
         assert re.search(r"\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\]", out)
+
+
+def test_unclassified_caller_totals_preserve_cost_classes_and_paid_failures(tmp_path):
+    def event(**kwargs):
+        return {"event": "call", "call_class": "unclassified", "cost_usd": 1,
+                "tokens_in": 10, "tokens_out": 2, "duration_s": 3,
+                "caller_chain": [{"module": "core.example", "function": "generate", "line": 1}], **kwargs}
+    _group(tmp_path, "g", [event(), event(caller_chain=[{"module": "core.example", "function": "generate", "line": 99}]),
+                           event(event="attempt_failed", cost_usd=0.5),
+                           event(disposition="cache_hit", cost_usd=0),
+                           event(caller_chain=None, cost_usd=2)])
+    spend = _aggregate_spend([tmp_path])
+    assert spend["total_usd"] == 4.5
+    assert spend["per_class"]["unclassified"] == (3, 4.5)
+    caller = spend["unclassified_origins"]["core.example.generate"]
+    assert caller == {"calls": 2, "failed_attempts": 1, "cost_usd": 2.5,
+                      "tokens_in": 30, "tokens_out": 6, "duration_s": 9}
+    assert spend["unclassified_origins"]["(unknown)"]["cost_usd"] == 2
+    text = _format_spend_block(spend, label_cost=0)
+    assert "core.example.generate" in text and "summed call time" in text
