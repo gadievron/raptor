@@ -72,6 +72,46 @@ def test_raw_truth_and_explicit_mode_expectations_remain_separate():
     assert cohort["by_class"]["auth"]["metrics"] == cohort["metrics"]
 
 
+def test_label_support_counts_unreviewed_truth_without_changing_recall():
+    rows = [
+        _row(expected_mode_results={"security": "clean"}),
+        _row(actual="error", expected_mode_results={"security": "finding"}),
+        _row("clean", "clean"),
+    ]
+    cohort = report.build_run_report(rows)["cohorts"][0]
+    assert cohort["label_support"] == {
+        "raw": {"positive": 2, "negative": 1},
+        "unreviewed": {"positive": 1, "negative": 0},
+        "explicit_current_mode": {"positive": 1, "negative": 1, "unspecified": 1},
+        "limits": [],
+    }
+    assert cohort["metrics"]["recall"] == 1.0
+    assert cohort["metrics"]["matrix"]["error"] == 1
+
+
+def test_single_polarity_classes_expose_measurement_limits():
+    rows = [_row("clean", "suspicious", bug_class="lifecycle"),
+            _row(bug_class="consistency", expected_mode_results={"security": "clean"})]
+    classes = report.build_run_report(rows)["cohorts"][0]["by_class"]
+    lifecycle = classes["lifecycle"]
+    assert lifecycle["label_support"]["raw"] == {"positive": 0, "negative": 1}
+    assert lifecycle["label_support"]["limits"] == ["no_positive_labels"]
+    assert lifecycle["metrics"]["recall"] is None
+    assert lifecycle["metrics"]["f1"] is None
+    consistency = classes["consistency"]
+    assert consistency["label_support"]["limits"] == ["no_negative_labels"]
+    assert consistency["label_support"]["explicit_current_mode"] == {"positive": 0, "negative": 1, "unspecified": 0}
+    assert consistency["metrics"]["precision"] == 1.0
+
+
+def test_file_mode_metadata_does_not_invent_explicit_row_expectations():
+    row = _row(expected_mode_results={"security": "finding"})
+    row.pop("mode")
+    cohort = report.build_run_report([row], {"mode": "security"})["cohorts"][0]
+    assert cohort["context"]["mode"] == "security"
+    assert cohort["label_support"]["explicit_current_mode"] == {"positive": 0, "negative": 0, "unspecified": 1}
+
+
 def test_resources_are_recorded_at_run_level_without_estimating_missing_totals():
     result = report.build_run_report([_row(), _row(model="other")], {
         "total_spend_usd": 4.5, "wall_s": 120, "llm_s": 40, "cost_usd": 1.2,
@@ -151,6 +191,6 @@ def test_cli_help_and_terminal_context_are_safe(tmp_path, capsys):
     assert caught.value.code == 0
     assert "Examples:" in capsys.readouterr().out
     source = tmp_path / "results.json"
-    source.write_text(json.dumps([_row(model="fixture\x1b[31m")]))
+    source.write_text(json.dumps([_row(model="fixture\x1b[31m", bug_class="class\x1b[31m")]))
     assert report.main([str(source)]) == 0
     assert "\x1b" not in capsys.readouterr().out

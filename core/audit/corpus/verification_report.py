@@ -24,6 +24,10 @@ from .corpus_metrics import (
 
 _CELLS = ("tp", "fp", "fn", "tn", "error")
 _STATES = ("matching", "other_claims_only", "unavailable", "missing", "malformed")
+_SUPPORT_LIMIT_TEXT = {
+    "no_positive_labels": "no raw positive labels; recall is unmeasured",
+    "no_negative_labels": "no raw negative labels; false-positive behavior is untested",
+}
 
 
 def _counts(value):
@@ -96,8 +100,24 @@ def _summarize_rows(rows):
     outcomes = {cell: Counter() for cell in _CELLS}
     outcome_rows = {cell: Counter() for cell in _CELLS}
     by_tool = {cell: defaultdict(Counter) for cell in _CELLS}
+    support = Counter()
+    unreviewed = Counter()
+    mode_support = Counter()
     for row in rows:
         cell = _classify(row["expected"], row["actual"])
+        # Derive ground-truth polarity from the scorer, independently of
+        # whether the pipeline produced a verdict for this label.
+        polarity = "positive" if _classify(row["expected"], "clean") == "fn" else "negative"
+        support[polarity] += 1
+        if cell == "error":
+            unreviewed[polarity] += 1
+        mode = row.get("mode")
+        expected_modes = row.get("expected_mode_results") or {}
+        if isinstance(mode, str) and mode and mode in expected_modes:
+            mode_polarity = "positive" if _classify(expected_modes[mode], "clean") == "fn" else "negative"
+            mode_support[mode_polarity] += 1
+        else:
+            mode_support["unspecified"] += 1
         state, observed, tools = _snapshot(row)
         availability[cell][state] += 1
         outcomes[cell].update(observed)
@@ -118,6 +138,13 @@ def _summarize_rows(rows):
             for cell in _CELLS
         },
         "mode_expectations": {"checked": checked, "mismatches": len(mismatches)},
+        "label_support": {
+            "raw": {kind: support[kind] for kind in ("positive", "negative")},
+            "unreviewed": {kind: unreviewed[kind] for kind in ("positive", "negative")},
+            "explicit_current_mode": {kind: mode_support[kind] for kind in ("positive", "negative", "unspecified")},
+            "limits": (["no_positive_labels"] if not support["positive"] else [])
+                      + (["no_negative_labels"] if not support["negative"] else []),
+        },
     }
 
 
@@ -179,6 +206,9 @@ def _print_report(path, report):
         for cell, counts in cohort["availability_by_cell"].items():
             values = " ".join(f"{counts[state]:>{width}}" for state, width in zip(_STATES, (9, 11, 12, 8, 10)))
             print(sanitise_for_terminal(f"  {cell:5} {sum(counts.values()):6} {values}"))
+        for name, summary in cohort["by_class"].items():
+            for limit in summary["label_support"]["limits"]:
+                print(sanitise_for_terminal(f"  {name}: {_SUPPORT_LIMIT_TEXT[limit]}."))
 
 
 def main(argv=None) -> int:
