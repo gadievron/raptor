@@ -712,71 +712,84 @@ def check_signed_mismatch(
     guard: GuardCondition,
     *,
     var_is_unsigned: bool | None = None,
+    comparison_is_signed: bool | None = None,
     bit_width: int = 32,
     source: str = "",
 ) -> SignedMismatchResult:
-    """Detect signed comparison on an unsigned variable.
+    """Check an explicitly supplied signed-comparison/unsigned-use model.
 
-    Pattern: ``if ((int)size < MAX)`` where size is size_t —
-    negative int values pass the guard but wrap to huge unsigned values.
+    An unsigned declaration does not establish signed comparison semantics:
+    a plain unsigned comparison with a small integer bound stays unsigned.
+    The caller must separately establish comparison_is_signed=True. Source
+    type lookup alone never grants that assumption. Cast/promotion binding
+    and source reachability are outside this legacy model.
 
-    Signedness must be ESTABLISHED, not defaulted: ``var_is_unsigned``
-    wins when the caller passes it; otherwise the declared type is
-    looked up in ``source``.  When the signedness is unknown, no
-    mismatch is claimed — the old ``var_is_unsigned=True`` default
-    stamped a witness-carrying signed_mismatch finding on every
-    resolvable upper-bound guard.
+    Every polarity-adjusted guard atom participates in the query, and every
+    returned assignment is replayed against that complete conjunction.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
+    if comparison_is_signed is not True:
+        return SignedMismatchResult(reasoning="signed comparison semantics not established — no mismatch claim")
+    if var_is_unsigned is not None and type(var_is_unsigned) is not bool:
+        return SignedMismatchResult(reasoning="unsigned-use flag must be a boolean — no mismatch claim")
     if var_is_unsigned is False:
         return SignedMismatchResult(reasoning="variable is signed — no mismatch")
+    if type(bit_width) is not int or not 1 <= bit_width <= 64:
+        return SignedMismatchResult(reasoning="unsupported comparison width — no mismatch claim")
+    constraints = constraints_for_guard(guard)
+    limit = 1 << (bit_width - 1)
+    if not constraints or any(not -limit <= c.bound_value < limit for c in constraints):
+        return SignedMismatchResult(reasoning="complete guard model unavailable — no mismatch claim")
 
-    if not _boolean_structure_tractable(guard.text):
-        return SignedMismatchResult(
-            reasoning=(
-                "guard boolean structure (||/!/ternary) not modeled — "
-                "no mismatch claim"
-            ),
-        )
-
-    constraints = extract_bounds_constraints(guard)
     for c in constraints:
         unsigned = var_is_unsigned
         if unsigned is None:
-            unsigned = declared_signedness(c.variable, source)  # type: ignore[assignment]
-        if unsigned is not True:
-            # Signed or unknown signedness: no witness-stamped
-            # mismatch finding without type evidence.
+            unsigned = declared_signedness(c.variable, source)
+        if unsigned is not True or c.operator not in ("<", "<=") or c.bound_value < 0:
             continue
-        if c.operator in ("<", "<=") and c.bound_value >= 0:
-            z3_result = _try_z3_signed_mismatch(
-                c.variable, c.operator, c.bound_value, bit_width,
+        native = _try_z3_signed_mismatch(c.variable, c.operator, c.bound_value, bit_width, constraints)
+        if native is not None:
+            if type(native.mismatch) is not bool or (native.mismatch and native.variable != c.variable):
+                return SignedMismatchResult(reasoning="malformed comparison result — no mismatch claim")
+            if native.mismatch and not _mismatch_witness_valid(native.witness, c.variable, c.bound_value, bit_width, constraints):
+                return SignedMismatchResult(reasoning="comparison witness failed replay — no mismatch claim")
+            if native.mismatch:
+                return native
+            continue
+        # Independent exact-integer fallback for the same finite signed
+        # domain. Retain every guard atom rather than inventing -1.
+        variables = {atom.variable for atom in constraints}
+        domains = [BoundsConstraint(var, op, value) for var in variables
+                   for op, value in ((">=", -limit), ("<", limit))]
+        candidate = _arithmetic_path_feasibility(
+            constraints + domains + [BoundsConstraint(c.variable, "<", 0)], 1,
+        )
+        if candidate.feasible is True and _mismatch_witness_valid(
+            candidate.witness, c.variable, c.bound_value, bit_width, constraints,
+        ):
+            return SignedMismatchResult(
+                mismatch=True, variable=c.variable, witness=candidate.witness,
+                reasoning="explicit signed-comparison model admits a negative value with a larger unsigned interpretation",
             )
-            if z3_result is not None:
-                return z3_result
-            # Arithmetic fallback: a signed comparison allows negative
-            # values which wrap to large unsigned values
-            signed_max = (1 << (bit_width - 1)) - 1
-            if c.bound_value <= signed_max:
-                return SignedMismatchResult(
-                    mismatch=True,
-                    variable=c.variable,
-                    reasoning=(
-                        f"signed comparison '{c.source_text}' allows negative "
-                        f"values that wrap to large unsigned values "
-                        f"(e.g. -1 → {(1 << bit_width) - 1})"
-                    ),
-                    witness={c.variable: -1},
-                )
+    return SignedMismatchResult(reasoning="no mismatch demonstrated in the supplied comparison model")
 
-    return SignedMismatchResult(
-        reasoning=(
-            "no signed/unsigned mismatch detected (unsigned-typed "
-            "variables with resolvable upper bounds only)"
-        ),
-    )
+
+def _mismatch_witness_valid(witness, variable, bound, bit_width, constraints):
+    """Replay finite signed values and every guard without native completion."""
+    import operator
+    comparisons = {"<": operator.lt, "<=": operator.le, ">": operator.gt,
+                   ">=": operator.ge, "==": operator.eq, "!=": operator.ne}
+    limit = 1 << (bit_width - 1)
+    if not isinstance(witness, dict) or set(witness) != {c.variable for c in constraints} | {variable}:
+        return False
+    if any(type(value) is not int or not -limit <= value < limit for value in witness.values()):
+        return False
+    if witness[variable] >= 0 or witness[variable] % (1 << bit_width) <= bound:
+        return False
+    return all(c.operator in comparisons and comparisons[c.operator](witness[c.variable], c.bound_value)
+               for c in constraints)
 
 
 def _try_z3_signed_mismatch(
@@ -784,6 +797,7 @@ def _try_z3_signed_mismatch(
     operator: str,
     bound: int,
     bit_width: int,
+    constraints: list[BoundsConstraint] | None = None,
 ) -> SignedMismatchResult | None:
     """Z3 check for signed/unsigned mismatch. Returns None if Z3 unavailable."""
     if not _z3_importable():
@@ -793,6 +807,7 @@ def _try_z3_signed_mismatch(
         "operator": operator,
         "bound": bound,
         "bit_width": bit_width,
+        "constraints": [asdict(c) for c in constraints] if constraints is not None else None,
     })
     return _result_from_child(SignedMismatchResult, out)
 
@@ -810,13 +825,15 @@ def check_off_by_one(
 ) -> list[SmtSufficiencyResult]:
     """Detect off-by-one when guard allows exactly buffer_size but sink appends.
 
-    Pattern: ``if (len <= buf_size) strncpy(dst, src, len)``
-    where strncpy writes len+1 bytes (null terminator).
+    This is a potential strncat length-bound issue, not a source defect
+    proof: actual writes also depend on string lengths and destination
+    position. strncpy does not append a byte beyond its count. Candidate
+    length assignments must satisfy the complete supplied guard model.
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    if buffer_size is None or not copies_null_terminator:
+    if type(buffer_size) is not int or buffer_size < 0 or copies_null_terminator is not True:
         return []
 
     null_term_sinks = frozenset({
@@ -825,6 +842,13 @@ def check_off_by_one(
     api_base = sink_guard.sink_api.split(".")[-1] if "." in sink_guard.sink_api else sink_guard.sink_api
     if api_base not in null_term_sinks:
         return []
+
+    all_constraints = []
+    for reaching_guard in sink_guard.guards:
+        modeled = constraints_for_guard(reaching_guard)
+        if modeled is None:
+            return []
+        all_constraints.extend(modeled)
 
     results: list[SmtSufficiencyResult] = []
     for guard in sink_guard.guards:
@@ -836,29 +860,37 @@ def check_off_by_one(
             # disjunction may not actually gate the sink.
             continue
         for c in constraints:
+            if not ((c.operator == "<=" and c.bound_value == buffer_size)
+                    or (c.operator == "<" and c.bound_value == buffer_size + 1)):
+                continue
+            candidate = _arithmetic_path_feasibility(
+                all_constraints + [BoundsConstraint(c.variable, "==", buffer_size)], 1,
+            )
+            if candidate.feasible is not True:
+                continue
             if c.operator == "<=" and c.bound_value == buffer_size:
                 results.append(SmtSufficiencyResult(
                     guard_text=guard.text,
                     feasible=True,
                     reasoning=(
-                        f"off-by-one: guard allows {c.variable}={c.bound_value} "
+                        f"potential off-by-one: guard model permits {c.variable}={c.bound_value} "
                         f"but {api_base} writes up to {c.bound_value}+1 bytes "
                         f"(null terminator) into {buffer_size}-byte buffer"
                     ),
                     concrete_values=guard.concrete_values,
-                    witness={c.variable: c.bound_value},
+                    witness=candidate.witness,
                 ))
             elif c.operator == "<" and c.bound_value == buffer_size + 1:
                 results.append(SmtSufficiencyResult(
                     guard_text=guard.text,
                     feasible=True,
                     reasoning=(
-                        f"off-by-one: guard allows {c.variable}={c.bound_value - 1} "
+                        f"potential off-by-one: guard model permits {c.variable}={c.bound_value - 1} "
                         f"but {api_base} writes up to {c.bound_value} bytes "
                         f"(null terminator) into {buffer_size}-byte buffer"
                     ),
                     concrete_values=guard.concrete_values,
-                    witness={c.variable: c.bound_value - 1},
+                    witness=candidate.witness,
                 ))
     return results
 
@@ -1373,6 +1405,7 @@ def _z3_dispatch_json(request: dict) -> Any:
         return asdict(_z3_signed_mismatch_check(
             args["variable"], args["operator"],
             args["bound"], args["bit_width"],
+            [BoundsConstraint(**c) for c in args["constraints"]] if args.get("constraints") is not None else None,
         ))
     if tag == "auth_bypass":
         return asdict(_z3_auth_bypass_check(
@@ -1452,55 +1485,47 @@ def _z3_signed_mismatch_check(
     operator: str,
     bound: int,
     bit_width: int,
+    constraints: list[BoundsConstraint] | None = None,
 ) -> SignedMismatchResult:
-    """Z3: Check if signed comparison allows negative values that wrap unsigned.
-
-    Uses core.smt_solver bitvec primitives for variable/value
-    construction and signedness-aware comparison routing.
-    """
+    """Solve the supplied signed-comparison model, never infer C conversions."""
     from core.smt_solver.availability import z3
-    from core.smt_solver.bitvec import gt, le, lt, mk_val, mk_var
     from core.smt_solver.session import new_solver
-    from core.smt_solver.witness import bv_to_int
+    from core.smt_solver.witness import format_vars
 
-    signed_var = mk_var(f"{variable}_signed", bit_width)
-    unsigned_var = mk_var(f"{variable}_unsigned", bit_width)
-    bv_bound = mk_val(bound, bit_width)
-
+    if (type(bit_width) is not int or not 1 <= bit_width <= 64
+            or operator not in {"<", "<="} or not isinstance(variable, str)
+            or not variable or type(bound) is not int or not 0 <= bound < (1 << (bit_width - 1))):
+        return SignedMismatchResult(reasoning="unsupported comparison model — inconclusive")
+    constraints = [BoundsConstraint(variable, operator, bound)] if constraints is None else list(constraints)
+    limit = 1 << (bit_width - 1)
+    if any(not isinstance(c.variable, str) or not c.variable or c.operator not in _NEGATE_OP
+           or type(c.bound_value) is not int or not -limit <= c.bound_value < limit for c in constraints):
+        return SignedMismatchResult(reasoning="unsupported guard model — inconclusive")
     solver = new_solver()
-
-    solver.add(signed_var == unsigned_var)
-
-    # Signed comparison passes (signed=True routes through z3's default signed cmp)
-    if operator == "<":
-        solver.add(lt(signed_var, bv_bound, signed=True))
-    elif operator == "<=":
-        solver.add(le(signed_var, bv_bound, signed=True))
-
-    # But unsigned interpretation is huge (unsigned > bound)
-    solver.add(gt(unsigned_var, bv_bound, signed=False))
-
+    variables = {name: z3.BitVec(name, bit_width) for name in {variable} | {c.variable for c in constraints}}
+    for c in constraints:
+        value, constant = variables[c.variable], z3.BitVecVal(c.bound_value, bit_width)
+        expressions = {"<": value < constant, "<=": value <= constant, ">": value > constant,
+                       ">=": value >= constant, "==": value == constant, "!=": value != constant}
+        solver.add(expressions[c.operator])
+    value = variables[variable]
+    # Assert the named comparison too: explicit constraints may omit it.
+    solver.add(value < bound if operator == "<" else value <= bound)
+    solver.add(value < 0, z3.UGT(value, z3.BitVecVal(bound, bit_width)))
     result = solver.check()
-    if result == z3.sat:
-        model = solver.model()
-        signed_val = model[signed_var]
-        unsigned_val = model[unsigned_var]
-        try:
-            sv = bv_to_int(signed_val.as_long(), bit_width, signed=True)
-            uv = bv_to_int(unsigned_val.as_long(), bit_width, signed=False)
-        except Exception:  # noqa: BLE001 — any model-extraction failure falls back to sentinel witnesses
-            sv, uv = -1, (1 << bit_width) - 1
-        return SignedMismatchResult(
-            mismatch=True,
-            variable=variable,
-            reasoning=(
-                f"signed comparison '{variable} {operator} {bound}' allows "
-                f"negative value {sv} which wraps to {uv} unsigned"
-            ),
-            witness={variable: sv},
-        )
+    if result == z3.unknown:
+        return SignedMismatchResult(reasoning="solver returned unknown — comparison model inconclusive")
+    if result == z3.unsat:
+        return SignedMismatchResult(reasoning="supplied comparison model has no mismatch (Z3 UNSAT)")
+    try:
+        witness = format_vars(solver.model(), variables, signed=True, completion=True)
+    except Exception:
+        return SignedMismatchResult(reasoning="comparison model unavailable — no witness claim")
+    if not _mismatch_witness_valid(witness, variable, bound, bit_width, constraints):
+        return SignedMismatchResult(reasoning="comparison witness failed replay — no mismatch claim")
     return SignedMismatchResult(
-        reasoning="no signed/unsigned mismatch: Z3 proved safe",
+        mismatch=True, variable=variable, witness=witness,
+        reasoning="explicit signed-comparison model admits a negative value with a larger unsigned interpretation",
     )
 
 

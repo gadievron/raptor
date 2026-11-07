@@ -2546,16 +2546,16 @@ class TestConfirmedTier:
         )
         assert o.compute_tier() == "tool_backed"
 
-    def test_smt_witness_is_confirmed(self):
+    def test_guard_model_witness_is_diagnostic(self):
         from core.audit.orchestrator import ReviewOutcome
         o = ReviewOutcome(
             file="f.c", function="fn", status="finding",
             body="overflow", evidence_tool="insufficient_guard_smt:witness",
             tools_dispatched={"smt"},
         )
-        assert o.compute_tier() == "confirmed"
+        assert o.compute_tier() == "llm_only"
 
-    def test_smt_witness_in_compound_evidence(self):
+    def test_guard_model_witness_does_not_upgrade_independent_evidence(self):
         from core.audit.orchestrator import ReviewOutcome
         o = ReviewOutcome(
             file="f.c", function="fn", status="finding",
@@ -2563,7 +2563,7 @@ class TestConfirmedTier:
             evidence_tool="semgrep:rule1+signed_mismatch_smt:witness",
             tools_dispatched={"smt", "semgrep"},
         )
-        assert o.compute_tier() == "confirmed"
+        assert o.compute_tier() == "tool_backed"
 
     def test_smt_no_witness_not_confirmed(self):
         from core.audit.orchestrator import ReviewOutcome
@@ -2572,7 +2572,7 @@ class TestConfirmedTier:
             body="dead path", evidence_tool="dead_path_smt",
             tools_dispatched={"dead_path_smt"},
         )
-        assert o.compute_tier() == "tool_backed"
+        assert o.compute_tier() == "llm_only"
 
     def test_llm_claimed_witness_never_confirmed(self):
         # The is_tool_evidence firewall must run BEFORE the :witness
@@ -2607,7 +2607,6 @@ class TestConfirmedTier:
         from core.audit.orchestrator import ReviewOutcome
         for stamp in (
             "smt:check-overflow:witness",
-            "dead_path_smt:witness",
             "clean-refuted:smt:check-overflow:witness",
         ):
             o = ReviewOutcome(
