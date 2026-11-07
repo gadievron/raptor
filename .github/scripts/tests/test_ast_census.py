@@ -73,3 +73,26 @@ def test_handler_cache_does_not_retain_visitor(visitor_module):
     borrowed = weakref.ref(visitor)
     del visitor
     assert borrowed() is None
+
+
+@pytest.mark.parametrize("source", [
+    "outer(inner(), option=other())\nlast()",
+    "@decorate(option=default())\ndef run(value: annotate() = initial()) -> result():\n"
+    "    return nested(value)\n",
+    "class Outer(base(), metaclass=meta()):\n    value = make()\n",
+    "result = [render(item) for item in source() if accept(item)]\n",
+    "result = f'{format_value():{width()}}'\n",
+    "try:\n    work()\nexcept kind():\n    recover()\nfinally:\n    finish()\n",
+    "match subject():\n    case {'key': value} if guard():\n        handle(value)\n",
+    "result = lambda value=initial(): nested(value)\ntext = 'not_a_call()'\n",
+    "values = {'literal': 1}\n",
+])
+def test_call_iterator_preserves_every_call_and_breadth_first_order(visitor_module, source):
+    tree = ast.parse(source)
+    before = ast.dump(tree, include_attributes=True)
+    expected = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    # Identity and order matter: consumers report the original nodes' locations.
+    actual = list(visitor_module.iter_calls(tree))
+    assert len(actual) == len(expected)
+    assert all(left is right for left, right in zip(actual, expected, strict=True))
+    assert ast.dump(tree, include_attributes=True) == before

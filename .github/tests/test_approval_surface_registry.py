@@ -65,11 +65,19 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 import unittest
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+
+with (patch.object(sys, "path", sys.path.copy())
+      if __name__ != "__main__" else nullcontext()):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from ast_census import iter_calls
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -591,9 +599,7 @@ def _may_carry_python_prompt(text: str) -> bool:
 
 def _python_prompt_count(tree: ast.AST, *, stop_after_first: bool = False) -> int:
     count = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in iter_calls(tree):
         fn = node.func
         if ((isinstance(fn, ast.Name) and fn.id in ("input", "confirm"))
                 or (isinstance(fn, ast.Attribute) and fn.attr == "confirm"

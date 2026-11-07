@@ -3,6 +3,27 @@
 from __future__ import annotations
 
 import ast
+from collections import deque
+from collections.abc import Iterator
+
+
+def iter_calls(tree: ast.AST) -> Iterator[ast.Call]:
+    """Yield every call in ast.walk order without per-node field generators.
+
+    Do not prune expressions or scope boundaries: calls in annotations,
+    defaults, decorators and nested scopes belong to these closure scans.
+    """
+    pending = deque([tree])
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, ast.Call):
+            yield node
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                pending.extend(item for item in value if isinstance(item, ast.AST))
+            elif isinstance(value, ast.AST):
+                pending.append(value)
 
 
 class CensusVisitor(ast.NodeVisitor):
