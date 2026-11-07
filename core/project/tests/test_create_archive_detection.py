@@ -10,6 +10,10 @@ all failures collapsing to None (create never refuses over the
 detection substrate).
 """
 
+import packages.describe.cli as _mock_consumer_tempfile
+from core.testing.module_bindings import mock_module_attribute
+
+
 import io
 import tarfile
 import unittest
@@ -75,9 +79,7 @@ class TestCreateArchiveDetection(unittest.TestCase):
                     created.append(d)
                 return d
 
-            from unittest.mock import patch
-            with patch("packages.describe.cli.tempfile.mkdtemp",
-                       tracking):
+            with mock_module_attribute(_mock_consumer_tempfile, 'tempfile', 'mkdtemp', tracking):
                 _detect_target_type(str(archive))
             for d in created:
                 self.assertFalse(Path(d).exists(),

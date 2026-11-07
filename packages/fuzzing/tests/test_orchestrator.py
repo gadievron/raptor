@@ -1,5 +1,9 @@
 """Tests for the fuzzing orchestrator's planning logic."""
 
+import packages.fuzzing.target_detector as _mock_consumer_platform
+from core.testing.module_bindings import mock_module_attribute
+
+
 import os
 import platform
 import shutil
@@ -134,8 +138,8 @@ class TestOrchestratorPlanning(unittest.TestCase):
             tmp = Path(f.name)
         try:
             tmp.chmod(0o755)
-            with patch("packages.fuzzing.target_detector.platform.system",
-                       return_value="Darwin"), \
+            with mock_module_attribute(_mock_consumer_platform, 'platform', 'system', return_value='Darwin'), \
+                 patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented", return_value=False), \
                  patch("packages.fuzzing.orchestrator.probe_capabilities",
                        return_value=_full_caps_macos()):
                 orch = FuzzingOrchestrator()
@@ -153,8 +157,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
             tmp = Path(f.name)
         try:
             tmp.chmod(0o755)
-            with patch("packages.fuzzing.target_detector.platform.system",
-                       return_value="Darwin"), \
+            with mock_module_attribute(_mock_consumer_platform, 'platform', 'system', return_value='Darwin'), \
                  patch("packages.fuzzing.orchestrator.probe_capabilities",
                        return_value=_full_caps_macos()), \
                  patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented",

@@ -13,6 +13,10 @@ End-to-end coverage:
 
 from __future__ import annotations
 
+import packages.describe.cli as _mock_consumer_tempfile
+from core.testing.module_bindings import patch_module_attribute
+
+
 import io
 import json
 import subprocess
@@ -163,10 +167,7 @@ class TestArchiveHandling:
                 created_tmps.append(Path(d))
             return d
 
-        monkeypatch.setattr(
-            "packages.describe.cli.tempfile.mkdtemp",
-            _tracking_mkdtemp,
-        )
+        patch_module_attribute(monkeypatch, _mock_consumer_tempfile, 'tempfile', 'mkdtemp', _tracking_mkdtemp)
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -279,10 +280,7 @@ class TestArchiveCacheHit:
                 created_tmps.append(Path(d))
             return d
 
-        monkeypatch.setattr(
-            "packages.describe.cli.tempfile.mkdtemp",
-            _tracking_mkdtemp,
-        )
+        patch_module_attribute(monkeypatch, _mock_consumer_tempfile, 'tempfile', 'mkdtemp', _tracking_mkdtemp)
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()

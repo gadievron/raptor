@@ -8,6 +8,10 @@ differ. Tests stub the OpenAI SDK client to avoid network.
 
 from __future__ import annotations
 
+import core.llm.providers as _mock_consumer_time
+from core.testing.module_bindings import patch_module_attribute
+
+
 from typing import Any
 
 import pytest
@@ -494,7 +498,7 @@ def test_api_error_returns_error_stop_reason(monkeypatch) -> None:
     from openai import APIConnectionError                    # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     def _always_fail(**_kwargs: Any) -> _FakeResponse:
         raise APIConnectionError(request=None)              # type: ignore[arg-type]
@@ -515,7 +519,7 @@ def test_transient_then_recovers(monkeypatch) -> None:
     from openai import APIConnectionError                    # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -545,7 +549,7 @@ def test_permanent_4xx_fails_fast(monkeypatch) -> None:
     from openai import APIStatusError                        # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -672,7 +676,7 @@ def test_turn_falls_back_to_synthesis_on_tool_unsupported(monkeypatch) -> None:
     via the JSON-protocol fallback. Result is a valid TurnResponse —
     same shape native turn() emits — so the loop continues."""
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     # generate() is what _tool_use_fallback calls — return a JSON
     # tool-call that the parser will recognise.
@@ -710,7 +714,7 @@ def test_turn_subsequent_calls_skip_native_when_unsupported(monkeypatch) -> None
     """After detection, subsequent turn() calls go straight to the
     fallback — no wasted round-trip per turn."""
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     def _generate(prompt, system_prompt=None, **kwargs):
         from core.llm.providers import LLMResponse
@@ -765,7 +769,7 @@ def test_turn_unrelated_4xx_does_not_flip_flag(monkeypatch) -> None:
     """A 401 or schema-error 400 must NOT flip the flag. Existing
     fail-fast behaviour should be preserved."""
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
 
     from openai import APIStatusError
     err = APIStatusError.__new__(APIStatusError)

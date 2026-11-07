@@ -13,6 +13,9 @@ either toolchain.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import os
 import shutil
 import subprocess
@@ -468,7 +471,7 @@ class TestToolchainFallback:
         def boom(*args, **kwargs):
             raise AssertionError("probe re-ran despite cache")
 
-        monkeypatch.setattr(compiler_sweep.subprocess, "run", boom)
+        patch_module_attribute(monkeypatch, compiler_sweep, 'subprocess', 'run', boom)
         assert compiler_sweep._gcc_analyzer() == first
 
 
@@ -538,6 +541,13 @@ class TestMappingEdges:
 
 
 class TestIntegration:
+    @pytest.fixture(autouse=True)
+    def _no_incidental_codeql_resolution(self, monkeypatch):
+        """Compiler chain ordering does not require installed CodeQL packs."""
+        from core.audit import orchestrator
+
+        monkeypatch.setattr(orchestrator, "_resolved_codeql_query", lambda query: None)
+
     def test_compiler_namespace_is_tool_evidence(self):
         assert is_tool_evidence("compiler:-Wanalyzer-use-after-free")
         assert is_tool_evidence("compiler:unix.Malloc")

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 
+
+
+
 import ast
 import inspect
 import json
@@ -2418,7 +2421,7 @@ class TestResolveRustc:
             seen["env"] = kwargs.get("env")
             return real_run(cmd, **kwargs)
 
-        monkeypatch.setattr(ex.subprocess, "run", spy_run)
+        patch_module_attribute(monkeypatch, ex, 'subprocess', 'run', spy_run)
         assert ex._resolve_rustc() == str(proxy)
         env = seen["env"]
         assert env is not None
@@ -3559,7 +3562,7 @@ def _forbid_bare_subprocess(monkeypatch):
             "execute through core.sandbox"
         )
 
-    monkeypatch.setattr(ex.subprocess, "run", _boom)
+    patch_module_attribute(monkeypatch, ex, 'subprocess', 'run', _boom)
 
 
 class TestCompileSandboxParity:

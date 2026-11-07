@@ -10,6 +10,9 @@ covered.
 
 from __future__ import annotations
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 import io
 import json
 import sys
@@ -583,7 +586,7 @@ class TestEmptyOverridePolicyRefusal:
 
         monkeypatch.setattr(bq, "proxy_hosts_for_bq", lambda: [])
         err = io.StringIO()
-        monkeypatch.setattr(mod.sys, "stderr", err)
+        patch_module_attribute(monkeypatch, mod, 'sys', 'stderr', err)
         rc = mod._run_sandboxed(
             {"query": "SELECT 1"},
             types.SimpleNamespace(timeout=5, output=None),

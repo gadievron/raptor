@@ -7,6 +7,10 @@ seam — no gdb/lldb/target binary is ever executed.
 
 from __future__ import annotations
 
+import packages.binary_analysis.crash_analyser as _mock_consumer_platform
+from core.testing.module_bindings import mock_module_attribute
+
+
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -201,10 +205,7 @@ class TestAslrEnabledStringConvention(unittest.TestCase):
 
         nm_result = MagicMock(returncode=1, stdout="")
         readelf_result = MagicMock(returncode=1, stdout="")
-        with patch(
-            "packages.binary_analysis.crash_analyser.platform.system",
-            return_value="Linux",
-        ), patch(
+        with mock_module_attribute(_mock_consumer_platform, 'platform', 'system', return_value='Linux'), patch(
             "packages.binary_analysis.crash_analyser._PROC_ASLR_PATH",
             aslr_file,
         ), patch(

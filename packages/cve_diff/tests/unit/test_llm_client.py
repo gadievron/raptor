@@ -8,6 +8,10 @@ method.
 
 from __future__ import annotations
 
+import cve_diff.llm.client as _mock_consumer_time
+from core.testing.module_bindings import patch_module_attribute
+
+
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
@@ -157,7 +161,7 @@ def test_provider_for_model_falls_back_to_claudecode(monkeypatch):
 
 def test_non_retryable_error_fails_fast(monkeypatch):
     sleeps: list[float] = []
-    monkeypatch.setattr("cve_diff.llm.client.time.sleep", sleeps.append)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', sleeps.append)
     provider = _mock_provider()
     provider.generate.side_effect = RuntimeError(
         "401 authentication_error: invalid x-api-key")
@@ -171,7 +175,7 @@ def test_non_retryable_error_fails_fast(monkeypatch):
 
 def test_transient_error_retries_then_succeeds(monkeypatch):
     sleeps: list[float] = []
-    monkeypatch.setattr("cve_diff.llm.client.time.sleep", sleeps.append)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', sleeps.append)
     provider = _mock_provider()
     provider.generate.side_effect = [
         ConnectionError("connection reset by peer"),
@@ -186,7 +190,7 @@ def test_transient_error_retries_then_succeeds(monkeypatch):
 
 
 def test_transient_error_exhausts_retries(monkeypatch):
-    monkeypatch.setattr("cve_diff.llm.client.time.sleep", lambda _s: None)
+    patch_module_attribute(monkeypatch, _mock_consumer_time, 'time', 'sleep', lambda _s: None)
     provider = _mock_provider()
     provider.generate.side_effect = TimeoutError("timed out")
     client = ResilientLLMClient(max_retries=2)
