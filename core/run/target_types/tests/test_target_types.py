@@ -17,6 +17,9 @@ from core.run.target_types import (
 )
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _reset_catalog_cache(monkeypatch):
     """Load a private catalog and restore the caller's immutable snapshot."""
@@ -543,7 +546,7 @@ class TestBinaryDominant:
             opened.append(str(path))
             return real_open(path, flags, *args, **kwargs)
 
-        monkeypatch.setattr(tt.os, "open", spy)
+        patch_module_attribute(monkeypatch, tt, 'os', "open", spy)
         assert tt._read_magic(fifo) is None
         assert str(fifo) not in opened
 

@@ -19,6 +19,10 @@ import pytest
 from core.run import tmp_reaper
 from core.run.scratch import scratch_dir
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 
 
@@ -377,8 +381,8 @@ class TestInodeCeilingAdvisory:
 
     def test_below_ceiling_is_silent(self, tmp_root, monkeypatch, caplog):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 500))
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 500))
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
         assert "inode usage" not in caplog.text
@@ -387,8 +391,8 @@ class TestInodeCeilingAdvisory:
         self, tmp_root, monkeypatch, caplog,
     ):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 50))  # 95%
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 50))  # 95%
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
             self._mint_lane(tmp_root)  # within the re-warn interval
@@ -398,8 +402,8 @@ class TestInodeCeilingAdvisory:
 
     def test_env_moves_the_ceiling(self, tmp_root, monkeypatch, caplog):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 500))  # 50%
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 500))  # 50%
         monkeypatch.setenv("RAPTOR_TMP_INODE_SOFT_PCT", "40")
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
@@ -407,8 +411,8 @@ class TestInodeCeilingAdvisory:
 
     def test_env_zero_disables(self, tmp_root, monkeypatch, caplog):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 0))  # 100%
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 0))  # 100%
         monkeypatch.setenv("RAPTOR_TMP_INODE_SOFT_PCT", "0")
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
@@ -418,8 +422,8 @@ class TestInodeCeilingAdvisory:
         self, tmp_root, monkeypatch, caplog,
     ):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 20))  # 98%
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 20))  # 98%
         monkeypatch.setenv("RAPTOR_TMP_INODE_SOFT_PCT", "lots")
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
@@ -429,8 +433,8 @@ class TestInodeCeilingAdvisory:
         self, tmp_root, monkeypatch, caplog,
     ):
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(0, 0))
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(0, 0))
         with caplog.at_level("WARNING"):
             self._mint_lane(tmp_root)
         assert "inode usage" not in caplog.text
@@ -443,7 +447,7 @@ class TestInodeCeilingAdvisory:
         def _boom(_path):
             raise OSError("statvfs exploded")
 
-        monkeypatch.setattr(scratch_mod.os, "statvfs", _boom)
+        patch_module_attribute(monkeypatch, scratch_mod, 'os', "statvfs", _boom)
         with scratch_dir("raptor-scratch-test-") as p:
             assert p.is_dir()
 
@@ -453,8 +457,8 @@ class TestInodeCeilingAdvisory:
         # dir=... scratch is operator-visible run output, not the
         # session-tmp growth surface — no advisory there.
         from core.run import scratch as scratch_mod
-        monkeypatch.setattr(
-            scratch_mod.os, "statvfs", self._statvfs(1000, 0))
+        patch_module_attribute(monkeypatch,
+            scratch_mod, 'os', "statvfs", self._statvfs(1000, 0))
         with caplog.at_level("WARNING"):
             with scratch_dir("x-", dir=tmp_path / "out"):
                 pass
@@ -512,7 +516,6 @@ def _idle_fixture_cwds(monkeypatch):
     # native integration concern. An unrelated lsof warning must not
     # turn their dead-owner/age assertions into host-dependent results.
     monkeypatch.setattr("core.run.tmp_reaper._live_cwds", lambda: set())
-
 
 
 @pytest.mark.parametrize("force_keepalive", [False, True])

@@ -7,6 +7,9 @@ import pytest
 from core.sandbox import _spawn
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('prefix', [b'G:', b'G', b'', b'G:X:exec failed', b'M:mount failed'])
 def test_read_error_never_returns_exec_success(monkeypatch, prefix):
     chunks = [prefix] if prefix else []
@@ -17,8 +20,8 @@ def test_read_error_never_returns_exec_success(monkeypatch, prefix):
             return chunks.pop(0)
         raise OSError(errno.EIO, 'status read failed')
 
-    monkeypatch.setattr(_spawn.os, 'read', read)
-    monkeypatch.setattr(_spawn.os, 'close', closed.append)
+    patch_module_attribute(monkeypatch, _spawn, 'os', 'read', read)
+    patch_module_attribute(monkeypatch, _spawn, 'os', 'close', closed.append)
     owned = {12345}
     result = _spawn._drain_status_pipe(12345, owned)
     assert result is not None
@@ -43,8 +46,8 @@ def test_successful_or_nonblocking_drain_preserves_confirmation(monkeypatch, tai
             raise item
         return item
 
-    monkeypatch.setattr(_spawn.os, 'read', read)
-    monkeypatch.setattr(_spawn.os, 'close', lambda fd: None)
+    patch_module_attribute(monkeypatch, _spawn, 'os', 'read', read)
+    patch_module_attribute(monkeypatch, _spawn, 'os', 'close', lambda fd: None)
     owned = {12345}
     assert _spawn._drain_status_pipe(12345, owned) is None
     assert not owned

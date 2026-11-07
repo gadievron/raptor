@@ -10,6 +10,10 @@ import pytest
 from core.sandbox import egress_summary as summary
 from core.security import capped_read
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.usefixtures("private_egress_readers")
 
 
@@ -69,8 +73,8 @@ def test_stat_failure_closes_descriptor_and_returns_no_summary(tmp_path, monkeyp
         return fd
 
     with monkeypatch.context() as patch:
-        patch.setattr(capped_read.os, "open", open_fd)
-        patch.setattr(capped_read.os, "fstat", Mock(side_effect=OSError("stat failed")))
+        patch_module_attribute(patch, capped_read, 'os', "open", open_fd)
+        patch_module_attribute(patch, capped_read, 'os', "fstat", Mock(side_effect=OSError("stat failed")))
         assert summary.summarise_egress(tmp_path) is None
     assert len(opened) == 1
     with pytest.raises(OSError) as exc:
@@ -90,5 +94,5 @@ def test_growth_past_cap_is_not_accepted_as_a_partial_log(tmp_path, monkeypatch)
             output.write(json.dumps(event()).encode() + b"\n")
         return metadata
 
-    monkeypatch.setattr(capped_read.os, "fstat", grow)
+    patch_module_attribute(monkeypatch, capped_read, 'os', "fstat", grow)
     assert summary.summarise_egress(tmp_path) is None

@@ -11,6 +11,9 @@ from packages.web import _browser_driver as driver
 from packages.web import _browser_sandbox as boundary
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def selected_nonroot_driver(monkeypatch):
     from types import SimpleNamespace
@@ -156,7 +159,7 @@ def test_cli_waiver_requires_browser(monkeypatch):
                                      dict(landlock_required=False), dict(rootfs='/owned/image')])
 def test_browser_backend_refuses_host_proc_and_fallback_lanes(tmp_path, monkeypatch, override):
     from core.sandbox import _spawn
-    monkeypatch.setattr(_spawn.os, 'getuid', lambda: 1001)
+    patch_module_attribute(monkeypatch, _spawn, 'os', 'getuid', lambda: 1001)
     options = dict(target=str(tmp_path), output=str(tmp_path), block_network=False,
                    nproc_limit=0, limits={}, writable_paths=[str(tmp_path)],
                    readable_paths=[], allowed_tcp_ports=[443], seccomp_profile='chromium',

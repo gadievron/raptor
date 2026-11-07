@@ -64,6 +64,10 @@ from core.testing.sockets import socket_worker_setup
 # response windows, exactly what the relay's scanner buffers hand over
 # ---------------------------------------------------------------------------
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _SSE_BODY = (
     b'event: message_start\n'
     b'data: {"type":"message_start","message":{"model":"m-1",'
@@ -941,11 +945,11 @@ class TestReadyBudget:
     ) -> None:
         # The live gatherer wires affinity + loadavg into the pure
         # derater: the reproduced starvation shape, sampled live.
-        monkeypatch.setattr(
-            usage_scan_jail.os, "sched_getaffinity",
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "sched_getaffinity",
             lambda pid: {0, 1, 2, 3}, raising=False)
-        monkeypatch.setattr(
-            usage_scan_jail.os, "getloadavg",
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "getloadavg",
             lambda: (64.0, 0.0, 0.0))
         assert (usage_scan_jail._ready_timeout_s()
                 == pytest.approx(
@@ -960,7 +964,7 @@ class TestReadyBudget:
         def _no_load() -> "tuple[float, float, float]":
             raise OSError("forced by test")
 
-        monkeypatch.setattr(usage_scan_jail.os, "getloadavg", _no_load)
+        patch_module_attribute(monkeypatch, usage_scan_jail, 'os', "getloadavg", _no_load)
         assert (usage_scan_jail._ready_timeout_s()
                 == usage_scan_jail._READY_TIMEOUT_S)
 
@@ -970,7 +974,7 @@ class TestReadyBudget:
         # A platform without os.getloadavg raises AttributeError, not
         # OSError — the spawn path must degrade to the floor, not
         # crash on the very host shape the fallback exists for.
-        monkeypatch.delattr(usage_scan_jail.os, "getloadavg")
+        monkeypatch.delattr(patch_module_attribute(monkeypatch, usage_scan_jail, 'os', "__name__", usage_scan_jail.os.__name__), "getloadavg")
         assert (usage_scan_jail._ready_timeout_s()
                 == usage_scan_jail._READY_TIMEOUT_S)
 
@@ -986,11 +990,11 @@ class TestReadyBudget:
         def _no_affinity(pid: int) -> "set[int]":
             raise OSError("forced by test")
 
-        monkeypatch.setattr(
-            usage_scan_jail.os, "sched_getaffinity", _no_affinity, raising=False)
-        monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: None)
-        monkeypatch.setattr(
-            usage_scan_jail.os, "getloadavg", lambda: (4096.0, 0.0, 0.0))
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "sched_getaffinity", _no_affinity, raising=False)
+        patch_module_attribute(monkeypatch, usage_scan_jail, 'os', "cpu_count", lambda: None)
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "getloadavg", lambda: (4096.0, 0.0, 0.0))
         assert (usage_scan_jail._ready_timeout_s()
                 == usage_scan_jail._READY_TIMEOUT_S)
 
@@ -1004,11 +1008,11 @@ class TestReadyBudget:
         def _no_affinity(pid: int) -> "set[int]":
             raise OSError("forced by test")
 
-        monkeypatch.setattr(
-            usage_scan_jail.os, "sched_getaffinity", _no_affinity, raising=False)
-        monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: 4)
-        monkeypatch.setattr(
-            usage_scan_jail.os, "getloadavg", lambda: (12.0, 0.0, 0.0))
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "sched_getaffinity", _no_affinity, raising=False)
+        patch_module_attribute(monkeypatch, usage_scan_jail, 'os', "cpu_count", lambda: 4)
+        patch_module_attribute(monkeypatch,
+            usage_scan_jail, 'os', "getloadavg", lambda: (12.0, 0.0, 0.0))
         assert (usage_scan_jail._ready_timeout_s()
                 == pytest.approx(
                     3.0 * usage_scan_jail._READY_TIMEOUT_S))

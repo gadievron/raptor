@@ -10,6 +10,9 @@ import pytest
 from core.sandbox import _spawn as spawn
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize('operation', ['getpgid', 'getpgrp'])
 def test_group_query_failure_still_kills_and_reaps_child(monkeypatch, operation):
     process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)
@@ -17,7 +20,7 @@ def test_group_query_failure_still_kills_and_reaps_child(monkeypatch, operation)
     try:
         with monkeypatch.context() as scoped:
             scoped.setattr(spawn.os, operation, Mock(side_effect=OSError(errno.EIO, 'query failed')))
-            scoped.setattr(spawn.os, 'killpg', groups)
+            patch_module_attribute(scoped, spawn, 'os', 'killpg', groups)
             spawn._kill_and_reap(process.pid)
         groups.assert_not_called()
         with pytest.raises(ChildProcessError):

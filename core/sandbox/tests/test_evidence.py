@@ -454,7 +454,7 @@ class TestTracerFdConfigConsumption:
         def no_children(*a, **k):
             raise ChildProcessError
 
-        monkeypatch.setattr(tracer_mod.os, "waitpid", no_children)
+        patch_module_attribute(monkeypatch, tracer_mod, 'os', "waitpid", no_children)
         # An fd number that is definitely not open in this process.
         probe = os.open(os.devnull, os.O_RDONLY)
         os.close(probe)
@@ -479,7 +479,7 @@ class TestTracerFdConfigConsumption:
         def no_children(*a, **k):
             raise ChildProcessError
 
-        monkeypatch.setattr(tracer_mod.os, "waitpid", no_children)
+        patch_module_attribute(monkeypatch, tracer_mod, 'os', "waitpid", no_children)
         f = ev.EvidenceFile.open(tmp_path, ".sandbox-denials.jsonl")
         try:
             rc = tracer_mod.trace(

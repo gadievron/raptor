@@ -34,6 +34,10 @@ import sys as _sys
 
 import pytest as _pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = [
     _pytest.mark.skipif(
         _sys.platform != "linux",
@@ -133,7 +137,7 @@ def test_engagement_failure_not_pinned_to_sibling_lifetime(
                 errno.EPERM, "unshare refused (test-induced)")
         return real_unshare(flags)
 
-    monkeypatch.setattr(_spawn.os, "unshare", flaky_unshare)
+    patch_module_attribute(monkeypatch, _spawn, 'os', "unshare", flaky_unshare)
 
     common = dict(
         block_network=True,

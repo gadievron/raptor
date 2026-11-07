@@ -9,6 +9,9 @@ import pytest
 from core.sandbox import _spawn as spawn
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def assert_closed(fds):
     for fd in fds:
         with pytest.raises(OSError) as exc:
@@ -36,8 +39,8 @@ def test_second_capture_pipe_failure_closes_first_pair(monkeypatch, failure_type
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(spawn.os, "pipe", pipe)
-            patch.setattr(spawn.os, "close", close)
+            patch_module_attribute(patch, spawn, 'os', "pipe", pipe)
+            patch_module_attribute(patch, spawn, 'os', "close", close)
             with pytest.raises(failure_type) as raised:
                 spawn._open_capture_pipes()
         assert raised.value is failure
@@ -95,8 +98,8 @@ def test_failed_death_registration_rolls_back_and_closes(
     try:
         with monkeypatch.context() as patch:
             patch.setattr(spawn, "_LIVE_DEATH_W", registry)
-            patch.setattr(spawn.os, "pipe", pipe)
-            patch.setattr(spawn.os, "close", close)
+            patch_module_attribute(patch, spawn, 'os', "pipe", pipe)
+            patch_module_attribute(patch, spawn, 'os', "close", close)
             with pytest.raises(failure_type) as raised:
                 spawn.open_death_pipe()
         assert raised.value is failure
@@ -128,8 +131,8 @@ def test_cleanup_error_does_not_replace_allocation_error(monkeypatch):
         raise OSError("cleanup reported an error")
 
     with monkeypatch.context() as patch:
-        patch.setattr(spawn.os, "pipe", pipe)
-        patch.setattr(spawn.os, "close", close)
+        patch_module_attribute(patch, spawn, 'os', "pipe", pipe)
+        patch_module_attribute(patch, spawn, 'os', "close", close)
         with pytest.raises(OSError) as raised:
             spawn._open_capture_pipes()
     assert raised.value is failure

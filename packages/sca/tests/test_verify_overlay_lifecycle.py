@@ -325,7 +325,7 @@ def test_walk_error_refuses_incomplete_source_copy(inputs, tmp_path, monkeypatch
         kwargs["onerror"](PermissionError("unreadable source subtree"))
         yield
 
-    monkeypatch.setattr(verify.os, "walk", failed_walk)
+    patch_module_attribute(monkeypatch, verify, 'os', "walk", failed_walk)
     assert run_verify(target, proposed, output, tmp_path) == 3
     assert (old / "keep").read_text() == "previous"
     assert not list(output.glob(".verify-overlay-*"))

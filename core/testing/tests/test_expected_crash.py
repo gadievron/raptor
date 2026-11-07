@@ -101,8 +101,8 @@ def test_cleanup_consumes_traced_stops_before_final_status(monkeypatch, stop_sig
     waits = iter([(pid, (int(stop_signal) << 8) | 0x7f), (0, 0),
                   (pid, int(signal.SIGKILL))])
     calls = []
-    monkeypatch.setattr(helper.os, 'kill', lambda child, sig: calls.append(('kill', child, sig)))
-    monkeypatch.setattr(helper.os, 'waitpid', lambda child, flags: next(waits))
+    patch_module_attribute(monkeypatch, helper, 'os', 'kill', lambda child, sig: calls.append(('kill', child, sig)))
+    patch_module_attribute(monkeypatch, helper, 'os', 'waitpid', lambda child, flags: next(waits))
     patch_module_attribute(monkeypatch, helper, "time", 'sleep', lambda seconds: None)
     result = helper._terminate_and_reap(
         pid, lambda request, child: calls.append(('ptrace', request, child)),
@@ -117,8 +117,8 @@ def test_cleanup_wait_has_a_deadline(monkeypatch):
     from core.testing import expected_crash as helper
 
     clock = iter([0, 3])
-    monkeypatch.setattr(helper.os, 'kill', lambda child, sig: None)
-    monkeypatch.setattr(helper.os, 'waitpid', lambda child, flags: (0, 0))
+    patch_module_attribute(monkeypatch, helper, 'os', 'kill', lambda child, sig: None)
+    patch_module_attribute(monkeypatch, helper, 'os', 'waitpid', lambda child, flags: (0, 0))
     patch_module_attribute(monkeypatch, helper, "time", 'monotonic', lambda: next(clock))
     with pytest.raises(TimeoutError, match='did not terminate during cleanup'):
         helper._terminate_and_reap(12345, lambda request, child: None)

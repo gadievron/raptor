@@ -12,6 +12,9 @@ from packages.sca import cache_budget as budget
 from packages.sca.clean_cache import main
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def entry(root, name, size=100, age=1):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +39,7 @@ def test_size_pruning_keeps_recently_used_entry(tmp_path):
 @pytest.mark.parametrize("no_noatime", [False, True], ids=["host-flags", "without-noatime"])
 def test_expired_entry_precedes_older_valid_entry(tmp_path, monkeypatch, no_noatime):
     if no_noatime:
-        monkeypatch.delattr(budget.os, "O_NOATIME", raising=False)
+        monkeypatch.delattr(patch_module_attribute(monkeypatch, budget, 'os', "__name__", budget.os.__name__), "O_NOATIME", raising=False)
     from core.json.cache import JsonCache, TTL_FOREVER
     cache = JsonCache(tmp_path)
     cache.put('q/valid', 'x' * 100, ttl_seconds=TTL_FOREVER)

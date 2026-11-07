@@ -34,6 +34,10 @@ from packages.joern.runner import (
 
 # ── Query validation ────────────────────────────────────────────────
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 class TestValidateQuery:
     def test_clean_query(self):
         assert _validate_query('cpg.method.name("foo").l') is None
@@ -783,7 +787,7 @@ class TestCPGCaching:
                 yield root, dirs, files
 
         import packages.joern.runner as runner_mod
-        monkeypatch.setattr(runner_mod.os, "walk", shuffled_walk)
+        patch_module_attribute(monkeypatch, runner_mod, 'os', "walk", shuffled_walk)
         h2 = _target_content_hash(tmp_path)
         assert h1 == h2
 

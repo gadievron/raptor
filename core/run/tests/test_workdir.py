@@ -27,6 +27,10 @@ from core.run import workdir
 
 # Captured pre-patch so test_family_name_is_the_launcher_shape pins
 # the production name even though the autouse fixture swaps it out.
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _REAL_FAMILY_NAME = workdir._family_name
 
 
@@ -301,7 +305,7 @@ def test_managed_sessions_never_use_pid_liveness_for_reclamation(_fresh, monkeyp
         probes.append(pid)
         raise ProcessLookupError
 
-    monkeypatch.setattr(workdir.os, 'kill', invisible)
+    patch_module_attribute(monkeypatch, workdir, 'os', 'kill', invisible)
     workdir._sweep_dead_sessions(family)
     assert (managed / 'keep').read_text() == 'still in use by a descendant'
     assert not legacy.exists()
@@ -322,7 +326,7 @@ def test_unreadable_metadata_identity_is_retained(_fresh, monkeypatch):
     def must_not_probe(pid, signal):
         pytest.fail('unavailable metadata must not trigger PID-based deletion')
 
-    monkeypatch.setattr(workdir.os, 'lstat', unavailable)
-    monkeypatch.setattr(workdir.os, 'kill', must_not_probe)
+    patch_module_attribute(monkeypatch, workdir, 'os', 'lstat', unavailable)
+    patch_module_attribute(monkeypatch, workdir, 'os', 'kill', must_not_probe)
     workdir._sweep_dead_sessions(family)
     assert managed.is_dir()

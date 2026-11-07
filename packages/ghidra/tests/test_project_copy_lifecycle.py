@@ -262,7 +262,7 @@ def test_walk_failure_does_not_publish_partial_database(project, tmp_path, monke
         kwargs["onerror"](PermissionError("cannot enumerate database"))
         yield
 
-    monkeypatch.setattr(util.os, "walk", failed)
+    patch_module_attribute(monkeypatch, util, 'os', "walk", failed)
     out = tmp_path / "out"
     with pytest.raises(OSError):
         util.prepare_working_copy(project, out)

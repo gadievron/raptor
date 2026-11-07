@@ -9,6 +9,10 @@ import pytest
 from core.config import RaptorConfig
 from core.run import tmp_reaper, tmp_ownership, scratch
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 INVALID = ["nan", "NaN", "inf", "-inf", "Infinity", "1e309", "1e308"]
 
 
@@ -119,8 +123,8 @@ def test_invalid_inode_threshold_keeps_default_pressure_warning(
 ):
     monkeypatch.setenv("RAPTOR_TMP_INODE_SOFT_PCT", raw)
     monkeypatch.setattr(scratch, "_last_inode_warning", 0.0)
-    monkeypatch.setattr(
-        scratch.os, "statvfs", lambda path: SimpleNamespace(f_files=100, f_ffree=free)
+    patch_module_attribute(monkeypatch,
+        scratch, 'os', "statvfs", lambda path: SimpleNamespace(f_files=100, f_ffree=free)
     )
     with caplog.at_level("WARNING", logger=scratch.__name__):
         scratch._inode_ceiling_advisory(tmp_path)

@@ -8,6 +8,9 @@ import pytest
 from packages.joern import artifacts, runner
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_worker_copy_survives_cache_replacement_and_deletion(tmp_path):
     source = tmp_path / "cache" / "cpg.bin"
     source.parent.mkdir()
@@ -104,7 +107,7 @@ def test_unset_macos_temp_uses_private_os_directory(tmp_path, monkeypatch):
     from packages.joern import client
     monkeypatch.setattr(client, "_INITIAL_BASE", None)
     monkeypatch.setattr(client.os.sys, "platform", "darwin")
-    monkeypatch.setattr(client.os, "confstr", lambda name: str(tmp_path))
+    patch_module_attribute(monkeypatch, client, 'os', "confstr", lambda name: str(tmp_path))
     assert client.runtime_base() == tmp_path
 
 
