@@ -507,7 +507,7 @@ class DatabaseManager:
     def get_codeql_version(self) -> str | None:
         """Fresh CodeQL version, using the same parser as query compatibility."""
         from .version_probe import read_codeql_version
-        return read_codeql_version(self.codeql_cli)
+        return read_codeql_version(self.codeql_cli) if self.codeql_cli is not None else None
 
     def supports_buildless(self, language: str) -> tuple:
         """Probe whether the CLI supports ``--build-mode=none`` for *language*.

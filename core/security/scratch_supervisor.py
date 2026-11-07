@@ -35,7 +35,7 @@ except (OSError, ImportError, SyntaxError) as exc:
 def _record_tracking_failure(session_id: str, stage: str, error) -> None:
     """Keep bounded diagnostics in the private record, away from startup UX."""
     cause = getattr(error, '__cause__', None) or error
-    item = {'stage': stage, 'error': str(cause)[:512]}
+    item: dict[str, str | int | None] = {'stage': stage, 'error': str(cause)[:512]}
     if isinstance(cause, OSError):
         item['errno'] = cause.errno
     with lifecycle.locked(session_id) as (node, value):

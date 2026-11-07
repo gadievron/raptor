@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +41,9 @@ from packages.codeql.database_manager import (
 )
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from packages.codeql.query_runner import QueryResult, QueryRunner
+
+if TYPE_CHECKING:
+    from core.reporting.options import ReportOptions
 
 logger = get_logger()
 
@@ -273,6 +276,8 @@ class CodeQLAgent:
     5. Generate SARIF output
     6. Create comprehensive report
     """
+
+    report_options: "ReportOptions | None"
 
     def __init__(
         self,

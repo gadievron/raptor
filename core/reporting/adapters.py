@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from core.sarif.parser import (
     get_result_rule, get_tool_name, load_sarif, parse_sarif_document,
@@ -165,7 +166,7 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
             budget += size
             if budget > MAX_INPUT_BYTES:
                 raise ValueError("Aggregate SARIF input limit exceeded")
-            metadata = {}
+            metadata: dict[str, Any] = {}
             data = load_sarif(path, metadata=metadata)
             if data is None or data.get("version") != "2.1.0" or not isinstance(data.get("runs"), list):
                 raise ValueError("Invalid SARIF 2.1.0 document")
@@ -182,7 +183,7 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
             context.artifacts.append({"path": str(path), "digest": identity, "digest_kind": "sha256-bytes", "media_type": "application/sarif+json",
                                       "canonical_digest": input_digest(data)})
             runs = data["runs"]
-            prepared = []
+            prepared: list[dict[str, Any]] = []
             remaining = max_findings - len(context.findings)
             for ri, run in enumerate(runs):
                 if not isinstance(run, dict) or not isinstance(run.get("results", []), list):
@@ -190,7 +191,7 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
                     skipped += 1
                     prepared.append({"results": []})
                     continue
-                clean = []
+                clean: list[dict[str, Any] | None] = []
                 observed += len(run.get("results", []))
                 for result in run.get("results", []):
                     if remaining <= 0:

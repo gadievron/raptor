@@ -798,7 +798,7 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
                 historical_dirs.append(historical_dir)
                 observation_dirs.append(historical_dir)
         observation_dirs.append(directory)
-    decisions = {}
+    decisions: dict[tuple[Any, ...], dict[str, Any]] = {}
     from core.project.report_lineage import grouping_keys
     group_keys, lineage_diagnostics = grouping_keys(frozen_records, frozen_contexts, frozen_origins)
     selection_diagnostics.extend(lineage_diagnostics)

@@ -1175,28 +1175,29 @@ def start_run(output_dir: Path, command: str,
         _prior_meta = _load_meta(output_dir / RUN_METADATA_FILE)
         from core.run.report_identity import identity_for_start
         retry_metadata = _load_meta(Path(retry_of) / RUN_METADATA_FILE) if retry_of is not None else None
-        metadata["reporting_identity"] = identity_for_start(command, _prior_meta, retry_metadata=retry_metadata,
+        reporting_identity = identity_for_start(command, _prior_meta, retry_metadata=retry_metadata,
                                                            retry_directory=Path(retry_of) if retry_of is not None else None,
                                                            target=target)
+        metadata["reporting_identity"] = reporting_identity
         if retry_of is not None:
-            metadata["reporting_identity"]["retry_of"]["local"] = Path(retry_of).resolve() == output_dir.resolve()
+            reporting_identity["retry_of"]["local"] = Path(retry_of).resolve() == output_dir.resolve()
         if parent_run is not None:
             from core.run.report_identity import checkpoint, valid_identity
             parent_metadata = _load_meta(Path(parent_run) / RUN_METADATA_FILE)
             parent_identity = parent_metadata.get("reporting_identity") if isinstance(parent_metadata, dict) else None
             if (Path(parent_run).resolve() == output_dir.resolve()
                     and (not valid_identity(parent_identity)
-                         or parent_identity["run_id"] == metadata["reporting_identity"]["run_id"])):
+                         or parent_identity["run_id"] == reporting_identity["run_id"])):
                 raise ValueError("A lifecycle run cannot be its own parent")
-            metadata["reporting_identity"]["parent_execution"] = {
+            reporting_identity["parent_execution"] = {
                 "directory": str(parent_run), "identity_available": valid_identity(parent_identity),
                 "local": Path(parent_run).resolve() == output_dir.resolve(),
                 **({k: parent_identity[k] for k in ("run_id", "pass_id", "attempt_id")} if valid_identity(parent_identity) else {}),
                 "checkpoint": checkpoint(Path(parent_run), parent_identity),
             }
-        if (isinstance(_prior_meta, dict) and metadata["reporting_identity"] == _prior_meta.get("reporting_identity")
+        if (isinstance(_prior_meta, dict) and reporting_identity == _prior_meta.get("reporting_identity")
                 and isinstance(_prior_meta.get("extra"), dict) and isinstance(_prior_meta["extra"].get("resumes"), list)):
-            metadata["extra"] = {**metadata["extra"], "resumes": _prior_meta["extra"]["resumes"]}
+            metadata["extra"] = {**(extra or {}), "resumes": _prior_meta["extra"]["resumes"]}
         _prior_owner_live = (
             isinstance(_prior_meta, dict)
             and _prior_meta.get("status") == STATUS_RUNNING

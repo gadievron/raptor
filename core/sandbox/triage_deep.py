@@ -236,7 +236,7 @@ def _parse_assessments(text: str, report: dict) -> tuple:
         try:
             raw_confidence = item.get("confidence")
             # JSON booleans are not numeric probabilities.
-            value = (0.0 if isinstance(raw_confidence, bool)
+            value = (0.0 if raw_confidence is None or isinstance(raw_confidence, bool)
                      else float(raw_confidence))
             confidence = min(1.0, max(0.0, value)) if math.isfinite(value) else 0.0
         except (TypeError, ValueError, OverflowError):

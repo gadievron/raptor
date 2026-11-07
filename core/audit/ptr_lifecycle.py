@@ -359,8 +359,8 @@ def detect_field_parity_deviations(
                     linked = True
                     break
             if not linked:
-                for site in rec.reads:
-                    if site.owner in cluster_owners:
+                for read_site in rec.reads:
+                    if read_site.owner in cluster_owners:
                         linked = True
                         break
             if not linked:
@@ -570,7 +570,7 @@ def _find_events(
             # record which field so edge matching can require it.
             chain_text = m.group(3) or ""
             chain = _EVENT_CHAIN_IDENT_RE.findall(chain_text)
-            site = {
+            site: dict[str, Any] = {
                 "verb": verb,
                 "target": target,
                 "target_field": chain[-1] if chain else None,

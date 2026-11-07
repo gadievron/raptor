@@ -50,7 +50,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
     parents = defaultdict(set)
     callbacks = defaultdict(list)
     resource_functions = defaultdict(set)
-    resource_links = defaultdict(set)
+    resource_links: dict[str, set[str]] = defaultdict(set)
     dispatch_calls = defaultdict(list)
     unresolved_calls = defaultdict(list)
     for row in index.callbacks:

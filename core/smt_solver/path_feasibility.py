@@ -1343,7 +1343,9 @@ def _solve_pending(
         model_dict = _format_witness(solver.model(), signed=profile.signed)
         # Optional implication-reduced constraint summary. Its fresh solver
         # cannot change the primary verdict, but still consumes worker time.
-        wp_predicate, wp_conjuncts, wp_complete = None, [], False
+        wp_predicate: str | None = None
+        wp_conjuncts: list[str] = []
+        wp_complete = False
         if reduce_constraints:
             try:
                 wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
@@ -1588,9 +1590,9 @@ def check_verb_feasibility(
         batch.satisfied, batch.unknown, batch.rejections,
         profile=profile, anon_map={**operand_model.anon_var_map, **batch.anon_map},
         axioms=operand_axioms + batch.axioms,
-        pending_call_terms=[None] * len(intrinsic) + batch.pending_call_terms,
-        pending_epochs=[None] * len(intrinsic) + batch.pending_epochs,
-        axiom_epochs=[None] * len(operand_axioms) + batch.axiom_epochs,
+        pending_call_terms=[*([None] * len(intrinsic)), *batch.pending_call_terms],
+        pending_epochs=[*([None] * len(intrinsic)), *batch.pending_epochs],
+        axiom_epochs=[*([None] * len(operand_axioms)), *batch.axiom_epochs],
         reduce_constraints=reduce_constraints,
     )
 

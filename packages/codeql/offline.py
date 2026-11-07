@@ -79,7 +79,7 @@ def _tree(root: Path, *, copy_to: Path | None = None, source=False):
     """Inventory regular files without following symlinks; optionally copy bytes."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f'not a real directory: {root}')
-    records = {}
+    records: dict[str, dict[str, str | int]] = {}
     total = 0
     directory_count = 0
     for current, dirs, files in os.walk(root, followlinks=False):
