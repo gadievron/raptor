@@ -19,6 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-build-checklist"
 
@@ -167,11 +169,11 @@ class TestFallbackWriterStamps:
 
 
 class TestPlantedCacheShapes:
-    def test_wrong_typed_binary_path_doc_completes(self, tmp_path: Path):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_wrong_typed_binary_path_doc_completes(self, tmp_path: Path, monkeypatch, stale_launch):
         """End to end: a planted cache with a wrong-TYPED binary_path
         must degrade per the identity gate's contract — the CLI
         completes instead of dying rc=1 on an uncaught TypeError."""
-        import subprocess
         import sys
 
         out = tmp_path / "out"
@@ -183,9 +185,14 @@ class TestPlantedCacheShapes:
             "functions": [], "metadata": {},
         }))
 
+        if stale_launch:
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-launch-scratch"))
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "invalid-launch-authorization")
+            monkeypatch.setenv("RAPTOR_SESSION_PID", "999999")
+            monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "invalid-launch-token")
         env = {k: v for k, v in os.environ.items() if k != "RAPTOR_DIR"}
         env["_RAPTOR_TRUSTED"] = "1"
-        cp = subprocess.run(
+        cp = run_standalone_cli(
             [sys.executable, str(SCRIPT), str(target), str(out)],
             capture_output=True, text=True, env=env, timeout=120,
         )
