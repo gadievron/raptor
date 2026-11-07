@@ -1,59 +1,106 @@
+# raptor: confirm-only
+# This rule covers immediate quoted-attribute encoding mistakes only.
+# A zero-match cannot refute the wider CWE-116 class.
 rules:
-  # CWE-116: improper encoding for the output context — the
-  # single-quoted-attribute residual of htmlspecialchars. A flags
-  # argument without ENT_QUOTES leaves the single quote unencoded, so
-  # a value emitted right after a ...=' attribute opener can close the
-  # attribute and add event-handler attributes. Both rules key on the
-  # string literal IMMEDIATELY concatenated before the call ending in
-  # an attribute opener — echoing into text content stays clean.
-  #
-  # Flagless htmlspecialchars($x) is deliberately NOT matched: since
-  # PHP 8.1 the default flags include ENT_QUOTES, so a flagless call
-  # is only unsafe on older runtimes — flagging it would FP on every
-  # modern codebase (known FN on legacy PHP instead).
-  #
-  # Known FP modes:
-  #   - The attribute opener and the encoded value assembled in
-  #     different statements (sprintf templates, heredoc) are missed
-  #     (FN); conversely a literal that merely ENDS with ='/=" outside
-  #     real HTML (e.g. building a config line) would fire (FP) —
-  #     both bounded by requiring the explicit non-ENT_QUOTES
-  #     constant expression.
+  # Quote bits are independent: bit 0 protects apostrophes; bit 1
+  # protects double quotes. Other ENT_* flags do not enable quoting.
   - id: raptor.php.attr-encoding.single-quote-attr
     languages: [php]
     severity: MEDIUM
     message: >
-      htmlspecialchars without ENT_QUOTES leaves single quotes
-      unencoded, but the value is emitted into a single-quoted
-      attribute (literal ends with ='). The attacker closes the
-      attribute and injects event handlers. Pass ENT_QUOTES.
+      The encoding flags leave the surrounding single quote unescaped
+      in this HTML attribute. If the value is untrusted, it can close the
+      attribute and add attacker-chosen markup. Use ENT_QUOTES and keep
+      the attribute quoted.
     patterns:
-      - pattern: $LIT . htmlspecialchars($X, $FLAGS, ...)
+      - pattern-either:
+          - patterns:
+              - pattern: $ENCODER($X, $FLAGS, ...)
+              - metavariable-regex:
+                  metavariable: $FLAGS
+                  constant-propagation: false
+                  regex: '\A\\?(?:ENT_COMPAT|ENT_NOQUOTES|ENT_IGNORE|ENT_SUBSTITUTE|ENT_DISALLOWED|ENT_HTML401|ENT_XML1|ENT_XHTML|ENT_HTML5)(?:\s*+\|\s*+\\?(?:ENT_COMPAT|ENT_NOQUOTES|ENT_IGNORE|ENT_SUBSTITUTE|ENT_DISALLOWED|ENT_HTML401|ENT_XML1|ENT_XHTML|ENT_HTML5))*\z'
+          - patterns:
+              - pattern: $ENCODER($X, $FLAGS, ...)
+              - metavariable-regex:
+                  metavariable: $FLAGS
+                  constant-propagation: false
+                  regex: '\A(?:0|[1-9][0-9]{0,8})\z'
+              - metavariable-comparison:
+                  metavariable: $FLAGS
+                  comparison: int($FLAGS) % 2 == 0
       - metavariable-regex:
-          metavariable: $LIT
-          regex: .*='"$
-      - metavariable-regex:
-          metavariable: $FLAGS
-          regex: ^(?!.*ENT_QUOTES)ENT_\w+(\s*\|\s*ENT_\w+)*$
+          metavariable: $ENCODER
+          constant-propagation: false
+          regex: '(?i)^\\?(?:htmlspecialchars|htmlentities)$'
+      # Match the encoder itself with \K: no concatenation operand splits,
+      # and an earlier call cannot borrow a later call's attribute context.
+      # Literal segments are bounded; complex templates remain out of scope.
+      # Numbered atoms keep old PCRE engines from unrolling large alternatives.
+      - pattern-regex: |-
+          (?x)
+          "
+          (?1){0,512}
+          <[A-Za-z]
+          (?2){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+'
+          (?3){0,512}
+          "\s*+\.\s*+\K\\?(?i:htmlspecialchars|htmlentities)\b
+          (?(DEFINE)
+            ((?:[^"\\\n]|\\[\\"$nrtvef]))
+            ((?:[^<>"\\\n]|\\[\\"$nrtvef]))
+            ((?:[^'<>"\\\n]|\\[\\"$nrtvef]))
+          )
     metadata:
       cwe: ["CWE-116"]
+  # Quote bits are independent: bit 0 protects apostrophes; bit 1
+  # protects double quotes. Other ENT_* flags do not enable quoting.
   - id: raptor.php.attr-encoding.noquotes-double-attr
     languages: [php]
     severity: MEDIUM
     message: >
-      htmlspecialchars with ENT_NOQUOTES encodes neither quote
-      character, but the value is emitted into a double-quoted
-      attribute (literal ends with ="). The attacker closes the
-      attribute and injects event handlers. Pass ENT_QUOTES.
+      The encoding flags leave the surrounding double quote unescaped
+      in this HTML attribute. If the value is untrusted, it can close the
+      attribute and add attacker-chosen markup. Use ENT_QUOTES and keep
+      the attribute quoted.
     patterns:
-      - pattern: $LIT . htmlspecialchars($X, $FLAGS, ...)
+      - pattern-either:
+          - patterns:
+              - pattern: $ENCODER($X, $FLAGS, ...)
+              - metavariable-regex:
+                  metavariable: $FLAGS
+                  constant-propagation: false
+                  regex: '\A\\?(?:ENT_NOQUOTES|ENT_IGNORE|ENT_SUBSTITUTE|ENT_DISALLOWED|ENT_HTML401|ENT_XML1|ENT_XHTML|ENT_HTML5)(?:\s*+\|\s*+\\?(?:ENT_NOQUOTES|ENT_IGNORE|ENT_SUBSTITUTE|ENT_DISALLOWED|ENT_HTML401|ENT_XML1|ENT_XHTML|ENT_HTML5))*\z'
+          - patterns:
+              - pattern: $ENCODER($X, $FLAGS, ...)
+              - metavariable-regex:
+                  metavariable: $FLAGS
+                  constant-propagation: false
+                  regex: '\A(?:0|[1-9][0-9]{0,8})\z'
+              - metavariable-comparison:
+                  metavariable: $FLAGS
+                  comparison: int($FLAGS) % 4 < 2
       - metavariable-regex:
-          metavariable: $LIT
-          regex: .*="'$
-      # ENT_NOQUOTES present, nothing that re-enables double-quote
-      # encoding (ENT_QUOTES or ENT_COMPAT) OR-ed in.
-      - metavariable-regex:
-          metavariable: $FLAGS
-          regex: ^(?=.*ENT_NOQUOTES)(?!.*ENT_QUOTES)(?!.*ENT_COMPAT)ENT_\w+(\s*\|\s*ENT_\w+)*$
+          metavariable: $ENCODER
+          constant-propagation: false
+          regex: '(?i)^\\?(?:htmlspecialchars|htmlentities)$'
+      # Match the encoder itself with \K: no concatenation operand splits,
+      # and an earlier call cannot borrow a later call's attribute context.
+      # Literal segments are bounded; complex templates remain out of scope.
+      # Numbered atoms keep old PCRE engines from unrolling large alternatives.
+      - pattern-regex: |-
+          (?x)
+          '
+          (?1){0,512}
+          <[A-Za-z]
+          (?2){0,512}
+          [ \t]+[A-Za-z_:][A-Za-z0-9_:.-]*+[ \t]*+=[ \t]*+"
+          (?3){0,512}
+          '\s*+\.\s*+\K\\?(?i:htmlspecialchars|htmlentities)\b
+          (?(DEFINE)
+            ((?:[^'\\\n]|\\[\\']))
+            ((?:[^<>'\\\n]|\\[\\']))
+            ((?:[^"<>'\\\n]|\\[\\']))
+          )
     metadata:
       cwe: ["CWE-116"]
