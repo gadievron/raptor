@@ -275,7 +275,7 @@ def test_descriptor_identity_cannot_alias_a_protected_root(tmp_path, monkeypatch
     root.mkdir()
     monkeypatch.setattr(guard, 'ROOT', root)
     # Emulate a bind-mount alias: a distinct pathname for the same open inode.
-    monkeypatch.setattr(guard.os, 'readlink', lambda _: str(tmp_path / 'apparent-state'))
+    patch_module_attribute(monkeypatch, guard, 'os', 'readlink', lambda _: str(tmp_path / 'apparent-state'))
     with pytest.raises(guard.ProtectionError, match='aliases a protected root'):
         guard.open_grant(root, [root])
 
@@ -380,8 +380,8 @@ def test_stdio_cannot_hide_registered_file_handles_in_an_anon_inode(tmp_path, mo
     def refuse(message):
         raise guard.ProtectionError(message)
     monkeypatch.setattr(guard, '_reject_stdio', refuse)
-    monkeypatch.setattr(guard.os, 'listdir', lambda _: ['0'])
-    monkeypatch.setattr(guard.os, 'readlink', lambda _: 'anon_inode:[io_uring]')
+    patch_module_attribute(monkeypatch, guard, 'os', 'listdir', lambda _: ['0'])
+    patch_module_attribute(monkeypatch, guard, 'os', 'readlink', lambda _: 'anon_inode:[io_uring]')
     with pytest.raises(guard.ProtectionError, match='anonymous kernel object'):
         guard.close_inherited_fds([tmp_path], tmp_path / 'out')
 
@@ -389,7 +389,7 @@ def test_stdio_cannot_hide_registered_file_handles_in_an_anon_inode(tmp_path, mo
 @pytest.mark.linux_native
 def test_parallel_bytecode_matches_serial_and_refreshes_changed_sources(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
+    patch_module_attribute(monkeypatch, guard, 'os', 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(10):
         (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
     (tmp_path / 'invalid.py').write_text('not valid python !!!')
@@ -457,7 +457,7 @@ time.sleep(60)
 
 def test_bytecode_worker_initialization_failure_stops_preparation(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
+    patch_module_attribute(monkeypatch, guard, 'os', 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(9):
         (tmp_path / f'module{index}.py').write_text('VALUE = 1\n')
 
@@ -472,7 +472,7 @@ def test_bytecode_worker_initialization_failure_stops_preparation(tmp_path, monk
 def test_restricted_worker_ipc_still_performs_full_serial_validation(tmp_path, monkeypatch):
     import concurrent.futures
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
+    patch_module_attribute(monkeypatch, guard, 'os', 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(9):
         (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
 
@@ -696,7 +696,7 @@ def test_loop_backing_beneath_a_device_mapper_layer_is_refused(monkeypatch):
     def slaves(path):
         yield iter([SimpleNamespace(path='/sys/devices/virtual/block/loop0')])
     with monkeypatch.context() as patch:
-        patch.setattr(guard.os, 'scandir', slaves)
+        patch_module_attribute(patch, guard, 'os', 'scandir', slaves)
         with pytest.raises(guard.ProtectionError, match='loop-backed'):
             guard.reject_loop_backing('253:12345')
 
@@ -709,9 +709,9 @@ def test_raw_device_stdio_cannot_bypass_file_mounts(monkeypatch):
     from types import SimpleNamespace
     original = guard.os.fstat
     with monkeypatch.context() as patch:
-        patch.setattr(guard.os, 'listdir', lambda path: ['0'])
-        patch.setattr(guard.os, 'readlink', lambda path: '/dev/fake-block')
-        patch.setattr(guard.os, 'fstat', lambda fd: SimpleNamespace(st_mode=stat.S_IFBLK) if fd == 0 else original(fd))
+        patch_module_attribute(patch, guard, 'os', 'listdir', lambda path: ['0'])
+        patch_module_attribute(patch, guard, 'os', 'readlink', lambda path: '/dev/fake-block')
+        patch_module_attribute(patch, guard, 'os', 'fstat', lambda fd: SimpleNamespace(st_mode=stat.S_IFBLK) if fd == 0 else original(fd))
         with pytest.raises(guard.ProtectionError, match='raw block device'):
             guard.close_inherited_fds([], Path('/nonexistent'))
 
@@ -777,7 +777,7 @@ def test_metadata_walk_tolerates_retired_atomic_files_without_skipping_other_ent
             yield iter(ordered)
     monkeypatch.setattr(guard, 'ROOT', root)
     with monkeypatch.context() as patch:
-        patch.setattr(guard.os, 'scandir', retiring)
+        patch_module_attribute(patch, guard, 'os', 'scandir', retiring)
         with pytest.raises(guard.ProtectionError, match='hard-linked installation'):
             guard.audit_protected_paths([root])
 
@@ -862,7 +862,7 @@ def test_protection_refuses_to_seal_user_configuration_instead_of_migrating_it(t
 
 def test_precompile_without_affinity_validates_all_sources_serially(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.delattr(guard.os, 'sched_getaffinity', raising=False)
+    monkeypatch.delattr(patch_module_attribute(monkeypatch, guard, 'os', "__name__", guard.os.__name__), 'sched_getaffinity', raising=False)
     for index in range(10):
         (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
     guard.precompile()

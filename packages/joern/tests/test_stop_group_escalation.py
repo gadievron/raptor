@@ -36,6 +36,10 @@ from packages.joern.server import (
 
 # Process-group semantics and the zombie-aware liveness probe are
 # exercised against real children and procfs.
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="process-group escalation is verified via procfs",
@@ -166,8 +170,8 @@ class TestEnsureGroupDead:
         setpgrp() child's pgid is its own in-namespace pid (> 1)
         everywhere, so the branch runs without any stand-in."""
         signalled: list[tuple] = []
-        monkeypatch.setattr(
-            server_mod.os, "killpg",
+        patch_module_attribute(monkeypatch,
+            server_mod, 'os', "killpg",
             lambda *args: signalled.append(args),
         )
         own = os.getpgrp()
@@ -179,7 +183,7 @@ class TestEnsureGroupDead:
             # test_empty_and_absent_groups_are_trivially_dead). Pin
             # the own-group branch itself on a mapped stand-in.
             own = 4242
-            monkeypatch.setattr(server_mod.os, "getpgrp", lambda: own)
+            patch_module_attribute(monkeypatch, server_mod, 'os', "getpgrp", lambda: own)
         assert _ensure_group_dead(own, label="test") is False
         assert signalled == []
         code = (
@@ -212,8 +216,8 @@ class TestEnsureGroupDead:
         from unittest.mock import Mock
 
         signalled: list[tuple] = []
-        monkeypatch.setattr(
-            server_mod.os, "killpg",
+        patch_module_attribute(monkeypatch,
+            server_mod, 'os', "killpg",
             lambda *args: signalled.append(args),
         )
         for bad in (Mock(), "5555", 5555.0, True):
@@ -301,8 +305,6 @@ class TestRestartReapsBeforeReplacing:
     def test_endpoint_client_cannot_restart_a_worker_it_does_not_own(self):
         srv = JoernServer.connect_existing(port=54321, auth_user="fixture", auth_password="fixture")
         assert srv.restart() is False
-
-
 
 
 class TestPgidAlive:

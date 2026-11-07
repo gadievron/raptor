@@ -8,6 +8,9 @@ from unittest.mock import Mock
 from packages.joern import server
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def test_reaped_worker_keeps_files_and_never_signals_a_recycled_group(tmp_path, monkeypatch):
     process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
     process.wait(timeout=5)
@@ -21,7 +24,7 @@ def test_reaped_worker_keeps_files_and_never_signals_a_recycled_group(tmp_path, 
     reservation = Mock()
     worker._heap_reservation = reservation
     signal_group = Mock()
-    monkeypatch.setattr(server.os, "killpg", signal_group)
+    patch_module_attribute(monkeypatch, server, 'os', "killpg", signal_group)
     monkeypatch.setattr(server, "_pgid_alive", lambda pgid: True)
     monkeypatch.setattr(server, "_GROUP_KILL_GRACE_S", 0.001)
     try:
@@ -41,6 +44,6 @@ def test_reaped_parser_never_signals_a_recycled_group(monkeypatch):
     process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
     process.wait(timeout=5)
     signal_group = Mock()
-    monkeypatch.setattr(server.os, "killpg", signal_group)
+    patch_module_attribute(monkeypatch, server, 'os', "killpg", signal_group)
     assert not _kill_build_group(process)
     signal_group.assert_not_called()

@@ -11,6 +11,9 @@ from core.sandbox import _landlock_audit as audit
 from core.sandbox import _pipe_poll
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def high_pipe():
     original_limits = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -62,7 +65,7 @@ def test_high_descriptor_drain_preserves_bytes(high_pipe, monkeypatch):
     os.write(write_fd, b'buffered output')
     # The target is already done: final sweep must collect buffered data
     # without waiting for EOF on an inherited writer.
-    monkeypatch.setattr(audit.os, 'waitid', lambda *args: object())
+    patch_module_attribute(monkeypatch, audit, 'os', 'waitid', lambda *args: object())
     result = audit._drain_pipes_until_eof([read_fd], 123, deadline=time.monotonic() + 1)
     assert result == {read_fd: b'buffered output'}
 

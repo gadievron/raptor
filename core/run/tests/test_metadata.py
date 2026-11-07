@@ -27,6 +27,10 @@ from core.run import (
 
 import pytest
 
+
+from core.testing.module_bindings import mock_module_attribute
+
+
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
     """User registries stay out of the real home: the root-conftest
@@ -342,30 +346,32 @@ class TestFindClaudeAncestor(unittest.TestCase):
 
         from core.project import sessions
 
-        stack = contextlib.ExitStack()
-        # The battery-wide conftest neutralises the walk (hermetic
-        # default); these tests exercise it — restore the real one.
-        stack.enter_context(mock.patch.object(
-            sessions, "_walk_session_pid", _REAL_WALK_SESSION_PID))
-        stack.enter_context(mock.patch.object(sys, "platform", "linux"))
-        stack.enter_context(mock.patch.object(md.os, "getpid",
-                                              lambda: self_pid))
-        stack.enter_context(mock.patch.object(md.os, "getppid",
-                                              lambda: parents[self_pid]))
-        stack.enter_context(mock.patch.object(md, "_read_ppid",
-                                              _fake_read_ppid))
-        stack.enter_context(mock.patch.object(md, "Path", _path_factory))
-        # The shared resolver lives in core.project.sessions and walks
-        # the same tree — give it the same fake comms and an isolated,
-        # empty registry (no entry-bearing ancestors unless a test
-        # writes one).
-        stack.enter_context(mock.patch.object(
-            sessions, "_comm", lambda pid: comms.get(pid)))
-        self._sessions_tmp = stack.enter_context(TemporaryDirectory())
-        stack.enter_context(mock.patch.object(
-            sessions, "SESSIONS_DIR",
-            Path(self._sessions_tmp) / "sessions.d"))
-        return stack
+        with contextlib.ExitStack() as stack:
+            # The battery-wide conftest neutralises the walk (hermetic
+            # default); these tests exercise it — restore the real one.
+            stack.enter_context(mock.patch.object(
+                sessions, "_walk_session_pid", _REAL_WALK_SESSION_PID))
+            stack.enter_context(mock.patch.object(sys, "platform", "linux"))
+            stack.enter_context(mock_module_attribute(md, 'os', "getpid",
+                                                  lambda: self_pid))
+            stack.enter_context(mock_module_attribute(md, 'os', "getppid",
+                                                  lambda: parents[self_pid]))
+            stack.enter_context(mock_module_attribute(sessions, "os", "getpid", lambda: md.os.getpid()))
+            stack.enter_context(mock_module_attribute(sessions, "os", "getppid", lambda: md.os.getppid()))
+            stack.enter_context(mock.patch.object(md, "_read_ppid",
+                                                  _fake_read_ppid))
+            stack.enter_context(mock.patch.object(md, "Path", _path_factory))
+            # The shared resolver lives in core.project.sessions and walks
+            # the same tree — give it the same fake comms and an isolated,
+            # empty registry (no entry-bearing ancestors unless a test
+            # writes one).
+            stack.enter_context(mock.patch.object(
+                sessions, "_comm", lambda pid: comms.get(pid)))
+            self._sessions_tmp = stack.enter_context(TemporaryDirectory())
+            stack.enter_context(mock.patch.object(
+                sessions, "SESSIONS_DIR",
+                Path(self._sessions_tmp) / "sessions.d"))
+            return stack.pop_all()
 
     # pid 100 (test) -> 50 (bash) -> 40 (claude) -> 1 (init)
     _TREE = {100: 50, 50: 40, 40: 1}
@@ -607,8 +613,6 @@ class TestTrackedRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
 
 
 class _ProjectRunCase(unittest.TestCase):

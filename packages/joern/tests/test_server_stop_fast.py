@@ -31,6 +31,10 @@ from packages.joern.server import (
 
 # Process-group semantics and starttime corroboration are exercised
 # against real children and procfs.
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="process-group teardown is verified via procfs",
@@ -158,7 +162,7 @@ class TestStopFastRealProcesses:
                 sent.append((pgid, sig))
             return real_killpg(pgid, sig)
 
-        monkeypatch.setattr(server_mod.os, "killpg", _recording_killpg)
+        patch_module_attribute(monkeypatch, server_mod, 'os', "killpg", _recording_killpg)
 
         srv = JoernServer.__new__(JoernServer)
         srv.stop = lambda: None  # type: ignore[method-assign] — see _bare_server_for
@@ -175,8 +179,8 @@ class TestStopFastRealProcesses:
 
     def test_no_proc_is_a_noop(self, monkeypatch):
         sent: list[tuple[int, int]] = []
-        monkeypatch.setattr(
-            server_mod.os, "killpg",
+        patch_module_attribute(monkeypatch,
+            server_mod, 'os', "killpg",
             lambda pgid, sig: sent.append((pgid, sig)),
         )
         srv = JoernServer.__new__(JoernServer)
@@ -257,8 +261,8 @@ class TestSentinelPgidRefusal:
     @pytest.fixture(autouse=True)
     def _fake_killpg(self, monkeypatch):
         self.sent: list[tuple[int, int]] = []
-        monkeypatch.setattr(
-            server_mod.os, "killpg",
+        patch_module_attribute(monkeypatch,
+            server_mod, 'os', "killpg",
             lambda pgid, sig: self.sent.append((pgid, sig)),
         )
 
@@ -323,7 +327,7 @@ class TestSentinelPgidRefusal:
         # its own group) still gets the group TERM, not the weaker
         # per-process fallback.
         pid = 2**22 + 777
-        monkeypatch.setattr(server_mod.os, "getpgid", lambda p: p)
+        patch_module_attribute(monkeypatch, server_mod, 'os', "getpgid", lambda p: p)
         monkeypatch.setattr(server_mod, "_pgid_alive", lambda _p: False)
         proc = _StubProc(pid)
         srv = JoernServer.__new__(JoernServer)

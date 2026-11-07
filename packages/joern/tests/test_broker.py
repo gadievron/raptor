@@ -311,7 +311,7 @@ def test_peer_cgroup_namespace_is_checked_even_with_same_cgroup_path(tmp_path, m
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux user namespaces")
 def test_root_mappings_do_not_share_a_uid_only_discovery_family(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    monkeypatch.setattr(broker.os, "geteuid", lambda: 0)
+    patch_module_attribute(monkeypatch, broker, 'os', "geteuid", lambda: 0)
     original = Path.stat
     inode = [101]
     def stat(path, **kwargs):

@@ -9,6 +9,9 @@ import pytest
 from packages.sca import cache_budget as budget
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -93,7 +96,7 @@ def test_stat_failure_does_not_hide_later_files(tmp_path, monkeypatch, namespace
             yield iter([Entry(row) for row in sorted(rows, key=lambda row: row.name)])
 
     with monkeypatch.context() as patch:
-        patch.setattr(budget.os, "scandir", scan)
+        patch_module_attribute(patch, budget, 'os', "scandir", scan)
         if namespace:
             result = budget.EvictionResult()
             rows = list(budget._walk(directory, result))
@@ -175,7 +178,7 @@ def test_short_header_reads_do_not_misclassify_real_database(
         connection.execute("create table entries (value text)")
         connection.commit()
         read = os.read
-        monkeypatch.setattr(budget.os, "read", lambda fd, n: read(fd, min(n, 3)))
+        patch_module_attribute(monkeypatch, budget, 'os', "read", lambda fd, n: read(fd, min(n, 3)))
         result = budget.prune_cache(tmp_path, max_bytes=0)
         assert path.exists()
         assert result.files_removed == 0

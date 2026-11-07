@@ -45,7 +45,7 @@ def _lose_creation_race(monkeypatch):
             raise FileExistsError(path)
         return real_open(path, flags, mode)
 
-    monkeypatch.setattr(cache_integrity.os, "open", fake_open)
+    patch_module_attribute(monkeypatch, mac_key, 'os', "open", fake_open)
     patch_module_attribute(monkeypatch, mac_key, "time", "sleep", lambda s: None)
 
 

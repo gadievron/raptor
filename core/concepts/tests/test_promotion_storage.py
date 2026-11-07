@@ -9,6 +9,9 @@ from core.concepts import study
 from core.concepts.model import Concept, DomainModel
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 def _model(path, name="one"):
     DomainModel(target="target", concepts=[Concept(id=name, description="description")]).save(path)
 
@@ -152,7 +155,7 @@ def test_failed_publication_preserves_canonical(tmp_path, monkeypatch, kind, can
         raise OSError("publication failed")
 
     with monkeypatch.context() as fault:
-        fault.setattr(atomic_fs.os, "replace", fail_replace)
+        patch_module_attribute(fault, atomic_fs, 'os', "replace", fail_replace)
         with pytest.raises(KeyboardInterrupt if cancel else OSError):
             _promote(kind, source, canonical)
     assert canonical.read_bytes() == original

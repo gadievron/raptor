@@ -8,6 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -288,7 +292,7 @@ class TestDbFreshness:
                 visited.append(str(dirpath))
                 yield dirpath, dirnames, filenames
 
-        monkeypatch.setattr(dv.os, "walk", spy_walk)
+        patch_module_attribute(monkeypatch, dv, 'os', "walk", spy_walk)
         dv._db_is_stale(db, repo)
         assert visited, "walk never ran"
         assert not any("node_modules" in v for v in visited)

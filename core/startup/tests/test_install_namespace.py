@@ -9,6 +9,9 @@ import pytest
 from core.startup.tests.test_install_guard import guard
 
 
+from core.testing.module_bindings import patch_module_attribute
+
+
 @pytest.fixture
 def native():
     return guard.native_namespace()
@@ -32,7 +35,7 @@ def test_only_private_devices_clear_nodev(native, monkeypatch):
     monkeypatch.setattr(native, 'mount', lambda *args, **kwargs: None)
     monkeypatch.setattr(native, 'minimal_devices', lambda _: None)
     monkeypatch.setattr(native, 'mount_attributes', lambda path, **kwargs: changes.append((path, kwargs)))
-    monkeypatch.setattr(native.os, 'statvfs', lambda _: SimpleNamespace(f_flag=0))
+    patch_module_attribute(monkeypatch, native, 'os', 'statvfs', lambda _: SimpleNamespace(f_flag=0))
     native.setup_mounts([(Path('/state'), 99)], [])
     assert changes[0] == ('/', {'set_flags': native.NOSUID | native.NODEV, 'recursive': True})
     assert [path for path, flags in changes if flags.get('clear_flags', 0) & native.NODEV] == ['/dev']
@@ -45,7 +48,7 @@ def test_state_is_not_advertised_writable_when_source_is_readonly(native, monkey
     monkeypatch.setattr(native, 'mount', lambda *args, **kwargs: None)
     monkeypatch.setattr(native, 'minimal_devices', lambda _: None)
     monkeypatch.setattr(native, 'mount_attributes', lambda *args, **kwargs: None)
-    monkeypatch.setattr(native.os, 'statvfs', lambda _: SimpleNamespace(f_flag=native.os.ST_RDONLY))
+    patch_module_attribute(monkeypatch, native, 'os', 'statvfs', lambda _: SimpleNamespace(f_flag=native.os.ST_RDONLY))
     with pytest.raises(OSError, match='incorrect write policy'):
         native.setup_mounts([(Path('/state'), 99)], [])
 
@@ -149,7 +152,7 @@ def test_install_output_and_metadata_are_mounted_in_hierarchical_order(native, m
         if clear_flags & native.RDONLY:
             readonly.discard(str(path))
     monkeypatch.setattr(native, 'mount_attributes', attributes)
-    monkeypatch.setattr(native.os, 'statvfs', lambda path: SimpleNamespace(
+    patch_module_attribute(monkeypatch, native, 'os', 'statvfs', lambda path: SimpleNamespace(
         f_flag=native.os.ST_RDONLY if str(path) in readonly else 0))
     native.setup_mounts([(Path('/install/out'), 2)], [],
                         [(Path('/install/out/session/metadata'), 3), (Path('/install'), 1)])
@@ -157,7 +160,6 @@ def test_install_output_and_metadata_are_mounted_in_hierarchical_order(native, m
     assert '/' not in readonly
     assert '/install' in readonly and '/install/out' not in readonly
     assert '/install/out/session/metadata' in readonly
-
 
 
 def test_binding_mounts_preserve_parent_write_policy(native, monkeypatch):
@@ -171,7 +173,6 @@ def test_binding_mounts_preserve_parent_write_policy(native, monkeypatch):
     assert not any(path == '/home/user' for path, _ in changes)
 
 
-
 def test_parent_pins_cannot_reopen_writable_holes_beneath_installation(native, monkeypatch):
     binds = []
     readonly = set()
@@ -181,7 +182,7 @@ def test_parent_pins_cannot_reopen_writable_holes_beneath_installation(native, m
         if set_flags & native.RDONLY:
             readonly.add(str(path))
     monkeypatch.setattr(native, 'mount_attributes', attributes)
-    monkeypatch.setattr(native.os, 'statvfs', lambda path: SimpleNamespace(
+    patch_module_attribute(monkeypatch, native, 'os', 'statvfs', lambda path: SimpleNamespace(
         f_flag=native.os.ST_RDONLY if str(path) in readonly else 0))
     native.setup_mounts([], [], [(Path('/install'), 1), (Path('/install/venv/lib/python'), 2)],
                         [(Path('/install/venv/lib'), 3)])

@@ -16,6 +16,10 @@ import pytest
 import core.run.tmp_reaper as _reaper_module
 from core.run.tmp_reaper import reap_stale_logs, reap_stale_runs, reap_stale_tmp
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 
 # The real namespace probe, captured at import — the autouse
@@ -35,7 +39,6 @@ def _idle_fixture_cwds(monkeypatch):
 @pytest.fixture
 def native_cwd_probe(monkeypatch):
     monkeypatch.setattr(_reaper_module, "_live_cwds", _REAL_LIVE_CWDS)
-
 
 
 @pytest.fixture(autouse=True)
@@ -1006,8 +1009,8 @@ class TestDeadPidDirReaping:
     def test_foreign_owner_kept(self, tmp_path, monkeypatch):
         from core.run import tmp_reaper
         d = self._pid_dir(tmp_path, self._dead_pid())
-        monkeypatch.setattr(
-            tmp_reaper.os, "geteuid", lambda: os.getuid() + 1,
+        patch_module_attribute(monkeypatch,
+            tmp_reaper, 'os', "geteuid", lambda: os.getuid() + 1,
         )
         assert tmp_reaper.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-emu-") == []
@@ -1019,7 +1022,7 @@ class TestDeadPidDirReaping:
         def _boom(*a, **kw):
             raise RuntimeError("listdir exploded")
 
-        monkeypatch.setattr(tmp_reaper.os, "listdir", _boom)
+        patch_module_attribute(monkeypatch, tmp_reaper, 'os', "listdir", _boom)
         assert tmp_reaper.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-emu-") == []
 
@@ -1089,8 +1092,8 @@ class TestMultiRootSweep:
         from core.run import tmp_reaper as reaper_mod
         _session, system, _runuser = roots
         stray = _make_old_dir(system, "raptor-pytest-foreign1")
-        monkeypatch.setattr(
-            reaper_mod.os, "geteuid", lambda: os.getuid() + 1)
+        patch_module_attribute(monkeypatch,
+            reaper_mod, 'os', "geteuid", lambda: os.getuid() + 1)
         assert reap_stale_tmp() == []
         assert stray.is_dir()
 
@@ -1331,7 +1334,7 @@ class TestPidFileReaping:
             calls.append(pid)
             return real_kill(pid, sig)
 
-        monkeypatch.setattr(reaper_mod.os, "kill", recording_kill)
+        patch_module_attribute(monkeypatch, reaper_mod, 'os', "kill", recording_kill)
         pair = self._sidecar_pair(tmp_root, 1, mtime=_OLD)
         assert reap_stale_tmp() == []
         assert all(f.exists() for f in pair)
@@ -1440,7 +1443,7 @@ class TestUnverifiableOwnerDirs:
             calls.append(pid)
             return real_kill(pid, sig)
 
-        monkeypatch.setattr(reaper_mod.os, "kill", recording_kill)
+        patch_module_attribute(monkeypatch, reaper_mod, 'os', "kill", recording_kill)
         self._dir(tmp_path, 1, age_s=25 * 3600)
         reaper_mod.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True)
@@ -1461,7 +1464,7 @@ class TestUnverifiableOwnerDirs:
                 raise PermissionError("simulated foreign-uid holder")
             return real_kill(pid, sig)
 
-        monkeypatch.setattr(reaper_mod.os, "kill", eperm_kill)
+        patch_module_attribute(monkeypatch, reaper_mod, 'os', "kill", eperm_kill)
         old = self._dir(tmp_path, eperm_pid, age_s=25 * 3600)
         young = self._dir(tmp_path, eperm_pid, age_s=2 * 3600,
                           name_tail="-young")
@@ -1481,8 +1484,8 @@ class TestUnverifiableOwnerDirs:
         for i in range(3):
             self._dir(tmp_path, 1, age_s=25 * 3600,
                       name_tail=f"-r{i}")
-        monkeypatch.setattr(
-            reaper_mod.os, "geteuid", lambda: os.getuid() + 1)
+        patch_module_attribute(monkeypatch,
+            reaper_mod, 'os', "geteuid", lambda: os.getuid() + 1)
         with caplog.at_level(_logging.INFO, logger="core.run.tmp_reaper"):
             got = reaper_mod.reap_dead_pid_dirs(
                 tmp_path, "raptor-pytest-", pid_suffix=True)
@@ -1557,7 +1560,7 @@ class TestMidSweepVanish:
                 _shutil.rmtree(vanished)
             return real_kill(pid, sig)
 
-        monkeypatch.setattr(reaper_mod.os, "kill", vanishing_kill)
+        patch_module_attribute(monkeypatch, reaper_mod, 'os', "kill", vanishing_kill)
         got = reaper_mod.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True)
         assert got == [sibling]  # only what THIS sweep removed
@@ -1674,7 +1677,7 @@ class TestPidNamespaceRefusal:
                     raise ProcessLookupError  # what a child ns reports
                 return real_kill(pid, sig)
 
-            monkeypatch.setattr(reaper_mod.os, "kill", ns_blind_kill)
+            patch_module_attribute(monkeypatch, reaper_mod, 'os', "kill", ns_blind_kill)
             got = reaper_mod.reap_dead_pid_dirs(
                 tmp_path, "raptor-pytest-", pid_suffix=True)
             assert got == []

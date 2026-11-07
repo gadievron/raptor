@@ -306,8 +306,8 @@ def test_supervisor_never_forwards_to_a_reaped_pid(
         rc = nf._supervise_ns_init(pid, arm_r, gone_w, None, poll_s=0.05)
         assert rc == 0
         kills: list[tuple[int, int]] = []
-        monkeypatch.setattr(
-            nf.os, "kill", lambda p, s: kills.append((p, s)))
+        patch_module_attribute(monkeypatch,
+            nf, 'os', "kill", lambda p, s: kills.append((p, s)))
         # the handler installed by _supervise_ns_init is still live
         signal.raise_signal(signal.SIGTERM)
         assert kills == [], (
@@ -368,7 +368,7 @@ def test_pidns_unshare_is_a_single_combined_call(monkeypatch):
         calls.append(flags)
         raise RuntimeError("stop before /proc writes")
 
-    monkeypatch.setattr(nf.os, "unshare", record)
+    patch_module_attribute(monkeypatch, nf, 'os', "unshare", record)
     with pytest.raises(RuntimeError, match="stop before"):
         nf.enter_private_netns(include_pid=True)
     assert len(calls) == 1, f"expected ONE unshare call, saw {calls}"

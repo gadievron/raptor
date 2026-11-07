@@ -192,8 +192,8 @@ class TestRunCodeqlDelegation:
         )
         with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
-             patch.object(_scanner_mod.os, "killpg") as mock_killpg, \
-             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+             mock_module_attribute(_scanner_mod, 'os', "killpg") as mock_killpg, \
+             mock_module_attribute(_scanner_mod, 'os', "getpgid", return_value=12345):
             mock_popen.return_value = fake
             result = run_codeql(tmp_path, tmp_path / "out", languages=None)
 
@@ -219,9 +219,9 @@ class TestRunCodeqlDelegation:
         )
         with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
-             patch.object(_scanner_mod.os, "killpg",
+             mock_module_attribute(_scanner_mod, 'os', "killpg",
                           side_effect=ProcessLookupError()), \
-             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+             mock_module_attribute(_scanner_mod, 'os', "getpgid", return_value=12345):
             mock_popen.return_value = fake
             # Should not raise; should still return [].
             result = run_codeql(tmp_path, tmp_path / "out", languages=None)
@@ -597,8 +597,8 @@ class TestJoinCodeQLStage:
         )
         with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
-             patch.object(_scanner_mod.os, "killpg") as mock_killpg, \
-             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+             mock_module_attribute(_scanner_mod, 'os', "killpg") as mock_killpg, \
+             mock_module_attribute(_scanner_mod, 'os', "getpgid", return_value=12345):
             mock_popen.return_value = fake
             with pytest.raises(KeyboardInterrupt):
                 run_codeql(tmp_path, tmp_path / "out", languages=None)

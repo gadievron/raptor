@@ -20,6 +20,10 @@ from core.coverage.journal import (
     now_iso,
 )
 
+
+from core.testing.module_bindings import patch_module_attribute
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -160,7 +164,7 @@ class TestAppendHardening:
                 return real_write(fd, data[: len(data) // 2])
             return real_write(fd, data)
 
-        monkeypatch.setattr(journal_mod.os, "write", flaky_write)
+        patch_module_attribute(monkeypatch, journal_mod, 'os', "write", flaky_write)
         append_entry(tmp_path, _entry(2, body_size=8 * 1024))
         monkeypatch.undo()
 
@@ -183,7 +187,7 @@ class TestAppendHardening:
         def always_short(fd: int, data: bytes) -> int:
             return real_write(fd, data[: max(1, len(data) // 2)])
 
-        monkeypatch.setattr(journal_mod.os, "write", always_short)
+        patch_module_attribute(monkeypatch, journal_mod, 'os', "write", always_short)
         with pytest.raises(OSError):
             append_entry(tmp_path, _entry(2, body_size=4096))
         monkeypatch.undo()
