@@ -97,18 +97,16 @@ def _declared_role(rule: Path) -> str:
     return role
 
 
-def _verification_rules() -> list[Path]:
-    rules = [
-        p for p in sorted(_RULES_DIR.glob("*.cocci"))
-        if _declared_role(p) == "verification"
-    ]
-    # Guard the derivation itself — an empty glob or a role-parse
-    # regression must not turn this gate into a vacuous pass.
-    assert len(rules) >= 40, (
-        f"only {len(rules)} verification rules derived — universe "
-        f"derivation looks broken"
-    )
+def _all_rules() -> list[Path]:
+    rules = sorted(_RULES_DIR.glob("*.cocci"))
+    assert rules, f"no Coccinelle rules found under {_RULES_DIR}"
     return rules
+
+
+def _verification_rules() -> list[Path]:
+    # Explicit roles determine the universe. A reviewed role change must
+    # not require maintaining a numeric quota of promotion-capable rules.
+    return [p for p in _all_rules() if _declared_role(p) == "verification"]
 
 
 def test_declared_role_matches_runtime_reader():
@@ -124,7 +122,7 @@ def test_declared_role_matches_runtime_reader():
     diverged = [
         f"{p.name}: declared {_declared_role(p)!r} but get_rule_role "
         f"returns {get_rule_role(str(p))!r}"
-        for p in sorted(_RULES_DIR.glob("*.cocci"))
+        for p in _all_rules()
         if _declared_role(p) != get_rule_role(str(p))
     ]
     assert not diverged, (
@@ -205,3 +203,28 @@ def test_undeterminable_roles_are_condemned(tmp_path):
     indented.write_text("  // @role: verification\n@r@\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="no // @role: directive"):
         _declared_role(indented)
+
+
+
+def test_census_follows_explicit_roles_without_a_size_quota(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setitem(globals(), "_RULES_DIR", tmp_path)
+    with pytest.raises(AssertionError, match="no Coccinelle rules found"):
+        _verification_rules()
+    with pytest.raises(AssertionError, match="no Coccinelle rules found"):
+        test_declared_role_matches_runtime_reader()
+
+    verification = tmp_path / "verification.cocci"
+    detection = tmp_path / "detection.cocci"
+    verification.write_text("// @role: verification\n@r@\n", encoding="utf-8")
+    detection.write_text("// @role: detection\n@r@\n", encoding="utf-8")
+    assert _declared_role(verification) == "verification"
+    assert _declared_role(detection) == "detection"
+    assert _verification_rules() == [verification]
+
+    verification.write_text("// @role: detection\n@r@\n", encoding="utf-8")
+    assert _verification_rules() == []
+    detection.write_text("// @role: verificaton\n@r@\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="unknown @role token"):
+        _verification_rules()

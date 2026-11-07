@@ -365,6 +365,17 @@ expressions and overloaded C++ operators are outside this check. Verify the
 promoted left-operand width before changing the operation; widening alone
 cannot make every reported count valid.
 
+The integer-divisor check looks for division or modulo of a parameter before
+a later zero test, including `/=` and `%=` and common integer parameter types.
+A bare unguarded division is not enough to trigger this check. Direct rejecting
+guards, supported nonzero branches, and canonical resets or zero clamps to
+`1` can protect a use; logging alone does not. Recognized writes and
+address-taking break the relationship with a later test, and rewrites before
+a use can invalidate earlier protection. An operation that overwrites its
+own divisor cannot borrow a later test of the new value. Each use is reviewed
+separately. Matches remain candidates: check caller ranges, aliases,
+expression side effects and more complex control flow before reporting a bug.
+
 ### Rule Inventory
 
 RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
