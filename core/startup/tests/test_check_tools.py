@@ -21,6 +21,11 @@ from core.startup.init import check_tools
 from core.testing.module_bindings import patch_module_attribute
 
 import pytest
+import importlib.metadata
+import importlib.util
+import subprocess
+from types import ModuleType
+from core.testing.module_views import scoped_function_imports
 
 
 from core.testing.module_bindings import mock_module_attribute
@@ -34,6 +39,26 @@ def _isolate_shutil_patch_targets(monkeypatch):
     patch_module_attribute(
         monkeypatch, consumer_0, "shutil", "which", consumer_0.shutil.which,
     )
+
+
+_probe_imports = ModuleType("startup_probe_imports")
+
+
+@pytest.fixture(autouse=True)
+def _owned_probe_imports(monkeypatch):
+    util = ModuleType(importlib.util.__name__)
+    vars(util).update(vars(importlib.util))
+    patch_module_attribute(monkeypatch, startup_init, "importlib", "util", util)
+    with scoped_function_imports(
+        startup_init, ("_semgrep_version", "_cached_cli_version"),
+        {"shutil": startup_init.shutil, "importlib.metadata": importlib.metadata,
+         "subprocess": subprocess},
+    ) as imports:
+        try:
+            monkeypatch.setitem(globals(), "_probe_imports", imports)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 _FAKE_DEPS = {
@@ -145,10 +170,10 @@ class TestGroupMemberWarnings:
 
 class TestSemgrepVersion:
     def test_prefers_importlib_metadata(self):
-        with mock.patch(
-            "shutil.which", return_value=None,
-        ), mock.patch(
-            "importlib.metadata.version", return_value="1.172.0",
+        with mock_module_attribute(
+            _probe_imports, "shutil", "which", return_value=None,
+        ), mock_module_attribute(
+            _probe_imports, "importlib.metadata", "version", return_value="1.172.0",
         ), mock.patch(
             "core.startup.init._cached_cli_version",
         ) as cli:
@@ -158,10 +183,10 @@ class TestSemgrepVersion:
     def test_falls_back_to_cli_probe_when_not_pip_installed(self):
         from importlib.metadata import PackageNotFoundError
 
-        with mock.patch(
-            "shutil.which", return_value=None,
-        ), mock.patch(
-            "importlib.metadata.version",
+        with mock_module_attribute(
+            _probe_imports, "shutil", "which", return_value=None,
+        ), mock_module_attribute(
+            _probe_imports, "importlib.metadata", "version",
             side_effect=PackageNotFoundError("semgrep"),
         ), mock.patch(
             "core.startup.init._cached_cli_version",
@@ -171,10 +196,10 @@ class TestSemgrepVersion:
         cli.assert_called_once_with("semgrep")
 
     def test_external_path_binary_uses_its_own_version(self, tmp_path):
-        with mock.patch(
-            "shutil.which", return_value=str(tmp_path / "semgrep"),
-        ), mock.patch(
-            "importlib.metadata.version",
+        with mock_module_attribute(
+            _probe_imports, "shutil", "which", return_value=str(tmp_path / "semgrep"),
+        ), mock_module_attribute(
+            _probe_imports, "importlib.metadata", "version",
         ) as metadata, mock.patch(
             "core.startup.init._cached_cli_version", return_value="1.177.0",
         ) as cli:
@@ -191,7 +216,8 @@ class TestJoernVersion:
         ), mock.patch(
             "packages.joern.prereqs._version_from_dist",
             return_value="4.0.470",
-        ) as dist, mock.patch("subprocess.run") as sub:
+        ) as dist, mock.patch("subprocess.run") as sub, \
+             mock_module_attribute(_probe_imports, "subprocess", "run", sub):
             assert startup_init._joern_version() == "4.0.470"
         dist.assert_called_once_with("/opt/joern/joern")
         # No JVM boot at startup — dist-file read only.
@@ -222,7 +248,7 @@ class TestCachedCliVersion:
         self._env(tmp_path, monkeypatch, fake_bin)
 
         proc = mock.Mock(returncode=0, stdout="sometool 9.8.7\n", stderr="")
-        with mock.patch("subprocess.run", return_value=proc) as sub:
+        with mock_module_attribute(_probe_imports, "subprocess", "run", return_value=proc) as sub:
             assert startup_init._cached_cli_version("sometool") == "9.8.7"
         sub.assert_called_once()
 
@@ -231,7 +257,7 @@ class TestCachedCliVersion:
         assert cached["sometool"]["version"] == "9.8.7"
 
         # Second call: served from the cache — no subprocess.
-        with mock.patch("subprocess.run") as sub2:
+        with mock_module_attribute(_probe_imports, "subprocess", "run") as sub2:
             assert startup_init._cached_cli_version("sometool") == "9.8.7"
         sub2.assert_not_called()
 
@@ -241,13 +267,13 @@ class TestCachedCliVersion:
         self._env(tmp_path, monkeypatch, fake_bin)
 
         proc = mock.Mock(returncode=0, stdout="sometool 1.0.0\n", stderr="")
-        with mock.patch("subprocess.run", return_value=proc):
+        with mock_module_attribute(_probe_imports, "subprocess", "run", return_value=proc):
             assert startup_init._cached_cli_version("sometool") == "1.0.0"
 
         # Simulate an upgrade: content (size) changes → key changes.
         fake_bin.write_text("#!/bin/sh\n# upgraded to 2\n")
         proc2 = mock.Mock(returncode=0, stdout="sometool 2.0.0\n", stderr="")
-        with mock.patch("subprocess.run", return_value=proc2) as sub:
+        with mock_module_attribute(_probe_imports, "subprocess", "run", return_value=proc2) as sub:
             assert startup_init._cached_cli_version("sometool") == "2.0.0"
         sub.assert_called_once()
 
@@ -258,7 +284,7 @@ class TestCachedCliVersion:
         fake_bin.write_text("#!/bin/sh\n")
         self._env(tmp_path, monkeypatch, fake_bin)
 
-        with mock.patch("subprocess.run", side_effect=OSError("boom")):
+        with mock_module_attribute(_probe_imports, "subprocess", "run", side_effect=OSError("boom")):
             assert startup_init._cached_cli_version("sometool") is None
         cache_file = tmp_path / "cache" / "raptor" / "tool-versions.json"
         assert not cache_file.exists()
@@ -269,7 +295,7 @@ class TestCachedCliVersion:
         self._env(tmp_path, monkeypatch, fake_bin)
 
         proc = mock.Mock(returncode=0, stdout="no digits here\n", stderr="")
-        with mock.patch("subprocess.run", return_value=proc):
+        with mock_module_attribute(_probe_imports, "subprocess", "run", return_value=proc):
             assert startup_init._cached_cli_version("sometool") is None
 
     def test_binary_not_on_path_returns_none(self, tmp_path, monkeypatch):
@@ -286,7 +312,7 @@ class TestCachedCliVersion:
         (cache_dir / "tool-versions.json").write_text("{not json")
 
         proc = mock.Mock(returncode=0, stdout="sometool 3.1.4\n", stderr="")
-        with mock.patch("subprocess.run", return_value=proc):
+        with mock_module_attribute(_probe_imports, "subprocess", "run", return_value=proc):
             assert startup_init._cached_cli_version("sometool") == "3.1.4"
 
 
