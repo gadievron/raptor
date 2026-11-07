@@ -27,11 +27,12 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
        [--dynamic | --no-dynamic]
        [--binary <path> ...] [--binary-auto] [--no-binary-oracle] [--no-vendored-triage]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
-       [--no-auto-siblings]
+       [--no-auto-siblings] [--integer-abi <profile|unknown>]
        [--study-lib PATH:IDENTIFIER ...] [--no-study-lib]
 ```
 
 - `<target_path>` — path to codebase to review (required on first run; resolved per DEFAULT TARGET DIRECTORY if omitted)
+- `--integer-abi <profile|unknown>` — override the target C integer layout. Binary targets use supported binary platform layouts; unsupported or ambiguous binaries stay unknown. Source directories default to the analysis process's native C layout, recorded as a host assumption; arithmetic conclusions are conditional on it. Use `unknown` to leave ABI-dependent checks inconclusive. Resume preserves the original selection.
 - `--strategy <name>` — filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing, integer
 - `--budget <N>` — max functions to review (default: all gaps)
 - `--scope <dir>` — restrict to a subdirectory (e.g. `ipc/`, `net/ipv4/`). Annotations and coverage still write to the project-level output dir, so successive scoped runs accumulate

@@ -1021,13 +1021,27 @@ directory, so they accumulate into one audit trail.  In project mode,
 
 ### Target integer ABI
 
-Source overflow checks require an explicit target integer layout. Select it
-with `raptor-audit run --integer-abi` (see `--help` for the supported layouts).
-This is an operator assertion about the target build, not host detection.
-Without it, the overflow SMT lane stays inconclusive while other review
-channels continue. The selection is pinned for resume and included in
-worker receipts and same-run memo keys. Repository build flags and model
-output cannot select it.
+Source-directory overflow checks default to the analysis process's native C integer
+layout, measured with `ctypes` and labelled `host-assumption`. This is an
+assumption about the target, not evidence of its deployment platform. Audit
+logs announce it; run configuration, worker receipts and memo keys preserve
+the resolved widths and provenance. Resume reuses that record even on a
+different host. Legacy runs without a recorded ABI remain unknown on resume.
+
+Binary-file targets instead select the standard data model of supported
+ELF, Windows PE, and thin Mach-O platforms. For example, Windows PE64 selects
+LLP64 even when the analysis host uses LP64. This is recorded as
+`binary-platform`; headers do not establish arbitrary compiler-specific
+settings. Unrecognized platforms, EFI PE, universal Mach-O without a single
+selected slice, malformed binaries, and Ghidra projects remain unknown;
+they never inherit the host default.
+
+Override with `raptor-audit run --integer-abi lp64` (or another supported
+profile) when the target layout is known. Use `--integer-abi unknown` to
+leave ABI-dependent SMT inconclusive. Unsupported host layouts also remain
+unknown. The corpus runner accepts the same option, records it in results
+and history, and partitions group checkpoints by the resolved selection.
+Repository text and model output cannot override the selection.
 
 The supported layouts use two's-complement integers without padding.
 The typed model follows supported builtin declarations and C integer

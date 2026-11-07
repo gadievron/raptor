@@ -217,3 +217,52 @@ def test_worker_reply_for_another_hypothesis_cannot_be_relabelled(c_grammar, mon
     assert result.outcome == "inconclusive"
     assert not result.matches
     assert result.details["source_scope_status"] == "unbound-worker-result"
+
+
+def test_host_selection_is_labelled_serializable_and_cached_separately(monkeypatch):
+    from core.audit import integer_abi
+    host = integer_abi.host_integer_abi()
+    assert host is not None
+    assert host.source == "host-assumption"
+    monkeypatch.setattr(integer_abi, "host_integer_abi", lambda: host)
+    record = integer_abi.select_integer_abi(None)
+    assert resolve_integer_abi(json.loads(json.dumps(record))) == host
+    explicit = IntegerABI("explicit", host.char_bits, host.short_bits, host.int_bits,
+                          host.long_bits, host.long_long_bits, host.representation)
+    assert integer_abi.integer_abi_key(record) != integer_abi.integer_abi_key(explicit)
+
+
+def test_overrides_never_probe_host_and_unknown_is_preserved(monkeypatch):
+    from core.audit import integer_abi
+    monkeypatch.setattr(integer_abi, "host_integer_abi",
+                        lambda: pytest.fail("explicit overrides must not query host"))
+    assert integer_abi.select_integer_abi("llp64") == "llp64"
+    assert integer_abi.select_integer_abi("unknown") == "unknown"
+    assert integer_abi.select_integer_abi(INTEGER_ABIS["lp64"].record()) == INTEGER_ABIS["lp64"].record()
+    with pytest.raises(ValueError, match="integer ABI"):
+        integer_abi.select_integer_abi("made-up")
+
+
+def test_unsupported_host_stays_unknown(monkeypatch, tmp_path):
+    from core.audit import integer_abi, pipeline
+    monkeypatch.setattr(integer_abi, "host_integer_abi", lambda: None)
+    assert integer_abi.select_integer_abi(None) == "unknown"
+    opts = pipeline.AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path)
+    cfg = pipeline._build_orchestrator_config(opts, None, ["test"], pipeline.ReviewMode.SECURITY)
+    assert opts.integer_abi == "unknown"
+    assert cfg.integer_abi is None
+
+
+def test_host_representation_must_match_supported_model(monkeypatch):
+    import ctypes
+    from core.audit.integer_abi import host_integer_abi
+    # A layout with padding/unsupported representation must not become a fact.
+    monkeypatch.setattr(ctypes, "sizeof", lambda kind: 16)
+    assert host_integer_abi() is None
+
+
+def test_host_without_ctypes_stays_unknown(monkeypatch):
+    import sys
+    from core.audit.integer_abi import host_integer_abi
+    monkeypatch.setitem(sys.modules, "ctypes", None)
+    assert host_integer_abi() is None

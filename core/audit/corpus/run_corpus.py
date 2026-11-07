@@ -938,6 +938,7 @@ def _run_audit(
     profile: str = "deployed",
     open_discovery: bool = False,
     immediate_verify: bool = True,
+    integer_abi: Any = None,
     checkpoint: Path | None = None,
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
@@ -1003,6 +1004,8 @@ def _run_audit(
     for label in labels:
         by_repo.setdefault(label.source.repo, []).append(label)
 
+    from core.audit.integer_abi import select_integer_abi
+    integer_abi = select_integer_abi(integer_abi)
     joern_srv = None
 
     # Per-group resume state: rows already scored by a previous
@@ -1017,6 +1020,7 @@ def _run_audit(
         "profile": profile,
         "triage": triage,
         "prefilter": prefilter,
+        "integer_abi": integer_abi,
     }
     if checkpoint_stamp:
         stamp.update(checkpoint_stamp)
@@ -1130,6 +1134,7 @@ def _run_audit(
                 prefilter=prefilter, profile=profile,
                 open_discovery=open_discovery,
                 immediate_verify=immediate_verify,
+                integer_abi=integer_abi,
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -1446,6 +1451,7 @@ def _run_audit_on_target(
     profile: str = "deployed",
     open_discovery: bool = False,
     immediate_verify: bool = True,
+    integer_abi: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1566,6 +1572,7 @@ def _run_audit_on_target(
             validate=False,
             open_discovery=open_discovery,
             immediate_verify=immediate_verify,
+            integer_abi=integer_abi,
             # Corpus fixtures are operator-curated pinned trees — the
             # operator running the corpus IS asserting repo trust, and
             # trust-gated witnesses (goconc) must behave here exactly
@@ -2851,7 +2858,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Disable inline hypothesis verification (IHV) — use the "
              "legacy post-loop sweep-validate path instead",
     )
+    from core.audit.integer_abi import INTEGER_ABIS, select_integer_abi
+    parser.add_argument(
+        "--integer-abi", choices=sorted([*INTEGER_ABIS, "unknown"]), default=None,
+        help="Target C integer ABI override (default: measured host C layout, "
+             "recorded as an analysis assumption; unknown disables ABI-dependent checks)",
+    )
     args = parser.parse_args(argv)
+    args.integer_abi = select_integer_abi(args.integer_abi)
 
     # Pin RAPTOR_DIR to THIS tree for the runner's OWN process, not
     # just spawned children. The in-process orchestrator resolves
@@ -3136,6 +3150,7 @@ def main(argv: list[str] | None = None) -> int:
         "profile": args.profile,
         "triage": args.triage,
         "prefilter": args.prefilter,
+        "integer_abi": args.integer_abi,
         "scope": args.scope,
         # A mutant run and a real run can share every other knob AND
         # the function_id set (a mutant label reuses the clean
@@ -3231,6 +3246,7 @@ def main(argv: list[str] | None = None) -> int:
                 profile=args.profile,
                 open_discovery=args.open_discovery,
                 immediate_verify=not args.no_immediate_verify,
+                integer_abi=args.integer_abi,
                 checkpoint=(
                     args.out / f"checkpoint-{mode}-groups.json"
                     if args.out else None
@@ -3355,6 +3371,7 @@ def main(argv: list[str] | None = None) -> int:
         # The knowledge profile the run was invoked with (probe mode
         # skips the orchestrator, so there it only labels the rows).
         "profile": args.profile,
+        "integer_abi": None if args.probe else args.integer_abi,
         # Label kind of the (single-kind) run: "real" or
         # "synthetic_mutant".  Mutant results are mutation-operator
         # regression floors, never real-bug recall — splice and the
@@ -3424,6 +3441,7 @@ def main(argv: list[str] | None = None) -> int:
                 "scope": args.scope,
                 "splice": str(args.splice) if args.splice else None,
                 "llm_cache": meta["llm_cache"],
+                "integer_abi": meta["integer_abi"],
             },
             profile=args.profile,
             selection=selection,

@@ -2193,6 +2193,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "codeql database provisioning failed", exc_info=True,
             )
 
+    from core.audit.integer_abi import select_integer_abi
+    args.integer_abi = select_integer_abi(getattr(args, "integer_abi", None), target_path=target_path)
     models = args.model or []
     opts = AuditPipelineOpts(
         target_path=target_path,
@@ -3582,7 +3584,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         max_seconds=max_seconds,
         budget=run_cfg.get("budget"),
         strategy_filter=run_cfg.get("strategy_filter"),
-        integer_abi=run_cfg.get("integer_abi"),
+        # Old runs with no recorded layout must not gain a new host assumption.
+        integer_abi=run_cfg.get("integer_abi") or "unknown",
         review_passes=int(run_cfg.get("review_passes") or 1),
         batch_sloc_threshold=run_cfg.get("batch_sloc_threshold"),
         include_kinds=(
@@ -4673,10 +4676,12 @@ def main() -> int:
     p_run = sub.add_parser("run", help="Run the full audit orchestrator")
     from core.audit.integer_abi import INTEGER_ABIS
     p_run.add_argument(
-        "--integer-abi", choices=sorted(INTEGER_ABIS), default=None,
+        "--integer-abi", choices=sorted([*INTEGER_ABIS, "unknown"]), default=None,
         help="Target C integer ABI for source overflow/array checks (operator assertion; "
-             "default: unknown, source overflow/array SMT stays inconclusive). Uses the same "
-             "selection on resume; never infers the target from the audit host.",
+             "default: binary platform layout for supported binary targets; "
+             "measured host C layout for source, recorded as an analysis assumption). "
+             "Unknown binary platforms stay unknown. Use unknown to keep ABI-dependent checks inconclusive. "
+             "The resolved layout and assumption are preserved on resume.",
     )
     add_report_arguments(p_run)
     p_run.add_argument("target", help="Path to codebase to review")
