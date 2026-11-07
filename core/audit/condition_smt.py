@@ -1152,8 +1152,9 @@ def _z3_overflow_check(
 
     import z3
 
-    solver = z3.Solver()
-    solver.set("timeout", 5000)
+    from core.smt_solver.session import check_solver, new_solver
+
+    solver = new_solver()
 
     vars_map: dict[str, z3.BitVecRef] = {}
     for c in constraints:
@@ -1185,7 +1186,7 @@ def _z3_overflow_check(
     for name, v in vars_map.items():
         solver.push()
         solver.add(z3.UGT(v, bv_buffer))
-        result = solver.check()
+        result = check_solver(solver)
         if result == z3.sat:
             model = solver.model()
             witness: dict[str, int] = {}
@@ -1243,8 +1244,9 @@ def _z3_alloc_overflow_check(
 
     import z3
 
-    solver = z3.Solver()
-    solver.set("timeout", 5000)
+    from core.smt_solver.session import check_solver, new_solver
+
+    solver = new_solver()
 
     vars_map: dict[str, z3.BitVecRef] = {}
     for c in constraints:
@@ -1281,7 +1283,7 @@ def _z3_alloc_overflow_check(
                 upper_bits = z3.Extract(127, 64, full_product)
                 solver.add(upper_bits != z3.BitVecVal(0, 64))
 
-                result = solver.check()
+                result = check_solver(solver)
                 if result == z3.sat:
                     model = solver.model()
                     witness = {}
@@ -1327,8 +1329,9 @@ def _z3_consistency_check(
     """
     import z3
 
-    solver = z3.Solver()
-    solver.set("timeout", 5000)
+    from core.smt_solver.session import check_solver, new_solver
+
+    solver = new_solver()
 
     vars_map: dict[str, z3.ArithRef] = {}
     for c in constraints:
@@ -1350,7 +1353,9 @@ def _z3_consistency_check(
         elif c.operator == "!=":
             solver.add(v != c.bound_value)
 
-    result = solver.check()
+    result = check_solver(solver)
+    if result not in (z3.sat, z3.unsat):
+        return (None, "solver returned unknown — consistency inconclusive", None)
     if result == z3.unsat:
         return (
             None,
@@ -1439,7 +1444,7 @@ def _z3_path_feasibility_check(
     construction with timeout.
     """
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver
 
     solver = new_solver()
 
@@ -1463,7 +1468,7 @@ def _z3_path_feasibility_check(
         elif c.operator == "!=":
             solver.add(v != c.bound_value)
 
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.unsat:
         return (False, "path infeasible: guard conjunction is unsatisfiable", None)
     if result == z3.sat:
@@ -1489,7 +1494,7 @@ def _z3_signed_mismatch_check(
 ) -> SignedMismatchResult:
     """Solve the supplied signed-comparison model, never infer C conversions."""
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver
     from core.smt_solver.witness import format_vars
 
     if (type(bit_width) is not int or not 1 <= bit_width <= 64
@@ -1512,7 +1517,7 @@ def _z3_signed_mismatch_check(
     # Assert the named comparison too: explicit constraints may omit it.
     solver.add(value < bound if operator == "<" else value <= bound)
     solver.add(value < 0, z3.UGT(value, z3.BitVecVal(bound, bit_width)))
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.unknown:
         return SignedMismatchResult(reasoning="solver returned unknown — comparison model inconclusive")
     if result == z3.unsat:
@@ -1541,7 +1546,7 @@ def _z3_auth_bypass_check(
     that demonstrates the bypass.
     """
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver
 
     constraints = _constraints_from_guard_text(guard_text)
 
@@ -1595,7 +1600,7 @@ def _z3_auth_bypass_check(
         elif c.operator == "!=":
             solver.add(v != c.bound_value)
 
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.sat:
         model = solver.model()
         witness: dict[str, Any] = {}
@@ -2401,7 +2406,7 @@ def _z3_lock_discipline_check(
 ) -> LockDisciplineResult:
     """Z3: Check if a lock-held return guard is satisfiable."""
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver
 
     constraints = _constraints_from_guard_text(guard_text)
 
@@ -2452,7 +2457,7 @@ def _z3_lock_discipline_check(
         elif c.operator == "!=":
             solver.add(v != c.bound_value)
 
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.sat:
         model = solver.model()
         witness: dict[str, Any] = {}
@@ -2854,7 +2859,7 @@ def _z3_resource_leak_check(
 ) -> ResourceLeakResult:
     """Z3: Check if a leak-path guard is satisfiable."""
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver
 
     constraints = _constraints_from_guard_text(guard_text)
 
@@ -2910,7 +2915,7 @@ def _z3_resource_leak_check(
         elif c.operator == "!=":
             solver.add(v != c.bound_value)
 
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.sat:
         model = solver.model()
         witness: dict[str, Any] = {}
@@ -3178,6 +3183,8 @@ class IntegerNarrowingResult:
     assign_line: int = 0
     reasoning: str = ""
     witness: dict[str, Any] | None = None
+    # Native status is separate from a syntax-only narrowing candidate.
+    solver_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -3196,6 +3203,8 @@ class IntegerNarrowingResult:
             d["assign_line"] = self.assign_line
         if self.witness:
             d["witness"] = self.witness
+        if self.solver_status is not None:
+            d["solver_status"] = self.solver_status
         return d
 
 
@@ -3825,7 +3834,14 @@ def _try_z3_integer_narrowing(
         "dest_type": dest_type,
         "assign_line": assign_line,
     })
-    return _result_from_child(IntegerNarrowingResult, out)
+    result = _result_from_child(IntegerNarrowingResult, out)
+    # Unknown, unsupported and older statusless results cannot suppress
+    # the caller's independently extracted diagnostic candidate.
+    if result is None or result.solver_status not in {"sat", "unsat"}:
+        return None
+    if type(result.narrowing_found) is not bool or result.narrowing_found != (result.solver_status == "sat"):
+        return None
+    return result
 
 
 def _z3_integer_narrowing_check(
@@ -3834,12 +3850,17 @@ def _z3_integer_narrowing_check(
     dest_type: str,
     assign_line: int,
 ) -> IntegerNarrowingResult:
-    """Z3: Prove narrowing can lose data."""
+    """Query an unsigned width model, without a source-type or path proof."""
     from core.smt_solver.availability import z3
-    from core.smt_solver.session import new_solver
+    from core.smt_solver.session import check_solver, new_solver, solver_reason_unknown
 
-    src_width = _type_to_width(src_type) or 64
-    dest_width = _type_to_width(dest_type) or 32
+    src_width = _type_to_width(src_type) if isinstance(src_type, str) else None
+    dest_width = _type_to_width(dest_type) if isinstance(dest_type, str) else None
+    if src_width is None or dest_width is None:
+        return IntegerNarrowingResult(
+            solver_status="unmodeled",
+            reasoning="unsupported type-width model — narrowing check inconclusive",
+        )
 
     solver = new_solver()
     v = z3.BitVec(var_name, src_width)
@@ -3847,7 +3868,7 @@ def _z3_integer_narrowing_check(
     max_dest = (1 << dest_width) - 1
     solver.add(z3.UGT(v, max_dest))
 
-    result = solver.check()
+    result = check_solver(solver)
     if result == z3.sat:
         model = solver.model()
         witness_val = model[v]
@@ -3859,20 +3880,29 @@ def _z3_integer_narrowing_check(
                 pass
         return IntegerNarrowingResult(
             narrowing_found=True,
+            solver_status="sat",
             source_type=src_type,
             dest_type=dest_type,
             source_width=src_width,
             dest_width=dest_width,
             assign_line=assign_line,
             reasoning=(
-                f"Z3 SAT: {src_type} ({src_width}-bit) → {dest_type} "
-                f"({dest_width}-bit) can overflow at line {assign_line}"
+                f"Z3 SAT: unsigned width model for {src_type} ({src_width}-bit) "
+                f"→ {dest_type} ({dest_width}-bit) can discard high bits "
+                f"at line {assign_line}; witness values are unsigned bit patterns"
             ),
             witness=w or None,
         )
+    if result != z3.unsat:
+        return IntegerNarrowingResult(
+            solver_status="unknown", source_type=src_type, dest_type=dest_type,
+            source_width=src_width, dest_width=dest_width, assign_line=assign_line,
+            reasoning="solver returned unknown — narrowing check inconclusive: " + solver_reason_unknown(solver),
+        )
     return IntegerNarrowingResult(
         narrowing_found=False,
-        reasoning="Z3 UNSAT: narrowing cannot lose data",
+        solver_status="unsat",
+        reasoning="Z3 UNSAT: unsigned width model cannot discard high bits",
     )
 
 
