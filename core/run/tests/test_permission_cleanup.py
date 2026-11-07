@@ -118,11 +118,14 @@ def test_expired_restricted_tree_is_reclaimed(tmp_path, monkeypatch, mode, kind)
 def test_workdir_exit_callback_reclaims_restricted_tree(tmp_path, monkeypatch, mode):
     callbacks = []
     monkeypatch.setenv("RAPTOR_WORK_DIR", str(tmp_path))
-    monkeypatch.setattr(
-        workdir.atexit, "register", lambda fn, *a, **kw: callbacks.append((fn, a, kw))
+    from core.testing.module_bindings import patch_module_attribute
+    patch_module_attribute(
+        monkeypatch, workdir, "atexit", "register",
+        lambda fn, *a, **kw: callbacks.append((fn, a, kw)),
     )
-    tree = workdir._create_session_dir()
-    assert tree is not None
+    allocation = workdir._create_session_dir()
+    assert allocation is not None
+    tree, _ = allocation
     with restricted_tree(tree, mode):
         fn, args, kwargs = callbacks[-1]
         fn(*args, **kwargs)

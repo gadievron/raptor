@@ -64,6 +64,12 @@ def _fresh(monkeypatch, tmp_path, _owned_tempfile_namespace):
     """
     monkeypatch.setattr(workdir, "_resolved", False)
     monkeypatch.setattr(workdir, "_cached", None)
+    monkeypatch.setattr(workdir, "_cached_identity", None)
+    callbacks = []
+    patch_module_attribute(
+        monkeypatch, workdir, "atexit", "register",
+        lambda fn, *args: callbacks.append((fn, args)),
+    )
     monkeypatch.delenv("RAPTOR_WORK_DIR", raising=False)
     monkeypatch.setattr(
         workdir, "_family_name",
@@ -72,8 +78,11 @@ def _fresh(monkeypatch, tmp_path, _owned_tempfile_namespace):
     tmp_root = tmp_path / "tmproot"
     tmp_root.mkdir()
     monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(tmp_root))
-    yield tmp_root
-    _tempfile_owner.tempfile.tempdir = None
+    try:
+        yield tmp_root
+    finally:
+        for fn, args in reversed(callbacks):
+            fn(*args)
 
 
 def _family(base: Path) -> Path:
@@ -343,3 +352,188 @@ def test_unreadable_metadata_identity_is_retained(_fresh, monkeypatch):
     patch_module_attribute(monkeypatch, workdir, 'os', 'kill', must_not_probe)
     workdir._sweep_dead_sessions(family)
     assert managed.is_dir()
+
+
+@pytest.mark.parametrize('replacement', ['directory', 'symlink', 'file', 'absent'])
+def test_cache_rejects_replaced_session(_fresh, replacement):
+    original = workdir.exec_workdir()
+    moved = original.with_name('original-allocation')
+    original.rename(moved)
+    (moved / 'keep').write_text('original')
+    if replacement == 'directory':
+        original.mkdir()
+        (original / 'keep').write_text('replacement')
+    elif replacement == 'symlink':
+        original.symlink_to(moved, target_is_directory=True)
+    elif replacement == 'file':
+        original.write_text('replacement')
+    got = workdir.exec_workdir()
+    assert got != original
+    assert got.is_dir() and not got.is_symlink()
+    assert (moved / 'keep').read_text() == 'original'
+    if replacement == 'directory':
+        assert (original / 'keep').read_text() == 'replacement'
+    elif replacement == 'file':
+        assert original.read_text() == 'replacement'
+    elif replacement == 'symlink':
+        assert original.is_symlink()
+
+
+@pytest.mark.parametrize('replacement', ['directory', 'symlink', 'file', 'absent'])
+def test_exit_cleanup_preserves_replacement(_fresh, replacement):
+    original = workdir.exec_workdir()
+    identity = workdir._cached_identity
+    moved = original.with_name('preserved-allocation')
+    original.rename(moved)
+    (moved / 'keep').write_text('original')
+    if replacement == 'directory':
+        original.mkdir()
+        (original / 'keep').write_text('replacement')
+    elif replacement == 'symlink':
+        original.symlink_to(moved, target_is_directory=True)
+    elif replacement == 'file':
+        original.write_text('replacement')
+    workdir._remove_owned_session(original, identity, os.getpid())
+    assert (moved / 'keep').read_text() == 'original'
+    if replacement == 'directory':
+        assert (original / 'keep').read_text() == 'replacement'
+    elif replacement == 'file':
+        assert original.read_text() == 'replacement'
+    elif replacement == 'symlink':
+        assert original.is_symlink()
+
+
+def test_exit_cleanup_refuses_inherited_parent_allocation(_fresh, monkeypatch):
+    original = workdir.exec_workdir()
+    identity = workdir._cached_identity
+    owner = os.getpid()
+    patch_module_attribute(monkeypatch, workdir, 'os', 'getpid', lambda: owner + 1)
+    workdir._remove_owned_session(original, identity, owner)
+    assert original.is_dir()
+
+
+def test_exit_cleanup_removes_original_and_is_idempotent(_fresh):
+    original = workdir.exec_workdir()
+    identity = workdir._cached_identity
+    (original / 'data').write_bytes(b'disposable')
+    workdir._remove_owned_session(original, identity, os.getpid())
+    assert not original.exists()
+    workdir._remove_owned_session(original, identity, os.getpid())
+
+
+@pytest.mark.parametrize('failure', [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_failed_exit_registration_rolls_back_allocation(_fresh, monkeypatch, failure):
+    def refuse(*args):
+        raise failure('registration failed')
+    patch_module_attribute(monkeypatch, workdir, 'atexit', 'register', refuse)
+    with pytest.raises(failure, match='registration failed'):
+        workdir.exec_workdir()
+    assert list(_family(_fresh).iterdir()) == []
+    assert workdir._cached is None and not workdir._resolved
+
+
+def test_failed_rollback_preserves_registration_exception(_fresh, monkeypatch):
+    def refuse(*args):
+        raise RuntimeError('registration failed')
+    def interrupted(*args):
+        raise KeyboardInterrupt('rollback interrupted')
+    patch_module_attribute(monkeypatch, workdir, 'atexit', 'register', refuse)
+    monkeypatch.setattr(workdir, 'rmtree_hardened', interrupted)
+    with pytest.raises(RuntimeError, match='registration failed'):
+        workdir.exec_workdir()
+
+
+@pytest.mark.parametrize('failure', ['false', 'oserror'])
+def test_exit_cleanup_reports_retained_allocation(_fresh, monkeypatch, caplog, failure):
+    original = workdir.exec_workdir()
+    def refuse(*args):
+        if failure == 'oserror':
+            raise PermissionError('fixture refused')
+        return False
+    monkeypatch.setattr(workdir, 'rmtree_hardened', refuse)
+    workdir._remove_owned_session(original, workdir._cached_identity, os.getpid())
+    assert original.is_dir()
+    assert 'workdir:' in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, 'fork'), reason='requires POSIX fork')
+@pytest.mark.parametrize('lock_held', [False, True], ids=['unlocked', 'locked'])
+def test_fork_child_owns_separate_workspace_and_cleanup(_fresh, lock_held):
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent('''
+        import atexit, os, signal, sys
+        from pathlib import Path
+        from core.run import workdir
+        parent = workdir.exec_workdir()
+        (parent / 'keep').write_text('parent data')
+        if sys.argv[1] == 'locked':
+            workdir._lock.acquire()
+        child = os.fork()
+        if child == 0:
+            signal.alarm(5)
+            own = workdir.exec_workdir()
+            assert own != parent
+            assert own.is_dir()
+            atexit._run_exitfuncs()
+            assert not own.exists()
+            assert (parent / 'keep').read_text() == 'parent data'
+            os._exit(0)
+        if sys.argv[1] == 'locked':
+            workdir._lock.release()
+        _, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0, status
+        assert (parent / 'keep').read_text() == 'parent data'
+        atexit._run_exitfuncs()
+        assert not parent.exists()
+    ''')
+    env = dict(os.environ, RAPTOR_WORK_DIR=str(_fresh), TMPDIR=str(_fresh))
+    result = subprocess.run(
+        [sys.executable, '-c', script, 'locked' if lock_held else 'unlocked'],
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('exit_mode', ['normal', 'error', 'interrupt'])
+def test_workspace_fixture_restores_borrowed_objects(tmp_path, exit_mode):
+    snapshot = {name: getattr(workdir, name) for name in
+                ('_cached', '_cached_identity', '_resolved', 'tempfile', 'atexit')}
+    tempdir = workdir.tempfile.tempdir
+    inner = tmp_path / 'fixture-scope'
+    inner.mkdir()
+    error = RuntimeError if exit_mode == 'error' else KeyboardInterrupt
+    try:
+        with pytest.MonkeyPatch.context() as scope:
+            generator = _fresh.__wrapped__(scope, inner, None)
+            next(generator)
+            try:
+                path = workdir.exec_workdir()
+                assert path.is_dir()
+                if exit_mode != 'normal':
+                    raise error('fixture body interrupted')
+            finally:
+                with pytest.raises(StopIteration):
+                    next(generator)
+                assert not path.exists()
+    except (RuntimeError, KeyboardInterrupt) as exc:
+        assert exit_mode != 'normal' and isinstance(exc, error)
+    for name, value in snapshot.items():
+        assert getattr(workdir, name) is value
+    assert workdir.tempfile.tempdir is tempdir
+
+
+def test_allocation_swapped_during_registration_is_not_cached(_fresh, monkeypatch):
+    moved = _fresh / 'preserved-original'
+    paths = []
+    def replace(fn, path, *args):
+        path.rename(moved)
+        path.mkdir()
+        (path / 'keep').write_text('replacement')
+        paths.append(path)
+    patch_module_attribute(monkeypatch, workdir, 'atexit', 'register', replace)
+    assert workdir.exec_workdir() is None
+    assert (paths[0] / 'keep').read_text() == 'replacement'
+    assert moved.is_dir()
