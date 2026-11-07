@@ -31,6 +31,7 @@ import pytest
 
 from core.sandbox import disable_consent as dc
 from core.sandbox import state
+from core.testing.module_bindings import patch_module_attribute
 from core.sandbox.errors import (
     SandboxDisableRefusedError,
     SandboxSetupError,
@@ -380,7 +381,7 @@ class TestGateInProcess:
         reporting as a terminal, resolution without a nonce is None.
         The resolver must never consult the fds — a reintroduced
         isatty grant turns this red."""
-        monkeypatch.setattr(os, "isatty", lambda fd: True)
+        patch_module_attribute(monkeypatch, dc, "os", "isatty", lambda fd: True)
         assert dc.resolve_disable_consent() is None
 
     def test_nonce_lane_accepts_in_process(self, no_sandbox_consent):

@@ -36,6 +36,7 @@ import sys
 import pytest
 
 from core.sandbox import landlock
+from core.testing.module_bindings import patch_module_attribute
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or not hasattr(os, "O_PATH"),
@@ -159,8 +160,10 @@ class TestUsrmergeRedirectExemption:
                 return lstats[p]
             return real_lstat(p, *a, **kw)
 
-        monkeypatch.setattr(os.path, "realpath", fake_realpath)
-        monkeypatch.setattr(os, "lstat", fake_lstat)
+        private_os = patch_module_attribute(
+            monkeypatch, landlock, "os", "lstat", fake_lstat,
+        )
+        patch_module_attribute(monkeypatch, private_os, "path", "realpath", fake_realpath)
 
     @pytest.mark.parametrize(
         "alias", ["/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"],
