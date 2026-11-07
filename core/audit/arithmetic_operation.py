@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from .condition_extraction import _get_parser
 from .arithmetic_evaluation import unevaluated_context
+from .function_execution_frame import ordinary_function_frame
 
 logger = logging.getLogger(__name__)
 _INTEGER_LITERAL_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|0|[1-9][0-9]*)")
@@ -81,7 +82,7 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
             return ArithmeticOperation("unavailable")
         node = stack.pop()
         if node.type == "function_definition":
-            if any(text(child) == "consteval" for child in node.named_children):
+            if not ordinary_function_frame(node, data, language):
                 return ArithmeticOperation("unavailable")
             body = node.child_by_field_name("body")
             if body is not None:
