@@ -42,7 +42,7 @@ mtime caveat (WSL drvfs/9p, no behaviour change):
   staleness cannot expire or revive an entry (cross-client
   ``written_at`` disagreement is ordinary clock skew, not the
   attribute cache). The module's actual mtime readers are the
-  in-process memo revalidation (stat mtime/size), the tempfile
+  in-process memo revalidation (file identity, size and timestamps), the tempfile
   reaper's is-someone-still-writing freshness window, and the
   reap-sentinel rate limit. On a Windows-interop mount those mtimes
   pass through the 9p attribute cache: same-distro views stay
@@ -60,6 +60,7 @@ import json
 import logging
 import math
 import os
+import stat
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -162,14 +163,14 @@ class _MemoEntry:
     """One row of the in-process memo, accounted against a byte budget.
 
     ``payload`` is either a :class:`CacheEnvelope` (fresh entry) or
-    the :data:`MISSING` sentinel (negative cache). ``mtime`` is the
-    on-disk file's modification time for fresh entries; ``None`` for
+    the :data:`MISSING` sentinel (negative cache). ``signature`` records
+    the file identity, size and nanosecond timestamps; ``None`` for
     MISSING. ``size`` is the byte cost charged against the budget —
     file-size for fresh entries, a small constant for MISSING.
     """
 
     payload: Any
-    mtime: float | None
+    signature: tuple[int, int, int, int, int] | None
     size: int
 
 
@@ -180,6 +181,30 @@ def _resolved_memo_budget_bytes() -> int:
     except Exception:  # noqa: BLE001
         mb = _DEFAULT_MEMO_BUDGET_MB
     return mb * 1024 * 1024
+
+
+def _file_signature(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Distinguish replacements and rewrites even with a preserved mtime."""
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _is_tempfile_name(name: str) -> bool:
+    """Recognize writer-owned names without claiming similar caller files.
+
+    The shared atomic writer uses eight hex characters by default and
+    sixteen in its descriptor-anchored mode; both generations are owned.
+    """
+    if name.startswith(".atomic-") and name.endswith(".tmp"):
+        parts = name[len(".atomic-"):-len(".tmp")].rsplit(".", 3)
+        return (len(parts) == 4 and bool(parts[0])
+                and all(part.isascii() and part.isdigit() for part in parts[1:3])
+                and len(parts[3]) in (8, 16)
+                and all(char in "0123456789abcdef" for char in parts[3]))
+    parts = name.rsplit(".tmp.", 1)
+    if len(parts) != 2 or not parts[0]:
+        return False
+    tail = parts[1].split(".")
+    return 1 <= len(tail) <= 2 and all(part.isascii() and part.isdigit() for part in tail)
 
 
 def _iter_tempfile_candidates(
@@ -331,68 +356,49 @@ class JsonCache:
         sentinel = self._root / _REAP_SENTINEL_NAME
         now = time.time()
         try:
-            sentinel_mtime = sentinel.stat().st_mtime
-            if now - sentinel_mtime < _REAP_RATE_LIMIT_S:
+            marker = sentinel.lstat()
+            age = now - marker.st_mtime
+            if (stat.S_ISREG(marker.st_mode) and marker.st_nlink == 1
+                    and 0 <= age < _REAP_RATE_LIMIT_S):
                 return
-        except FileNotFoundError:
-            # First-ever construction on this cache root — fall
-            # through to the full reap, then write the sentinel.
-            pass
         except OSError:
-            # Defensive: any other stat failure means we can't
-            # trust the rate-limit; fall through to the reap.
             pass
         try:
-            entries = list(_iter_tempfile_candidates(
-                self._root, max_depth=_REAP_MAX_DEPTH,
-            ))
+            # Consume candidates as they arrive: an interrupted directory walk
+            # must not discard completed cleanup or retain every orphan in RAM.
+            for entry in _iter_tempfile_candidates(self._root, max_depth=_REAP_MAX_DEPTH):
+                if not _is_tempfile_name(entry.name):
+                    continue
+                try:
+                    info = entry.lstat()
+                    if not stat.S_ISREG(info.st_mode):
+                        continue
+                    if now - info.st_mtime < _REAP_FRESHNESS_S:
+                        continue
+                    # A concurrent writer may have replaced or refreshed the
+                    # candidate since inspection; leave that generation alone.
+                    current = entry.lstat()
+                    if _file_signature(current) != _file_signature(info):
+                        continue
+                    entry.unlink()
+                except OSError:
+                    continue
         except OSError:
+            # Do not rate-limit a walk that could not finish. A later cache
+            # construction can retry; already-reclaimed files stay reclaimed.
             return
-        now = time.time()
-        for entry in entries:
-            # Defensive: only target files whose suffix matches the
-            # tempfile shape we write — either legacy ``.tmp.<pid>``
-            # (single all-digit segment) or current
-            # ``.tmp.<pid>.<tid>`` (two all-digit segments). Anything
-            # else is left alone so we don't collide with caller-chosen
-            # keys that happen to contain ".tmp.".
-            if entry.name.startswith(".atomic-") and entry.name.endswith(".tmp"):
-                # Current shape (core.atomic_fs):
-                # ``.atomic-<name>.<pid>.<tid>.<rand>.tmp``. The
-                # leading-dot prefix can never collide with a real
-                # cache entry (keys refuse empty/dot segments), so the
-                # prefix+suffix match is sufficient.
-                pass
-            else:
-                parts = entry.name.rsplit(".tmp.", 1)
-                if len(parts) != 2:
-                    continue
-                tail = parts[1].split(".")
-                if not (1 <= len(tail) <= 2
-                        and all(s.isdigit() for s in tail)):
-                    continue
-            # Skip if mtime is recent — concurrent writer is in
-            # the middle of producing this file.
-            try:
-                mtime = entry.stat().st_mtime
-            except OSError:
-                continue
-            if now - mtime < _REAP_FRESHNESS_S:
-                continue
-            try:
-                entry.unlink()
-            except OSError:
-                pass
-        # Update the sentinel so subsequent constructions within
-        # the rate-limit window skip the walk. Touch-only — the
-        # mtime is what matters, the contents don't.
         try:
-            sentinel.touch(exist_ok=True)
+            try:
+                marker = sentinel.lstat()
+            except FileNotFoundError:
+                marker = None
+            if marker is not None and (not stat.S_ISREG(marker.st_mode) or marker.st_nlink != 1):
+                return
+            # Atomic replacement never follows a planted link, even if the
+            # marker changes after the lstat. Its contents are not cache data.
+            write_text_atomically(sentinel, "", mode=0o600)
         except OSError:
-            # Sentinel-write failure means subsequent constructions
-            # will re-reap. Acceptable cost; the data is still
-            # correct.
-            pass
+            pass  # Failed rate-limit bookkeeping never blocks the cache.
 
     # ------------------------------------------------------------------
     # Memo helpers (caller must hold ``self._memo_lock``)
@@ -400,7 +406,7 @@ class JsonCache:
 
     def _memo_put(
         self, key: str, payload: Any,
-        mtime: float | None, size: int,
+        signature: tuple[int, int, int, int, int] | None, size: int,
     ) -> None:
         """Insert / replace a memo entry and evict from the front
         while over budget. Caller holds the memo lock.
@@ -410,7 +416,7 @@ class JsonCache:
             self._memo_bytes -= existing.size
             del self._memo[key]
         self._memo[key] = _MemoEntry(
-            payload=payload, mtime=mtime, size=size,
+            payload=payload, signature=signature, size=size,
         )
         self._memo_bytes += size
         # The just-inserted entry is kept even when it ALONE exceeds
@@ -476,14 +482,14 @@ class JsonCache:
         # metadata, supply-chain tracker lookups) get hit many times
         # in one scan; pre-memo each repeat paid disk + JSON parse.
         # We memoise the parsed envelope keyed on the disk file's
-        # mtime so external rewrites (test fixtures, concurrent
-        # processes) still get re-read instead of returning a stale
+        # identity and precise metadata so same-mtime rewrites and atomic
+        # replacements still get re-read instead of returning a stale
         # in-memory copy. Stat is much cheaper than read + JSON parse,
         # so the memo still wins net even with the per-hit stat.
         path = self._path_for(key)
         try:
             st = path.stat()
-            file_mtime: float | None = st.st_mtime
+            signature = _file_signature(st)
             file_size = st.st_size
         except (OSError, ValueError):
             # ValueError: an embedded NUL in the key survives
@@ -491,9 +497,9 @@ class JsonCache:
             # the path simply cannot exist) but raises from the lstat
             # itself. Keys carry externally-influenced package names,
             # and the cache degrades — it never crashes the consumer.
-            file_mtime = None
+            signature = None
             file_size = 0
-        if file_mtime is None:
+        if signature is None:
             with self._memo_lock:
                 self._memo_put(key, MISSING, None, _MISSING_ENTRY_BYTES)
             with self._counter_lock:
@@ -503,7 +509,7 @@ class JsonCache:
             cached = self._memo.get(key)
         envelope: CacheEnvelope | None = None
         if (cached is not None and cached.payload is not MISSING
-                and cached.mtime == file_mtime):
+                and cached.signature == signature):
             envelope = cached.payload
             with self._memo_lock:
                 if key in self._memo:
@@ -525,7 +531,7 @@ class JsonCache:
                     self.misses += 1
                 return MISSING
             with self._memo_lock:
-                self._memo_put(key, envelope, file_mtime, file_size)
+                self._memo_put(key, envelope, signature, file_size)
         # Caller may downgrade TTL relative to what was stored. Honour
         # the *minimum* TTL.
         #
