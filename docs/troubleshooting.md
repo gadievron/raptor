@@ -17,6 +17,7 @@ the run directory and exact error message available when checking a failure.
 
 - [Self-test](#self-test)
 - [Run introspection](#run-introspection)
+- [Session scratch cleanup](#session-scratch-cleanup)
 - [Sandbox](#sandbox)
 - [Running under endpoint security (EDR)](#running-under-endpoint-security-edr)
 - [Coccinelle](#coccinelle)
@@ -77,6 +78,22 @@ vs the run's cap, LLM call / failed-attempt / timeout counts, breaker
 trips, and the newest call class as a phase hint.  `--raw` prints the
 same as JSON.  After completion, `raptor-review digest <run-dir>`
 gives the ranked what-matters summary (verified findings first).
+
+
+## Session scratch cleanup
+
+`bin/raptor cleanup` removes registered launcher-session scratch with recorded
+process-tree closure or prior removal authorization. It does not clear general
+caches, build outputs, or unregistered temporary directories. Use
+`bin/raptor cleanup --dry-run` to see eligibility and `--list` to inspect recorded
+states; see `bin/raptor cleanup --help` for selection and limits.
+
+A retained session has no recorded proof that all its users finished. A dead
+launcher alone is insufficient because descendants can still use its files.
+After confirming the selected session and its descendants have stopped, explicit
+removal is available through `bin/raptor cleanup --session ID --force`.
+Cleanup errors include a reason; resolve that condition and retry the selected
+session. Previously removed records are historical receipts, not newly freed space.
 
 
 ## Sandbox

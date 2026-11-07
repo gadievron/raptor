@@ -490,7 +490,14 @@ def _terminal_sanitizer():
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description='Inspect and clean RAPTOR-owned session scratch.')
+    parser = argparse.ArgumentParser(
+        description=('Inspect and clean registered RAPTOR launcher-session scratch. '
+                     'Normal cleanup requires recorded process-tree closure or prior removal '
+                     'authorization; it does not clear general caches or build outputs.'),
+        epilog=('Examples: bin/raptor cleanup --dry-run; bin/raptor cleanup --list. '
+                'After confirming a retained session and its descendants have stopped: '
+                'bin/raptor cleanup --session ID --force. '
+                'Dry-run reports eligibility only; filesystem checks can still prevent removal.'))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--list', action='store_true', help='list records without changing files')
     mode.add_argument('--dry-run', action='store_true', help='show what normal cleanup could remove')
@@ -505,7 +512,9 @@ def main(argv=None) -> int:
     failed = False
     sanitise_for_terminal = _terminal_sanitizer()
     try:
-        selected = records(args.limit)
+        selected = records(args.limit + 1)
+        counts = {}
+        inspected = 0
         if args.session:
             node = _open_registry()
             try:
@@ -514,16 +523,42 @@ def main(argv=None) -> int:
             finally:
                 os.close(node)
         for value in selected:
+            if inspected == args.limit:
+                print('raptor: record limit reached; more records remain. '
+                      'Increase --limit or select --session.')
+                break
+            inspected += 1
             state = value['state']
-            if not (args.list or args.dry_run or state == 'invalid'):
+            detail = None
+            if state == 'invalid':
+                detail = 'invalid control record; inspect operator state'
+                failed = True
+            elif state == 'removed':
+                if not args.list:
+                    state = 'already-removed'
+            elif args.dry_run:
+                if value.get('closure') or value.get('removal_authorized') is True:
+                    state = 'would-remove'
+                    detail = 'eligible; filesystem checks will run during cleanup'
+                else:
+                    state = 'retained'
+            elif not args.list:
                 try:
                     state = cleanup(value['id'], force=args.force)
-                except (OSError, ValueError, TypeError):
+                except (OSError, ValueError, TypeError) as exc:
                     state = 'cleanup-error'
+                    detail = f'{type(exc).__name__}: {str(exc)[:1024]}'
                     failed = True
+            if state == 'retained':
+                detail = ('no recorded process-tree closure or removal authorization; '
+                          'after confirming this session and its descendants have stopped, '
+                          f'use bin/raptor cleanup --session {value["id"]} --force')
+            counts[state] = counts.get(state, 0) + 1
             print(f"{sanitise_for_terminal(str(value['id']))}  {sanitise_for_terminal(str(state))}  "
                   f"{sanitise_for_terminal(str(value.get('backend', 'unknown')))}  "
                   f"{sanitise_for_terminal(str(value.get('root', '(unavailable)')))}")
+            if detail:
+                print('  reason: ' + sanitise_for_terminal(detail))
             for diagnostic in (value.get('tracking_diagnostics') or [])[:6]:
                 if not isinstance(diagnostic, dict):
                     continue
@@ -531,9 +566,17 @@ def main(argv=None) -> int:
                 if diagnostic.get('errno') is not None:
                     detail += f" (errno={diagnostic['errno']})"
                 print('  tracking: ' + sanitise_for_terminal(detail[:1024]))
+        if not inspected:
+            print('raptor: no registered launcher-session scratch found; '
+                  'general caches, build outputs and unregistered temporary files are not scanned.')
+        else:
+            action = 'listed' if args.list else 'dry-run' if args.dry_run else 'cleanup'
+            totals = ', '.join(f'{count} {state}' for state, count in sorted(counts.items()))
+            print(f'raptor: {action}: {inspected} inspected; {totals}.')
         return int(failed)
     except (OSError, ValueError, TypeError) as exc:
-        print(f'raptor: scratch cleanup unavailable ({type(exc).__name__}); inspect operator state', file=sys.stderr)
+        detail = sanitise_for_terminal(f'{type(exc).__name__}: {str(exc)[:1024]}')
+        print(f'raptor: scratch cleanup unavailable ({detail}); inspect operator state', file=sys.stderr)
         return 1
 
 
