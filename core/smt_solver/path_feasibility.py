@@ -697,17 +697,28 @@ def _call_may_expose_state(masked: str) -> bool:
 
     A single ampersand can expose an object's address; opaque call argument
     text has no C type/effect model. Quoted bytes have already been masked.
-    Non-call bitmasks and logical && do not create this barrier.
+    Non-call bitmasks and logical && do not create this barrier. Detecting
+    parenthesised or subscript callees here does not admit their expressions
+    to the arithmetic parser; it only preserves possible state changes.
     """
     index = 0
     while index < len(masked):
         head = _CALL_HEAD_RE.match(masked, index)
         if head is None:
-            index += 1
-            continue
-        opening = head.end()
-        while opening < len(masked) and masked[opening].isspace():
-            opening += 1
+            # A parenthesised callee or a function-pointer table entry
+            # can expose the same address as a directly named call.
+            previous = index - 1
+            if masked[index] == "(":
+                while previous >= 0 and masked[previous].isspace():
+                    previous -= 1
+            if masked[index] != "(" or previous < 0 or masked[previous] not in ")]":
+                index += 1
+                continue
+            opening = index
+        else:
+            opening = head.end()
+            while opening < len(masked) and masked[opening].isspace():
+                opening += 1
         if opening < len(masked) and masked[opening] == "(":
             end = find_call_end(masked, opening)
             if _ADDRESS_ARGUMENT_RE.search(masked[opening + 1:end if end is not None else len(masked)]):
@@ -716,7 +727,7 @@ def _call_may_expose_state(masked: str) -> bool:
                 return False
             index = end
         else:
-            index = head.end()
+            index = head.end() if head is not None else index + 1
     return False
 
 
