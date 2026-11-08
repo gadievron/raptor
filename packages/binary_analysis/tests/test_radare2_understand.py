@@ -1,5 +1,7 @@
 """Tests for binary-level adversarial analysis via radare2."""
 
+from core.testing.module_registry import mock_module_registry
+
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
@@ -53,7 +55,7 @@ class TestProbeCapability(unittest.TestCase):
         ):
             mock_which.return_value = "/usr/bin/r2"
             # Force ImportError by pretending the module is None
-            with patch.dict("sys.modules", {"r2pipe": None}), \
+            with mock_module_registry({"r2pipe": None}), \
                     patch("builtins.__import__", side_effect=ImportError):
                 cap = probe_capability()
             self.assertFalse(cap["has_r2pipe"])
@@ -66,7 +68,7 @@ class TestProbeCapability(unittest.TestCase):
         ):
             mock_which.return_value = "/usr/bin/r2"
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
+            with mock_module_registry({"r2pipe": MagicMock()}):
                 cap = probe_capability()
             self.assertTrue(cap["available"])
             self.assertEqual(cap["decompiler"], "pdc")
@@ -78,7 +80,7 @@ class TestProbeCapability(unittest.TestCase):
         ):
             mock_which.return_value = "/usr/bin/r2"
             mock_run.return_value = MagicMock(stdout="r2ghidra plugin loaded", returncode=0)
-            with patch.dict("sys.modules", {"r2pipe": MagicMock()}):
+            with mock_module_registry({"r2pipe": MagicMock()}):
                 cap = probe_capability()
             self.assertTrue(cap["has_r2ghidra"])
             self.assertEqual(cap["decompiler"], "r2ghidra")
@@ -296,7 +298,7 @@ class TestBinaryUnderstand(unittest.TestCase):
             tmp = Path(td) / "sample.elf"
             tmp.write_bytes(b"\x7fELF" + b"\x00" * 60)
 
-            with patch.dict("sys.modules", {"r2pipe": MagicMock()}) as mock_modules:
+            with mock_module_registry({"r2pipe": MagicMock()}) as mock_modules:
                 mock_modules["r2pipe"].open = MagicMock(return_value=fake_r2)
 
                 bu = BinaryUnderstand(tmp)
@@ -395,7 +397,7 @@ class TestSandboxWiring(unittest.TestCase):
 
         fake_r2pipe = MagicMock()
         fake_r2pipe.open = fake_open
-        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+        with mock_module_registry({"r2pipe": fake_r2pipe}):
             understand.analyse(max_decompile=0, max_strings=0)
 
         self.assertIsNotNone(captured_env["R2PIPE_R2"])
@@ -424,7 +426,7 @@ class TestSandboxWiring(unittest.TestCase):
                 "_RAPTOR_TRUSTED")}
         fake_r2pipe = MagicMock()
         fake_r2pipe.open.return_value.cmd.return_value = "[]"
-        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+        with mock_module_registry({"r2pipe": fake_r2pipe}):
             understand.analyse(max_decompile=0, max_strings=0)
         for k, v in pre.items():
             self.assertEqual(
@@ -443,7 +445,7 @@ class TestSandboxWiring(unittest.TestCase):
         pre_r2pipe_r2 = os.environ.get("R2PIPE_R2")
         fake_r2pipe = MagicMock()
         fake_r2pipe.open.side_effect = RuntimeError("simulated r2 failure")
-        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}), \
+        with mock_module_registry({"r2pipe": fake_r2pipe}), \
                 self.assertRaises(RuntimeError):
             understand.analyse(max_decompile=0, max_strings=0)
         self.assertEqual(os.environ.get("R2PIPE_R2"), pre_r2pipe_r2,
@@ -595,7 +597,7 @@ class TestTimeoutDegradation(unittest.TestCase):
         fake_r2pipe.open = fake_open
         with patch.object(
             BinaryUnderstand, "_cmd_t", new=staticmethod(fake_cmd_t),
-        ), patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+        ), mock_module_registry({"r2pipe": fake_r2pipe}):
             return understand.analyse(
                 max_decompile=0, max_strings=0, quick=quick,
             )
@@ -1361,8 +1363,7 @@ class TestStringAnchors(unittest.TestCase):
             fake_r2pipe.open.return_value.cmd.return_value = "[]"
             with patch.object(
                 BinaryUnderstand, "_extract_string_anchors",
-            ) as mock_pass, patch.dict("sys.modules",
-                                       {"r2pipe": fake_r2pipe}):
+            ) as mock_pass, mock_module_registry({"r2pipe": fake_r2pipe}):
                 understand.analyse(
                     max_decompile=0, max_strings=0, string_anchors=flag)
             self.assertEqual(mock_pass.call_count, expected_calls)

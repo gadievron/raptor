@@ -6,6 +6,8 @@ Unit tests mock the JVM/PyGhidra layer. The live integration test
 
 from __future__ import annotations
 
+from core.testing.module_registry import mock_module_registry
+
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -209,7 +211,7 @@ class TestEnsureJvm:
         try:
             mock_pyghidra = MagicMock()
             mock_pyghidra.api.started.return_value = False
-            with patch.dict("sys.modules", {"pyghidra": mock_pyghidra, "pyghidra.api": mock_pyghidra.api}), \
+            with mock_module_registry({"pyghidra": mock_pyghidra, "pyghidra.api": mock_pyghidra.api}), \
                  patch.dict("os.environ", {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}):
                 GhidraSession.ensure_jvm()
             mock_pyghidra.start.assert_called_once()

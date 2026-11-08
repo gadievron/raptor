@@ -1,5 +1,7 @@
 """Tests for target detection."""
 
+from core.testing.module_registry import mock_module_registry
+
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
@@ -7,7 +9,6 @@ from core.testing.module_bindings import mock_module_attribute
 import os
 import platform
 import struct
-import sys
 import tempfile
 import unittest
 import zipfile
@@ -411,7 +412,7 @@ class TestRecommendedFuzzerPopulation(unittest.TestCase):
             (Path(tmp) / "pyproject.toml").write_text("[project]\n")
             # None entry in sys.modules makes `import atheris` raise
             # ImportError even if the package is installed.
-            with patch.dict(sys.modules, {"atheris": None}):
+            with mock_module_registry({"atheris": None}):
                 info = detect(Path(tmp))
         self.assertEqual(info.kind, "python-pkg")
         self.assertFalse(info.can_fuzz_here)

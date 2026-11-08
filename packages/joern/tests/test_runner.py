@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.module_registry import mock_module_registry
+
 import json
 import os
 import subprocess
@@ -1196,24 +1198,19 @@ class TestDefaultSandboxRunnerFailClosed:
     operator explicitly opted into unsandboxed execution."""
 
     def test_raises_when_sandbox_unimportable(self, monkeypatch):
-        import sys as _sys
-
-        from unittest.mock import patch as _patch
-
         from core.run.sandbox_policy import (
             ALLOW_UNSANDBOXED_ENV,
             SandboxUnavailableError,
         )
         from packages.joern.runner import _default_sandbox_runner
         monkeypatch.delenv(ALLOW_UNSANDBOXED_ENV, raising=False)
-        with _patch.dict(_sys.modules, {"core.sandbox": None}):
+        with mock_module_registry({"core.sandbox": None}):
             with pytest.raises(SandboxUnavailableError, match="joern"):
                 _default_sandbox_runner()
 
     def test_optout_returns_bare_subprocess_with_event(self, monkeypatch):
         import sys as _sys
 
-        from unittest.mock import patch as _patch
 
         import core.run.sandbox_policy as policy_mod
         from packages.joern.runner import _default_sandbox_runner
@@ -1223,7 +1220,7 @@ class TestDefaultSandboxRunnerFailClosed:
             policy_mod, "log_security_event",
             lambda etype, msg, **kw: events.append(etype),
         )
-        with _patch.dict(_sys.modules, {"core.sandbox": None}):
+        with mock_module_registry({"core.sandbox": None}):
             runner = _default_sandbox_runner()
         assert events == ["unsandboxed_tool_fallback"]
         # The opt-out waives the sandbox, never env hygiene: the

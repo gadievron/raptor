@@ -1,8 +1,9 @@
 """Tests for config file reading, model defaulting, and migration detection."""
 
+from core.testing.module_registry import mock_module_registry
+
 import json
 import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -495,7 +496,7 @@ model_list:
     def test_returns_false_without_pyyaml(self, tmp_path):
         from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, "model_list: []")
-        with patch.dict(sys.modules, {"yaml": None}):
+        with mock_module_registry({"yaml": None}):
             result = _try_auto_migrate(old, new)
         assert result is False
         assert not new.exists()

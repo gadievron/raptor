@@ -20,6 +20,7 @@ Coverage:
 
 from __future__ import annotations
 
+
 import json
 import sys
 from pathlib import Path
@@ -39,6 +40,8 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[4])
 if __name__ == "__main__":
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+
+from core.testing.module_registry import mock_module_registry
 
 
 from packages.code_understanding.dispatch import hunt_slopsquat_dispatch as mod  # noqa: E402
@@ -101,7 +104,7 @@ def test_sca_not_importable_returns_error_variant(tmp_path: Path) -> None:
     _write_package_json(tmp_path, {"react-helper": "^1.0.0"})
     # Setting a module to None in sys.modules makes `import` of it raise
     # ImportError — simulates SCA not being installed alongside /understand.
-    with mock.patch.dict(sys.modules, {"packages.sca.discovery": None}):
+    with mock_module_registry({"packages.sca.discovery": None}):
         out = mod.slopsquat_hunt_dispatch(None, "x", str(tmp_path))
     assert len(out) == 1
     assert "error" in out[0]

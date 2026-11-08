@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.module_registry import mock_module_registry
+
 import importlib.util
 import sys
 from pathlib import Path
@@ -220,7 +222,7 @@ def test_pytest_api_restores_borrowed_path_and_cwd(ps, tmp_path, failure):
         return 5
 
     fake_pytest.main = main
-    with patch.dict(sys.modules, {'pytest': fake_pytest}):
+    with mock_module_registry({'pytest': fake_pytest}):
         if failure:
             with pytest.raises(RuntimeError, match='owned pytest failure'):
                 ps.run_tests(['test with\nnewline.py'], tmp_path)

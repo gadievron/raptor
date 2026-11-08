@@ -1,0 +1,376 @@
+[
+  {
+    "file": "core/audit/tests/test_capabilities.py",
+    "symbol": "TestProbeCapabilities.test_joern_issues_on_import_error",
+    "ordinal": 0,
+    "names": [
+      "packages.joern",
+      "packages.joern.prereqs"
+    ],
+    "original_line": 97
+  },
+  {
+    "file": "core/concepts/tests/test_study_loop.py",
+    "symbol": "TestStoreInSage.test_sage_import_fails_gracefully",
+    "ordinal": 0,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 350
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestDomainModelContextWithSage.test_sage_only_when_no_local_match",
+    "ordinal": 0,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 491
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_none_when_sage_not_installed",
+    "ordinal": 1,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 733
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_none_when_client_unavailable",
+    "ordinal": 2,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 740
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_formatted_block",
+    "ordinal": 3,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 757
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_none_on_empty_results",
+    "ordinal": 4,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 776
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_none_on_query_exception",
+    "ordinal": 5,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 790
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_truncates_long_content",
+    "ordinal": 6,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 807
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_handles_none_confidence_and_content",
+    "ordinal": 7,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 826
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_returns_none_when_no_repo_path",
+    "ordinal": 8,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 835
+  },
+  {
+    "file": "core/concepts/tests/test_audit_bridge.py",
+    "symbol": "TestSageRecallForContext.test_respects_max_results",
+    "ordinal": 9,
+    "names": [
+      "core.sage.hooks"
+    ],
+    "original_line": 851
+  },
+  {
+    "file": "core/llm/tests/test_llm_callbacks.py",
+    "symbol": "TestLLMClientInit.test_init_works_without_litellm",
+    "ordinal": 0,
+    "names": [
+      "litellm"
+    ],
+    "original_line": 57
+  },
+  {
+    "file": "core/llm/tests/test_config_file.py",
+    "symbol": "TestAutoMigration.test_returns_false_without_pyyaml",
+    "ordinal": 0,
+    "names": [
+      "yaml"
+    ],
+    "original_line": 498
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestProbeCapability.test_radare2_without_r2pipe",
+    "ordinal": 0,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 56
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestProbeCapability.test_radare2_with_r2pipe_no_ghidra",
+    "ordinal": 1,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 69
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestProbeCapability.test_radare2_with_r2ghidra",
+    "ordinal": 2,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 81
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestBinaryUnderstand.test_analyse_pipeline_with_mocked_r2",
+    "ordinal": 3,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 299
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestSandboxWiring.test_analyse_sets_r2pipe_r2_to_wrapper",
+    "ordinal": 4,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 398
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestSandboxWiring.test_analyse_restores_env_on_exit",
+    "ordinal": 5,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 427
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestSandboxWiring.test_analyse_restores_env_on_exception",
+    "ordinal": 6,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 446
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestTimeoutDegradation._analyse_with",
+    "ordinal": 7,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 598
+  },
+  {
+    "file": "packages/binary_analysis/tests/test_radare2_understand.py",
+    "symbol": "TestStringAnchors.test_analyse_flag_skips_the_pass",
+    "ordinal": 8,
+    "names": [
+      "r2pipe"
+    ],
+    "original_line": 1364
+  },
+  {
+    "file": "packages/code_understanding/tests/dispatch/test_hunt_slopsquat_dispatch.py",
+    "symbol": "test_sca_not_importable_returns_error_variant",
+    "ordinal": 0,
+    "names": [
+      "packages.sca.discovery"
+    ],
+    "original_line": 104
+  },
+  {
+    "file": "packages/frida/tests/test_substrate.py",
+    "symbol": "TestSandboxedMain.test_spawn_mode_passes_block_network",
+    "ordinal": 0,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 341
+  },
+  {
+    "file": "packages/frida/tests/test_substrate.py",
+    "symbol": "TestSandboxedMain.test_attach_mode_allows_network",
+    "ordinal": 1,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 369
+  },
+  {
+    "file": "packages/frida/tests/test_substrate.py",
+    "symbol": "TestSandboxedMain.test_import_failure_hard_fails",
+    "ordinal": 2,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 404
+  },
+  {
+    "file": "packages/fuzzing/tests/test_target_detector.py",
+    "symbol": "TestRecommendedFuzzerPopulation.test_python_pkg_nulls_fuzzer_when_atheris_missing",
+    "ordinal": 0,
+    "names": [
+      "atheris"
+    ],
+    "original_line": 414
+  },
+  {
+    "file": "packages/fuzzing/tests/test_atheris_orchestration.py",
+    "symbol": "_plan",
+    "ordinal": 0,
+    "names": [
+      "atheris"
+    ],
+    "original_line": 44
+  },
+  {
+    "file": "packages/fuzzing/tests/test_atheris_orchestration.py",
+    "symbol": "TestAtherisPlanning.test_python_pkg_without_atheris_still_reports_target",
+    "ordinal": 1,
+    "names": [
+      "atheris"
+    ],
+    "original_line": 65
+  },
+  {
+    "file": "packages/ghidra/tests/test_session.py",
+    "symbol": "TestEnsureJvm.test_calls_pyghidra_start",
+    "ordinal": 0,
+    "names": [
+      "pyghidra",
+      "pyghidra.api"
+    ],
+    "original_line": 212
+  },
+  {
+    "file": "packages/ghidra/tests/test_bridge_enrichments.py",
+    "symbol": "TestApplyEnrichmentsProgramLookup._apply",
+    "ordinal": 0,
+    "names": [
+      "pyghidra",
+      "pyghidra.api"
+    ],
+    "original_line": 73
+  },
+  {
+    "file": "packages/ghidra/tests/test_bridge_enrichments.py",
+    "symbol": "TestApplyEnrichmentsProgramLookup.test_project_closed_on_lookup_failure",
+    "ordinal": 1,
+    "names": [
+      "pyghidra",
+      "pyghidra.api"
+    ],
+    "original_line": 145
+  },
+  {
+    "file": "packages/ghidra/tests/test_bridge_enrichments.py",
+    "symbol": "TestExceptionTextScrubbing.test_hostile_program_names_scrubbed_from_error",
+    "ordinal": 2,
+    "names": [
+      "pyghidra",
+      "pyghidra.api"
+    ],
+    "original_line": 194
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "symbol": "TestMakeSandboxRunner.test_fails_closed_when_sandbox_unavailable",
+    "ordinal": 0,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 420
+  },
+  {
+    "file": "packages/hypothesis_validation/tests/test_security.py",
+    "symbol": "TestMakeSandboxRunner.test_explicit_optout_falls_back_with_security_event",
+    "ordinal": 1,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 582
+  },
+  {
+    "file": "packages/joern/tests/test_runner.py",
+    "symbol": "TestDefaultSandboxRunnerFailClosed.test_raises_when_sandbox_unimportable",
+    "ordinal": 0,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 1209
+  },
+  {
+    "file": "packages/joern/tests/test_runner.py",
+    "symbol": "TestDefaultSandboxRunnerFailClosed.test_optout_returns_bare_subprocess_with_event",
+    "ordinal": 1,
+    "names": [
+      "core.sandbox"
+    ],
+    "original_line": 1226
+  },
+  {
+    "file": "packages/llm_analysis/tests/test_iris_reuse.py",
+    "symbol": "TestSmtPreFlight.test_smt_unavailable_no_check",
+    "ordinal": 0,
+    "names": [
+      "packages.exploit_feasibility.smt_path"
+    ],
+    "original_line": 443
+  },
+  {
+    "file": "packages/llm_analysis/tests/test_dataflow_validation.py",
+    "symbol": "TestTier4SmtRefine.test_smt_unavailable_falls_through",
+    "ordinal": 0,
+    "names": [
+      "packages.exploit_feasibility.smt_path"
+    ],
+    "original_line": 3700
+  },
+  {
+    "file": ".github/scripts/tests/test_preflight_scope.py",
+    "symbol": "test_pytest_api_restores_borrowed_path_and_cwd",
+    "ordinal": 0,
+    "names": [
+      "pytest"
+    ],
+    "original_line": 223
+  }
+]

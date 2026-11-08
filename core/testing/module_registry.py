@@ -27,3 +27,17 @@ def module_registry_scope(*names):
         for name in names:
             cleanup.callback(_restore, table, name, table.get(name, _ABSENT))
         yield table
+
+
+@contextmanager
+def mock_module_registry(replacements):
+    """Publish selected fake or missing dependencies without rewinding imports.
+
+    Unlike a whole-table snapshot, this leaves unrelated module-cache writes
+    intact. Yield the live table for tests that configure their fake after
+    publication. Register every selected slot before publishing the first.
+    """
+    with module_registry_scope(*replacements) as modules:
+        for name, module in replacements.items():
+            modules[name] = module
+        yield modules
