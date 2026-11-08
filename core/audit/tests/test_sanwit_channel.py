@@ -565,7 +565,7 @@ class TestOrchestratorLeg:
             config=_Cfg(tmp_path, out_dir),
             file_path=file_path,
             function_name="g",
-            source=(tmp_path / file_path).read_text(),
+            source=(tmp_path / file_path).read_text(encoding="utf-8"),
             hypothesis=_HYP_SHELL,
             line_start=1,
             cwe="CWE-88",
@@ -582,6 +582,7 @@ class TestOrchestratorLeg:
         )
         assert confirmed == ["sanwit:insufficient:shell-command"]
         assert len(calls) == 1
+        assert calls[0][1]["source"] == (tmp_path / "web/a.php").read_text(encoding="utf-8")
         log = (out_dir / ".audit-log.jsonl").read_text()
         rows = [json.loads(line) for line in log.splitlines()]
         receipt = next(
@@ -607,30 +608,32 @@ class TestOrchestratorLeg:
 
         (tmp_path / "web").mkdir(exist_ok=True)
         (tmp_path / "web" / "a.php").write_text("<?php function g(){}\n")
-        monkeypatch.setattr(
-            sanwit_mod, "run_sanwit_check",
-            lambda *a, **k: self._canned(
-                "skipped", "sanwit:not-executable", "not-executable",
-            ),
-        )
+        calls = []
+
+        def skipped_check(*args, **kwargs):
+            calls.append((args, kwargs))
+            return self._canned("skipped", "sanwit:not-executable", "not-executable")
+
+        monkeypatch.setattr(sanwit_mod, "run_sanwit_check", skipped_check)
         skipped = set()
         confirmed = _run_tool_chain(
             [{"type": "sanwit", "config": {}}],
             config=_Cfg(tmp_path),
             file_path="web/a.php",
             function_name="g",
-            source=(tmp_path / "web/a.php").read_text(),
+            source=(tmp_path / "web/a.php").read_text(encoding="utf-8"),
             hypothesis=_HYP_SHELL,
             line_start=1,
             skipped_types=skipped,
         )
         assert confirmed == []
         assert "sanwit" in skipped
+        assert len(calls) == 1
 
     def test_substrate_gate_skips_non_php_pre_dispatch(
         self, tmp_path, monkeypatch,
     ):
-        confirmed, calls, _ = self._dispatch(
+        confirmed, calls, out_dir = self._dispatch(
             tmp_path, monkeypatch,
             self._canned(
                 "confirmed", "sanwit:insufficient:shell-command",
@@ -640,6 +643,27 @@ class TestOrchestratorLeg:
         )
         assert confirmed == []
         assert calls == []  # never dispatched — substrate skip
+        rows = [json.loads(line) for line in (out_dir / ".audit-log.jsonl").read_text().splitlines()]
+        assert any(row.get("action") == "substrate_skip" and row.get("tool") == "sanwit" for row in rows)
+
+    def test_mismatched_source_stops_before_channel_dispatch(self, tmp_path, monkeypatch):
+        from core.audit.orchestrator import _run_tool_chain
+
+        confirmed, calls, out_dir = self._dispatch(
+            tmp_path, monkeypatch,
+            self._canned("confirmed", "sanwit:insufficient:shell-command", "insufficient"),
+        )
+        assert confirmed and len(calls) == 1
+        skipped = set()
+        rejected = _run_tool_chain(
+            [{"type": "sanwit", "config": {}}], config=_Cfg(tmp_path, out_dir),
+            file_path="web/a.php", function_name="g", line_start=1,
+            source="<?php function changed($x) { return $x; }", hypothesis=_HYP_SHELL,
+            cwe="CWE-88", skipped_types=skipped,
+        )
+        assert rejected == [] and skipped == {"sanwit"}
+        assert len(calls) == 1
+        assert rejected.outcomes[0].rule_id == "source-input-unbound"
 
 
 class TestFileBindingHazard:

@@ -209,7 +209,7 @@ class TestOrchestratorLeg:
             config=_Cfg(tmp_path, out_dir),
             file_path=file_path,
             function_name="g",
-            source=(tmp_path / file_path).read_text(),
+            source=(tmp_path / file_path).read_text(encoding="utf-8"),
             hypothesis=_HYP,
             line_start=1,
             cwe="CWE-502",
@@ -246,24 +246,27 @@ class TestOrchestratorLeg:
         (tmp_path / "web").mkdir(exist_ok=True)
         (tmp_path / "web" / "a.php").write_text(
             "<?php function g(){}\n")
-        monkeypatch.setattr(
-            gadget_mod, "run_gadget_oracle_check",
-            lambda *a, **k: self._canned(
-                "skipped", RULE_ABSENCE, "grammar-unavailable"),
-        )
+        calls = []
+
+        def skipped_check(*args, **kwargs):
+            calls.append((args, kwargs))
+            return self._canned("skipped", RULE_ABSENCE, "grammar-unavailable")
+
+        monkeypatch.setattr(gadget_mod, "run_gadget_oracle_check", skipped_check)
         skipped = set()
         confirmed = _run_tool_chain(
             [{"type": "gadget_oracle", "config": {}}],
             config=_Cfg(tmp_path),
             file_path="web/a.php",
             function_name="g",
-            source=(tmp_path / "web/a.php").read_text(),
+            source=(tmp_path / "web/a.php").read_text(encoding="utf-8"),
             hypothesis=_HYP,
             line_start=1,
             skipped_types=skipped,
         )
         assert confirmed == []
         assert "gadget_oracle" in skipped
+        assert len(calls) == 1
 
     def test_channel_exception_lands_in_errored(
             self, tmp_path, monkeypatch):
@@ -274,7 +277,10 @@ class TestOrchestratorLeg:
         (tmp_path / "web" / "a.php").write_text(
             "<?php function g(){}\n")
 
+        calls = []
+
         def boom(*a, **k):
+            calls.append((a, k))
             raise RuntimeError("scan exploded")
 
         monkeypatch.setattr(
@@ -285,23 +291,44 @@ class TestOrchestratorLeg:
             config=_Cfg(tmp_path),
             file_path="web/a.php",
             function_name="g",
-            source=(tmp_path / "web/a.php").read_text(),
+            source=(tmp_path / "web/a.php").read_text(encoding="utf-8"),
             hypothesis=_HYP,
             line_start=1,
             errored_types=errored,
         )
         assert confirmed == []
         assert "gadget_oracle" in errored
+        assert len(calls) == 1
 
     def test_substrate_gate_skips_non_php_pre_dispatch(
             self, tmp_path, monkeypatch):
-        confirmed, calls, _ = self._dispatch(
+        confirmed, calls, out_dir = self._dispatch(
             tmp_path, monkeypatch,
             self._canned("confirmed", RULE_CHAIN),
             file_path="web/b.c",
         )
         assert confirmed == []
         assert calls == []  # never dispatched — substrate skip
+        rows = [json.loads(line) for line in (out_dir / ".audit-log.jsonl").read_text().splitlines()]
+        assert any(row.get("action") == "substrate_skip" and row.get("tool") == "gadget_oracle" for row in rows)
+
+    def test_mismatched_source_stops_before_channel_dispatch(self, tmp_path, monkeypatch):
+        from core.audit.orchestrator import _run_tool_chain
+
+        result = self._canned("confirmed", RULE_CHAIN)
+        result.chains = [{"class": "A", "magic_method": "__destruct"}]
+        confirmed, calls, out_dir = self._dispatch(tmp_path, monkeypatch, result)
+        assert confirmed and len(calls) == 1
+        skipped = set()
+        rejected = _run_tool_chain(
+            [{"type": "gadget_oracle", "config": {}}], config=_Cfg(tmp_path, out_dir),
+            file_path="web/a.php", function_name="g", line_start=1,
+            source="<?php function changed() {}", hypothesis=_HYP,
+            cwe="CWE-502", skipped_types=skipped,
+        )
+        assert rejected == [] and skipped == {"gadget_oracle"}
+        assert len(calls) == 1
+        assert rejected.outcomes[0].rule_id == "source-input-unbound"
 
 
 def _prompt_ctx(gadget_context):
