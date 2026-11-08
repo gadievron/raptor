@@ -207,7 +207,7 @@ def _dispatch(cfg, entry, file_path, *, tiers, skipped, memo=None):
         config=cfg,
         file_path=file_path,
         function_name="f",
-        source="int f(void){ return 0; }",
+        source=(cfg.target_path / file_path).read_text(encoding="utf-8"),
         hypothesis=_UAF_HYPOTHESIS,
         line_start=1,
         tier_counters=tiers,
@@ -250,6 +250,23 @@ class TestDispatcherGate:
         assert skip_rows[0]["tool"] == "coccinelle"
         assert skip_rows[0]["file"] == "src/index.php"
         assert "php" in skip_rows[0]["reason"]
+
+    def test_mismatched_source_stops_before_substrate_accounting(self, tmp_path, monkeypatch):
+        rule = _tree(tmp_path)
+        calls = []
+        monkeypatch.setattr(orch, "run_coccinelle_file_sweep", lambda **kw: calls.append(kw))
+        tiers, skipped = _make_tier_counters(), set()
+        rejected = _run_tool_chain(
+            [{"type": "coccinelle", "config": {"rule": str(rule)}}],
+            config=_Cfg(tmp_path), file_path="src/index.php", function_name="f", line_start=1,
+            source="int f(void){ return 0; }", hypothesis=_UAF_HYPOTHESIS,
+            tier_counters=tiers, skipped_types=skipped,
+        )
+        assert rejected == [] and skipped == {"coccinelle"}
+        assert calls == []
+        assert rejected.outcomes[0].rule_id == "source-input-unbound"
+        assert tiers["coccinelle"].skipped_substrate == 0
+        assert tiers["coccinelle"].substrate_skip_languages == {}
 
     def test_c_subject_dispatches(self, tmp_path, monkeypatch):
         from core.audit.sweep import SweepResult
