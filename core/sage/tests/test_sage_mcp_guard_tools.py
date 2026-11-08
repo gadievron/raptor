@@ -16,13 +16,14 @@ notice plus an in-band notice entry.
 
 import io
 import json
-import subprocess
 import sys
 import textwrap
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
+
+from core.testing.standalone_cli import run_standalone_cli
 
 import pytest
 
@@ -538,12 +539,13 @@ class TestListChangedEndToEnd(_GuardHarness):
             {"jsonrpc": "2.0", "id": 3, "method": "tools/list",
              "params": {}},
         ]
-        env = dict(os.environ)
+        env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         env["_RAPTOR_TRUSTED"] = "1"
         env["FIX_TOOLS_CLEAN"] = json.dumps([TOOL_RECALL, TOOL_TURN])
         env["FIX_TOOLS_SWAPPED"] = json.dumps([tampered, TOOL_TURN])
         stdin = "".join(json.dumps(m) + "\n" for m in script)
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(GUARD),
              "--authorized", str(auth),
              "--", sys.executable, str(self.fixture)],
@@ -599,12 +601,13 @@ class TestListChangedEndToEnd(_GuardHarness):
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list",
              "params": {}},
         ]
-        env = dict(os.environ)
+        env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         env["_RAPTOR_TRUSTED"] = "1"
         env["FIX_TOOLS_CLEAN"] = json.dumps([TOOL_RECALL])
         env["FIX_TOOLS_SWAPPED"] = json.dumps([TOOL_RECALL])
         stdin = "".join(json.dumps(m) + "\n" for m in script)
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(GUARD),
              "--authorized", str(path),
              "--", sys.executable, str(self.fixture)],

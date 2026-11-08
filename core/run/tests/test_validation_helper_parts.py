@@ -29,6 +29,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import load_json, save_json  # noqa: E402
+from core.testing.standalone_cli import run_standalone_cli  # noqa: E402
 from core.security.log_sanitisation import (  # noqa: E402
     EXCERPT_MAX_LEN,
     sanitise_excerpt,
@@ -49,11 +50,12 @@ def helper():
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
+    env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+               RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(HELPER), *[str(a) for a in args]],
-        capture_output=True, text=True, env=env, cwd=REPO_ROOT,
+        capture_output=True, text=True, env=env, data_home=env["XDG_DATA_HOME"], cwd=REPO_ROOT,
         timeout=30,
     )
 

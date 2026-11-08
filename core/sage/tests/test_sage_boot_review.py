@@ -27,6 +27,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
+
 import pytest
 
 from core.testing.processes import run_in_process_group
@@ -979,29 +981,33 @@ class TestReviewSubcommand(ReviewerBase):
             "TEST_AUTHORIZED": str(authorized),
             "APPROVE": "1" if approve else "0",
             "REJECT": "1" if reject else "0",
+            "_RAPTOR_SCRATCH_AUTH": "stale-test-authorization",
+            "RAPTOR_SESSION_PID": "invalid",
+            "RAPTOR_SESSION_TOKEN": "stale",
         }
         if fake_payload is not None:
             env["FAKE_PAYLOAD"] = fake_payload
-        if tty_stdin:
-            import pty
-            master, slave = pty.openpty()
-            try:
-                if pty_input is not None:
-                    # Queued in the line-discipline buffer before the
-                    # child starts; read -r consumes it line by line.
-                    os.write(master, pty_input.encode("utf-8"))
+        with standalone_cli_env(env=env) as env:
+            if tty_stdin:
+                import pty
+                master, slave = pty.openpty()
+                try:
+                    if pty_input is not None:
+                        # Queued in the line-discipline buffer before the
+                        # child starts; read -r consumes it line by line.
+                        os.write(master, pty_input.encode("utf-8"))
+                    proc = run_in_process_group(
+                        ["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, env=env, stdin=slave, timeout=30,
+                    )
+                finally:
+                    os.close(master)
+                    os.close(slave)
+            else:
                 proc = run_in_process_group(
                     ["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, env=env, stdin=slave, timeout=30,
+                    text=True, env=env, stdin=subprocess.DEVNULL, timeout=30,
                 )
-            finally:
-                os.close(master)
-                os.close(slave)
-        else:
-            proc = run_in_process_group(
-                ["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, env=env, stdin=subprocess.DEVNULL, timeout=30,
-            )
         return proc, authorized
 
     def test_no_stamp_points_at_install(self):
@@ -1287,10 +1293,12 @@ def test_decision_cli_matches_main(mode, tmp_path):
     with patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}), \
             contextlib.redirect_stdout(expected):
         status = bpr.main(args)
-    proc = subprocess.run(
+    proc = run_standalone_cli(
         [sys.executable, str(REVIEWER), *args],
         capture_output=True, text=True, stdin=subprocess.DEVNULL,
-        timeout=30, env={**os.environ, "_RAPTOR_TRUSTED": "1"},
+        timeout=30, env={**os.environ, "_RAPTOR_TRUSTED": "1",
+                         "_RAPTOR_SCRATCH_AUTH": "stale-test-authorization",
+                         "RAPTOR_SESSION_PID": "invalid", "RAPTOR_SESSION_TOKEN": "stale"},
     )
     assert status == proc.returncode == 0, proc.stderr
     assert proc.stdout == expected.getvalue()

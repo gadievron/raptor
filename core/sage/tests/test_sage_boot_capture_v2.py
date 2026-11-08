@@ -20,12 +20,13 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from core.testing.standalone_cli import run_standalone_cli
 
 from core.sage.tests.test_sage_mcp_guard import (
     MESSAGE_CLEAN,
@@ -130,7 +131,8 @@ class _V2Harness(_GuardHarness):
                       client_script=None, instructions=PAYLOAD_CLEAN,
                       tools=None):
         import os
-        env = dict(os.environ)
+        env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         env["_RAPTOR_TRUSTED"] = "1"
         env["FIX_INSTR"] = instructions
         env["FIX_TOOL_CONTENT"] = json.dumps(tool_content)
@@ -147,7 +149,7 @@ class _V2Harness(_GuardHarness):
              "params": {"name": "sage_inception", "arguments": {}}},
         ]
         stdin = "".join(json.dumps(m) + "\n" for m in script)
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(GUARD),
              "--authorized", str(authorized_path),
              "--", sys.executable, str(self.fixture)],
@@ -453,7 +455,8 @@ class TestCaptureAuthorizeGuardIntegration(_V2Harness):
         wrapper.chmod(0o755)
         server = self.dir / "fake_server.py"
         server.write_text(_FAKE_SERVER, encoding="utf-8")
-        env = dict(os.environ)
+        env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         env["FAKE_WRAPPER"] = str(wrapper)
         env["FAKE_SERVER"] = str(server)
         env["TEST_RAPTOR_DIR"] = str(self.dir)
@@ -466,7 +469,7 @@ class TestCaptureAuthorizeGuardIntegration(_V2Harness):
         if tools_json is not None:
             env["FIX_TOOLS"] = tools_json
         env.pop("RAPTOR_SAGE_BOOT_CAPTURE", None)
-        return subprocess.run(
+        return run_standalone_cli(
             ["bash", "-c", driver],
             capture_output=True, text=True, timeout=60, env=env,
         )
@@ -632,7 +635,8 @@ class TestCaptureAuthorizeGuardIntegration(_V2Harness):
         wrapper.chmod(0o755)
         server = self.dir / "fake_server.py"
         server.write_text(_FAKE_SERVER, encoding="utf-8")
-        env = dict(os.environ)
+        env = dict(os.environ, _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         env["FAKE_SERVER"] = str(server)
         env["RAPTOR_DIR"] = str(self.dir)
         env["RAPTOR_SAGE_BOOT_CAPTURE"] = "1"
@@ -642,7 +646,7 @@ class TestCaptureAuthorizeGuardIntegration(_V2Harness):
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"clientInfo": {"name": "x", "version": "0"}},
         }) + "\n"
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(wrapper)], input=stdin, capture_output=True,
             text=True, timeout=30, env=env,
         )
