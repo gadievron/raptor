@@ -28,14 +28,18 @@ def evidence(tmp_path):
 def test_manifest_covers_image_original_notices_and_partial_reports(evidence):
     assert SCRIPT.write_checksums(evidence) == 3
     manifest = (evidence / SCRIPT.MANIFEST).read_text()
-    assert manifest.startswith("# OCI image: sha256:")
+    header, records = manifest.split("\n", 1)
+    assert header == "# OCI image: " + (evidence / "image-digest.txt").read_text().strip()
     assert hashlib.sha256(b"Original notice\r\n").hexdigest() + "  prepared/notice with spaces.txt\n" in manifest
     checker = shutil.which("sha256sum")
     if checker:
-        result = subprocess.run([checker, "--check", "--strict", SCRIPT.MANIFEST], cwd=evidence, capture_output=True)
+        # Metadata is checked above; strict checkers differ on comment support.
+        result = subprocess.run([checker, "--check", "--strict"], input=records.encode(),
+                                cwd=evidence, capture_output=True)
         assert result.returncode == 0, result.stderr
         (evidence / "prepared/notice with spaces.txt").write_bytes(b"Changed")
-        assert subprocess.run([checker, "--check", "--strict", SCRIPT.MANIFEST], cwd=evidence, capture_output=True).returncode != 0
+        assert subprocess.run([checker, "--check", "--strict"], input=records.encode(),
+                              cwd=evidence, capture_output=True).returncode != 0
 
 
 @pytest.mark.parametrize("problem", ["symlink", "directory-link", "fifo", "newline", "backslash", "digest", "missing-manifest", "size", "total", "entries", "existing", "signature"])
