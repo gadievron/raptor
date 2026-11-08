@@ -53,10 +53,13 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import logging
+import math
 import os
 import stat as _stat
 import time
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -202,6 +205,38 @@ def _try_flock_nb(fd: int) -> bool:
     return True
 
 
+def _duration(value, default, *, positive=False):
+    value = default if value is None else value
+    try:
+        valid = (not isinstance(value, bool) and isinstance(value, (int, float))
+                 and math.isfinite(value) and (value > 0 if positive else value >= 0))
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError('lock timing must be finite and ' + ('positive' if positive else 'nonnegative'))
+    return value
+
+
+def _release_sidecar(fd, acquired, *, failed):
+    """Close independently of unlock errors; preserve the operation's exception."""
+    pending = None
+    if acquired:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BaseException as exc:
+            logger.warning('Sidecar lock unlock failed; closing descriptor', exc_info=True)
+            if not failed and not isinstance(exc, OSError):
+                pending = exc
+    try:
+        os.close(fd)
+    except BaseException as exc:
+        logger.warning('Sidecar lock descriptor close failed', exc_info=True)
+        if not failed and not isinstance(exc, OSError) and pending is None:
+            pending = exc
+    if pending is not None:
+        raise pending
+
+
 def acquire_flock_bounded(
     fd: int,
     lock_path: Path,
@@ -211,6 +246,7 @@ def acquire_flock_bounded(
     deadline_s: float | None = None,
     poll_s: float | None = None,
     expiry_note: str | None = None,
+    holder_hint: bool | None = None,
 ) -> bool:
     """Take ``LOCK_EX`` on *fd* without ever waiting silently or
     unboundedly.
@@ -232,12 +268,12 @@ def acquire_flock_bounded(
     generic give-up note.
 
     ``deadline_s`` / ``poll_s`` default to the module constants at
-    call time.
+    call time. Invalid or nonfinite timing values are refused before attempting
+    the lock. ``holder_hint`` separates advisory reads from stamping when a
+    caller must verify the acquired inode before writing its stamp.
     """
-    if deadline_s is None:
-        deadline_s = _ACQUIRE_DEADLINE_S
-    if poll_s is None:
-        poll_s = _ACQUIRE_POLL_S
+    deadline_s = _duration(deadline_s, _ACQUIRE_DEADLINE_S)
+    poll_s = _duration(poll_s, _ACQUIRE_POLL_S, positive=True)
     if _try_flock_nb(fd):
         if stamp:
             stamp_lock_holder(fd)
@@ -246,7 +282,7 @@ def acquire_flock_bounded(
     # fds). For data-file flocks *lock_path* IS the data file: it never
     # carries a stamp, and reading it for a hint would touch
     # shard-sized content on every contended acquire.
-    hint = _holder_hint(lock_path) if stamp else ""
+    hint = _holder_hint(lock_path) if (stamp if holder_hint is None else holder_hint) else ""
     logger.warning(
         "%s lock %s: held by another process%s; waiting up to %.0fs",
         subject, lock_path, hint, deadline_s,
@@ -296,63 +332,102 @@ def sidecar_flock(
     Contention expiry intentionally raises TimeoutError with ETIMEDOUT,
     preserving the OSError errno contract for callers handling lock failures.
     """
+    deadline_s = _duration(deadline_s, _ACQUIRE_DEADLINE_S)
     if not _HAS_FCNTL:
         if required:
             raise OSError(errno.ENOSYS, f"{subject}: cross-process locking unavailable")
         yield
         return
-    flags = (
-        os.O_WRONLY | os.O_CREAT
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    fd = None
-    try:
-        if create_parent:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), flags, 0o600)
-        validate_lock_fd(fd, lock_path)
-    except OSError as exc:
-        if fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        if required:
-            raise OSError(
-                exc.errno or errno.EACCES,
-                f"{subject} lock {lock_path}: refusing unlocked operation ({exc})",
-            ) from exc
-        logger.warning(
-            "%s lock %s: refusing to open (%s); proceeding WITHOUT "
-            "cross-process lock — concurrent writers may drop each "
-            "other's contributions; investigate a planted symlink, "
-            "FIFO or foreign-uid file at that path", subject, lock_path,
-            exc,
-        )
-        yield
-        return
-    try:
-        if not acquire_flock_bounded(
-                fd, lock_path, subject=subject, stamp=True, deadline_s=deadline_s,
-                expiry_note=("refusing unlocked operation" if required else
-                    "proceeding WITHOUT cross-process lock — "
-                    "concurrent writers may drop each other's "
-                    "contributions; investigate a wedged or hostile "
-                    "holder of that lock file"
-                )):
-            if required:
-                raise TimeoutError(
-                    errno.ETIMEDOUT,
-                    f"{subject} lock {lock_path}: acquisition deadline expired",
-                )
-            yield
-            return
+    flags = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0))
+    deadline = time.monotonic() + deadline_s
+    for _attempt in range(3):
+        fd = None
+        acquired = failed = False
         try:
-            yield
+            try:
+                if create_parent:
+                    lock_path.parent.mkdir(parents=True, exist_ok=True)
+                fd = os.open(str(lock_path), flags, 0o600)
+                validate_lock_fd(fd, lock_path)
+                if os.fstat(fd).st_nlink != 1:
+                    raise OSError(errno.EMLINK, 'refusing hardlinked sidecar lock')
+            except OSError as exc:
+                if fd is not None:
+                    opened, fd = fd, None
+                    _release_sidecar(opened, False, failed=required)
+                if required:
+                    raise OSError(exc.errno or errno.EACCES,
+                                  f"{subject} lock {lock_path}: refusing unlocked operation ({exc})") from exc
+                logger.warning('%s lock %s: refusing to open (%s); proceeding WITHOUT '
+                               'cross-process lock — concurrent writers may drop each '
+                               "other's contributions; investigate a planted symlink, "
+                               'FIFO or foreign-uid file at that path', subject, lock_path, exc)
+                yield
+                return
+            acquired = acquire_flock_bounded(
+                fd, lock_path, subject=subject, stamp=False, holder_hint=True,
+                deadline_s=max(0.0, deadline - time.monotonic()),
+                expiry_note=('refusing unlocked operation' if required else
+                             'proceeding WITHOUT cross-process lock — concurrent writers may drop '
+                             "each other's contributions; investigate a wedged or hostile holder"))
+            if not acquired:
+                if required:
+                    raise TimeoutError(errno.ETIMEDOUT,
+                                       f"{subject} lock {lock_path}: acquisition deadline expired")
+                # Release the descriptor before entering an explicitly unlocked body.
+                opened, fd = fd, None
+                _release_sidecar(opened, False, failed=False)
+                yield
+                return
+            held = os.fstat(fd)
+            try:
+                current = lock_path.lstat()
+                stable = ((held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+                          and _stat.S_ISREG(current.st_mode) and held.st_nlink == 1)
+            except OSError:
+                stable = False
+            if stable:
+                stamp_lock_holder(fd)
+                yield
+                return
+            logger.warning('%s lock %s changed while acquiring; retrying the current inode',
+                           subject, lock_path)
+        except BaseException:
+            failed = True
+            raise
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+            if fd is not None:
+                _release_sidecar(fd, acquired, failed=failed)
+    if required:
+        raise OSError(errno.EAGAIN, f'{subject} lock {lock_path}: lock identity did not stabilize')
+    logger.warning('%s lock %s: lock identity did not stabilize; proceeding WITHOUT cross-process lock',
+                   subject, lock_path)
+    yield
+
+
+def _artifact_lock_path(artifact: Path) -> Path:
+    """Retain conventional sidecars; hash long components into bounded siblings.
+
+    Normalize canonical Unicode and case aliases conservatively, so filesystems
+    that identify those spellings do not split ownership. Distinct long names
+    retain separate locks rather than introducing a parent-wide lock order.
+    """
+    conventional = artifact.with_suffix(artifact.suffix + '.lock')
+    try:
+        limit = os.pathconf(artifact.parent, 'PC_NAME_MAX')
+    except (AttributeError, OSError, ValueError):
+        limit = 255
+    if limit <= 0:
+        limit = 255
+    if len(os.fsencode(conventional.name)) <= limit:
+        return conventional
+    width = min(64, limit - len('.raptor-.lock'))
+    if width < 16:
+        raise OSError(errno.ENAMETOOLONG, 'filesystem name limit cannot accommodate a sidecar lock')
+    canonical = unicodedata.normalize('NFC', artifact.name).casefold()
+    digest = hashlib.sha256(os.fsencode(canonical)).hexdigest()[:width]
+    return artifact.parent / f'.raptor-{digest}.lock'
 
 
 @contextlib.contextmanager
@@ -365,7 +440,8 @@ def artifact_lock(
     deadline_s: float | None = None,
 ) -> Iterator[None]:
     """Exclusive cross-process lock over *artifact*'s read-modify-write
-    window (flocks the sibling ``<artifact>.lock``).
+    window (flocks the sibling ``<artifact>.lock``). Names that cannot fit
+    that suffix use bounded hashed siblings within their parent directory.
 
     *subject* names the guarded resource in the degrade warning.
     ``create_parent=False`` preserves callers whose missing parent dir
@@ -377,7 +453,7 @@ def artifact_lock(
     ``deadline_s`` sets an operation-specific acquisition budget; None
     preserves the standard bounded wait.
     """
-    lock_path = artifact.with_suffix(artifact.suffix + ".lock")
+    lock_path = _artifact_lock_path(artifact)
     with sidecar_flock(lock_path, subject=subject,
                        create_parent=create_parent, required=required, deadline_s=deadline_s):
         yield
