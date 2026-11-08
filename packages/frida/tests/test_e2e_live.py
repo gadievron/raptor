@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 pytestmark = pytest.mark.skipif(
     not shutil.which("frida") or not shutil.which("gcc"),
     reason="frida CLI or gcc not on PATH",
@@ -96,7 +98,7 @@ def _run_frida_cli(binary: Path, run_dir: Path, duration: int = 3,
         "--spawn",
         "--out", str(run_dir),
     ]
-    result = subprocess.run(
+    result = run_standalone_cli(
         cmd, capture_output=True, text=True,
         timeout=duration + 30, env=env,
     )
@@ -120,12 +122,34 @@ def _find_frida_python() -> str | None:
     return sys.executable
 
 
+@pytest.fixture(scope="module")
+def api_trace_capture(victim_binary, tmp_path_factory):
+    """Capture once per worker; share immutable bytes, not writable run files."""
+    directory = tmp_path_factory.mktemp("api-trace") / "frida_run"
+    directory.mkdir()
+    returncode = _run_frida_cli(victim_binary, directory)
+    artifacts = tuple((path.relative_to(directory), path.read_bytes())
+                      for path in sorted(directory.rglob("*")) if path.is_file())
+    return returncode, artifacts
+
+
+@pytest.fixture
+def api_trace_returncode(api_trace_capture, run_dir):
+    """Each consumer receives its own copy of the real capture's artifacts."""
+    returncode, artifacts = api_trace_capture
+    for relative, content in artifacts:
+        path = run_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    return returncode
+
+
 class TestLiveE2E:
     """Real frida instrumentation of a compiled binary."""
 
-    def test_spawn_captures_events(self, victim_binary, run_dir):
+    def test_spawn_captures_events(self, victim_binary, run_dir, api_trace_returncode):
         """Spawn victim, api-trace template captures open/read/write/stat."""
-        rc = _run_frida_cli(victim_binary, run_dir)
+        rc = api_trace_returncode
         assert rc == 0, f"frida CLI returned {rc}"
 
         events_path = run_dir / "events.jsonl"
@@ -139,9 +163,9 @@ class TestLiveE2E:
         assert meta["target"]["binary"] == str(victim_binary)
         assert meta["events_captured"] > 0
 
-    def test_events_contain_expected_syscalls(self, victim_binary, run_dir):
+    def test_events_contain_expected_syscalls(self, victim_binary, run_dir, api_trace_returncode):
         """Captured events include the syscalls our victim binary makes."""
-        rc = _run_frida_cli(victim_binary, run_dir)
+        rc = api_trace_returncode
         assert rc == 0
 
         from packages.frida import parse_events
@@ -160,9 +184,9 @@ class TestLiveE2E:
         assert "read" in fns_seen, f"expected read in {fns_seen}"
         assert "write" in fns_seen, f"expected write in {fns_seen}"
 
-    def test_evidence_discovery_finds_run(self, victim_binary, run_dir):
+    def test_evidence_discovery_finds_run(self, victim_binary, run_dir, api_trace_returncode):
         """Evidence layer discovers the run and matches the target."""
-        rc = _run_frida_cli(victim_binary, run_dir)
+        rc = api_trace_returncode
         assert rc == 0
 
         from packages.frida.evidence import discover_evidence
@@ -174,9 +198,9 @@ class TestLiveE2E:
         assert ev.has_events is True
         assert ev.target_binary == str(victim_binary)
 
-    def test_observe_adapter_produces_profile(self, victim_binary, run_dir):
+    def test_observe_adapter_produces_profile(self, victim_binary, run_dir, api_trace_returncode):
         """ObserveProfile from real events has file operations populated."""
-        rc = _run_frida_cli(victim_binary, run_dir)
+        rc = api_trace_returncode
         assert rc == 0
 
         from packages.frida.observe_adapter import events_to_observe_profile
@@ -198,9 +222,9 @@ class TestLiveE2E:
         assert "/etc/hostname" in all_paths, (
             f"expected a real decoded path, got: {all_paths}")
 
-    def test_validation_bridge_full_pipeline(self, victim_binary, run_dir):
+    def test_validation_bridge_full_pipeline(self, victim_binary, run_dir, api_trace_returncode):
         """Full pipeline: real events → collect_runtime_evidence → annotate."""
-        rc = _run_frida_cli(victim_binary, run_dir)
+        rc = api_trace_returncode
         assert rc == 0
 
         from core.orchestration.frida_validation_bridge import (
