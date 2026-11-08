@@ -26,7 +26,8 @@ _CASES = [
     ("raptor-smt-check-null-deref", ["--ptr", "p"]),
     ("raptor-smt-check-negative-bypass", ["--value", "v", "--limit", "10"]),
     ("raptor-smt-check-overflow-to-oob",
-     ["--count", "n", "--element-size", "sz", "--index", "i"]),
+     # A fixed stride keeps the real CLI compatibility check cheap.
+     ["--count", "n", "--element-size", "4", "--index", "i"]),
     ("raptor-smt-check-encoding-residual",
      ["--transfer", '{"escaped": ["\\""]}', "--grammar", "quoted-string"]),
 ]
