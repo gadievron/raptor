@@ -7,6 +7,7 @@
 //
 // CWE-805: Buffer Access with Incorrect Length Value
 // @role: detection
+// raptor: confirm-only
 
 // Different type spellings do not establish different byte sizes. Keep
 // unresolved layouts as candidates, while excluding equivalent scalar

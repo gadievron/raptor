@@ -61,3 +61,32 @@ size_t comment_spacing(void) { return ( /* comment */ - /* comment */ EIO); } /*
     expected = {i for i, line in enumerate(source.splitlines(), 1) if "/* unsafe */" in line}
     assert set(actual) == expected
     assert len(actual) == len(expected), "one diagnostic per return expression"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = 'typedef unsigned long size_t;\n'
+    source = prefix + 'size_t partial(int failed) { return failed ? -EINVAL : 0; }' + "\n"
+    partial_line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'size_t other(void) { return -EINVAL; }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["rule"] == 'negative_errno_unsigned_return'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=partial_line, line_end=partial_line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches
+    assert len(result.matches) == int(other_hit)

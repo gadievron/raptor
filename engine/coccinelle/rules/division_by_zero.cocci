@@ -9,6 +9,7 @@
 // invalidate earlier protection. Aliases and complex guards need review.
 // CWE-369: Divide By Zero
 // @role: detection
+// raptor: confirm-only
 
 @use_then_zero_check exists@
 typedef uint32_t, uint64_t, int32_t, int64_t;

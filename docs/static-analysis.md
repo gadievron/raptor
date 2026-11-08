@@ -366,6 +366,10 @@ not treated as a negative value. Variable operands, arbitrary constant
 expressions and overloaded C++ operators are outside this check. Verify the
 promoted left-operand width before changing the operation; widening alone
 cannot make every reported count valid.
+A scan with no match from either check is inconclusive in an audit. It does
+not rule out implicit conversions or variable-count shifts.
+The division, allocation-product, user-copy-size and unsigned-error-return
+checks also leave a no-match audit result inconclusive.
 
 The integer-divisor check looks for division or modulo of a parameter before
 a later zero test, including `/=` and `%=` and common integer parameter types.
