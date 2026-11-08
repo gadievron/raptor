@@ -11,10 +11,17 @@ from __future__ import annotations
 import pytest
 
 from core.testing.tempdirs import isolated_test_dir
+from core.testing.module_state import isolated_module_state
+from core.witness import provenance
 
 
 @pytest.fixture(autouse=True)
 def _isolated_witness_mac_key(tmp_path_factory, monkeypatch):
-    monkeypatch.setenv(
-        "XDG_DATA_HOME", str(isolated_test_dir(tmp_path_factory, "xdg")),
-    )
+    with isolated_module_state(provenance, {"_warned_paths": set()}):
+        try:
+            monkeypatch.setenv(
+                "XDG_DATA_HOME", str(isolated_test_dir(tmp_path_factory, "xdg")),
+            )
+            yield
+        finally:
+            monkeypatch.undo()

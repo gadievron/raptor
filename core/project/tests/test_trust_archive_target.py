@@ -22,6 +22,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from core.testing.module_state import isolated_module_state
+
 from core.hash import sha256_file
 from core.project.project import ProjectManager
 from core.project.trust import run_target_matches_project
@@ -38,6 +40,11 @@ class ArchiveProjectFixture(unittest.TestCase):
     """Temp projects dir; one active project whose target is a zip."""
 
     def setUp(self):
+        from core.project import trust
+
+        self.enterContext(isolated_module_state(trust, {
+            "_gate_pin_memo": {}, "_ARCHIVE_SNAP_MEMO": {},
+        }))
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
