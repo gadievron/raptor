@@ -459,6 +459,22 @@ A no-match from these checks, or from the `popen_fclose` shutdown check, remains
 inconclusive. They cover specific release patterns rather than every ownership
 or resource-shutdown defect.
 
+### Allocation units and container layout
+
+Repeated `sizeof` factors and explicit pointer strides are review candidates:
+counts may intentionally express a matrix size or a wider stride. The checks
+inspect the size argument of `realloc` and `krealloc`, and both factors of
+`calloc`; known primitive one-byte widths stay quiet.
+
+An allocation followed by `container_of` also needs a capacity and layout
+review. Whole-container storage and recovery through its first member can be
+intentional. Recognised direct pointer updates or address escapes stop tracking
+that allocation origin; aliases and indirect updates still need inspection.
+
+These candidates cannot independently confirm or promote an audit finding.
+A scan with no match is inconclusive, rather than evidence that the calculation
+is safe.
+
 ### String sizes and array parameters
 
 String-size checks review `malloc(strlen(s))` and one-byte `calloc` allocations
