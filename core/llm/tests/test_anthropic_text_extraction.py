@@ -288,3 +288,13 @@ def test_empty_content_errors_are_not_retryable(stop_reason):
     with pytest.raises(RuntimeError) as e:
         _generate_with(_response(stop_reason=stop_reason))
     assert not _is_retryable_error(e.value)
+
+
+def test_provider_truncation_factory_is_shared_with_consumers():
+    from core.llm import providers, response_validation
+
+    assert providers._llm_truncation_error is response_validation._llm_truncation_error
+    error = providers._llm_truncation_error("provider stopped")
+    assert type(error) is RuntimeError
+    assert error.llm_truncation is True
+    assert str(error) == "provider stopped"

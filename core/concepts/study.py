@@ -557,7 +557,7 @@ def _study_max_output_tokens(model_name: str | None = None) -> int:
     text = _study_text_output_tokens()
     if model_name:
         try:
-            from core.llm.providers import thinking_shares_output_budget
+            from core.llm.model_capabilities import thinking_shares_output_budget
             if thinking_shares_output_budget(model_name):
                 return text * 2
         except ImportError:

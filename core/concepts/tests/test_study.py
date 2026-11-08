@@ -3564,7 +3564,7 @@ class TestTruncationMatcher:
 
     def test_provider_guard_constructor_is_matched(self):
         from core.concepts.study import _is_truncation_error
-        from core.llm.providers import _llm_truncation_error
+        from core.llm.response_validation import _llm_truncation_error
         assert _is_truncation_error(
             _llm_truncation_error("anything at all"))
 
@@ -3583,7 +3583,7 @@ class TestTruncationMatcher:
 
     def test_chain_walked_through_wrappers(self):
         from core.concepts.study import _is_truncation_error
-        from core.llm.providers import _llm_truncation_error
+        from core.llm.response_validation import _llm_truncation_error
         inner = _llm_truncation_error("cut")
         try:
             raise RuntimeError("wrapped") from inner
