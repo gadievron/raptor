@@ -73,7 +73,10 @@ from typing import Any
 
 from core.atomic_fs import rmtree_hardened
 from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
-from core.sandbox._daemon import _MAX_CAPTURE_BYTES as _DAEMON_CAPTURE_CAP
+from core.sandbox._daemon import (
+    _MAX_CAPTURE_BYTES as _DAEMON_CAPTURE_CAP,
+    _MAX_FRAME_BYTES as _DAEMON_REQUEST_CAP,
+)
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +92,23 @@ _DAEMON_SCRIPT = Path(__file__).resolve().parent / "_daemon.py"
 # rejected frames over 64 MiB only AFTER the daemon had already built
 # and half-sent them, wedging the persistent channel mid-frame.
 _MAX_REPLY_FRAME_BYTES = 4 * _DAEMON_CAPTURE_CAP + 1024 * 1024
+
+
+def _rpc_deadline(timeout):
+    try:
+        seconds = float(timeout)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HostRPCError("RPC timeout must be finite and positive") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise HostRPCError("RPC timeout must be finite and positive")
+    return time.monotonic() + seconds
+
+
+def _request_frame(payload):
+    body = json.dumps(payload).encode("utf-8")
+    if len(body) > _DAEMON_REQUEST_CAP:
+        raise HostRPCError(f"request frame too large: {len(body)}")
+    return struct.pack("!I", len(body)) + body
 
 
 def _remove_owned_output(path: str) -> bool:
@@ -222,6 +242,8 @@ class SandboxHost:
         self._daemon_fd_numbers = tuple(_daemon_fds or ())
         self._lock = _lock
         self._closed = False
+        self._broken = False
+        self._closing_transaction = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -333,9 +355,11 @@ class SandboxHost:
                     # A failed or cancelled startup may never receive a
                     # ping. Keep spawn fds valid until the backend exits,
                     # then release them so readers observe daemon EOF.
-                    host._release_daemon_fds()
-                    if host._closed:
-                        host._cleanup_owned_output()
+                    try:
+                        host._release_daemon_fds()
+                    finally:
+                        if host._closed:
+                            host._cleanup_owned_output()
 
             thread = threading.Thread(
                 target=_worker, name="sandbox-host-daemon", daemon=True,
@@ -374,7 +398,10 @@ class SandboxHost:
                 raise HostRPCError(msg)
         except BaseException as e:
             launch_gate.set()
-            host.close()
+            try:
+                host.close()
+            except BaseException as cleanup_error:
+                e.add_note("host startup cleanup: " + type(cleanup_error).__name__)
             if not isinstance(e, Exception):
                 raise
             if not thread.is_alive():
@@ -386,21 +413,36 @@ class SandboxHost:
                 )
                 raise HostRPCError(msg) from e
             raise
-        log.info("sandbox_host started (daemon pid=%s)", pong.get("pid"))
-        # The daemon answered, so the spawn happened and the daemon owns
-        # its copies of the pipe ends. Drop the parent's copies now so
-        # the read end delivers EOF the moment the daemon (or its
-        # sandbox chain) exits.
-        host._release_daemon_fds()
+        try:
+            log.info("sandbox_host started (daemon pid=%s)", pong.get("pid"))
+            # A successful ping proves inheritance. Drop the parent's
+            # daemon-side copies so backend exit exposes EOF promptly.
+            host._release_daemon_fds()
+        except BaseException as failure:
+            try:
+                host.close()
+            except BaseException as cleanup_error:
+                failure.add_note("host acknowledgement cleanup: " + type(cleanup_error).__name__)
+            raise
         return host
 
     def _release_daemon_fds(self) -> None:
         """Close the parent's copies of the daemon-side pipe ends."""
         with self._daemon_fds_lock:
             fds, self._daemon_fds = self._daemon_fds, None
+        errors = []
         for fd in fds or ():
-            with contextlib.suppress(OSError):
+            try:
                 os.close(fd)
+            except OSError:
+                pass
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            primary = errors.pop(0)
+            for exc in errors:
+                primary.add_note("daemon endpoint cleanup: " + type(exc).__name__)
+            raise primary
 
     def _cleanup_owned_output(self) -> None:
         """Keep ownership until the backend's private scratch is removed."""
@@ -409,31 +451,72 @@ class SandboxHost:
             if output and _remove_owned_output(output):
                 self._owned_output = None
 
+    def _release_rpc_fds(self, failure=None) -> None:
+        """Consume owned endpoint numbers before closing; caller owns _lock."""
+        errors = []
+        for name in ("_write_fd", "_read_fd"):
+            fd = getattr(self, name)
+            setattr(self, name, None)
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                except BaseException as exc:
+                    errors.append(exc)
+        if errors:
+            primary = failure if failure is not None else errors.pop(0)
+            for exc in errors:
+                primary.add_note("RPC endpoint cleanup: " + type(exc).__name__)
+            if failure is None:
+                raise primary
+
     def close(self) -> None:
-        """Terminate the daemon and close the pipe fds."""
-        if self._closed:
-            if not self._thread.is_alive():
-                self._cleanup_owned_output()
-            return
+        """Close within one budget, without racing an active pipe operation.
+
+        Active transactions observe the closing flag at bounded poll ticks;
+        they retire their own channel before releasing the request lock.
+        A backend still running retains its private output until it exits.
+        """
+        deadline = time.monotonic() + 5.0
+        first = not self._closed
         self._closed = True
-        # Startup acknowledgement already released the daemon-side
-        # copies for a live session. Before acknowledgement, the worker
-        # retains them until its backend returns: releasing them here
-        # could invalidate pass_fds while a delayed spawn still uses it.
-        # Channel failures and malformed replies must not interrupt
-        # release of this handle's descriptors and worker ownership.
-        with contextlib.suppress(HostRPCError, ValueError):
-            self._rpc({"cmd": "close"}, timeout=5.0)
-        for fd in (self._write_fd, self._read_fd):
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        self._thread.join(timeout=5.0)
-        if self._thread.is_alive():
-            log.warning("sandbox_host worker thread did not exit within 5s")
-        else:
-            self._cleanup_owned_output()
-        # A worker still running owns its scratch until its backend
-        # returns; its finally block performs deferred cleanup.
+        failure = None
+        try:
+            if first:
+                with contextlib.suppress(HostRPCError, ValueError):
+                    self._rpc({"cmd": "close"}, timeout=max(0, deadline - time.monotonic()))
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            try:
+                acquired = self._lock.acquire(timeout=max(0, deadline - time.monotonic()))
+                if acquired:
+                    try:
+                        self._release_rpc_fds(failure)
+                    finally:
+                        self._lock.release()
+                # The active I/O owner retires its endpoints after observing
+                # close. Never close its numeric descriptors from this thread.
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+                else:
+                    failure.add_note("RPC close cleanup: " + type(exc).__name__)
+            try:
+                self._thread.join(timeout=max(0, deadline - time.monotonic()))
+                if self._thread.is_alive():
+                    log.warning("sandbox_host worker thread did not exit within 5s")
+                else:
+                    self._cleanup_owned_output()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+                else:
+                    failure.add_note("RPC worker cleanup: " + type(exc).__name__)
+            if failure is not None:
+                raise failure
 
     # ------------------------------------------------------------------
     # RPC verbs
@@ -518,61 +601,105 @@ class SandboxHost:
     # ------------------------------------------------------------------
 
     def _rpc(self, payload: dict, *, timeout: float) -> dict:
-        # Stamp every request with an unguessable parent-minted id and
-        # require the reply to echo it: binds each response frame to
-        # its request, so a forged / stale / misordered frame on the
-        # persistent channel is rejected instead of silently answering
-        # the wrong RPC. The daemon echoes ``rid`` verbatim; extra
-        # response keys keep the wire format backward-compatible.
-        rid = os.urandom(16).hex()
-        with self._lock:
-            self._write_frame({**payload, "rid": rid})
-            response = self._read_frame(timeout=timeout)
-        if response.get("rid") != rid:
-            raise HostRPCError(
-                f"reply not bound to request: expected rid={rid} "
-                f"got rid={response.get('rid')!r} — forged, stale, or "
-                f"misordered frame on the RPC channel"
-            )
-        response.pop("rid", None)
-        return response
+        deadline = _rpc_deadline(timeout)
+        closing = payload.get("cmd") == "close"
+        if self._closed and not closing:
+            raise HostRPCError("sandbox host is closed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not self._lock.acquire(timeout=min(remaining, threading.TIMEOUT_MAX)):
+            # A queued caller owns no transaction and cannot poison the
+            # channel currently serving another caller.
+            raise HostRPCError("RPC request queue deadline exceeded")
+        started = False
+        failure = None
+        try:
+            if self._broken:
+                raise HostRPCError("RPC channel is retired after a failed transaction")
+            if self._closed and not closing:
+                raise HostRPCError("sandbox host is closed")
+            rid = os.urandom(16).hex()
+            frame = _request_frame({**payload, "rid": rid})
+            if time.monotonic() >= deadline:
+                raise HostRPCError("RPC request deadline exceeded before send")
+            self._closing_transaction = closing
+            started = True
+            os.set_blocking(self._write_fd, False)
+            os.set_blocking(self._read_fd, False)
+            self._write_frame_bytes(frame, deadline=deadline)
+            response = self._read_frame(deadline=deadline)
+            if response.get("rid") != rid:
+                raise HostRPCError(
+                    f"reply not bound to request: expected rid={rid} "
+                    f"got rid={response.get('rid')!r} — forged, stale, or "
+                    f"misordered frame on the RPC channel"
+                )
+            response.pop("rid", None)
+            return response
+        except BaseException as exc:
+            failure = exc
+            if started:
+                # A send/receive can fail at any byte boundary. Reusing
+                # this stream would turn its residue into the next reply.
+                self._broken = True
+            raise
+        finally:
+            try:
+                if self._broken or self._closed:
+                    self._release_rpc_fds(failure)
+            finally:
+                self._closing_transaction = False
+                self._lock.release()
 
-    def _write_frame(self, payload: dict) -> None:
-        body = json.dumps(payload).encode("utf-8")
-        hdr = struct.pack("!I", len(body))
-        # Write ALL the bytes: os.write can return a partial count on
-        # a >PIPE_BUF frame (spawn requests embed unbounded caller
-        # stdin_hex) when a signal lands after a partial transfer —
-        # PEP 475 only retries zero-progress EINTR. A truncated frame
-        # desynchronises the persistent channel: the daemon parses
-        # the next request from mid-frame bytes.
-        view = memoryview(hdr + body)
+    def _wait_rpc(self, fd, mask, deadline):
+        poller = select.poll()
+        poller.register(fd, mask)
+        while True:
+            if getattr(self, "_closed", False) and not getattr(self, "_closing_transaction", False):
+                raise HostRPCError("sandbox host closed during request")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HostRPCError("RPC transaction deadline exceeded")
+            # Close can interrupt an active transaction even if its caller
+            # supplied a long request timeout and the peer stays silent.
+            try:
+                if poller.poll(math.ceil(min(remaining, 0.05) * 1000)):
+                    return
+            except InterruptedError:
+                continue
+
+    def _write_frame(self, payload: dict, *, deadline=None) -> None:
+        self._write_frame_bytes(_request_frame(payload), deadline=deadline)
+
+    def _write_frame_bytes(self, frame, *, deadline=None) -> None:
+        view = memoryview(frame)
         try:
             while view:
-                n = os.write(self._write_fd, view)
+                if deadline is not None:
+                    self._wait_rpc(self._write_fd, select.POLLOUT, deadline)
+                try:
+                    n = os.write(self._write_fd, view[:65536])
+                except (BlockingIOError, InterruptedError):
+                    continue
                 if n <= 0:
                     raise OSError(errno.EIO, "RPC frame write made no progress")
                 view = view[n:]
-        except OSError as e:
-            msg = f"write to daemon failed: {e}"
-            raise HostRPCError(msg) from e
+        except OSError as exc:
+            raise HostRPCError(f"write to daemon failed: {exc}") from exc
 
-    def _read_frame(self, *, timeout: float) -> dict:
-        deadline = time.monotonic() + timeout
+    def _read_frame(self, *, timeout=None, deadline=None) -> dict:
+        if deadline is None:
+            deadline = _rpc_deadline(timeout)
         try:
             hdr = self._read_exact(4, deadline)
-        except (OSError, HostRPCError) as e:
-            msg = f"header read failed: {e}"
-            raise HostRPCError(msg) from e
+        except (OSError, HostRPCError) as exc:
+            raise HostRPCError(f"header read failed: {exc}") from exc
         (length,) = struct.unpack("!I", hdr)
         if length > _MAX_REPLY_FRAME_BYTES:
-            msg = f"daemon frame too large: {length}"
-            raise HostRPCError(msg)
+            raise HostRPCError(f"daemon frame too large: {length}")
         try:
             body = self._read_exact(length, deadline)
-        except (OSError, HostRPCError) as e:
-            msg = f"body read failed: {e}"
-            raise HostRPCError(msg) from e
+        except (OSError, HostRPCError) as exc:
+            raise HostRPCError(f"body read failed: {exc}") from exc
         return _decode_response(body, source="daemon")
 
     def _read_exact(self, n: int, deadline: float) -> bytes:
@@ -580,21 +707,16 @@ class SandboxHost:
         # hundreds of MiB (see _MAX_REPLY_FRAME_BYTES) and repeated
         # bytes concatenation is quadratic at that size.
         buf = bytearray()
-        poller = select.poll()
-        poller.register(self._read_fd, select.POLLIN)
+        os.set_blocking(self._read_fd, False)
         while len(buf) < n:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                msg = f"read timeout at {len(buf)}/{n}"
-                raise HostRPCError(msg)
-            if not poller.poll(math.ceil(remaining * 1000)):
-                msg = f"read poll timeout at {len(buf)}/{n}"
-                raise HostRPCError(msg)
-            chunk = os.read(self._read_fd, n - len(buf))
+            self._wait_rpc(self._read_fd, select.POLLIN, deadline)
+            try:
+                chunk = os.read(self._read_fd, min(n - len(buf), 65536))
+            except (BlockingIOError, InterruptedError):
+                continue
             if not chunk:
-                msg = "daemon EOF"
-                raise HostRPCError(msg)
-            buf += chunk
+                raise HostRPCError("daemon EOF")
+            buf.extend(chunk)
         return bytes(buf)
 
 
@@ -647,8 +769,7 @@ def one_shot_call(
         # mismatch (a target that reopened the daemon's stdout could
         # otherwise substitute the verdict frame).
         rid = os.urandom(16).hex()
-        body = json.dumps({"cmd": cmd, **payload, "rid": rid}).encode("utf-8")
-        frame = struct.pack("!I", len(body)) + body
+        frame = _request_frame({"cmd": cmd, **payload, "rid": rid})
 
         try:
             r = sandbox_run(
