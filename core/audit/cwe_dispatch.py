@@ -503,7 +503,7 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
     # Resource management
     "CWE-401": {
         "smt": "check-resource-leak",
-        "cocci": "resource_leak_err.cocci",
+        "cocci": ["resource_leak_err.cocci", "realloc_losing_ptr.cocci"],
         "joern": False,
         "codeql": "cpp/resource-not-released-in-destructor",
         "sinks": [],

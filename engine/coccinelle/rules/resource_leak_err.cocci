@@ -19,6 +19,8 @@
 //
 // Covers CWE-401: missing free on error path.
 // @role: detection
+// raptor: confirm-only
+// Missing this error-path shape does not rule out other allocation leaks.
 
 @initialize:python@
 @@

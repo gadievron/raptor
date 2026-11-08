@@ -121,6 +121,18 @@ class TestNewDispatchEntries:
         assert cocci_rule_for_cwe("CWE-415") == "double_free.cocci"
         assert cocci_rules_for_cwe("CWE-825") == []
 
+    @pytest.mark.parametrize("hypothesis", ["", "memory leak when reallocation fails"])
+    def test_allocation_leak_dispatch_keeps_both_candidate_shapes(self, hypothesis):
+        from core.audit.cwe_dispatch import cocci_rules_for_cwe
+
+        expected = ["resource_leak_err.cocci", "realloc_losing_ptr.cocci"]
+        assert cocci_rules_for_cwe("CWE-401") == expected
+        assert cocci_rule_for_cwe("CWE-401") == expected[0]
+        chain = _hypothesis_to_tool_chain(hypothesis, "a.c", cwe="CWE-401")
+        paths = [Path(entry["config"]["rule"]) for entry in chain if entry["type"] == "coccinelle"]
+        assert [path.name for path in paths] == expected
+        assert all(path.is_absolute() and path.is_file() for path in paths)
+
 
 def _suspicious_outcome(cwe: str, counter: str) -> ReviewOutcome:
     return ReviewOutcome(
