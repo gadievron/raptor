@@ -59,7 +59,7 @@ def test_queue_time_is_not_added_to_transport_budget(clock, transport, monkeypat
     sock = ExchangeSocket(clock)
     transport._sock = sock
     assert transport.parse(b"owned") == parser.ParsedRequestLine("owned.invalid", 443)
-    assert sock.send_timeouts == [0.25]
+    assert sock.send_timeouts == [min(0.25, parser._IO_WAIT_TICK_S)]
     assert sock.gettimeout() == 99.0
     assert transport._lock.released == 1
 
@@ -85,8 +85,10 @@ class QuietPoll:
 
 
 class ExchangeSocket:
-    def __init__(self, clock, *, send_delay=0, failure=None):
+    def __init__(self, clock, *, send_delay=0, reply_delay=0, failure=None):
         self.clock, self.send_delay, self.failure = clock, send_delay, failure
+        self.reply_delay = reply_delay
+        self.closed = False
         self.timeout = 99.0
         self.send_timeouts = []
         payload = b'{"ok":true,"host":"owned.invalid","port":443}'
@@ -98,13 +100,23 @@ class ExchangeSocket:
     def settimeout(self, value):
         self.timeout = value
 
-    def sendall(self, data):
+    def send(self, data):
         self.send_timeouts.append(self.timeout)
         self.clock[0] += self.send_delay
         if self.failure is not None:
             raise self.failure
+        return len(data)
+
+    def close(self):
+        self.closed = True
 
     def recv(self, size):
+        if self.reply_delay:
+            elapsed = min(self.timeout, self.reply_delay)
+            self.clock[0] += elapsed
+            self.reply_delay -= elapsed
+            if self.reply_delay > 0:
+                raise parser.socket.timeout('owned delayed reply')
         data, self.data = self.data[:size], self.data[size:]
         return data
 
@@ -130,7 +142,7 @@ def test_send_uses_remaining_deadline_and_restores_timeout(clock, transport, mon
 
     monkeypatch.setattr(transport, "_new_req_id", prepare)
     assert transport._roundtrip_locked(b"owned") == parser.ParsedRequestLine("owned.invalid", 443)
-    assert sock.send_timeouts == [0.25]
+    assert sock.send_timeouts == [min(0.25, parser._IO_WAIT_TICK_S)]
     assert sock.gettimeout() == 99.0
 
 
@@ -157,7 +169,7 @@ def test_transport_restores_timeout_on_send_failure(clock, transport, failure):
     with pytest.raises(type(failure)) as caught:
         transport._roundtrip_locked(b"owned")
     assert caught.value is failure
-    assert sock.send_timeouts == [1.0]
+    assert sock.send_timeouts == [min(1.0, parser._IO_WAIT_TICK_S)]
     assert sock.gettimeout() == 99.0
 
 
@@ -171,6 +183,24 @@ def test_cold_start_uses_its_own_lifecycle_budget(clock, transport, monkeypatch)
     sock = ExchangeSocket(clock)
     transport._sock = sock
     assert transport.parse(b"owned") == parser.ParsedRequestLine("owned.invalid", 443)
-    assert sock.send_timeouts == [0.25]
+    assert sock.send_timeouts == [min(0.25, parser._IO_WAIT_TICK_S)]
     assert sock.gettimeout() == 99.0
+    assert transport._lock.released == 1
+
+
+@pytest.mark.parametrize('reply_delay,accepted,finished_at', [(0.1, True, .85), (.5, False, 1.0)])
+def test_sliced_waits_keep_the_budget_remaining_after_queueing(clock, transport, monkeypatch, reply_delay, accepted, finished_at):
+    transport._lock = QueueLock(clock, delay=.75)
+    monkeypatch.setattr(transport, '_ensure_worker_locked', lambda: None)
+    sock = ExchangeSocket(clock, reply_delay=reply_delay)
+    transport._sock = sock
+    result = transport.parse(b'owned')
+    if accepted:
+        assert result == parser.ParsedRequestLine('owned.invalid', 443)
+        assert not sock.closed
+    else:
+        assert isinstance(result, parser.ParseRefusal)
+        assert sock.closed and transport._sock is None
+    assert clock[0] == pytest.approx(finished_at)
+    assert sock.timeout == 99.0
     assert transport._lock.released == 1

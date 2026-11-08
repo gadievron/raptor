@@ -36,6 +36,7 @@ Landlock available-but-failing is not degraded — it is fail-closed
 """
 
 import atexit
+from contextlib import closing
 import json
 import logging
 import os
@@ -48,6 +49,7 @@ import time
 from pathlib import Path
 
 from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
+from core.source.streams import preserving_stream_error
 
 from ._parser_jail_child import FRAME_HEADER, MAX_FRAME_PAYLOAD, READY_FRAME_ID
 from ._request_head import CENSUS_VALUES, ParsedRequestLine, ParseRefusal
@@ -63,6 +65,8 @@ _READY_TIMEOUT_S = 10.0
 # that takes longer is wedged or hostile — kill it and deny the
 # request. Deliberately far below the child's own RLIMIT_CPU backstop.
 _ROUNDTRIP_TIMEOUT_S = 5.0
+# Transport slices observe shutdown without resetting the transaction budget.
+_IO_WAIT_TICK_S = 0.05
 # Respawn backoff for consecutive SPAWN failures (a crash of a
 # previously-healthy worker respawns immediately; only failing spawns
 # back off). Counter resets on a successful ready handshake.
@@ -98,28 +102,8 @@ class _ProtocolError(Exception):
 
 
 def _raptor_dir() -> str:
-    """Import root for the child's PYTHONPATH.
-
-    PYTHONPATH-to-child is sys.path-equivalent injection, so the
-    path-safety doctrine applies: RAPTOR_DIR is authoritative. The
-    Path(__file__) fallback is the same BLESSED doctrine exception as
-    the landlock-audit tracer spawn: this lane must stay usable as a
-    library (bare callers without the launcher), and a hard KeyError
-    would kill runs the fallback serves correctly on single-checkout
-    hosts — but on a multi-checkout host it silently steers the worker
-    to whichever tree this module sits in, so the ambiguity is
-    surfaced loudly instead of guessed silently.
-    """
-    raptor_dir = os.environ.get("RAPTOR_DIR")
-    if raptor_dir is None:
-        raptor_dir = str(Path(__file__).resolve().parents[2])
-        logger.warning(
-            "parser-jail: RAPTOR_DIR unset — worker will import from "
-            "the tree containing this module (%s); on multi-checkout "
-            "hosts export RAPTOR_DIR to pin the intended tree",
-            raptor_dir,
-        )
-    return raptor_dir
+    """Trusted import root of the parent code that owns this worker."""
+    return str(Path(__file__).resolve().parents[2])
 
 
 def _validate_host(host: object) -> str:
@@ -206,6 +190,24 @@ def _validate_verdict(payload: bytes) -> "ParsedRequestLine | ParseRefusal":
     raise _ProtocolError("ok field violates type contract")
 
 
+def _socket_io_timeout(deadline, check_cancel):
+    if check_cancel is not None:
+        check_cancel()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise socket.timeout("parser worker frame deadline exceeded")
+    return min(remaining, _IO_WAIT_TICK_S) if check_cancel is not None else remaining
+
+def _restore_socket_timeout(sock, timeout):
+    primary = sys.exc_info()[1]
+    try:
+        sock.settimeout(timeout)
+    except BaseException:
+        if primary is None:
+            raise
+        # A second close/mode error must not replace request cancellation
+        # or the transport failure that already requires worker retirement.
+
 class ParserJail:
     """Owner of one confined parser worker (see module docstring)."""
 
@@ -235,8 +237,13 @@ class ParserJail:
 
     def start(self) -> None:
         """Spawn + confine the worker now. Raises on failure (fail-closed)."""
-        with self._lock:
+        self._check_running()
+        if not self._lock.acquire(timeout=_READY_TIMEOUT_S):
+            raise ParserJailUnavailable("parser startup queue deadline exceeded")
+        try:
             self._ensure_worker_locked()
+        finally:
+            self._lock.release()
 
     def parse(self, raw: bytes) -> "ParsedRequestLine | ParseRefusal":
         """One raw request line in, one re-validated verdict out.
@@ -250,6 +257,7 @@ class ParserJail:
         — poison input costs the attacker their request and us one
         respawn, nothing else.
         """
+        self._check_running()
         if len(raw) > MAX_FRAME_PAYLOAD:
             # The proxy's read cap (4096) makes this unreachable; keep
             # the reader's refusal semantics rather than a hard error
@@ -316,15 +324,24 @@ class ParserJail:
         Raises ParserJailUnavailable if exit cannot be confirmed. The
         process remains owned; a subsequent stop retries its bounded reap.
         """
-        with self._lock:
-            self._stopped = True
+        # Publish before queueing: the current owner observes this between
+        # socket waits; queued requests refuse rather than delaying teardown.
+        self._stopped = True
+        if not self._lock.acquire(timeout=_READY_TIMEOUT_S):
+            raise ParserJailUnavailable("parser stop queue deadline exceeded; cleanup pending")
+        try:
             self._kill_worker_locked()
+        finally:
+            self._lock.release()
 
     # ---- internals (all require self._lock held) ----
 
-    def _ensure_worker_locked(self) -> None:
+    def _check_running(self) -> None:
         if self._stopped:
             raise ParserJailUnavailable("parser jail is stopped")
+
+    def _ensure_worker_locked(self) -> None:
+        self._check_running()
         try:
             worker_alive = self._proc is not None and self._proc.poll() is None
         except OSError:
@@ -342,6 +359,8 @@ class ParserJail:
         try:
             self._spawn_worker_locked()
         except ParserJailError:
+            if self._stopped:
+                raise
             self._spawn_failures += 1
             # Saturate before doing unbounded exponent arithmetic. A
             # persistent outage must keep producing typed refusals even
@@ -367,8 +386,10 @@ class ParserJail:
         # modules' function-local RaptorConfig imports).
         from core.config import RaptorConfig
 
+        root = _raptor_dir()
         env = RaptorConfig.get_safe_env()
-        env["PYTHONPATH"] = _raptor_dir()
+        env["RAPTOR_DIR"] = root
+        env["PYTHONPATH"] = root
         # Belt-and-braces with the child's RLIMIT_FSIZE=0: imports must
         # not attempt .pyc writes in the first place.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -390,7 +411,7 @@ class ParserJail:
         committed = False
         try:
             parent_sock, child_sock = socket.socketpair()
-            try:
+            with preserving_stream_error(closing(child_sock)):
                 try:
                     proc = subprocess.Popen(
                         child_argv + [str(child_sock.fileno())],
@@ -404,17 +425,12 @@ class ParserJail:
                         stderr=subprocess.DEVNULL,
                         close_fds=True,
                         pass_fds=(child_sock.fileno(),),
-                        cwd=_raptor_dir(),
+                        cwd=root,
                         env=env,
                     )
                 except OSError as exc:
                     raise ParserJailUnavailable(
                         f"parser worker spawn failed: {exc}") from exc
-            finally:
-                try:
-                    child_sock.close()
-                except OSError:
-                    pass
 
             parent_sock.settimeout(_READY_TIMEOUT_S)
             try:
@@ -478,6 +494,7 @@ class ParserJail:
                     "process isolation only",
                 )
 
+            self._check_running()
             parent_sock.settimeout(_ROUNDTRIP_TIMEOUT_S)
             self._proc = proc
             self._sock = parent_sock
@@ -502,11 +519,13 @@ class ParserJail:
     def _read_ready_frame(self, sock: socket.socket) -> dict:
         deadline = time.monotonic() + _READY_TIMEOUT_S
         length, frame_id = FRAME_HEADER.unpack(
-            self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline))
+            self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline,
+                             check_cancel=self._check_running))
         if frame_id != READY_FRAME_ID or length > MAX_FRAME_PAYLOAD:
             raise _ProtocolError("malformed ready frame header")
         try:
-            obj = json.loads(self._recv_exact(sock, length, deadline=deadline),
+            obj = json.loads(self._recv_exact(sock, length, deadline=deadline,
+                                             check_cancel=self._check_running),
                              object_pairs_hook=_unique_evidence_object)
         except (ValueError, UnicodeDecodeError, RecursionError) as exc:
             raise _ProtocolError("ready frame is not valid JSON") from exc
@@ -528,28 +547,47 @@ class ParserJail:
         return obj
 
     @staticmethod
-    def _recv_exact(sock: socket.socket, n: int, *, deadline: float) -> bytes:
-        # Socket timeouts apply to individual recv calls. Recompute the
-        # remaining budget so fragmented input cannot extend the frame's
-        # deadline, and share that deadline across header and payload.
+    def _recv_exact(sock: socket.socket, n: int, *, deadline: float,
+                    check_cancel=None) -> bytes:
         timeout = sock.gettimeout()
         buf = bytearray()
         try:
             while len(buf) < n:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise socket.timeout("parser worker frame deadline exceeded")
-                sock.settimeout(remaining)
-                chunk = sock.recv(n - len(buf))
+                sock.settimeout(_socket_io_timeout(deadline, check_cancel))
+                try:
+                    chunk = sock.recv(n - len(buf))
+                except InterruptedError:
+                    continue
+                except socket.timeout:
+                    if check_cancel is None:
+                        raise
+                    continue
                 if not chunk:
                     raise OSError("parser worker closed the socket")
                 buf.extend(chunk)
             return bytes(buf)
         finally:
+            _restore_socket_timeout(sock, timeout)
+
+    @staticmethod
+    def _send_exact(sock: socket.socket, data: bytes, *, deadline: float,
+                    check_cancel=None) -> None:
+        # sendall timeout does not disclose its sent offset. Retrying it after
+        # a cancellation slice would duplicate bytes and desynchronise frames.
+        view = memoryview(data)
+        while view:
+            sock.settimeout(_socket_io_timeout(deadline, check_cancel))
             try:
-                sock.settimeout(timeout)
-            except OSError:
-                pass
+                sent = sock.send(view)
+            except InterruptedError:
+                continue
+            except socket.timeout:
+                if check_cancel is None:
+                    raise
+                continue
+            if sent <= 0:
+                raise OSError("parser worker send made no progress")
+            view = view[sent:]
 
     @staticmethod
     def _new_req_id() -> int:
@@ -595,22 +633,22 @@ class ParserJail:
             if remaining <= 0:
                 raise socket.timeout("parser worker request deadline exceeded")
             sock.settimeout(remaining)
-            sock.sendall(FRAME_HEADER.pack(len(raw), req_id) + raw)
-            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline)
+            self._send_exact(sock, FRAME_HEADER.pack(len(raw), req_id) + raw,
+                             deadline=deadline, check_cancel=self._check_running)
+            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline,
+                             check_cancel=self._check_running)
             length, resp_id = FRAME_HEADER.unpack(header)
             if length > MAX_FRAME_PAYLOAD:
                 raise _ProtocolError("oversized verdict frame")
             if resp_id != req_id:
                 raise _ProtocolError("verdict frame id desync")
-            payload = self._recv_exact(sock, length, deadline=deadline)
+            payload = self._recv_exact(sock, length, deadline=deadline,
+                                       check_cancel=self._check_running)
             return _validate_verdict(payload)
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
         finally:
-            try:
-                sock.settimeout(timeout)
-            except OSError:
-                pass
+            _restore_socket_timeout(sock, timeout)
 
     def _kill_worker_locked(self) -> None:
         sock, proc = self._sock, self._proc
