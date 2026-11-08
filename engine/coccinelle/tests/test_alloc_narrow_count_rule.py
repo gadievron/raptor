@@ -201,3 +201,40 @@ def test_narrow_count_silence_is_inconclusive(tmp_path, other_hit):
     assert scoped.outcome == "inconclusive"
     assert scoped.details["confirm_only"]
     assert not scoped.matches
+
+
+
+def test_allocator_value_uses_and_size_positions(tmp_path):
+    cases = [
+        ("p = vmalloc(bits);", True),
+        ("return vmalloc(bits);", True),
+        ("consume(vmalloc(bits));", True),
+        ("void *local = vmalloc(bits);", True),
+        ("p = kcalloc(bits, 1, 0);", True),
+        ("p = kcalloc(1, bits, 0);", True),
+        ("return kmalloc(bits, 0);", True),
+        ("p = kmalloc(16, bits);", False),
+        ("p = kcalloc(1, 16, bits);", False),
+        ("p = kcalloc(bits, bits, 0);", True),
+        ("bits = 16; return vmalloc(bits);", False),
+        ("mutate_size(&bits); consume(vmalloc(bits));", False),
+    ]
+    lines = []
+    expected = set()
+    for allocation, candidate in cases:
+        lines += [
+            f"void *value_{len(lines)}(unsigned long length, unsigned int divisor) {{",
+            "  unsigned int count;",
+            "  size_t bits;",
+            "  void *p;",
+            "  count = sector_div_up(length, divisor);",
+            "  bits = round_up_helper(count, 64);",
+            f"  {allocation}",
+            "  return p;",
+            "}",
+        ]
+        if candidate:
+            expected.add(len(lines) - 2)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {row["line"] for row in rows} == expected
+    assert len(rows) == len(expected)

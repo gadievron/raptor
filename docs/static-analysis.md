@@ -469,6 +469,10 @@ updates and calculations through further assignments still need inspection.
 An increment retains the division-derived lead, as does a conditional update
 with a surviving unchanged path.
 
+The detector follows allocation values in assignments, initialisers, returns
+and larger expressions. For kcalloc it checks both count and element width;
+allocator flags alone do not carry a size dependency.
+
 The candidate cannot independently confirm or promote a finding, and a scan
 with no match is inconclusive.
 
