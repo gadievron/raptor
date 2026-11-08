@@ -19,6 +19,12 @@ import pytest
 from packages.sca.resolvers._cache import manifest_hash
 
 
+@pytest.fixture(autouse=True)
+def owned_proxy_policy(tmp_path, monkeypatch):
+    from packages.sca.resolvers import _cache
+    monkeypatch.setattr(_cache, "_OVERRIDE_CONFIG_PATH", tmp_path / "proxy-hosts.json")
+
+
 class _StubResolver:
     ecosystem = "npm"
     MANIFEST_FILES = ("a.manifest", "b.manifest")
@@ -63,7 +69,7 @@ def test_identical_inputs_still_hit(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.geteuid() == 0,
                     reason="chmod 000 does not block reads for root")
-def test_unreadable_file_is_distinct_from_absent(tmp_path: Path) -> None:
+def test_unreadable_file_bypasses_cache(tmp_path: Path) -> None:
     """A present-but-unreadable lockfile must not hash identically to
     a project with no lockfile at all."""
     with_unreadable = _project(tmp_path, "unreadable", {
@@ -75,7 +81,9 @@ def test_unreadable_file_is_distinct_from_absent(tmp_path: Path) -> None:
     r = _StubResolver()
     h1 = manifest_hash(r, with_unreadable)
     h2 = manifest_hash(r, without)
-    assert h1 is not None and h2 is not None
+    # Unknown inputs cannot reuse a cached resolution; an actually absent
+    # optional file can still participate in a valid fingerprint.
+    assert h1 is None and h2 is not None
     assert h1 != h2
 
 

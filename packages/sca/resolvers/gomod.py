@@ -23,7 +23,8 @@ from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
-from ._safe_io import copy_regular_file
+from ._proxy_hosts import _GOMOD_ENV_KEYS
+from ._safe_io import copy_regular_file, read_regular_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,10 @@ _SKIP_DIRS = {"vendor", "node_modules", ".git", "testdata"}
 _MAX_FILES = 10_000
 
 
-def _copy_go_sources(project_dir: Path, tmp_path: Path) -> None:
+def _copy_go_sources(project_dir: Path, tmp_path: Path | None) -> tuple[str, ...]:
     """Copy the target's ``.go`` files into the temp resolve dir.
+
+    With tmp_path=None, enumerate the same bounded input set without copying.
 
     Walks with ``os.walk(..., followlinks=False)`` — NOT ``rglob``:
     before Python 3.13 ``Path.rglob`` recurses THROUGH directory
@@ -43,14 +46,15 @@ def _copy_go_sources(project_dir: Path, tmp_path: Path) -> None:
     ``_SKIP_DIRS`` apply to TRAVERSAL, not just to copied paths. Same
     shape as ``verify._copy_target``.
     """
+    selected = []
     copied = 0
     walk_root = project_dir.resolve()
     for dirpath, dirnames, filenames in os.walk(
         walk_root, followlinks=False,
     ):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
         cur = Path(dirpath)
-        for fname in filenames:
+        for fname in sorted(filenames):
             if not fname.endswith(".go"):
                 continue
             go_file = cur / fname
@@ -61,18 +65,27 @@ def _copy_go_sources(project_dir: Path, tmp_path: Path) -> None:
                 continue
             copied += 1
             if copied > _MAX_FILES:
-                return
+                return tuple(selected)
             rel = go_file.relative_to(walk_root)
-            dest = tmp_path / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            copy_regular_file(go_file, dest)
+            selected.append(str(rel))
+            if tmp_path is not None:
+                dest = tmp_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                copy_regular_file(go_file, dest)
+    return tuple(selected)
 
 
 class GoResolver:
     """``go mod tidy`` (in a temp copy) wrapper."""
 
     ecosystem = "Go"
+    CACHE_ENV_KEYS = _GOMOD_ENV_KEYS
+    CACHE_TOOLS = ("go",)
     MANIFEST_FILES = ("go.mod", "go.sum")
+
+    def input_files(self, project_dir: Path) -> tuple[str, ...]:
+        return (*self.MANIFEST_FILES, *_copy_go_sources(project_dir, None))
+
     @property
     def proxy_hosts(self) -> list:
         """Egress-proxy hostname allowlist for the go subprocess.
@@ -146,19 +159,26 @@ class GoResolver:
                     raw_output=raw,
                 )
             lockfile = _read_if_exists(tmp_path / "go.sum")
+            if lockfile is None:
+                try:
+                    (tmp_path / "go.sum").lstat()
+                except FileNotFoundError:
+                    # A successful empty/local-only module graph needs no go.sum.
+                    # Only absence is allowed; refused symlinks/devices stay failures.
+                    lockfile = b""
+                except OSError:
+                    pass
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=True, available=True,
+                success=lockfile is not None, available=True,
+                error=None if lockfile is not None else "resolver produced no readable regular lockfile within the byte budget",
                 proposed_lockfile=lockfile,
                 raw_output=raw,
             )
 
 
 def _read_if_exists(p: Path) -> bytes | None:
-    try:
-        return p.read_bytes()
-    except OSError:
-        return None
+    return read_regular_bytes(p)
 
 
 __all__ = ["GoResolver"]

@@ -572,15 +572,13 @@ class TestCliDispatch:
             assert "--out" in args
             assert "./out" in args
 
-    def test_fix_findings_with_positional_drops_positional(self):
-        """fix /path --findings /f.json drops the positional (--findings wins)."""
+    def test_fix_findings_with_positional_is_rejected(self):
+        """An explicit target cannot be silently ignored."""
         from packages.sca.cli import _dispatch_fix
         from unittest.mock import patch
-        with patch("packages.sca.update.main", return_value=0) as m:
-            _dispatch_fix(["/path", "--findings", "/f.json"])
-            args = m.call_args[0][0]
-            assert "--findings" in args
-            assert "/path" not in args
+        with patch("packages.sca.update.main", return_value=0) as call:
+            assert _dispatch_fix(["/path", "--findings", "/f.json"]) == 2
+            call.assert_not_called()
 
     def test_positional_to_target_flag_empty(self):
         from packages.sca.cli import _positional_to_target_flag

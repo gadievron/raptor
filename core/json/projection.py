@@ -160,6 +160,22 @@ def _array_values(reader, project=None, observe=None, *, depth):
     reader.expect("]")
 
 
+def iter_array(stream, *, max_bytes, max_depth=128):
+    """Yield top-level rows with strict validation and bounded input reads.
+
+    Fully consume this iterator before committing derived output: trailing JSON
+    and EOF validation happen after the last row. The caller owns the stream.
+    """
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("JSON projection requires a positive byte budget")
+    if type(max_depth) is not int or not 1 <= max_depth <= 128:
+        raise ValueError("JSON depth budget must be between 1 and 128")
+    reader = _Reader(stream, max_bytes, max_depth)
+    yield from _array_values(reader, depth=1)
+    if reader.peek():
+        raise ValueError("trailing JSON content")
+
+
 def project_array(stream, *, max_bytes, project=None, max_depth=128):
     """Return (projected rows, original SHA-256), validating through EOF.
 

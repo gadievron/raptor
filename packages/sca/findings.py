@@ -39,7 +39,6 @@ from typing import Any
 from core.cve import EpssClient, KevClient
 from core.cve.vulnrichment import SSVCDecision, VulnrichmentClient
 
-from ._atomic import atomic_write_text
 from .kinds import (
     HYGIENE_PREFIX,
     LICENSE_PREFIX,
@@ -934,30 +933,29 @@ def write_findings_json(
     incomplete. Each entry is a dict with ``kind`` (snake_case tag),
     ``detail`` (human-readable description) and optional ``evidence``
     (JSON-serialisable dict merged into the row's ``sca`` block).
-    These rows never trip the ``--fail-on-*`` gates — thresholds
+    These rows trip only the opt-in ``--fail-on-incomplete`` gate; other thresholds
     evaluate specific finding classes only — but they are stable,
     machine-readable markers a pipeline can gate on explicitly.
     """
-    rows: list[dict[str, Any]] = [_vuln_finding_to_row(f) for f in vuln_findings]
-    rows.extend(_hygiene_finding_to_row(f) for f in hygiene_findings)
-    rows.extend(_supply_chain_finding_to_row(f) for f in supply_chain_findings)
-    rows.extend(_license_finding_to_row(f) for f in license_findings)
-    rows.extend(_scan_health_to_row(h) for h in scan_health)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Shared atomic-write primitive: random-suffix tempfile opened
-    # O_EXCL|O_NOFOLLOW then renamed — a predictable ``<name>.json.tmp``
-    # sibling is squattable / symlinkable in shared output dirs.
-    # ``allow_nan=False``: a ``nan`` / ``inf`` float anywhere in a row
-    # would serialise as a bare non-JSON token (``NaN``) that strict
-    # consumers reject — invalidating the WHOLE document, not one row.
-    # Enrichment ingest validates scores upstream (core.cve.epss); this
-    # is the belt-and-braces refusal at the write chokepoint.
-    atomic_write_text(
-        path,
-        _json.dumps(rows, indent=2, default=_json_default, allow_nan=False),
-    )
-    return len(rows)
+    from itertools import chain
+    from core.atomic_fs import write_bytes_atomically
+    rows = chain((_vuln_finding_to_row(f) for f in vuln_findings),
+                 (_hygiene_finding_to_row(f) for f in hygiene_findings),
+                 (_supply_chain_finding_to_row(f) for f in supply_chain_findings),
+                 (_license_finding_to_row(f) for f in license_findings),
+                 (_scan_health_to_row(h) for h in scan_health))
+    count = 0
+    def chunks():
+        nonlocal count
+        yield b"["
+        for row in rows:
+            yield b",\n" if count else b"\n"
+            text = _json.dumps(row, indent=2, default=_json_default, allow_nan=False)
+            yield ("  " + text.replace("\n", "\n  ")).encode("utf-8")
+            count += 1
+        yield b"\n]" if count else b"]"
+    write_bytes_atomically(path, chunks())
+    return count
 
 
 def _row_envelope(

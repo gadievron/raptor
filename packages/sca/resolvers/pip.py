@@ -39,6 +39,8 @@ best-effort host-side cleanup for sandbox lanes that share the host
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import logging
 import os
 import secrets
@@ -50,6 +52,8 @@ from pathlib import Path
 from core.run.scratch import scratch_dir
 
 from . import ResolverResult, _check_tool, _run
+from ._proxy_hosts import _PIP_ENV_KEYS
+from ._safe_io import read_regular_text
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +72,17 @@ _ONLY_BINARY_ENV = "PIP_ONLY_BINARY=:all:"
 # import time, so the per-run ``--allow-sdist-builds`` CLI flag flows
 # through this module-level default (same pattern as the parsers'
 # module-level setters toggled by ``pipeline.run_sca``).
-_ALLOW_SDIST_BUILDS_DEFAULT = False
+_ALLOW_SDIST_BUILDS_DEFAULT: ContextVar[bool] = ContextVar("sca_allow_sdist_builds_default", default=False)
 
 
 def set_allow_sdist_builds(value: bool) -> None:
-    """Set the process-wide default for :attr:`PipResolver.allow_sdist_builds`.
+    """Set the context-local default for :attr:`PipResolver.allow_sdist_builds`.
 
     Instances constructed with an explicit ``allow_sdist_builds``
     keep their pinned value; instances using the default (including
     the registry singleton) pick this up on the next ``dry_run``.
     """
-    global _ALLOW_SDIST_BUILDS_DEFAULT
-    _ALLOW_SDIST_BUILDS_DEFAULT = bool(value)
+    _ALLOW_SDIST_BUILDS_DEFAULT.set(bool(value))
 
 
 def _real_python() -> str:
@@ -123,7 +126,7 @@ class PipResolver:
     SUPPORTS_BATCH = True
 
     def __init__(self, *, allow_sdist_builds: bool | None = None) -> None:
-        # ``None`` defers to the process-wide default managed by
+        # ``None`` defers to the context-local default managed by
         # :func:`set_allow_sdist_builds` (CLI flag plumbing); an
         # explicit bool pins this instance regardless of the flag.
         self._allow_sdist_builds = allow_sdist_builds
@@ -133,18 +136,33 @@ class PipResolver:
         """True when sdist builds are permitted for this resolver."""
         if self._allow_sdist_builds is not None:
             return self._allow_sdist_builds
-        return _ALLOW_SDIST_BUILDS_DEFAULT
+        return _ALLOW_SDIST_BUILDS_DEFAULT.get()
 
     ecosystem = "PyPI"
-    # Files the resolver-cache wrapper hashes to key memoisation.
-    # See ``_cache.py``. ``constraints.txt`` would also affect
-    # resolution but pip-compile picks it up only via ``-c`` on the
-    # command line, not as a discovered manifest, so projects that
-    # use it will need to invalidate manually if the cache miss-
-    # fires (rare).
+    # Cache only inputs whose complete local dependency surface is known.
+    CACHE_ENV_KEYS = _PIP_ENV_KEYS
+    CACHE_TOOLS = ("pip-compile", "pip", "python3")
     MANIFEST_FILES = (
         "requirements.txt", "requirements.in", "pyproject.toml",
     )
+    def input_files(self, project_dir: Path) -> tuple[str, ...]:
+        manifest = _find_pip_manifest(project_dir)
+        if manifest is None or manifest.name == "pyproject.toml" or manifest.name not in self.MANIFEST_FILES:
+            # Build backends/dynamic project metadata can consume arbitrary files.
+            return ()
+        text = read_regular_text(manifest)
+        if text is None:
+            return ()
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith(("-", ".", "/")) or "://" in line or "@" in line:
+                # Includes, constraints, editables and direct/local source inputs
+                # have an open input closure: resolve afresh instead of guessing.
+                return ()
+        return (*self.MANIFEST_FILES, manifest.name)
+
     @property
     def proxy_hosts(self) -> list:
         """Egress-proxy hostname allowlist for the pip subprocess.
@@ -651,13 +669,8 @@ def _find_pip_manifest(project_dir: Path) -> Path | None:
       4. Any other ``requirements*.txt`` (covers ``requirements-dev``,
          ``requirements-all-optional``, ``requirements-prod``, etc.).
 
-    Every declared ``MANIFEST_FILES`` entry outranks the glob fallback
-    — the resolver cache hashes only declared files, so selecting a
-    glob-matched file while a declared one exists would key the cache
-    on a file that isn't the one being resolved (edits to the resolved
-    file would then miss invalidation). With this order, whenever the
-    cache is keyed at all, the resolved manifest is one of the hashed
-    files; glob-only projects hash to ``None`` and bypass the cache.
+    Every canonical manifest outranks the glob fallback. input_files uses
+    this same selection and bypasses caching for dynamic/local input closures.
     """
     pyproject = project_dir / "pyproject.toml"
     if pyproject.exists():

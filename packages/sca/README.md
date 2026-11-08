@@ -61,6 +61,12 @@ updates are informational and missing evidence remains explicit.
 See [SBOM inventory workflows](../../docs/sca.md#inspecting-sbom-inventories-and-collected-notices)
 and `raptor-sca sbom --help`.
 
+For scan profiles, completion coverage, streamed exports and the full
+SBOM → upgrade → rebuild → verification workflow, see
+[the SCA guide](../../docs/sca.md#choose-a-scan).
+Use `sbom stats` for offline licence/notice/ecosystem distributions, including
+separate GPL versions and compound expressions.
+
 ## Scan stages
 
 The mechanical pipeline runs eight stages in order, each cancellable

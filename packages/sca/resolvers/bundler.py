@@ -27,7 +27,8 @@ from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
-from ._safe_io import copy_regular_file
+from ._proxy_hosts import _BUNDLER_ENV_KEYS
+from ._safe_io import copy_regular_file, read_regular_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,13 @@ class BundlerResolver:
     """``bundle lock`` (in a temp copy) wrapper."""
 
     ecosystem = "RubyGems"
-    # Note: ``.gemspec`` files also affect resolution but vary per
-    # project (no fixed name). The cache wrapper's manifest-list is
-    # literal filenames only, so .gemspec drift may not invalidate
-    # the cache — operators with .gemspec changes can flush by
-    # bumping the .gemspec content into Gemfile.lock or via the
-    # 24h TTL.
+    CACHE_ENV_KEYS = _BUNDLER_ENV_KEYS
+    CACHE_TOOLS = ("bundle",)
     MANIFEST_FILES = ("Gemfile", "Gemfile.lock")
+
+    def input_files(self, project_dir: Path) -> tuple[str, ...]:
+        return (*self.MANIFEST_FILES, *(p.name for p in sorted(project_dir.glob("*.gemspec"))))
+
     @property
     def proxy_hosts(self) -> list:
         """Egress-proxy hostname allowlist for the bundler subprocess.
@@ -85,14 +86,8 @@ class BundlerResolver:
             # follows symlinks (``Gemfile.lock -> ~/.aws/credentials``
             # exfiltrates operator files into the resolve, and into
             # cached / reported tool output) and opens special files.
-            for fname in ("Gemfile", "Gemfile.lock"):
+            for fname in self.input_files(project_dir):
                 copy_regular_file(project_dir / fname, tmp_path / fname)
-            # Copy top-level *.gemspec files so the ``gemspec`` DSL
-            # directive in Gemfile resolves. Note: ``eval_gemfile``
-            # siblings are NOT covered — those require bespoke
-            # handling per project layout.
-            for spec in project_dir.glob("*.gemspec"):
-                copy_regular_file(spec, tmp_path / spec.name)
 
             try:
                 proc = _run(
@@ -120,17 +115,15 @@ class BundlerResolver:
             lockfile = _read_if_exists(tmp_path / "Gemfile.lock")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=True, available=True,
+                success=lockfile is not None, available=True,
+                error=None if lockfile is not None else "resolver produced no readable regular lockfile within the byte budget",
                 proposed_lockfile=lockfile,
                 raw_output=raw,
             )
 
 
 def _read_if_exists(p: Path) -> bytes | None:
-    try:
-        return p.read_bytes()
-    except OSError:
-        return None
+    return read_regular_bytes(p)
 
 
 __all__ = ["BundlerResolver"]

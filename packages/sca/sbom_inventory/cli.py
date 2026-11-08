@@ -14,7 +14,7 @@ from core.security.log_sanitisation import sanitise_for_terminal, escape_nonprin
 from .compare import compare
 from .inventory import read_inventory
 from .model import selected
-from .output import inventory_document, csv_inventory, export_notices, markdown, write_inventory
+from .output import inventory_chunks, csv_chunks, record_chunks, export_notices, markdown, write_inventory
 from .source import Source
 from .relationships import explain
 
@@ -30,12 +30,24 @@ def parser():
     notices = commands.add_parser("notices", help="export original licence and notice bytes", description="Export retained original bytes and a portable index to a new directory. External licence URLs are never fetched.",
         epilog="Examples:\n  raptor-sca sbom notices container-sbom.zip --out notices\n  raptor-sca sbom notices sbom.cdx.json --license MIT --out mit-notices",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    for sub in (inspect, notices):
+    stats = commands.add_parser("stats", help="summarise licence, ecosystem and evidence distributions offline",
+        description="Print JSON distributions from supplied inventory records, separated by scope. No network, source execution or notice-byte verification occurs.",
+        epilog="Examples:\n  raptor-sca sbom stats container-sbom.zip --scope packages\n  raptor-sca sbom stats release.cdx.json --license GPL-3.0-only --out statistics.json",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    for sub in (inspect, notices, stats):
         sub.add_argument("input", type=Path, help="CycloneDX 1.5 / SPDX 2.3 JSON, audit snapshot, evidence ZIP or directory")
         sub.add_argument("--license", dest="license_id", help="exact declaration operand, including AND/OR expressions (default: all)")
         sub.add_argument("--package", help="exact package name, occurrence ID or Package URL (default: all)")
         sub.add_argument("--scope", choices=("packages", "source-candidates", "subjects"), help="inventory scope (default: all, kept separate)")
-    inspect.add_argument("--format", choices=("text", "json", "csv"), default="text", help="stdout format (default: text)")
+    for sub in (inspect, stats):
+        sub.add_argument("--ecosystem", help="exact Package URL type, for example npm or deb")
+        sub.add_argument("--unresolved", action="store_true", help="select records with missing or unknown licence declarations")
+        sub.add_argument("--notice-status", help="exact recorded notice status")
+    stats.add_argument("--out", type=Path, help="also save statistics JSON")
+    inspect.add_argument("--limit", type=int, default=50, help="text display rows; does not truncate saved inventories or machine exports")
+    inspect.add_argument("--offset", type=int, default=0, help="text display starting row")
+    inspect.add_argument("--records-only", action="store_true", help="JSON contains selected records only, not a portable full inventory snapshot")
+    inspect.add_argument("--format", choices=("text", "json", "csv", "jsonl"), default="text", help="stdout format (default: text)")
     inspect.add_argument("--out", type=Path, help="also write inventory.json, inventory.csv and summary.md (default: stdout only)")
     notices.add_argument("--out", type=Path, required=True, help="new export directory; existing paths are refused")
     diff = commands.add_parser("diff", help="compare two inventories or audit snapshots", description="Compare packages, declarations, notice fingerprints, supplied dependencies and recorded executable ownership. Ambiguous matches remain explicit; notice text updates are informational.",
@@ -80,9 +92,10 @@ def parser():
         epilog="Examples:\n  raptor-sca sbom verify-plan upgrade-plan/upgrade-plan.json rebuilt/sbom.cdx.json --findings rebuilt/findings.json\n  raptor-sca sbom verify-plan plan.json rebuilt.spdx.json --findings findings.json --coverage advisory-coverage.json --out verification\n\nExit codes: 0 verified within recorded coverage; 1 unmet targets or advisory concerns; 2 unavailable or inconsistent evidence.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     verify.add_argument("plan", type=Path, help="saved upgrade-plan.json")
-    verify.add_argument("current", type=Path, help="rebuilt scan's SBOM or inventory snapshot")
+    verify.add_argument("current", type=Path, help="rebuilt scan's CycloneDX 1.5 or SPDX 2.3 JSON SBOM")
     verify.add_argument("--findings", type=Path, required=True, help="rebuilt scan's findings.json")
     verify.add_argument("--coverage", type=Path, help="advisory coverage receipt (default: advisory-coverage.json alongside findings)")
+    verify.add_argument("--max-coverage-age-hours", type=float, help="require a coverage receipt generated within this many hours; does not establish feed freshness")
     verify.add_argument("--format", choices=("text", "json"), default="text", help="stdout format (default: text)")
     verify.add_argument("--out", type=Path, help="new directory for upgrade-verification.json and upgrade-verification.md")
     return result
@@ -104,12 +117,13 @@ def main(argv=None):
             from .output import verification_markdown, write_verification
             plan, plan_sha = read_plan(args.plan)
             with Source(args.current) as source:
-                inventory, _ = read_inventory(source, require_scan_document=True)
+                inventory, _ = read_inventory(source, require_scan_document=True, verify_notices=False)
             findings, findings_sha = read_findings(args.findings)
             coverage, coverage_sha, errors = read_coverage(
-                args.coverage or args.findings.parent / "advisory-coverage.json", inventory.source_sha256, findings_sha)
+                args.coverage or args.findings.parent / "advisory-coverage.json", inventory.source_sha256, findings_sha, max_age_hours=args.max_coverage_age_hours)
             report = verify_plan(plan, plan_sha, inventory, findings, findings_sha,
                                  coverage=coverage, coverage_sha=coverage_sha, coverage_errors=errors)
+            report["limitations"].append("Notice bytes were not re-verified; upgrade verification uses package/query evidence only.")
             if args.out:
                 write_verification(args.out, report)
             if args.format == "json":
@@ -122,7 +136,7 @@ def main(argv=None):
             from .plan_inputs import read_findings
             from .output import upgrade_plan_markdown, write_upgrade_plan
             with Source(args.input) as source:
-                inventory, _ = read_inventory(source)
+                inventory, _ = read_inventory(source, verify_notices=False)
             findings, sha = read_findings(args.findings)
             osv = None
             if args.check_candidates:
@@ -133,6 +147,7 @@ def main(argv=None):
                 osv = OsvClient(default_client(offline=args.offline), cache, offline=args.offline)
             report = build_plan(inventory, findings, sha, osv=osv,
                                 max_candidates=args.max_candidates, max_queries=args.max_queries)
+            report["limitations"].append("Notice bytes were not re-verified; notice status is supplied metadata only.")
             if args.out:
                 write_upgrade_plan(args.out, report)
             if args.format == "json":
@@ -147,8 +162,9 @@ def main(argv=None):
             return 0
         if args.command == "why":
             with Source(args.input) as source:
-                inventory, _ = read_inventory(source)
+                inventory, _ = read_inventory(source, verify_notices=False)
             result = explain(inventory, args.package, root=args.root, max_paths=args.max_paths, max_depth=args.max_depth)
+            result["notice_verification"] = inventory.notice_verification
             if args.out:
                 save_json(args.out, result, stream=True)
             _emit(result)
@@ -164,8 +180,26 @@ def main(argv=None):
             _emit(result)
             return 0
         with Source(args.input) as source:
-            inventory, embedded = read_inventory(source)
+            inventory, embedded = read_inventory(source, verify_notices=args.command != "stats")
             records = selected(inventory, license_id=args.license_id, package=args.package, scope=args.scope)
+            if args.command in {"inspect", "stats"}:
+                from .statistics import ecosystem
+                records = [row for row in records if (not args.ecosystem or ecosystem(row) == args.ecosystem)
+                           and (not args.unresolved or row.declaration_missing)
+                           and (not args.notice_status or row.notice_status == args.notice_status)]
+            if args.command == "stats":
+                from .statistics import statistics
+                report = statistics(inventory, records)
+                if args.out:
+                    if args.out.resolve() == args.input.resolve() or (args.out.exists() and args.out.samefile(args.input)):
+                        raise ValueError("statistics output must differ from the input")
+                    save_json(args.out, report, stream=True)
+                _emit(report)
+                return 0
+            if args.command == "inspect" and (args.limit < 1 or args.offset < 0):
+                raise ValueError("display limit must be positive and offset nonnegative")
+            if args.command == "inspect" and args.records_only and args.format != "json":
+                raise ValueError("--records-only applies to --format json; JSONL always exports selected records")
             if args.command == "notices":
                 result = export_notices(args.out, inventory, records, source, embedded,
                                         include_unassociated=not any((args.license_id, args.package, args.scope)))
@@ -173,12 +207,17 @@ def main(argv=None):
             else:
                 if args.out:
                     write_inventory(args.out, inventory, records)
-                if args.format == "json":
-                    _emit(inventory_document(inventory, records))
+                if (args.format == "json" and args.records_only) or args.format == "jsonl":
+                    for part in record_chunks(inventory, records, jsonl=args.format == "jsonl"):
+                        sys.stdout.write(part)
+                elif args.format == "json":
+                    for part in inventory_chunks(inventory, records):
+                        sys.stdout.write(part)
                 elif args.format == "csv":
-                    sys.stdout.write(csv_inventory(records))
+                    for part in csv_chunks(records):
+                        sys.stdout.write(part)
                 else:
-                    print(escape_nonprintable(markdown(inventory, records), preserve_newlines=True))
+                    print(escape_nonprintable(markdown(inventory, records, limit=args.limit, offset=args.offset), preserve_newlines=True))
         return 0
     except (OSError, ValueError, TypeError, KeyError, RecursionError, zipfile.BadZipFile, TarOpenError) as error:
         print("raptor-sca sbom: " + sanitise_for_terminal(str(error)), file=sys.stderr)

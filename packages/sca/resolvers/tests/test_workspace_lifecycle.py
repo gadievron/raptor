@@ -80,13 +80,18 @@ def outcome(kind):
 
 
 @pytest.mark.parametrize("name,cls", RESOLVERS, ids=[v[0] for v in RESOLVERS])
-@pytest.mark.parametrize("kind", ["success", "nonzero", "timeout", "error", "interrupt", "exit"])
+@pytest.mark.parametrize("kind", ["success", "missing-lock", "nonzero", "timeout", "error", "interrupt", "exit"])
 def test_native_workspace_covers_run(workspace, monkeypatch, name, cls, kind):
     module, owner = native_owner(monkeypatch, name, cls)
 
     def run(*args, **kwargs):
         root = dirty(workspace)
         assert kwargs["cwd"] == root
+        if kind == "success":
+            # Successful package managers must actually produce a regular lock.
+            for filename in ("Gemfile.lock", "Cargo.lock", "composer.lock", "go.sum", "package-lock.json",
+                             "packages.lock.json", "pnpm-lock.yaml", "poetry.lock", "yarn.lock"):
+                (root / filename).write_bytes(b"fixture lock")
         return outcome(kind)
 
     monkeypatch.setattr(module, "_run", run)
@@ -95,7 +100,9 @@ def test_native_workspace_covers_run(workspace, monkeypatch, name, cls, kind):
             owner.dry_run(workspace.project)
     else:
         result = owner.dry_run(workspace.project)
-        assert result.success == (kind == "success")
+        assert result.success == (kind == "success" or kind == "missing-lock" and name == "gomod")
+        if kind == "missing-lock" and name != "gomod":
+            assert result.proposed_lockfile is None and "readable regular lockfile" in result.error
 
 
 @pytest.mark.parametrize("name,cls", RESOLVERS, ids=[v[0] for v in RESOLVERS])

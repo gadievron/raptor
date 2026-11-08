@@ -15,18 +15,31 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
                        cache_hits: int | None = 0, cache_misses: int | None = 0, cache_evictions: int | None = None, rerender: bool = False,
                        artifacts: list[dict] | None = None, selection: dict | None = None, limitations=()):
     diagnostics = [*limitations, *(f"Manifest parser failed: {f.path}: {f.reason}" for f in parse_failures)]
-    valid = [r for r in rows if isinstance(r, dict)]
-    if len(valid) != len(rows):
-        diagnostics.append(f"{len(rows) - len(valid)} non-object row(s) omitted from reporting; original input retained")
-    rows = valid
+    captured, counts, health = [], Counter(), []
+    recorded = invalid = kev = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            invalid += 1
+            continue
+        recorded += 1
+        kind = str(row.get("vuln_type", "unknown"))
+        counts[kind] += 1
+        if len(captured) < MAX_FINDINGS:
+            captured.append(row)
+        if kind.startswith("sca:scan_health:") and len(health) < 100:
+            health.append(row)
+        kev += bool(kind == "sca:vulnerable_dependency" and isinstance(row.get("sca"), dict)
+                    and row["sca"].get("in_kev") is True and row.get("suppressed") is not True)
+    if invalid:
+        diagnostics.append(f"{invalid} non-object row(s) omitted from reporting; original input retained")
+    rows = captured
     if rerender:
         diagnostics.append("Regenerated from recorded findings; no dependency analysis or network queries ran. Original inventory completeness and cache statistics are unknown.")
         if selection:
             diagnostics.append(f"Selection: {selection['selected_rows']} of {selection['source_rows']} input rows; CI thresholds still evaluate the full input.")
-    health = [r for r in rows if str(r.get("vuln_type", "")).startswith("sca:scan_health:")]
     diagnostics.extend(str(r.get("description") or r.get("title") or "Scan health limitation") for r in health)
-    if len(rows) > MAX_FINDINGS:
-        diagnostics.append(f"Report truncated: showing {MAX_FINDINGS} of {len(rows)} recorded SCA rows; full evidence remains in findings.json")
+    if recorded > MAX_FINDINGS:
+        diagnostics.append(f"Report details and overview truncated: showing {MAX_FINDINGS} of {recorded} recorded SCA rows; finding-class and KEV counts include all rows. Full evidence remains in findings.json")
     captured = rows[:MAX_FINDINGS]
     findings = native_findings(captured, run_id=output_dir.name, producer="sca", triage=True)
     for row, f in zip(captured, findings):
@@ -41,7 +54,7 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
                                                   coverage=[{"unit": "dependency", "completed": deps_analysed,
                                                              "population": str(target), "scope": "parsed dependency inventory"}] if deps_analysed is not None else [])],
                             artifacts=artifacts if artifacts is not None else [{"path": str(output_dir / "findings.json")}],
-                            extensions={"raptor.accounting": {"recorded_rows": len(rows), "captured_rows": len(captured)},
+                            extensions={"raptor.accounting": {"recorded_rows": recorded, "captured_rows": len(captured)},
                                         "raptor.scope": {"target": str(target), "population": "recorded finding rows" if rerender else "parsed dependency inventory",
                                                          **({"filters": {k: (selection or {}).get(k) for k in ("reachability", "only_reachable", "hide_not_reachable")}} if rerender else {})},
                                         **({"raptor.rerender": selection or {}} if rerender else {})})
@@ -49,8 +62,6 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
                                             "Cache hits": cache_hits, "Cache misses": cache_misses,
                                             "Cache evictions": cache_evictions,
                                             "Project license": project_license or "not recorded"}
-    counts = Counter(str(r.get("vuln_type", "unknown")) for r in rows)
-    kev = sum(1 for r in rows if r.get("vuln_type") == "sca:vulnerable_dependency" and isinstance(r.get("sca"), dict) and r["sca"].get("in_kev") is True and r.get("suppressed") is not True)
     blocks = [Block("paragraph", inline=[Inline("strong", "KEV"), Inline("text", f": {kev} unsuppressed known-exploited advisory matches.")]),
               Block("paragraph", text="Advisory matches and supply-chain signals do not by themselves establish exploitability. Reachability, suppression, and evidence retain their recorded meanings."),
               Block("table", title="Finding classes", columns=["Class", "Recorded rows"], rows=[[k, v] for k, v in sorted(counts.items())])]

@@ -468,27 +468,15 @@ def test_fail_lines_escape_hostile_description_bytes() -> None:
     assert "bad" in fails[0] and "dep" in fails[0]
 
 
-def test_fail_lines_escape_hostile_severity_bytes() -> None:
-    """The severity field sits one slot over from the escaped
-    description in the same fail lines — and it is just as
-    attacker-writable on hand-edited / third-party findings.json
-    (FindingRow accepts any string; unknown severities rank 0, so a
-    hostile severity passes the info floor and reaches the
-    terminal). Rank on the raw value, print the escaped one."""
+def test_gate_refuses_hostile_severity_without_echoing_it() -> None:
+    import pytest
     cfg = thresholds.ThresholdConfig(fail_on_severity="info")
-    rows = [_vuln("\x1b]0;pwned\x07info", desc="d")]
-    passed, fails = thresholds.evaluate(rows, cfg)
-    assert passed is False
-    assert "\x1b" not in fails[0]
-    assert "\x07" not in fails[0]
-    assert "info" in fails[0] and "d" in fails[0]
+    with pytest.raises(ValueError, match="invalid severity") as error:
+        thresholds.evaluate([_vuln("\x1b]0;pwned\x07info")], cfg)
+    assert "\x1b" not in str(error.value)
 
 
-def test_hostile_severity_does_not_change_gating() -> None:
-    """Escaping is display-only: a junk severity still ranks 0 and
-    must NOT trip a high floor."""
-    cfg = thresholds.ThresholdConfig(fail_on_severity="high")
-    rows = [_vuln("\x1b[31mcritical-looking", desc="d")]
-    passed, fails = thresholds.evaluate(rows, cfg)
-    assert passed is True
-    assert fails == []
+def test_gate_refuses_unknown_severity_at_high_floor() -> None:
+    import pytest
+    with pytest.raises(ValueError, match="invalid severity"):
+        thresholds.evaluate([_vuln("unknown")], thresholds.ThresholdConfig(fail_on_severity="high"))

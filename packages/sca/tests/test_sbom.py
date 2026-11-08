@@ -230,7 +230,7 @@ def test_vex_block_cross_references_components() -> None:
     assert vex["ratings"][0]["score"] == 9.8
 
 
-def test_vex_state_exploitable_when_imported() -> None:
+def test_vex_state_in_triage_when_imported() -> None:
     d = _dep()
     findings = build_vuln_findings(
         [d], [OsvResult(d.key(), [_adv()])],
@@ -241,10 +241,10 @@ def test_vex_state_exploitable_when_imported() -> None:
         )},
     )
     bom = build_bom(deps=[d], vuln_findings=findings)
-    assert bom["vulnerabilities"][0]["analysis"]["state"] == "exploitable"
+    assert bom["vulnerabilities"][0]["analysis"]["state"] == "in_triage"
 
 
-def test_vex_state_not_affected_when_not_reachable() -> None:
+def test_vex_state_in_triage_when_not_reachable() -> None:
     d = _dep()
     findings = build_vuln_findings(
         [d], [OsvResult(d.key(), [_adv()])],
@@ -255,7 +255,7 @@ def test_vex_state_not_affected_when_not_reachable() -> None:
         )},
     )
     bom = build_bom(deps=[d], vuln_findings=findings)
-    assert bom["vulnerabilities"][0]["analysis"]["state"] == "not_affected"
+    assert bom["vulnerabilities"][0]["analysis"]["state"] == "in_triage"
 
 
 def test_vex_kev_property_emitted() -> None:

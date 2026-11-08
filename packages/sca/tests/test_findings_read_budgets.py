@@ -117,16 +117,23 @@ def _run_padded_scan(
 # Self-produced path: accepts past 64 MiB ...
 # ---------------------------------------------------------------------------
 
-def test_self_reread_accepts_over_64mib_findings(
+def test_self_reread_accepts_over_steered_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """run_sca must not refuse its OWN findings.json at the steered
     64 MiB budget (regression: big-target scans died at the SARIF
     re-read, their final step)."""
+    # Exercise the policy split with small owned inputs. The nightly
+    # superset-scale case below retains the real 202 MB boundary workload;
+    # separate constant pins keep the production budgets from shrinking.
+    from packages.sca import kinds
+    steered_limit = 8 * 1024
+    monkeypatch.setattr(kinds, "MAX_FINDINGS_BYTES", steered_limit)
+    monkeypatch.setattr(kinds, "MAX_SELF_FINDINGS_BYTES", 32 * 1024)
     result = _run_padded_scan(
-        tmp_path, monkeypatch, pad_to_bytes=MAX_FINDINGS_BYTES + 1,
+        tmp_path, monkeypatch, pad_to_bytes=steered_limit + 1,
     )
-    assert result.findings_path.stat().st_size > MAX_FINDINGS_BYTES
+    assert result.findings_path.stat().st_size > steered_limit
     assert result.sarif_path.exists()
 
 
@@ -227,7 +234,7 @@ def _write_big_findings(
 
 
 @isolated_cli_logging()
-def test_cli_threshold_gate_accepts_over_64mib_self_findings(
+def test_cli_threshold_gate_accepts_over_steered_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The --fail-on-* threshold gate re-reads the findings.json the
@@ -239,6 +246,11 @@ def test_cli_threshold_gate_accepts_over_64mib_self_findings(
     from packages.sca import cli
     from packages.sca.pipeline import RunResult
 
+    from packages.sca import kinds
+    steered_limit = 8 * 1024
+    monkeypatch.setattr(kinds, "MAX_FINDINGS_BYTES", steered_limit)
+    monkeypatch.setattr(kinds, "MAX_SELF_FINDINGS_BYTES", 32 * 1024)
+
     target = tmp_path / "repo"
     target.mkdir()
     out = tmp_path / "out"
@@ -246,7 +258,7 @@ def test_cli_threshold_gate_accepts_over_64mib_self_findings(
     def fake_run_sca(*, target: Path, output_dir: Path, options: Any) -> Any:
         _write_big_findings(
             output_dir / "findings.json",
-            pad_to_bytes=MAX_FINDINGS_BYTES + 1,
+            pad_to_bytes=steered_limit + 1,
         )
         return RunResult(
             target=target, output_dir=output_dir,
@@ -262,12 +274,12 @@ def test_cli_threshold_gate_accepts_over_64mib_self_findings(
     monkeypatch.setattr(cli, "run_sca", fake_run_sca)
     rc = cli.main([str(target), "--out", str(out), "--offline",
                    "--fail-on-severity", "critical"])
-    assert (out / "findings.json").stat().st_size > MAX_FINDINGS_BYTES
+    assert (out / "findings.json").stat().st_size > steered_limit
     assert rc == 0  # gate read the rows and evaluated them: no crits
 
 
 def test_baseline_delta_current_read_takes_self_budget(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_emit_baseline_delta's current-rows read is of the findings.json
     the in-process run_sca just wrote; at the steered budget big-target
@@ -276,10 +288,15 @@ def test_baseline_delta_current_read_takes_self_budget(
     accept direction for this function."""
     from packages.sca.cli import _emit_baseline_delta
 
+    from packages.sca import kinds
+    steered_limit = 8 * 1024
+    monkeypatch.setattr(kinds, "MAX_FINDINGS_BYTES", steered_limit)
+    monkeypatch.setattr(kinds, "MAX_SELF_FINDINGS_BYTES", 32 * 1024)
+
     out = tmp_path / "out"
     out.mkdir()
     current = out / "findings.json"
-    _write_big_findings(current, pad_to_bytes=MAX_FINDINGS_BYTES + 1)
+    _write_big_findings(current, pad_to_bytes=steered_limit + 1)
     baseline = tmp_path / "baseline.json"
     baseline.write_text("[]", encoding="utf-8")
 

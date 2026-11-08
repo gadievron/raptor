@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 from core.json import JsonCache
 from packages.sca.resolvers import ResolverResult
@@ -17,6 +19,12 @@ from packages.sca.resolvers._cache import (
     cached_dry_run_batch,
     manifest_hash,
 )
+
+
+@pytest.fixture(autouse=True)
+def owned_proxy_policy(tmp_path, monkeypatch):
+    from packages.sca.resolvers import _cache
+    monkeypatch.setattr(_cache, "_OVERRIDE_CONFIG_PATH", tmp_path / "proxy-hosts.json")
 
 
 class _FakeResolver:

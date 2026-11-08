@@ -442,20 +442,20 @@ def _build_vulnerabilities(
                 "on a live execution path"
             )
         elif f.reachability.verdict == "imported":
-            analysis["state"] = "exploitable"
+            analysis["state"] = "in_triage"
             analysis["detail"] = (
-                "module-level reachability: imported in non-test source"
+                "module-level reachability: imported in non-test source; exploitability is not established"
             )
         elif f.reachability.verdict in (
             "not_reachable", "not_function_reachable",
         ):
-            # ``not_function_reachable`` is "the dep is imported but
-            # the specific affected function isn't called" — same
-            # CycloneDX/VEX state as not_reachable (the vulnerable
-            # code isn't reached), with a more specific detail.
-            analysis["state"] = "not_affected"
-            analysis["justification"] = "code_not_reachable"
-            analysis["detail"] = f.reachability.confidence.reason
+            # Static non-use is heuristic, even at high confidence. Missing
+            # dynamic calls or incomplete source cannot justify non-impact.
+            analysis["state"] = "in_triage"
+            analysis["detail"] = (
+                "Heuristic reachability only; absence of calls does not establish non-impact. "
+                + f.reachability.confidence.reason
+            )
         elif f.reachability.verdict == "called_in_dead_code":
             # The vulnerable function IS called from project code,
             # but the call sites all live in private-named hosts

@@ -631,15 +631,6 @@
     "packages/sca/clean_cache.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
-    "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_hygiene_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
-    },
-    "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_license_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
-    },
-    "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_supply_chain_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
-    },
     "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::proc": {
       "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
     },

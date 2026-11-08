@@ -23,9 +23,9 @@ Cache is invalidated by:
 
 Cache is NOT invalidated by:
   * Network state (we don't include reachability in the key).
-  * Other files in the project_dir not declared in MANIFEST_FILES.
-  * SCA version changes — operators can flush via the underlying
-    JsonCache's eviction tooling if a resolver bug needs a re-resolve.
+  * Other files outside the resolver's declared inputs (including dynamic input_files).
+Resolver code, RAPTOR version, runtime/platform, effective environment,
+tool file identity and resolver policy also invalidate the cache.
 
 The cache layer is OPT-IN at the call site (``cached_dry_run`` /
 ``cached_dry_run_batch``) — direct ``resolver.dry_run`` paths in tests
@@ -37,14 +37,22 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
+import platform
+import shutil
+import sys
+import stat
 from typing import Any, TYPE_CHECKING
+from pathlib import Path
+
+from core.json import dumps_canonical
 
 from . import Resolver, ResolverResult
 from ._safe_io import read_regular_bytes
+from ._proxy_hosts import _OVERRIDE_CONFIG_PATH
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +61,7 @@ logger = logging.getLogger(__name__)
 # version that matches a range constraint. Daily scans see fresh
 # resolution at most a day late.
 _DEFAULT_TTL = 24 * 3600
+_MAX_INPUT_BYTES = 50 * 1024 * 1024
 
 
 def _manifest_files(resolver: Resolver) -> Sequence[str]:
@@ -72,64 +81,82 @@ def _manifest_files(resolver: Resolver) -> Sequence[str]:
 def manifest_hash(
     resolver: Resolver, project_dir: Path,
 ) -> str | None:
-    """Compute a deterministic hash over the resolver's manifest files.
+    """Hash the complete declared input set plus runtime/tool/policy identity.
 
-    Returns ``None`` if the resolver doesn't opt in (no
-    ``MANIFEST_FILES``) OR if no declared file could be read in
-    ``project_dir`` (can't key on a non-existent input).
-
-    Hash shape: SHA-256 over one unambiguously framed record per
-    declared file, sorted by rel_path for deterministic order:
-
-      * readable file → ``F <len(rel)> <rel> <size> <sha256(content)>``
-      * present-but-unreadable file → ``U <len(rel)> <rel>``
-
-    Length-prefixing the path and hashing the content (instead of
-    splicing raw bytes with ``\\0`` separators) makes the framing
-    injective: manifest CONTENT can contain ``\\0`` freely, so the
-    old separator scheme let one project's single file collide with
-    another project's two files — and the resolver cache is shared
-    machine-wide, so a collision serves one project's cached
-    ``ResolverResult`` (lockfile included) to a different project.
-    Unreadable files get an explicit marker for the same reason: a
-    project whose lockfile exists but can't be read must not hash
-    identically to a project with no lockfile at all. Absent files
-    still contribute nothing — a project that has only
-    ``package.json`` (no lock) hashes the same way regardless of
-    declaration order.
+    A resolver may supply input_files(project_dir) for dynamic input names.
+    No inputs, refused files, unknown input closure or an aggregate byte-budget
+    refusal bypass caching. Native resolution then reports its actual outcome.
+    Regular-file records frame path length, path, byte length and content SHA-256
+    so embedded separators cannot alias another project's input set.
     """
-    files = _manifest_files(resolver)
+    input_files = getattr(resolver, "input_files", None)
+    files = input_files(project_dir) if input_files is not None else _manifest_files(resolver)
     if not files:
         return None
     h = hashlib.sha256()
+    context = _resolution_context(resolver)
+    if context is None:
+        return None
+    h.update(context)
     readable = 0
-    for rel in sorted(files):
+    remaining = _MAX_INPUT_BYTES
+    for rel in sorted(set(files)):
         path = project_dir / rel
-        if not path.is_file():
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
             continue
+        except OSError:
+            return None
+        if not stat.S_ISREG(info.st_mode) or info.st_size > remaining or remaining <= 0:
+            return None
         rel_bytes = rel.encode("utf-8")
-        # lstat-gated, size-bounded read — manifests live in the
-        # scanned (hostile) tree; a bare read_bytes followed a
-        # symlinked manifest anywhere on the host and buffered a
-        # multi-GB plant whole just to compute a cache key.
-        payload = read_regular_bytes(path)
+        payload = read_regular_bytes(path, max_bytes=remaining)
         if payload is None:
-            # Present but unreadable/refused: distinct marker record.
-            # The subsequent uncached call surfaces the underlying
-            # error to the operator.
-            h.update(b"U")
-            h.update(len(rel_bytes).to_bytes(4, "big"))
-            h.update(rel_bytes)
-            continue
+            return None
         h.update(b"F")
         h.update(len(rel_bytes).to_bytes(4, "big"))
         h.update(rel_bytes)
         h.update(len(payload).to_bytes(8, "big"))
         h.update(hashlib.sha256(payload).digest())
+        remaining -= len(payload)
         readable += 1
     if readable == 0:
         return None
     return h.hexdigest()
+
+
+def _resolution_context(resolver: Resolver) -> bytes | None:
+    """Versioned cache identity for runtime, resolver code and effective policy.
+
+    Only a digest is persisted. No environment values or credentials are stored.
+    Ignore volatile launch/session/CI state; hash declared registry settings and
+    the operator override without triggering proxy calibration or tool probes.
+    Tool file identity changes invalidate cached results without executing probes.
+    """
+    from core.config import RaptorConfig
+    names = (*getattr(resolver, "CACHE_ENV_KEYS", ()), "PATH", "HOME", "XDG_CONFIG_HOME",
+             "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "GOPATH", "GOMODCACHE")
+    env = {name: os.environ.get(name) for name in sorted(set(names))}
+    override = read_regular_bytes(_OVERRIDE_CONFIG_PATH, max_bytes=1024 * 1024)
+    if override is None and (_OVERRIDE_CONFIG_PATH.exists() or _OVERRIDE_CONFIG_PATH.is_symlink()):
+        # Refused policy bytes cannot safely share a cache identity with absence.
+        return None
+    tools = []
+    for tool in getattr(resolver, "CACHE_TOOLS", ()):
+        path = shutil.which(tool, path=env.get("PATH"))
+        try:
+            st = os.stat(path) if path else None
+            tools.append((path, st.st_size, st.st_mtime_ns, st.st_ino) if st else (None,))
+        except OSError:
+            tools.append((None,))
+    module = sys.modules.get(type(resolver).__module__)
+    code = read_regular_bytes(Path(module.__file__)) if module and getattr(module, "__file__", None) else None
+    return dumps_canonical({"schema": 2, "raptor_version": RaptorConfig.VERSION, "runtime": sys.version, "platform": platform.system() + "/" + platform.machine(),
+                       "executable": sys.executable, "environment": env, "tools": tools,
+                       "resolver": hashlib.sha256(code or b"").hexdigest(),
+                       "sdist": getattr(resolver, "allow_sdist_builds", False),
+                       "hosts": hashlib.sha256(override).hexdigest() if override is not None else None}).encode("ascii")
 
 
 def _cache_key(resolver: Resolver, hsh: str) -> str:

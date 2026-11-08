@@ -27,7 +27,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from core.json import save_json
 from core.security.prompt_output_sanitise import sanitise_string
 
 from .kinds import (
@@ -131,9 +130,40 @@ _RULE_DESCRIPTIONS: dict[str, str] = {
 def write_sarif(path: Path, *, target: Path, rows: Sequence[dict[str, Any]],
                 generated_at: datetime | None = None) -> int:
     """Atomically write SARIF 2.1.0 to ``path``; returns ``len(rows)``."""
-    doc = build_sarif(target=target, rows=rows, generated_at=generated_at)
-    save_json(path, doc)
-    return len(rows)
+    from core.json import dumps_artifact
+    from core.atomic_fs import write_bytes_atomically
+    doc = build_sarif(target=target, rows=(), generated_at=generated_at)
+    run = doc["runs"][0]
+    rule_index = {}
+    count = 0
+    def encode(value):
+        return dumps_artifact(value, indent=None, ensure_ascii=True).encode("ascii")
+    def chunks():
+        nonlocal count
+        yield b'{"$schema":' + encode(doc["$schema"]) + b',"version":' + encode(doc["version"]) + b',"runs":[{"results":['
+        first = True
+        for row in rows:
+            count += 1
+            if not isinstance(row, dict):
+                continue
+            rid = row.get("vuln_type")
+            if isinstance(rid, str) and rid and rid not in rule_index:
+                rule_index[rid] = len(rule_index)
+            result, _ = _row_to_result(row, target, rule_index)
+            if result is None:
+                continue
+            if not first:
+                yield b','
+            yield encode(result)
+            first = False
+        run["tool"]["driver"]["rules"] = [_rule_definition(rid) for rid in rule_index]
+        yield b']'
+        for key, value in run.items():
+            if key != "results":
+                yield b',' + encode(key) + b':' + encode(value)
+        yield b'}]}'
+    write_bytes_atomically(path, chunks())
+    return count
 
 
 def build_sarif(

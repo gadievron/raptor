@@ -32,7 +32,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from core.json import dumps_artifact, load_json
+from core.json import dumps_artifact
 from . import _md
 from .findings import severity_rank
 from .rows import FindingRow
@@ -259,7 +259,8 @@ def _load_rows(path_str: str) -> list[dict[str, Any]] | None:
     try:
         # Operator-supplied findings file; ValueError covers malformed
         # JSON, bad encoding, and the byte-budget refusal.
-        data = load_json(path, strict=True, max_bytes=64 * 1024 * 1024)
+        from .finding_stream import FindingsFile
+        data = [row for row in FindingsFile(path, max_bytes=64 * 1024 * 1024)]
     except (OSError, ValueError) as e:
         print(f"raptor-sca diff: cannot read {path}: {e}", file=sys.stderr)
         return None

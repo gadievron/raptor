@@ -260,9 +260,9 @@ def test_tier_a_signals_all_present(tmp_path: Path) -> None:
     # reachability for Maven; KEV is the fallback signal).
     log4j_vex = next(v for v in vuln_block if v["id"] == "GHSA-jfh8-c2jp-5v3q")
     assert log4j_vex["analysis"]["state"] == "exploitable"
-    # The Django entry should be exploitable via reachability.
+    # An import is useful reachability evidence, not proof of exploitability.
     django_vex = next(v for v in vuln_block if v["id"] == "GHSA-django-fake")
-    assert django_vex["analysis"]["state"] == "exploitable"
+    assert django_vex["analysis"]["state"] == "in_triage"
 
     # ------------------------------------------------------------------
     # Markdown report — covers all sections

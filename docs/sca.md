@@ -19,6 +19,9 @@ all deterministic.
 **On this page:**
 
 - [Usage](#usage)
+- [Choose a scan](#choose-a-scan)
+- [Understand scan results](#understand-scan-results)
+- [Explore inventories offline](#explore-inventories-offline)
 - [Subcommands](#subcommands)
 - [Scanning](#scanning)
 - [SBOM Generation](#sbom-generation)
@@ -231,8 +234,9 @@ bin/raptor-sca /path/to/project --sbom /path/to/sbom.cdx.json
 This is useful when the build system already emits an SBOM (cargo
 auditable, Maven cyclonedx-plugin, Trivy, Snyk export) and you want to
 scan the exact resolved deps the build produced rather than re-parsing
-manifests. When combined with `--repo`, RAPTOR uses the source tree for
-reachability analysis while taking the dep list from the SBOM.
+manifests. Source reachability is not inferred from the working directory.
+Add `--sbom-source-root /path/to/source` to use a corresponding source checkout;
+that association is supplied by you, not authenticated by the scanner.
 
 Import supports CycloneDX **1.5 JSON** and SPDX **2.3 JSON**, detected from
 the document contents. Validation covers the structures used by the importer;
@@ -342,7 +346,8 @@ raptor-sca ./project --sbom release.cdx.json --out scan
 raptor-sca ./project --sbom release.spdx.json --out scan
 ```
 
-Use a real source checkout when you want reachability or source-based analysis.
+Add `--sbom-source-root /path/to/source` when you want checks against the
+corresponding source checkout.
 Supported Package URLs and resolved versions enable advisory matching; missing
 or unsupported coordinates remain in the inventory with coverage diagnostics.
 File records are retained as evidence, outside package vulnerability matching.
@@ -483,6 +488,10 @@ complete nested-payload inventory, complete advisory databases, build
 provenance or compatibility. Receipts check local artifact consistency; they
 are not signed attestations. File inventory and OS/container subjects remain
 outside package-advisory matching.
+
+Add `--max-coverage-age-hours 24` to require a receipt generated within the last
+day. This checks receipt age, not the age of the upstream advisory feed. Older
+receipts remain usable when no age requirement is requested.
 
 `--out` requires a new directory and writes `upgrade-verification.json` and
 `upgrade-verification.md`. JSON and saved Markdown retain all outcomes;
@@ -931,6 +940,10 @@ source or permission to redistribute them.
 
 ## Reachability Analysis
 
+SBOM-only scans leave reachability unevaluated unless you supply a
+corresponding `--sbom-source-root`. Heuristic non-use and imports remain triage
+evidence in VEX, rather than `not_affected` or proof of exploitability.
+
 SCA reachability is mechanical. RAPTOR does not ask an LLM whether a
 dependency is reachable; it derives the verdict from source evidence and
 advisory metadata. LLM review can still run later in the pipeline
@@ -1169,6 +1182,7 @@ The diff command's exit code is 0 = no regression at threshold,
 | Flag | Purpose |
 |------|---------|
 | `--fail-on-severity <level>` | Exit non-zero if any vulnerable-dependency finding meets or exceeds this severity (info / low / medium / high / critical) |
+| `--fail-on-incomplete` | Exit 1 on recorded coverage gaps; off by default |
 | `--fail-on-kev` | Exit non-zero if any finding is in the CISA Known Exploited Vulnerabilities catalogue, even below `--fail-on-severity` |
 | `--fail-on-supply-chain <level>` | Exit non-zero if any supply-chain finding meets or exceeds this severity |
 | `--fail-on-hygiene <level>` | Exit non-zero if any hygiene finding meets or exceeds this severity |
@@ -1190,6 +1204,7 @@ Every scan run produces:
 
 | File | Format | Audience |
 |------|--------|----------|
+| `scan-summary.json` | Completion status, checked/unavailable counts and timings | Operators and CI |
 | `advisory-coverage.json` | Positive package-query availability bound to emitted SBOMs and findings | `sbom verify-plan` and CI coverage checks |
 | `findings.json` | RAPTOR findings schema | Other RAPTOR commands (`/validate`, `/patch`) |
 | `report.md` | Human-readable | Operators |
@@ -1264,3 +1279,77 @@ was busy, encountered deletion errors, or could not meet the requested budget.
 - **CHA-precision for dynamic dispatch in Java / C#** -- virtual and
   interface dispatch currently lands in `not_function_reachable` when the
   static graph cannot narrow the receiver type.
+
+## Choose a scan
+
+Preview what will run before starting a scan:
+
+```bash
+raptor-sca /path/to/project --profile mechanical --explain-plan
+raptor-sca /path/to/project --profile fast --out scan
+```
+
+The preview prints JSON and runs no analysis, tools or network/model calls.
+Use it to check whether a scan can send package information to registries,
+send excerpts to an LLM, or incur model costs.
+
+| Profile | Use it when you want… |
+| --- | --- |
+| `full` | Advisory and supply-chain checks, dependency resolution, image inspection, LLM review and triage |
+| `mechanical` | Checks without model calls, while retaining dependency resolution and image inspection |
+| `fast` | A quicker check that skips native dependency resolution and image inspection |
+| `offline` | Local files and cached advisories, with no network or model calls |
+
+Individual options can further restrict a profile. For example, `fast` never
+runs a native resolver, even if other resolution options are present.
+
+## Understand scan results
+
+Read `scan-summary.json` alongside the findings. It shows whether package-query
+coverage is complete or partial, how many packages were checked or unavailable,
+and why. Parser failures, deliberately excluded checks and stage timings help
+explain the result. Unrecoverable analysis errors record `failed` when the
+output directory remains writable. Memory figures reflect the process's
+lifetime peak and can include other work.
+
+Zero reported vulnerabilities does not mean all packages were checked.
+To fail your own CI job when recorded coverage is incomplete, opt in:
+
+```bash
+raptor-sca /path/to/project --profile mechanical --fail-on-severity high --fail-on-incomplete
+```
+
+Without that option, coverage gaps stay visible without causing a new failure
+exit. Container publication keeps its existing warning-only policy. Active CI
+checks reject malformed findings rather than silently treating them as clean.
+
+When changing dependencies, choose either `fix PATH` to scan a target or
+`fix --findings FILE` to reuse findings. Combining both is rejected so the
+intended target cannot be silently ignored.
+
+## Explore inventories offline
+
+Find licence groups, missing declarations and packages without notice evidence:
+
+```bash
+raptor-sca sbom stats container-sbom.zip --scope packages
+raptor-sca sbom inspect container-sbom.zip --unresolved --format jsonl
+raptor-sca sbom inspect release.cdx.json --ecosystem npm --notice-status not_assessed --format csv
+raptor-sca sbom inspect release.cdx.json --license MIT --format json --records-only
+raptor-sca sbom inspect release.cdx.json --limit 25 --offset 25
+```
+
+Statistics keep package records, source candidates and image subjects separate.
+GPL versions, exceptions and complete licence expressions remain visible; none
+are hidden in “Other”. A package can have several licence operands, so counts
+can overlap.
+
+Use CSV, JSONL or `--format json --records-only` for the selected packages.
+Ordinary inventory JSON keeps all records and identifies the selection, making
+it suitable for later comparisons. `--limit` and `--offset` only change the
+text you see; they do not truncate exports. Large exports stream to reduce
+memory use.
+
+Statistics, dependency-path explanations and upgrade plans use recorded notice
+information. Use `sbom inspect` to check retained notice bytes, or `sbom notices`
+to collect the original texts. These inventory operations work offline.
