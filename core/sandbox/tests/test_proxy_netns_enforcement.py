@@ -8,7 +8,6 @@ import os
 import socket
 import subprocess
 import sys
-import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -20,6 +19,7 @@ from core.sandbox.tests.socket_server import SocketServer
 
 
 from core.testing.module_bindings import mock_module_attribute
+from core.testing.processes import reap_on_exit
 
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
@@ -307,45 +307,41 @@ class TestProxyBridge:
 
     def test_forwarder_relays_data(self):
         """_run_forwarder bridges TCP ↔ Unix socket."""
-        sock_path = str(self.tmp / "relay.sock")
-        port = _free_loopback_port()
+        with ExitStack() as cleanup:
+            sock_path = str(self.tmp / "relay.sock")
+            port = _free_loopback_port()
+            echo_srv = cleanup.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+            echo_srv.bind(sock_path)
+            echo_srv.listen(1)
 
-        # Stand up a simple unix socket echo server.
-        echo_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        echo_srv.bind(sock_path)
-        echo_srv.listen(1)
-
-        def _echo():
-            conn, _ = echo_srv.accept()
-            try:
+            def echo(conn):
                 data = conn.recv(4096)
                 if data:
                     conn.sendall(data)
-            finally:
-                conn.close()
-            echo_srv.close()
 
-        echo_thread = threading.Thread(target=_echo, daemon=True)
-        echo_thread.start()
-
-        # Launch a forwarder in a fresh interpreter.
-        death_r, death_w = os.pipe()
-        fwd = _spawn_forwarder(port, sock_path, death_r)
-        os.close(death_r)
-
-        try:
+            server = SocketServer(echo_srv, echo)
+            cleanup.callback(server.close)
+            death_r, death_w = os.pipe()
+            read_cleanup = ExitStack()
+            read_cleanup.callback(os.close, death_r)
+            cleanup.callback(read_cleanup.close)
+            write_cleanup = ExitStack()
+            write_cleanup.callback(os.close, death_w)
+            cleanup.callback(write_cleanup.close)
+            fwd = _spawn_forwarder(port, sock_path, death_r)
+            cleanup.enter_context(reap_on_exit(fwd))
+            read_cleanup.close()
             # Connect via TCP → forwarder → unix → echo server → back.
             # Retries while the spawned forwarder starts up and binds — a
             # fixed sleep is not hermetic under full-suite load.
-            s = _connect_with_retry(port)
+            s = cleanup.enter_context(_connect_with_retry(port))
             s.sendall(b"hello-bridge")
             s.settimeout(5.0)
             got = s.recv(4096)
             s.close()
 
             assert got == b"hello-bridge"
-        finally:
-            os.close(death_w)
+            write_cleanup.close()
             fwd.wait(timeout=10)
 
     def test_forwarder_concurrent_connections_with_churn(self):
@@ -355,55 +351,33 @@ class TestProxyBridge:
         iteration must be skipped (not read/closed again), and accepts
         are deferred until after the snapshot is processed so a fresh
         connection can't alias a just-closed fd number."""
-        sock_path = str(self.tmp / "churn.sock")
-        echo_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        echo_srv.bind(sock_path)
-        echo_srv.listen(64)
-        stop = threading.Event()
+        with ExitStack() as cleanup:
+            sock_path = str(self.tmp / "churn.sock")
+            echo_srv = cleanup.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+            echo_srv.bind(sock_path)
+            echo_srv.listen(64)
 
-        def _echo_loop():
-            # Echo each connection's bytes back until EOF.
-            conns = []
-            echo_srv.settimeout(0.1)
-            while not stop.is_set():
+            def echo(conn):
                 try:
-                    conn, _ = echo_srv.accept()
+                    while data := conn.recv(4096):
+                        conn.sendall(data)
                 except OSError:
+                    # The native churn deliberately resets some peers.
                     pass
-                else:
-                    conn.setblocking(False)
-                    conns.append(conn)
-                for c in list(conns):
-                    try:
-                        data = c.recv(4096)
-                    except BlockingIOError:
-                        continue
-                    except OSError:
-                        conns.remove(c)
-                        c.close()
-                        continue
-                    if not data:
-                        conns.remove(c)
-                        c.close()
-                        continue
-                    try:
-                        c.sendall(data)
-                    except OSError:
-                        conns.remove(c)
-                        c.close()
-            for c in conns:
-                c.close()
-            echo_srv.close()
 
-        echo_thread = threading.Thread(target=_echo_loop, daemon=True)
-        echo_thread.start()
-
-        port = _free_loopback_port()
-        death_r, death_w = os.pipe()
-        fwd = _spawn_forwarder(port, sock_path, death_r)
-        os.close(death_r)
-
-        try:
+            server = SocketServer(echo_srv, echo)
+            cleanup.callback(server.close)
+            port = _free_loopback_port()
+            death_r, death_w = os.pipe()
+            read_cleanup = ExitStack()
+            read_cleanup.callback(os.close, death_r)
+            cleanup.callback(read_cleanup.close)
+            write_cleanup = ExitStack()
+            write_cleanup.callback(os.close, death_w)
+            cleanup.callback(write_cleanup.close)
+            fwd = _spawn_forwarder(port, sock_path, death_r)
+            cleanup.enter_context(reap_on_exit(fwd))
+            read_cleanup.close()
             # Rapid rounds of: open several connections, exchange a
             # unique payload on each, abruptly close some while others
             # are mid-flight, verify the survivors' payloads are
@@ -411,7 +385,7 @@ class TestProxyBridge:
             for round_no in range(10):
                 socks = []
                 for i in range(6):
-                    s = _connect_with_retry(port)
+                    s = cleanup.enter_context(_connect_with_retry(port))
                     s.settimeout(5.0)
                     socks.append(s)
                 # Abruptly close half BEFORE any traffic — their
@@ -436,29 +410,29 @@ class TestProxyBridge:
                     )
                 for s in survivors:
                     s.close()
-        finally:
-            stop.set()
-            os.close(death_w)
+            write_cleanup.close()
             fwd.wait(timeout=10)
-            echo_thread.join(timeout=5)
 
     def test_forwarder_exits_on_death_pipe(self):
         """Forwarder exits when death pipe write end is closed."""
-        sock_path = str(self.tmp / "noop.sock")
-        # Bind a unix socket so the path exists (forwarder won't
-        # actually reach it since we close the death pipe immediately).
-        noop_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        noop_srv.bind(sock_path)
-        noop_srv.listen(1)
-
-        death_r, death_w = os.pipe()
-        fwd = _spawn_forwarder(_free_loopback_port(), sock_path, death_r)
-        os.close(death_r)
-
-        # Close write end → forwarder should exit promptly.
-        os.close(death_w)
-        assert fwd.wait(timeout=10) == 0
-        noop_srv.close()
+        with ExitStack() as cleanup:
+            sock_path = str(self.tmp / "noop.sock")
+            # The forwarder need not reach this listener before the EOF.
+            noop_srv = cleanup.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+            noop_srv.bind(sock_path)
+            noop_srv.listen(1)
+            death_r, death_w = os.pipe()
+            read_cleanup = ExitStack()
+            read_cleanup.callback(os.close, death_r)
+            cleanup.callback(read_cleanup.close)
+            write_cleanup = ExitStack()
+            write_cleanup.callback(os.close, death_w)
+            cleanup.callback(write_cleanup.close)
+            fwd = _spawn_forwarder(_free_loopback_port(), sock_path, death_r)
+            cleanup.enter_context(reap_on_exit(fwd))
+            read_cleanup.close()
+            write_cleanup.close()
+            assert fwd.wait(timeout=10) == 0
 
 
 # ---------------------------------------------------------------------------
