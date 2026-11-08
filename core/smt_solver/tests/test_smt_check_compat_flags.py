@@ -8,11 +8,14 @@ ignore) them rather than argparse-exit with "unrecognized arguments".
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -29,10 +32,30 @@ _CASES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def stale_launcher_context(tmp_path, monkeypatch):
+    """Every shim case must work without adopting the parent's launch state."""
+    pid = os.getpid()
+    state = {
+        "_RAPTOR_SCRATCH_AUTH": json.dumps({
+            "entry": str(tmp_path / str(pid)), "pid": pid,
+            "token": "stale-scratch-token", "kind": "launch",
+        }),
+        "RAPTOR_SESSION_PID": "999999999",
+        "RAPTOR_SESSION_TOKEN": "stale-session-token",
+        "RAPTOR_REGISTRY_HOME": str(tmp_path / "parent-registry"),
+    }
+    for name, value in state.items():
+        monkeypatch.setenv(name, value)
+    yield
+    assert all(os.environ.get(name) == value for name, value in state.items()), \
+        "standalone CLI changed the parent's launch state"
+
+
 def _run(script: str, args: list[str]) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(REPO_ROOT / "libexec" / script), *args],
         env=env,
         capture_output=True,
