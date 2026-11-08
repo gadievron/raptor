@@ -156,6 +156,9 @@ def _run_smoke_command(cmd, *, env, timeout, cwd=None) -> subprocess.CompletedPr
                 os.killpg(proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 proc.kill()
+            # Publish the observed exit before a second I/O failure can
+            # enter the cleanup owner and signal the same group again.
+            proc.wait(timeout=5)
             out, err = proc.communicate()
             # Preserve subprocess.run's timeout diagnostics for callers.
             raise subprocess.TimeoutExpired(
@@ -512,3 +515,48 @@ def test_core_config_imports():
         check=False,
     )
     assert r.returncode == 0, f"import failed: {r.stderr}"
+
+
+
+def test_timeout_reaps_before_followup_communication(monkeypatch):
+    import io
+    import sys
+
+    from core.testing import processes
+    from core.testing.module_bindings import patch_module_attribute
+
+    class Child:
+        pid = 12345
+        returncode = None
+        stdin = None
+
+        def __init__(self):
+            self.stdout = io.StringIO()
+            self.stderr = io.StringIO()
+            self.calls = 0
+
+        def communicate(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(["owned"], 0.1)
+            assert self.returncode == -signal.SIGKILL, "child was not reaped before follow-up I/O"
+            return "partial", "diagnostic"
+
+        def wait(self, *, timeout):
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    child = Child()
+    signals = []
+    owner = sys.modules[__name__]
+    patch_module_attribute(monkeypatch, owner, "subprocess", "Popen", lambda *a, **kw: child)
+    signal_group = lambda pid, sig: signals.append((pid, sig))
+    # Both cleanup owners are private; a failing regression never signals a PID.
+    patch_module_attribute(monkeypatch, owner, "os", "killpg", signal_group)
+    patch_module_attribute(monkeypatch, processes, "os", "killpg", signal_group)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        _run_smoke_command(["owned"], env={}, timeout=0.1)
+    assert caught.value.output == "partial"
+    assert caught.value.stderr == "diagnostic"
+    assert signals == [(child.pid, signal.SIGKILL)]
+    assert child.stdout.closed and child.stderr.closed
