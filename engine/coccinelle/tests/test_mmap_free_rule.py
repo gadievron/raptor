@@ -19,9 +19,10 @@ _RULE = (
     Path(__file__).resolve().parents[1] / "rules" / "mmap_free.cocci"
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("spatch") is None, reason="coccinelle not installed",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(shutil.which("spatch") is None, reason="coccinelle not installed"),
+]
 
 
 def _run_rule(
@@ -129,7 +130,11 @@ def test_mapping_release_keeps_production_batching(tmp_path, monkeypatch):
         'void remapped(char *p) { p = mremap(p, 4096, 8192, 1); free(p); }\n'
         'void replaced(int fd) { char *p = mmap(0, 4096, 1, 2, fd, 0); replace(&p); free(p); }\n'
         'void casted(int fd) { char *p = (char *)mmap64(0, 4096, 1, 2, fd, 0); munmap(p, 4096); free((void *)p); }\n'
-        'void twice(int fd) { close(fd); close(fd); }\n',
+        'void twice(int fd) { close(fd); close(fd); }\n'
+        'int partial(int fd, unsigned long len) { char *p = (char *)mmap64(0, len, 1, 2, fd, 0); if (p == MAP_FAILED) return -1; munmap(p, len / 2); return -22; }\n'
+        'int owned(int fd, unsigned long len, void **owner) { void *p = mmap(0, len, 1, 2, fd, 0); if (p == MAP_FAILED) return -1; *owner = p; return 0; }\n'
+        'void *wrapped(int fd, unsigned long len) { char *p = (char *)mmap64(0, len, 1, 2, fd, 0); if (p == MAP_FAILED) return 0; return (void *)p; }\n'
+        'int branched(int fd, unsigned long len, int cond) { void *p; if (cond) p = mmap(0, len, 1, 2, fd, 0); else p = mmap64(0, len, 1, 2, fd, 0); if (p == MAP_FAILED) return -1; return -22; }\n',
     )
     original = runner._confined_default_runner
     invocations = []
@@ -145,11 +150,12 @@ def test_mapping_release_keeps_production_batching(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_confined_default_runner", observe)
     results = runner.run_rules_batched(
-        source, [_RULE, _RULE.with_name("double_close.cocci")],
+        source, [_RULE, _RULE.with_name("double_close.cocci"), _RULE.with_name("mmap_leak_err.cocci")],
         allow_scripting=True, no_includes=True, timeout=60,
     )
-    assert set(results) == {"mmap_free", "double_close"}
+    assert set(results) == {"mmap_free", "double_close", "mmap_leak_err"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
     assert len(results["mmap_free"].matches) == 4
     assert len(results["double_close"].matches) == 1
+    assert len(results["mmap_leak_err"].matches) == 3
     assert len(invocations) == 1, invocations

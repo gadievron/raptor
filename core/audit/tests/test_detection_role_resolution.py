@@ -139,7 +139,7 @@ class TestDetectionRoleResolution:
         assert _is_detection_only("coccinelle:division_by_zero") is True
 
 
-    @pytest.mark.parametrize("rule_name", ["popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err"])
+    @pytest.mark.parametrize("rule_name", ["popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err"])
     def test_stream_patterns_require_lifetime_and_ownership_review(self, monkeypatch, tmp_path, rule_name):
         from core.audit.evidence_grade import is_verification_evidence
         from core.audit.sweep import get_rule_role

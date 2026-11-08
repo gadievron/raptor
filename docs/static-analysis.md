@@ -477,9 +477,22 @@ the original pointer when allocation fails.
 Literal zero-size kernel requests are excluded because they release the old
 allocation. Libc zero-size calls remain candidates for review against the
 target's allocator and language standard. In `/audit`, CWE-401 checks include
-both this pattern and the separate error-path allocation-leak check. A no-match
-from either is inconclusive; custom wrappers and more complex pointer flows can
-need manual review.
+this pattern, error-path allocation leaks and mapping cleanup. A no-match
+from these checks is inconclusive; custom wrappers and more complex pointer
+flows can need manual review.
+
+### Mapping cleanup
+
+`mmap_leak_err` reviews checked local `mmap` and `mmap64` results that can reach
+a return without recognized cleanup. Treat these as possible leaks: the mapping
+may have been retained by another owner, and a return value alone does not prove
+an error. Direct returns of the mapping, including pointer casts, are excluded.
+
+A `munmap` with a different address or length does not automatically count as
+full cleanup. Review the actual range, page rounding and cleanup return status.
+Changing lengths, aliases, custom cleanup helpers, unchecked mappings and
+nonlocal pointer storage can need manual review. In `/audit`, this check joins
+CWE-401 and CWE-460; a no-match remains inconclusive.
 
 
 ### Prerequisites

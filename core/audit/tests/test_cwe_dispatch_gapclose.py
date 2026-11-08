@@ -208,7 +208,10 @@ class TestCocciSmtEntries:
 
     def test_error_path_cleanup(self):
         assert smt_verb_for_cwe("CWE-460") == "check-resource-leak"
-        assert lookup("CWE-460")["cocci"] == "resource_leak_err.cocci"
+        chain = _cwe_fallback_chain("CWE-460", "mapping memory leak on error return", "a.c")
+        paths = [Path(entry["config"]["rule"]) for entry in chain if entry["type"] == "coccinelle"]
+        assert [path.name for path in paths] == ["resource_leak_err.cocci", "mmap_leak_err.cocci"]
+        assert all(path.is_absolute() and path.is_file() for path in paths)
 
     def test_double_close_family(self):
         rules = resolve_cocci_rules_for_cwe("CWE-675")

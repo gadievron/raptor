@@ -206,6 +206,7 @@ class TestVerifyImmediate:
 
     @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", [
         pytest.param("use_after_free", "use after free of a pointer", "CWE-416", False, id="detection-uaf"),
+        pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
         pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ])
     def test_prep_phase_correlation_requires_verification_grade(
@@ -240,17 +241,22 @@ class TestVerifyImmediate:
         assert bool(out.review_result.get("immediate_verified")) is promotes
         assert not out.review_result.get("ihv_all_refuted")
 
+    @pytest.mark.parametrize("receipt,hypothesis,cwe", [
+        pytest.param("coccinelle:use_after_free", "use after free of a pointer", "CWE-416", id="detection-uaf"),
+        pytest.param("coccinelle:mmap_leak_err", "mapping memory leak at return", "CWE-401", id="detection-mapping-leak"),
+    ])
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
-    def test_prep_phase_detection_receipt_cannot_bypass_aggregation(self, mock_corr, monkeypatch, tmp_path):
+    def test_prep_phase_detection_receipt_cannot_bypass_aggregation(
+        self, mock_corr, monkeypatch, tmp_path, receipt, hypothesis, cwe,
+    ):
         from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
 
         monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         # Even an erroneous upstream admission must not launder a lead into
         # verification. The real correlation refusal is covered above.
-        mock_corr.return_value = "coccinelle:use_after_free"
-        hypothesis = "use after free of a pointer"
+        mock_corr.return_value = receipt
         o = self._make_outcome(
-            hypothesis=hypothesis, review_result={"cwe": "CWE-416", "hypothesis": hypothesis},
+            hypothesis=hypothesis, review_result={"cwe": cwe, "hypothesis": hypothesis},
         )
         result = OrchestratorResult()
         config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
@@ -259,7 +265,7 @@ class TestVerifyImmediate:
         assert not out.evidence_tool
         assert result.immediate_verified == 0
         assert not out.review_result.get("immediate_verified")
-        assert out.review_result["ihv_tools"] == ["coccinelle:use_after_free"]
+        assert out.review_result["ihv_tools"] == [receipt]
         assert out.review_result["ihv_hypotheses_confirmed"] == 0
 
     @patch("core.audit.orchestrator._run_tool_chain")
