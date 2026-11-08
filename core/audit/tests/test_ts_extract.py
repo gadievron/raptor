@@ -28,6 +28,24 @@ from core.audit.ts_extract import (  # noqa: E402
 from core.testing.treesitter import requires_ts  # noqa: E402
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_parse_cache():
+    """Keep cache mutations private to this test."""
+    from collections import OrderedDict
+    from core.audit import ts_extract
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        ts_extract,
+        {
+            "_PARSE_CACHE": OrderedDict(),
+        },
+        lock=ts_extract._PARSE_CACHE_LOCK,
+    ):
+        yield
+
+
 def _nested_switch_tower(depth: int) -> str:
     out = ["void f(int a) {\n"]
     for d in range(depth):
