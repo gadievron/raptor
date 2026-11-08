@@ -1,8 +1,11 @@
 """Extraction limit/cancellation receipts survive failed stream teardown."""
 import gzip
+import os
 
 import pytest
 
+from core import atomic_fs
+from core.testing.module_bindings import patch_module_attribute
 from core.archive import extract as extraction
 from core.archive.errors import DecompressionLimitExceeded
 from core.testing.stream_faults import FaultingStream
@@ -16,26 +19,38 @@ def test_single_file_extraction_keeps_limit_or_cancellation(tmp_path, monkeypatc
     original = source.read_bytes()
     primary = (primary_type('primary extraction failure', cap='total_bytes')
                if primary_type is DecompressionLimitExceeded else primary_type('primary extraction failure'))
-    opened = []
-    real_open = open
+    outputs, closed = set(), []
+    real_open, real_close = os.open, os.close
+    dest = tmp_path / 'output'
+    dest.mkdir()
+    target = dest / 'source'
+    target.write_bytes(b'previous complete output')
     def chunks(*args, **kwargs):
         yield b'payload' * 100  # Enough to finish the real tar sniff.
         raise primary
-    def writer(*args, **kwargs):
-        stream = FaultingStream(real_open(*args, **kwargs), cleanup=cleanup_type('close failed'))
-        opened.append(stream)
-        return stream
+    def output_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if flags & os.O_CREAT:
+            outputs.add(fd)
+        return fd
+    def close(fd):
+        real_close(fd)
+        if fd in outputs:
+            outputs.remove(fd)
+            closed.append(fd)
+            raise cleanup_type('close failed')
     monkeypatch.setattr(extraction, 'iter_decompressed', chunks)
-    monkeypatch.setattr(extraction, 'open', writer, raising=False)
+    patch_module_attribute(monkeypatch, atomic_fs, 'os', 'open', output_open)
+    patch_module_attribute(monkeypatch, atomic_fs, 'os', 'close', close)
     with pytest.raises(primary_type) as caught:
-        extraction.extract_to_dir(source, tmp_path / 'output')
+        extraction.extract_to_dir(source, dest)
     assert caught.value is primary
     if primary_type is DecompressionLimitExceeded:
         assert caught.value.cap == 'total_bytes'
     assert source.read_bytes() == original
-    assert len(opened) == 1
-    assert opened[0].closed
-    assert len(opened[0].exits) == 1
+    assert len(closed) == 1 and outputs == set()
+    assert target.read_bytes() == b'previous complete output'
+    assert list(dest.iterdir()) == [target]
 
 
 @pytest.mark.parametrize('primary_type', [OSError, KeyboardInterrupt, SystemExit])

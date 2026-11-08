@@ -15,6 +15,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_bytes_atomically
 from core.source.streams import preserving_stream_error
 from core.tar import (
     TarEntryCountExceeded,
@@ -105,19 +106,30 @@ def _count_reason(reasons: dict[str, int], reason: str, n: int = 1) -> None:
     reasons[reason] = reasons.get(reason, 0) + n
 
 
-def _write_member_bytes(target: Path, data: bytes) -> bool:
-    """Skip invalid paths, but propagate every write/close failure."""
+def _write_member_bytes(target: Path, data: bytes, *, root: Path) -> bool:
+    """Publish complete members; skip invalid paths without hiding IO failures."""
+    started = False
+
+    def payload():
+        nonlocal started
+        started = True
+        yield data
+
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        stream = open(target, "wb")
+        write_bytes_atomically(target, payload(), root=root.resolve())
     except (OSError, ValueError) as exc:
-        if isinstance(exc, OSError) and exc.errno not in _MEMBER_PATH_ERRORS:
+        # Before content consumption these are invalid names/open paths. After
+        # consumption, only destination-name conflicts may be skipped: an
+        # EINVAL/EILSEQ during write or fsync remains a failed extraction.
+        path_error = (isinstance(exc, OSError) and exc.errno in _MEMBER_PATH_ERRORS
+                      and (not started or exc.errno in {
+                          errno.EEXIST, errno.ENOTDIR, errno.EISDIR, errno.ENAMETOOLONG,
+                      }))
+        if not path_error and not (isinstance(exc, ValueError) and not started):
             raise
         logger.warning("core.archive: skipping unwritable member %r (%s)",
                        target, exc)
         return False
-    with stream:
-        stream.write(data)
     return True
 
 
@@ -139,7 +151,7 @@ def _write_members(members: dict[str, bytes], dest: Path,
             logger.warning("core.archive: dropping out-of-tree member %r", name)
             _count_reason(reasons, "out_of_tree")
             continue
-        if not _write_member_bytes(target, data):
+        if not _write_member_bytes(target, data, root=dest):
             _count_reason(reasons, "unwritable")
             continue
         written += 1
@@ -179,7 +191,7 @@ class _DiskSink:
             logger.warning("core.archive: dropping out-of-tree member %r", name)
             _count_reason(self.dropped_reasons, "out_of_tree")
             return
-        if not _write_member_bytes(target, data):
+        if not _write_member_bytes(target, data, root=self._dest):
             _count_reason(self.dropped_reasons, "unwritable")
             return
         self.written += 1
@@ -198,11 +210,14 @@ def _write_single_file(chunks, src: Path, dest: Path) -> dict[str, int]:
     if target is None:  # pragma: no cover — plain basename never escapes
         raise UnsupportedArchive(f"cannot derive a safe name for {src}")
     total = 0
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with preserving_stream_error(open(target, "wb")) as fh:
+
+    def counted_chunks():
+        nonlocal total
         for chunk in chunks:
-            fh.write(chunk)
             total += len(chunk)
+            yield chunk
+
+    write_bytes_atomically(target, counted_chunks(), root=dest.resolve())
     return {"files": 1, "bytes": total, "dropped": 0}
 
 
