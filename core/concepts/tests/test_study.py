@@ -3104,7 +3104,7 @@ class TestPhase2TruncationEscalation:
         class _BudgetOnEscalation(self._CapSensitiveClient):
             def generate_structured(self, prompt: str, schema, **kw):
                 if kw["max_tokens"] > 32768:
-                    from core.llm.client import LLMBudgetExceededError
+                    from core.llm.budget_errors import LLMBudgetExceededError
                     self.calls.append((0, kw["max_tokens"]))
                     raise LLMBudgetExceededError("budget exceeded")
                 return outer._CapSensitiveClient.generate_structured(
@@ -3615,7 +3615,7 @@ class TestPhase2BudgetStop:
     def test_midrun_trip_stops_cleanly_with_partials(self, caplog):
         import logging
 
-        from core.llm.client import LLMBudgetExceededError
+        from core.llm.budget_errors import LLMBudgetExceededError
         client = MagicMock()
         client.generate_structured.side_effect = [
             self._OK, self._OK,
@@ -3641,7 +3641,7 @@ class TestPhase2BudgetStop:
         import pytest
 
         from core.concepts.study import _BatchLLMError
-        from core.llm.client import LLMBudgetExceededError
+        from core.llm.budget_errors import LLMBudgetExceededError
         client = MagicMock()
         client.generate_structured.side_effect = LLMBudgetExceededError(
             "LLM budget exceeded: $10.0010 spent > $10.0000 limit")
@@ -3656,7 +3656,7 @@ class TestPhase2BudgetStop:
         def generate_structured(self, prompt: str, schema, **kw):
             import re as _re
 
-            from core.llm.client import LLMBudgetExceededError
+            from core.llm.budget_errors import LLMBudgetExceededError
             names = set(_re.findall(r"\bfn\d+\b", prompt))
             if len(names) > 1:
                 raise RuntimeError(

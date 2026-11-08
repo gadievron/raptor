@@ -203,7 +203,7 @@ class TestStudyRunExitContract:
             self, tmp_path: Path, monkeypatch) -> None:
         # The structural classifier covers raises that never went
         # through the phase-2 guard (e.g. Phase 3 synthesis).
-        from core.llm.client import LLMBudgetExceededError
+        from core.llm.budget_errors import LLMBudgetExceededError
 
         def _boom(*a, **k):
             raise LLMBudgetExceededError("spend cap tripped")

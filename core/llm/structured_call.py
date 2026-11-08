@@ -178,14 +178,14 @@ def is_content_filter_error(exc: BaseException) -> bool:
     that labels blocked/refused failures must walk the chain — this is
     the one shared implementation (bounded, cycle-safe).
     """
-    from core.llm.client import _exception_chain
+    from core.llm.budget_errors import _exception_chain
     return any(is_content_filter_text(str(e)) for e in _exception_chain(exc))
 
 
 def is_refusal_error(exc: BaseException) -> bool:
     """Chain-walking model-refusal check (see ``REFUSAL_TEXT_RE`` for
     why this is narrower than the content-filter vocabulary)."""
-    from core.llm.client import _exception_chain
+    from core.llm.budget_errors import _exception_chain
     return any(
         REFUSAL_TEXT_RE.search(str(e)) for e in _exception_chain(exc)
     )
