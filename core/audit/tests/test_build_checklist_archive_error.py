@@ -10,19 +10,29 @@ archives.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "libexec" / "raptor-build-checklist"
 
 
 def _run(*argv: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    _launch_env = dict(
+        os.environ,
+        _RAPTOR_TRUSTED="1",
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(_SCRIPT), *argv],
-        capture_output=True, text=True, check=False, timeout=120,
+        env=_launch_env, capture_output=True, text=True, check=False, timeout=120,
     )
 
 

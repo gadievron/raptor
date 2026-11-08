@@ -29,6 +29,7 @@ from unittest.mock import patch
 import pytest
 
 from core.concepts.tests._study_cli import run_loop_with_prep, run_study_main
+from core.testing.standalone_cli import run_standalone_cli
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _PREP_PATH = RAPTOR_DIR / "libexec" / "raptor-study-prep"
@@ -62,9 +63,15 @@ def _run(script: Path, args: list[str], *, in_process=True) -> subprocess.Comple
             return run_loop_with_prep(lambda: _load_study(script), script, args)
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(script)] + args,
-        env=env,
+        env=_launch_env,
         capture_output=True,
         text=True,
         timeout=120,

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-zkpox"
 
@@ -29,9 +31,15 @@ _not_root = pytest.mark.skipif(
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(CLI), *args],
-        env=env,
+        env=_launch_env,
         capture_output=True,
         text=True,
         check=False,

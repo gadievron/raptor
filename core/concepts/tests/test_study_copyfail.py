@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 STUDY_PREP = str(RAPTOR_DIR / "libexec" / "raptor-study-prep")
@@ -28,10 +29,16 @@ class TestStudyPrepCopyFail:
         """With aliasing concepts seeded, prep extracts items for the bug-site functions."""
         env = os.environ.copy()
         env["_RAPTOR_TRUSTED"] = "1"
-        result = subprocess.run(
+        _launch_env = dict(
+            env,
+            _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+            RAPTOR_SESSION_PID="invalid",
+            RAPTOR_SESSION_TOKEN="stale",
+        )
+        result = run_standalone_cli(
             [sys.executable, STUDY_PREP, str(TARGET), str(tmp_path),
              "--concept", "scatterlist_page_ownership,in_place_crypto_aliasing"],
-            env=env, capture_output=True, text=True, timeout=30,
+            env=_launch_env, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0, result.stderr
 
@@ -55,10 +62,16 @@ class TestStudyPrepCopyFail:
         """With _aead_recvmsg as identifier seed, prep extracts it directly."""
         env = os.environ.copy()
         env["_RAPTOR_TRUSTED"] = "1"
-        result = subprocess.run(
+        _launch_env = dict(
+            env,
+            _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+            RAPTOR_SESSION_PID="invalid",
+            RAPTOR_SESSION_TOKEN="stale",
+        )
+        result = run_standalone_cli(
             [sys.executable, STUDY_PREP, str(TARGET), str(tmp_path),
              "--identifier", "_aead_recvmsg,af_alg_pull_tsgl"],
-            env=env, capture_output=True, text=True, timeout=30,
+            env=_launch_env, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0, result.stderr
 

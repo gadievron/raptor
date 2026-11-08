@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 # Module-level marker — every test in this file spawns the real
 # libexec/raptor-understand binary as a subprocess (see _run() below).
 pytestmark = pytest.mark.integration
@@ -42,9 +44,15 @@ def env():
 
 
 def _run(args, env, expect_returncode=None):
-    proc = subprocess.run(
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    proc = run_standalone_cli(
         [sys.executable, str(LIBEXEC), *args],
-        capture_output=True, text=True, env=env, timeout=30,
+        capture_output=True, text=True, env=_launch_env, timeout=30,
     )
     if expect_returncode is not None:
         assert proc.returncode == expect_returncode, (

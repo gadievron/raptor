@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-stage-hints"
 
@@ -21,9 +23,15 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-stage-hints"
 def _run(*args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(SCRIPT), *args],
-        capture_output=True, text=True, env=env, timeout=60,
+        capture_output=True, text=True, env=_launch_env, timeout=60,
     )
 
 

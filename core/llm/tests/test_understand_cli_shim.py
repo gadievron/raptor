@@ -20,11 +20,12 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 pytestmark = pytest.mark.integration
 
@@ -52,9 +53,15 @@ def repo(tmp_path):
 
 
 def _run(args, env):
-    return subprocess.run(
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(SCRIPT), *args],
-        capture_output=True, text=True, env=env, timeout=120,
+        capture_output=True, text=True, env=_launch_env, timeout=120,
     )
 
 
