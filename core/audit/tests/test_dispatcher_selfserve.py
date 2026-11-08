@@ -48,14 +48,13 @@ def _isolated_env(monkeypatch, tmp_path):
     )
     import core.llm.config as cfg
     import core.llm.detection as det
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
-    monkeypatch.setattr(cfg, "_operator_primary_override", None)
-    yield
-    det._cached_llm_availability = None
-    cfg._cached_thinking_model = None
-    cfg._thinking_model_checked = False
+    from core.testing.llm_state import isolated_llm_resolution
+
+    with isolated_llm_resolution(cfg, det):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture
