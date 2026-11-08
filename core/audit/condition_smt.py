@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import islice
 from dataclasses import asdict, dataclass, field
 from typing import Any, TYPE_CHECKING
+from core.source.lines import iter_source_lines, split_lines as _NARROW_LINES_IMPL
 
 
 if TYPE_CHECKING:
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_NARROW_TYPE_IMPL = type
 
 _SMT_AND_WORD_RE = re.compile(r"\band\b")
 _SMT_ELSE_WORD_RE = re.compile(r"\belse\b")
@@ -3226,8 +3230,10 @@ def check_integer_narrowing(
 
     if language is None:
         go_view = sanitized_view(source, language="go")
-        language = "go" if any(_SMT_GO_DECL_RE.match(line)
-                                  for line in split_lines(go_view)[:30]) else "c"
+        rows = (islice(iter_source_lines(go_view), 30)
+                if _NARROW_TYPE_IMPL(go_view) is str and split_lines is _NARROW_LINES_IMPL
+                else split_lines(go_view)[:30])
+        language = "go" if any(_SMT_GO_DECL_RE.match(line) for line in rows) else "c"
     if language not in {"c", "cpp", "go"}:
         return IntegerNarrowingResult(reasoning="unsupported narrowing source language")
     source = sanitized_view(source, language=language)
