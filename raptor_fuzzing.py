@@ -13,10 +13,13 @@ Usage:
 This is very much a work-in-progress!
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Add the repo root to sys.path. resolve() first: invoked through a
 # symlink (or relatively on interpreters that don't absolutise
@@ -36,22 +39,8 @@ from core.sage.hooks import (
     store_fuzzing_strategy_outcome,
 )
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-from packages.autonomous import (
-    CorpusGenerator,
-    ExploitValidator,
-    FuzzingMemory,
-    FuzzingPlanner,
-    FuzzingState,
-    GoalPlanner,
-    MultiTurnAnalyser,
-)
-from packages.binary_analysis import CrashAnalyser
-from packages.fuzzing import AFLRunner, CrashCollector
-from packages.llm_analysis.crash_agent import (
-    CrashAnalysisAgent,
-    exploit_artifact_path,
-    refined_exploit_artifact_path,
-)
+if TYPE_CHECKING:
+    from packages.fuzzing import AFLRunner
 
 logger = get_logger()
 
@@ -183,6 +172,8 @@ def _load_generated_exploit(agent_out_dir: Path, crash_id: str) -> str | None:
     writer never produced, so validate-and-refine silently never ran.
     Returns the exploit source, or None when no artifact exists.
     """
+    from packages.llm_analysis.crash_agent import exploit_artifact_path
+
     exploit_file = exploit_artifact_path(agent_out_dir, crash_id)
     if not exploit_file.exists():
         return None
@@ -837,6 +828,11 @@ Examples:
     # ternary-form lines above remain as the single source of
     # truth for these fields.
 
+    # Parser/help and orchestrator-only paths need none of the legacy analysis
+    # stack. Import it only when the legacy workflow will actually use it.
+    from packages.binary_analysis import CrashAnalyser
+    from packages.fuzzing import AFLRunner, CrashCollector
+
     # ========================================================================
     # AUTONOMOUS SYSTEM INITIALIZATION
     # ========================================================================
@@ -868,6 +864,16 @@ Examples:
             )
 
     if args.autonomous:
+        from packages.autonomous import (
+            CorpusGenerator,
+            ExploitValidator,
+            FuzzingMemory,
+            FuzzingPlanner,
+            FuzzingState,
+            GoalPlanner,
+            MultiTurnAnalyser,
+        )
+
         logger.info("=" * 70)
         logger.info("AUTONOMOUS MODE ENABLED")
         logger.info("=" * 70)
@@ -1189,6 +1195,11 @@ Examples:
 
         # Analyse crashes
         crash_analyser = CrashAnalyser(binary_path)
+        from packages.llm_analysis.crash_agent import (
+            CrashAnalysisAgent,
+            refined_exploit_artifact_path,
+        )
+
         llm_agent = CrashAnalysisAgent(
             binary_path=binary_path,
             out_dir=out_dir / "analysis",
