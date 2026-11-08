@@ -359,6 +359,8 @@ def _parse_typed_expr(
     differently for signed vs unsigned expression operands. High-bit hex
     literals contribute unsigned type through arithmetic; shifts preserve
     the left operand's type regardless of the shift count's signedness.
+    A bare name grouped before + or - needs a scalar binding to rule out
+    an unsupported cast of a unary expression.
 
     Returns a :class:`Rejection` — rather than a partial Z3 expression —
     when something can't be encoded, so the whole condition falls through
@@ -384,6 +386,25 @@ def _parse_typed_expr(
             "non-tokenisable character was silently dropped by the tokeniser",
             hint="remove or rephrase unsupported operators (e.g. ~, ^, /, %)",
         )
+
+    # `(Alias) + Value` may be a cast of unary +Value, rather than
+    # addition to a grouped scalar. A known scalar binding (including a
+    # substituted call result) or the grammar's NULL literal disambiguates
+    # it; an unbound name must not become an invented arithmetic operand.
+    for index in range(len(tokens) - 3):
+        name = tokens[index + 1]
+        if (
+            tokens[index] == "("
+            and _IDENT_RE.fullmatch(name)
+            and tokens[index + 2] == ")"
+            and tokens[index + 3] in {"+", "-"}
+            and not _NULL_RE.fullmatch(name)
+            and vars_.get(name) is None
+        ):
+            return Rejection(
+                text, RejectionKind.UNRECOGNIZED_OPERAND,
+                "ambiguous cast or grouped identifier requires a bound scalar or source types",
+            )
 
     pos = [0]
     paren_depth = [0]
