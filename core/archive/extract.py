@@ -15,6 +15,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
 from core.tar import (
     TarEntryCountExceeded,
     TarTotalBytesExceeded,
@@ -197,7 +198,7 @@ def _write_single_file(chunks, src: Path, dest: Path) -> dict[str, int]:
         raise UnsupportedArchive(f"cannot derive a safe name for {src}")
     total = 0
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "wb") as fh:
+    with preserving_stream_error(open(target, "wb")) as fh:
         for chunk in chunks:
             fh.write(chunk)
             total += len(chunk)
@@ -270,7 +271,7 @@ def extract_to_dir(path, dest, *,
             # Stream the on-disk tar member-by-member ("r|*"). read_bytes()
             # would materialise the whole archive in RAM before any cap
             # applies — the caps below only bound bytes already read.
-            with Path(src).open("rb") as fh:
+            with preserving_stream_error(Path(src).open("rb")) as fh:
                 extract_files_from_tar(
                     _iter_file_chunks(fh), selector=_keep_files, mode="r|*",
                     max_member_bytes=max_member_bytes,
