@@ -116,6 +116,18 @@ _FENCE_LINE_RE = re.compile(
     r"^\s*(?P<delim>```|~~~)\s*(?:(?P<lang>[a-zA-Z0-9_+-]+)\s*)?$"
 )
 
+_FENCE_LINE_IMPL = _FENCE_LINE_RE
+_NATIVE_TYPE = type
+_NATIVE_STR = str
+_NATIVE_LEN = len
+_NATIVE_RANGE = range
+
+
+def _native_text(text: str) -> bool:
+    """Permit absence checks only for native text and scanner primitives."""
+    return (_NATIVE_TYPE(text) is _NATIVE_STR
+            and len is _NATIVE_LEN and range is _NATIVE_RANGE)
+
 
 @dataclass(frozen=True)
 class ExtractionDiagnostic:
@@ -341,6 +353,9 @@ def _extract_fence(text: str) -> tuple[str | None, str | None]:
     kind (a later same-delim opener line would have closed it) — so
     the whole scan is O(len(text)).
     """
+    if (_native_text(text) and _FENCE_LINE_RE is _FENCE_LINE_IMPL
+            and "```" not in text and "~~~" not in text):
+        return None, None
     lines = text.split("\n")  # line-model: LLM response text; fence scan is \n-model
     n = len(lines)
     first_open: tuple[int, str] | None = None  # (line_idx, lang)
@@ -432,6 +447,10 @@ def _extract_delim_span(
     mismatched pairing this laxness lets through.
     """
     n = len(text)
+    if (_native_text(text) and _NATIVE_TYPE(open_ch) is _NATIVE_STR
+            and _NATIVE_TYPE(close_ch) is _NATIVE_STR
+            and (open_ch not in text or close_ch not in text)):
+        return None, 0, 0
     depth = 0
     in_string = False
     escape = False
@@ -491,6 +510,8 @@ def _fix_trailing_commas(s: str) -> str:
     single-quote awareness here is the belt-and-braces defence so
     order alone doesn't determine correctness.
     """
+    if _native_text(s) and "," not in s:
+        return s
     out = []
     in_double = False
     in_single = False
@@ -550,6 +571,8 @@ def _fix_python_literals(s: str) -> str:
     or ``Truthy`` collisions. Python literals inside string fields
     (e.g. ``"reason": "returned None"``) are left alone.
     """
+    if _native_text(s) and not ("None" in s or "True" in s or "False" in s):
+        return s
     replacements = {"None": "null", "True": "true", "False": "false"}
     out = []
     in_string = False
@@ -602,6 +625,8 @@ def _fix_single_quotes(s: str) -> str:
     embedded double-quote). Skips content inside existing double-quoted
     strings so ``"reason": "it's fine"`` is left alone.
     """
+    if _native_text(s) and "'" not in s:
+        return s
     out = []
     in_dq = False
     dq_escape = False

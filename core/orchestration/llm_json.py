@@ -20,6 +20,26 @@ from __future__ import annotations
 
 from typing import Any
 
+_NATIVE_TYPE = type
+_NATIVE_STR = str
+_NATIVE_LEN = len
+_NATIVE_RANGE = range
+_FENCE_PREFIX_CHARS = 4096
+
+
+def _short_fence_body(text: str) -> str | None:
+    """Find an early close without preparing rows from the response tail.
+
+    A partial closing line is sufficient once its complete marker is
+    visible: everything after that marker is excluded from the body.
+    No early close leaves the full display-line scan authoritative.
+    """
+    lines = text[:_FENCE_PREFIX_CHARS].splitlines()
+    for i in range(1, len(lines)):
+        if lines[i].strip().startswith("```"):
+            return "\n".join(lines[1:i]).strip()
+    return None
+
 
 def strip_json_fences(text: str) -> str:
     """Payload of a leading markdown code fence, else *text* stripped.
@@ -44,6 +64,12 @@ def strip_json_fences(text: str) -> str:
     s = text.strip()
     if not s.startswith("```"):
         return s
+    if (_NATIVE_TYPE(s) is _NATIVE_STR
+            and len is _NATIVE_LEN and range is _NATIVE_RANGE
+            and _NATIVE_STR.__len__(s) >= 64 * 1024):
+        short_body = _short_fence_body(s)
+        if short_body is not None:
+            return short_body
     lines = s.splitlines()
     end = len(lines)
     for i in range(1, len(lines)):
