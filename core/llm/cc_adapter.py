@@ -1655,6 +1655,14 @@ def run_cc_streaming(
                 fd for fd in (stdout_fd, stderr_fd) if fd is not None
             ]
             write_set = [stdin_fd] if stdin_fd is not None else []
+            if not read_set and not write_set:
+                # EOF can precede process exit. Wait for that exit directly:
+                # an empty select would add up to a second to a finished call.
+                try:
+                    proc.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    continue  # The deadline path above kills and reaps it.
+                break
             ready, writable, _ = select.select(
                 read_set, write_set, [], min(remaining or 1.0, 1.0),
             )

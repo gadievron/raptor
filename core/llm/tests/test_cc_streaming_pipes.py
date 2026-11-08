@@ -17,10 +17,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from types import ModuleType
 
 import pytest
 
 from core.llm.cc_adapter import run_cc_streaming
+from core.testing.module_views import scoped_function_imports
 
 # Children here are test-local fakes (module docstring) — the spawn
 # machinery itself is under test, so the transport kill switch the
@@ -353,15 +355,16 @@ def test_timeout_covers_stdin_write():
     assert time.monotonic() - start < 30
 
 
-def test_early_pipe_close_does_not_busy_spin(monkeypatch):
+def test_early_pipe_close_does_not_busy_spin():
     """A child that closes stdout AND stderr then lingers (cleanup,
     budget-abort teardown) must not peg a core: a closed pipe reports
     readable forever, so an fd left in the select set after EOF turns
     the drain loop into a busy spin for the child's remaining
-    lifetime. Count select() calls — the fixed loop parks in ~1s
-    blocking selects (a handful of calls); the spin shape was tens of
-    thousands."""
+    lifetime. Once every pipe is closed, wait for child exit directly
+    rather than sleeping in empty selects. Count remaining select()
+    calls too: the busy-spin shape was tens of thousands."""
     import select as select_mod
+    from core.llm import cc_adapter
 
     result_line = json.dumps({
         "type": "result",
@@ -381,26 +384,59 @@ def test_early_pipe_close_does_not_busy_spin(monkeypatch):
     calls = {"n": 0}
 
     def counting_select(*args, **kwargs):
+        assert args[0] or args[1], "empty select delays child-exit observation"
         calls["n"] += 1
         return real_select(*args, **kwargs)
 
-    monkeypatch.setattr(select_mod, "select", counting_select)
-    try:
-        sr = run_cc_streaming(
+    view = ModuleType("select")
+    vars(view).update(vars(select_mod))
+    view.select = counting_select
+    with scoped_function_imports(cc_adapter, ("run_cc_streaming",), {"select": view}):
+        sr = cc_adapter.run_cc_streaming(
             [sys.executable, "-c", script],
             prompt="",
             env=_env(),
             timeout_s=30,
         )
-    finally:
-        monkeypatch.setattr(select_mod, "select", real_select)
-
     assert sr.error is None
     assert sr.session_id == "sess-early-close"
-    # Generous bound: the fixed loop needs ~2-4 selects for the whole
-    # 1.5s lingering window (plus the prompt/stdin iterations); the
+    # Generous bound: only pipe activity needs selects; the
     # busy-spin regression shape is unbounded (>10k in 1.5s).
     assert calls["n"] < 100, (
         f"select() called {calls['n']} times — EOF fds are being "
         "re-selected (busy spin)"
     )
+
+
+def test_deadline_after_all_pipes_close_reaps_child():
+    import subprocess
+    from core.llm import cc_adapter
+
+    procs = []
+
+    def recording_popen(*args, **kwargs):
+        proc = subprocess.Popen(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    view = ModuleType("subprocess")
+    vars(view).update(vars(subprocess))
+    view.Popen = recording_popen
+    command = [sys.executable, "-c",
+               "import os,time; os.close(1); os.close(2); time.sleep(60)"]
+    try:
+        with scoped_function_imports(cc_adapter, ("run_cc_streaming",), {"subprocess": view}):
+            with pytest.raises(subprocess.TimeoutExpired) as error:
+                cc_adapter.run_cc_streaming(command, prompt="", env=_env(), timeout_s=1)
+        assert error.value.cmd == command
+        assert error.value.timeout == 1
+        assert len(procs) == 1
+        assert procs[0].poll() is not None
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
