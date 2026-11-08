@@ -18,6 +18,9 @@ from __future__ import annotations
 import ast
 import functools
 from pathlib import Path
+from textwrap import indent
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -61,11 +64,22 @@ def _runtime_sources() -> list[Path]:
     return files
 
 
+def _statement_imports(tree: ast.AST):
+    """Imports can nest in statement bodies, never inside expressions."""
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+        elif not isinstance(node, ast.expr):
+            pending.extend(ast.iter_child_nodes(node))
+
+
 def _parser_constructions(tree: ast.AST) -> list[ast.Call]:
     """Call nodes that construct a ``tree_sitter.Parser``."""
     parser_names: set[str] = set()
     ts_aliases: set[str] = set()
-    for node in ast.walk(tree):
+    for node in _statement_imports(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "tree_sitter":
@@ -189,3 +203,49 @@ def test_census_flags_a_planted_raw_construction(tmp_path):
     calls = _parser_constructions(wrapped)
     assert len(calls) == 1
     assert _is_wrapped(calls[0], _parent_map(wrapped))
+
+
+@pytest.mark.parametrize("prefix,depth", [
+    ("", 0),
+    ("def f():\n", 4),
+    ("class C:\n", 4),
+    ("if condition:\n", 4),
+    ("if condition:\n    pass\nelse:\n", 4),
+    ("for item in items:\n", 4),
+    ("while condition:\n", 4),
+    ("with context():\n", 4),
+    ("try:\n", 4),
+    ("try:\n    pass\nexcept Exception:\n", 4),
+    ("try:\n    pass\nexcept* Exception:\n", 4),
+    ("try:\n    pass\nfinally:\n", 4),
+    ("match value:\n    case 0:\n", 8),
+    ("async def f():\n    async for item in items:\n", 8),
+    ("async def f():\n    async with context():\n", 8),
+], ids=["module", "function", "class", "if", "else", "for", "while", "with",
+        "try", "except", "except-star", "finally", "match", "async-for", "async-with"])
+@pytest.mark.parametrize("declaration,call", [
+    ("import tree_sitter as ts", "ts.Parser(lang)"),
+    ("from tree_sitter import Parser as P", "P(lang)"),
+], ids=["module-alias", "parser-alias"])
+def test_import_discovery_keeps_all_statement_bodies(prefix, depth, declaration, call):
+    suffix = "except Exception:\n    pass\n" if prefix == "try:\n" else ""
+    source = prefix + indent(declaration + "\np = " + call + "\n", " " * depth) + suffix
+    tree = ast.parse(source)
+    expected = {node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))}
+    assert set(_statement_imports(tree)) == expected
+    calls = _parser_constructions(tree)
+    assert len(calls) == 1
+    assert not _is_wrapped(calls[0], _parent_map(tree))
+
+
+@pytest.mark.parametrize("size", [1, 10_000], ids=["small", "large"])
+def test_import_discovery_does_not_walk_expression_payloads(size):
+    tree = ast.parse("payload = (" + "f(1)," * size + ")\nimport tree_sitter\n")
+    class UnvisitedExpressions(list):
+        def __iter__(self):
+            pytest.fail("import discovery entered an expression payload")
+
+    tree.body[0].value.elts = UnvisitedExpressions(tree.body[0].value.elts)
+    imports = list(_statement_imports(tree))
+    assert len(imports) == 1
+    assert imports[0].names[0].name == "tree_sitter"
