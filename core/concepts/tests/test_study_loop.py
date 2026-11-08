@@ -15,6 +15,7 @@ from core.concepts.tests._study_cli import run_loop_with_prep
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.standalone_cli import run_standalone_cli
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 STUDY_LOOP = str(RAPTOR_DIR / "libexec" / "raptor-study-loop")
@@ -45,7 +46,7 @@ def _run_loop(args: list[str], env_extra: dict | None = None, *, in_process=Fals
     env["_RAPTOR_TRUSTED"] = "1"
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(  # noqa: PLW1510 - callers assert on returncode
+    return run_standalone_cli(
         [sys.executable, STUDY_LOOP] + args,
         env=env,
         capture_output=True,
@@ -77,7 +78,11 @@ def _run_empty_prepared_loop(monkeypatch, target, output_dir):
 
 
 class TestStudyLoopCLI:
-    def test_help(self):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_help(self, tmp_path, monkeypatch, stale_launch):
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
         result = _run_loop(["--help"])
         assert result.returncode == 0
         assert "drain" in result.stdout.lower() or "study" in result.stdout.lower()
