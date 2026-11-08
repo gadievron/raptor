@@ -20,8 +20,9 @@ import pytest
 #   [2] core/
 #   [3] <repo root>         (where ``packages/`` lives)
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+if __name__ == "__main__":
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
 
 from core.binary.capability_diff import diff_binary_capabilities  # noqa: E402
 from core.binary.fingerprint import bucket_imports  # noqa: E402

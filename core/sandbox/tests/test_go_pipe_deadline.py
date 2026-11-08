@@ -17,8 +17,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
 
 
 def test_go_pipe_read_is_deadline_bounded():

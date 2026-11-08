@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -65,7 +66,26 @@ _HANDLERS_SRC = textwrap.dedent('''\
 
 
 @pytest.fixture(scope="module")
-def prep_result(tmp_path_factory):
+def semantic_signing_home(tmp_path_factory):
+    return tmp_path_factory.mktemp("semantic_keys")
+
+
+@pytest.fixture(autouse=True)
+def _semantic_mac_keys(_isolated_mac_keys, semantic_signing_home, monkeypatch):
+    # Re-pin after the audit directory's function-scoped default key fixture.
+    monkeypatch.setenv("XDG_DATA_HOME", str(semantic_signing_home))
+
+
+@pytest.fixture(scope="module")
+def prep_result(tmp_path_factory, semantic_signing_home):
+    # Module setup precedes the per-test key owner. Both the child writer
+    # and the in-process reader must use this module's signing domain.
+    with pytest.MonkeyPatch.context() as owner:
+        owner.setenv("XDG_DATA_HOME", str(semantic_signing_home))
+        return _prepare_semantic_result(tmp_path_factory, semantic_signing_home)
+
+
+def _prepare_semantic_result(tmp_path_factory, signing_home):
     target = tmp_path_factory.mktemp("semantic_target")
     (target / "handlers.py").write_text(_HANDLERS_SRC)
 
@@ -84,9 +104,9 @@ def prep_result(tmp_path_factory):
         _RAPTOR_TRUSTED="1",
         PYTHONPATH=str(_RAPTOR_DIR),
     )
-    r = subprocess.run(
+    r = run_standalone_cli(
         [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-        env=env,
+        env=env, data_home=signing_home,
         capture_output=True,
         text=True,
         check=False,
@@ -215,3 +235,12 @@ class TestSemanticConsistencyRouting:
         assert any(
             e.get("detector") == "semantic_consistency" for e in entries
         )
+
+
+def test_module_consumers_keep_the_checklist_signing_domain(prep_result, semantic_signing_home):
+    from core.inventory import checklist_frame_mac as cm
+
+    _, out = prep_result
+    doc = json.loads((out / "checklist.json").read_text())
+    assert os.environ["XDG_DATA_HOME"] == str(semantic_signing_home)
+    assert cm.frame_provenance(doc, cm.frame_binding(out), cm.FORM_SINGLE) == cm.FRAME_VERIFIED

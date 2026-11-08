@@ -39,8 +39,9 @@ from core.testing.processes import reap_on_exit
 # core/sandbox/tests/test_coordinator_isolation.py
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
 
 COORDINATOR = REPO / "core" / "sandbox" / "netns_coordinator.py"
 

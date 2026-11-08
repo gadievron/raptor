@@ -31,8 +31,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
 
 from core.audit.dynamic_sweep import (  # noqa: E402
     _signal_grade_death,
