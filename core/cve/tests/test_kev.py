@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+
+from core.testing.module_registry import fresh_module_tree
 from typing import Any, Dict
 
 from core.cve.kev import KEV_URL, KevClient
@@ -306,15 +308,7 @@ class TestKevJunkCatalog:
         the clock warp must land on the namespace THIS suite's
         ``JsonCache`` binding reads, or the expired envelope looks
         fresh and gets served."""
-        import sys
-
-        purged = {
-            name: sys.modules[name] for name in list(sys.modules)
-            if name == "core.json" or name.startswith("core.json.")
-        }
-        for name in purged:
-            del sys.modules[name]
-        try:
+        with fresh_module_tree("core.json"):
             cache = JsonCache(root=tmp_path)
             cache.put("kev", _PAYLOAD, ttl_seconds=24 * 3600)
             TestKevCaching._warp_cache_clock(monkeypatch, days=3)
@@ -322,25 +316,6 @@ class TestKevJunkCatalog:
                             JsonCache(root=tmp_path))
             assert kev.contains("CVE-2021-44228") is False
             assert kev.is_loaded() is True
-        finally:
-            # Restore the ORIGINAL module objects (drop any fresh
-            # re-imports the body may have triggered): leaving the
-            # purge in place would split identities for later tests
-            # in the same process — the very ordering-bug class this
-            # fence pins.
-            for name in list(sys.modules):
-                if name == "core.json" or name.startswith("core.json."):
-                    del sys.modules[name]
-            sys.modules.update(purged)
-            # Re-importing a child also rebinds core.json on its parent.
-            # Restoring sys.modules alone leaves attribute-based imports
-            # pointing at a different module from string-based patches.
-            core_pkg = sys.modules.get("core")
-            if core_pkg is not None:
-                if "core.json" in purged:
-                    core_pkg.json = purged["core.json"]
-                else:
-                    core_pkg.__dict__.pop("json", None)
 
 
 # ---------------------------------------------------------------------------

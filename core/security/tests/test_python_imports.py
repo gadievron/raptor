@@ -1,6 +1,8 @@
 """Protected startup drops writable/undeclared imports, without executing them."""
 import os
 
+from core.testing.module_registry import fresh_module_tree
+
 from core.testing.module_bindings import patch_module_attribute
 import sys
 from types import SimpleNamespace
@@ -97,11 +99,9 @@ def test_writable_shadow_module_is_not_executed(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'path_importer_cache', dict(sys.path_importer_cache))
     monkeypatch.setattr(sys, 'pycache_prefix', None)
     monkeypatch.setattr(sys, 'dont_write_bytecode', False)
-    try:
+    with fresh_module_tree(name):
         python_imports.harden_import_paths()
         assert importlib.import_module(name).VALUE == 42
-    finally:
-        sys.modules.pop(name, None)
 
 
 @pytest.fixture
@@ -189,12 +189,10 @@ def test_zip_imports_keep_protected_archive_and_reject_data_archive(import_layou
     with zipfile.ZipFile(bad, 'w') as archive:
         archive.writestr(name+'.py', 'raise AssertionError("data ZIP executed")\n')
     sys.path[:] = [str(bad), str(good)]
-    try:
+    with fresh_module_tree(name):
         python_imports.harden_import_paths()
         assert importlib.import_module(name).VALUE == 42
         assert sys.path == [str(good)]
-    finally:
-        sys.modules.pop(name, None)
 
 
 def test_namespace_package_uses_only_protected_portion(import_layout):
@@ -206,14 +204,11 @@ def test_namespace_package_uses_only_protected_portion(import_layout):
     (dependency/name/'safe.py').write_text('VALUE = 42\n')
     (data/name/'unsafe.py').write_text('raise AssertionError("data namespace executed")\n')
     sys.path[:] = [str(data), str(dependency)]
-    try:
+    with fresh_module_tree(name):
         python_imports.harden_import_paths()
         assert importlib.import_module(name+'.safe').VALUE == 42
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(name+'.unsafe')
-    finally:
-        for module in (name, name+'.safe', name+'.unsafe'):
-            sys.modules.pop(module, None)
 
 
 def test_hardening_is_idempotent(import_layout):

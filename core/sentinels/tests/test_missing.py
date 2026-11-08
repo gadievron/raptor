@@ -11,8 +11,9 @@ the sentinel's actual location.
 from __future__ import annotations
 
 import contextlib
+
+from core.testing.module_registry import fresh_module_tree
 import importlib
-import sys
 from typing import Iterator
 
 
@@ -34,28 +35,8 @@ def _purged_core_json_window() -> Iterator[None]:
     stdlib-json forcing was defeated and the live orjson lane rejected
     its non-finite fixture).
     """
-    saved = {
-        mod: sys.modules.pop(mod)
-        for mod in list(sys.modules)
-        if mod == "core.json" or mod.startswith("core.json.")
-    }
-    try:
+    with fresh_module_tree("core.json"):
         yield
-    finally:
-        for mod in list(sys.modules):
-            if mod == "core.json" or mod.startswith("core.json."):
-                del sys.modules[mod]
-        sys.modules.update(saved)
-        # A fresh ``import core.json`` inside the window rebinds the
-        # parent package's ``json`` attribute; point it back at the
-        # restored original (attribute access on an already-imported
-        # package bypasses sys.modules).
-        core_pkg = sys.modules.get("core")
-        if core_pkg is not None:
-            if "core.json" in saved:
-                core_pkg.json = saved["core.json"]
-            else:
-                core_pkg.__dict__.pop("json", None)
 
 
 def test_missing_is_singleton():

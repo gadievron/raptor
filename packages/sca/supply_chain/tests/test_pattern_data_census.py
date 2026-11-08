@@ -27,6 +27,9 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+from core.testing.module_registry import module_registry_scope
+from core.testing.module_state import isolated_module_state
+
 from packages.sca.supply_chain import (
     binary_in_package as _bip,
 )
@@ -44,16 +47,12 @@ def _census():
         "_redos_idiom_census_for_sca", _CENSUS_PATH,
     )
     assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    # Registered so dataclasses/typing resolution inside the module
-    # works; removed afterwards to keep sys.modules clean.
-    sys.modules[spec.name] = mod
-    try:
+    with module_registry_scope(spec.name) as modules:
+        mod = importlib.util.module_from_spec(spec)
+        modules[spec.name] = mod
         with patch.object(sys, "path", sys.path.copy()):
             spec.loader.exec_module(mod)
-    finally:
-        sys.modules.pop(spec.name, None)
-    return mod
+        return mod
 
 
 def _sca_data_file_members() -> list[tuple[str, str]]:
@@ -64,23 +63,19 @@ def _sca_data_file_members() -> list[tuple[str, str]]:
     members: list[tuple[str, str]] = []
     # Exfil-destination rules: ``entry["pattern"]`` compiled raw
     # (flag-less, so only an inline (?m)/(?s) can make a member).
-    _exfil._RULES_CACHE = None
-    try:
+    with isolated_module_state(_exfil, {"_RULES_CACHE": None}):
         members.extend(
             (f"exfil:{rule.category}", rule.pattern.pattern)
             for rule in _exfil._load_rules()
             if rule.pattern is not None
             and census._compiled_is_member(rule.pattern)
         )
-    finally:
-        _exfil._RULES_CACHE = None
     # binary_in_package name_suffix_opt_in rows: raw regex strings
     # compiled flag-less by _is_per_platform_name. (The sibling
     # ``patterns`` rows are GLOBS routed through _glob_to_regex,
     # which escapes everything but the wildcards — an inline-flag
     # member is structurally impossible there.)
-    _bip._ALLOWLIST = None
-    try:
+    with isolated_module_state(_bip, {"_ALLOWLIST": None}):
         for pat in (
             _bip._load_allowlist()
             .get("name_suffix_opt_in", {})
@@ -92,8 +87,6 @@ def _sca_data_file_members() -> list[tuple[str, str]]:
                 continue  # the loader logs and ignores bad rows
             if census._compiled_is_member(compiled):
                 members.append(("binary-name-suffix", pat))
-    finally:
-        _bip._ALLOWLIST = None
     return members
 
 

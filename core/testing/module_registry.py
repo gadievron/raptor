@@ -41,3 +41,39 @@ def mock_module_registry(replacements):
         for name, module in replacements.items():
             modules[name] = module
         yield modules
+
+
+def _in_module_tree(key, root):
+    return isinstance(key, str) and (key == root or key.startswith(root + "."))
+
+
+def _restore_module_tree(table, root, saved):
+    with ExitStack() as restore:
+        for name, previous in saved.items():
+            restore.callback(_restore, table, name, previous)
+        for name in tuple(table):
+            if _in_module_tree(name, root) and name not in saved:
+                restore.callback(_restore, table, name, _ABSENT)
+
+
+@contextmanager
+def fresh_module_tree(root):
+    """Temporarily remove one import namespace, preserving its borrowed state.
+
+    Restore original entries, including None, and remove newly imported
+    descendants. Own the raw child attribute on an already-loaded parent
+    independently of its sys.modules entry: those bindings need not agree.
+    Other namespaces and their concurrent imports remain untouched.
+    """
+    table = sys.modules
+    saved = {name: table[name] for name in tuple(table) if _in_module_tree(name, root)}
+    parent_name, _, child = root.rpartition(".")
+    parent = table.get(parent_name) if parent_name else None
+    with ExitStack() as restore:
+        if parent is not None:
+            namespace = vars(parent)
+            restore.callback(_restore, namespace, child, namespace.get(child, _ABSENT))
+        restore.callback(_restore_module_tree, table, root, saved)
+        for name in saved:
+            table.pop(name, None)
+        yield table

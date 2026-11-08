@@ -32,6 +32,9 @@ if __name__ == "__main__":
         sys.path.insert(0, _REPO_ROOT)
 
 
+from core.testing.module_registry import module_registry_scope
+
+
 @pytest.fixture
 def fresh_raptor_module():
     """Re-import ``raptor`` so the module-level ``_active_dispatcher``
@@ -40,14 +43,9 @@ def fresh_raptor_module():
     that share the import would leak state)."""
     # Other tests retain references to the original module; restore that
     # object so later string-based patches reach the same namespace.
-    previous = sys.modules.pop("raptor", None)
-    try:
-        raptor = importlib.import_module("raptor")
-        yield raptor
-    finally:
-        sys.modules.pop("raptor", None)
-        if previous is not None:
-            sys.modules["raptor"] = previous
+    with module_registry_scope("raptor") as modules:
+        modules.pop("raptor", None)
+        yield importlib.import_module("raptor")
 
 
 def test_dispatcher_startup_failure_records_the_reason(

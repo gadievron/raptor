@@ -31,6 +31,8 @@ fence — pre-fix it eagerly imports cache.
 from __future__ import annotations
 
 import contextlib
+
+from core.testing.module_registry import fresh_module_tree
 import sys
 from typing import Iterator
 
@@ -51,28 +53,8 @@ def _fresh_core_json_window() -> Iterator[None]:
     resolve a module object production code never reads — its
     patch.object() calls would land on the wrong module.
     """
-    saved = {
-        mod: sys.modules.pop(mod)
-        for mod in list(sys.modules)
-        if mod == "core.json" or mod.startswith("core.json.")
-    }
-    try:
+    with fresh_module_tree("core.json"):
         yield
-    finally:
-        for mod in list(sys.modules):
-            if mod == "core.json" or mod.startswith("core.json."):
-                del sys.modules[mod]
-        sys.modules.update(saved)
-        # `import core.json` inside the window rebound the parent
-        # package's `json` attribute to the fresh module; point it
-        # back at the restored original (attribute access on an
-        # already-imported package bypasses sys.modules).
-        core_pkg = sys.modules.get("core")
-        if core_pkg is not None:
-            if "core.json" in saved:
-                core_pkg.json = saved["core.json"]
-            else:
-                core_pkg.__dict__.pop("json", None)
 
 
 @pytest.fixture
