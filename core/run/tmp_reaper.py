@@ -722,8 +722,10 @@ def _recent_activity(path: Path, now: float, max_age: float) -> bool:
     on EVERY sweep, permanently exempt from this reaper.
     """
     seen = 0
+    def failed_walk(error):
+        raise error  # An incomplete walk cannot establish inactivity.
     try:
-        for root, dirs, files in os.walk(path, followlinks=False):
+        for root, dirs, files in os.walk(path, followlinks=False, onerror=failed_walk):
             for name in dirs + files:
                 seen += 1
                 if seen > _DEEP_SCAN_MAX_ENTRIES:
@@ -731,7 +733,7 @@ def _recent_activity(path: Path, now: float, max_age: float) -> bool:
                 try:
                     st = os.lstat(os.path.join(root, name))
                 except OSError:
-                    continue
+                    return True
                 if now - st.st_mtime < max_age:
                     return True
     except OSError:
