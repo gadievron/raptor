@@ -26,6 +26,48 @@ from core.testing.module_state import isolated_module_state
 
 
 
+def _best_cpu_until_below(run, limit, *, clock):
+    """Keep the best-of-three verdict, stopping once it cannot change."""
+    best = float("inf")
+    for _ in range(3):
+        start = clock()
+        run()
+        best = min(best, clock() - start)
+        if best < limit:
+            break
+    return best
+
+
+@pytest.mark.parametrize("samples,limit,attempts", [
+    ([1.0, 2.0, 3.0], 2.0, 1),
+    ([3.0, 1.0, 0.5], 2.0, 2),
+    ([3.0, 2.0, 1.0], 2.0, 3),
+    ([3.0, 4.0, 5.0], 2.0, 3),
+    ([2.0, 2.0, 2.0], 2.0, 3),
+    ([3.0, 2.0, 2.0], 2.0, 3),
+], ids=["first-passes", "second-passes", "third-passes", "all-fail", "equal", "retry-equal"])
+def test_cpu_sampling_preserves_verdict_and_bounds_work(samples, limit, attempts):
+    ticks = iter(value for sample in samples for value in (0.0, sample))
+    calls = []
+    measured = _best_cpu_until_below(lambda: calls.append(None), limit, clock=lambda: next(ticks))
+    assert (measured < limit) == (min(samples) < limit)
+    assert measured == min(samples[:attempts])
+    assert len(calls) == attempts
+
+
+@pytest.mark.parametrize("error", [AssertionError, RuntimeError, KeyboardInterrupt])
+def test_cpu_sampling_does_not_retry_workload_failures(error):
+    calls = []
+
+    def fail():
+        calls.append(None)
+        raise error("workload failed")
+
+    with pytest.raises(error, match="workload failed"):
+        _best_cpu_until_below(fail, 5.0, clock=lambda: 0.0)
+    assert len(calls) == 1
+
+
 @pytest.fixture
 def domain_model():
     return {
@@ -1242,7 +1284,7 @@ class TestDomainBugPatterns:
             raise AssertionError(msg)
 
         old = signal.signal(signal.SIGALRM, _on_alarm)
-        # 3 measured runs + 3 reference runs; one measured run is
+        # Up to 3 measured runs + 3 reference runs; one measured run is
         # already ~9 s wall on slow CI cores, so the hang net covers
         # the whole min-of-3 schedule with load headroom.
         signal.alarm(120)
@@ -1263,13 +1305,9 @@ class TestDomainBugPatterns:
             # regex work every time (nothing memoises the evaluation
             # result), so the denominator cannot be optimised away
             # to a cached near-zero that would inflate the ratio.
-            samples: list[float] = []
-            for _ in range(3):
-                t0 = time.thread_time()
-                block = domain_bug_patterns(tmp_path, "a.c", "f", src)
-                samples.append(time.thread_time() - t0)
-                assert block is None  # regex fails; nothing relevant
-            dt = min(samples)
+            # Finish all reference samples first: once one measured
+            # sample clears that fixed bound, later samples cannot
+            # change the best-of-three pass verdict.
             ref_samples: list[float] = []
             for _ in range(3):
                 t0 = time.thread_time()
@@ -1278,6 +1316,14 @@ class TestDomainBugPatterns:
                 ref_samples.append(time.thread_time() - t0)
                 assert ref_block is None
             ref_dt = min(ref_samples)
+
+            def measured_work():
+                block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+                assert block is None  # regex fails; nothing relevant
+
+            dt = _best_cpu_until_below(
+                measured_work, 24.0 * ref_dt, clock=time.thread_time,
+            )
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
@@ -1380,14 +1426,15 @@ class TestDomainBugPatterns:
             # cheapest run, so cache-cold first-run work (guard and
             # pattern lru misses) and residual CPU jitter are not
             # billed as the admitted shapes' cost. The wall-clock hang
-            # net stays with the alarm above.
-            samples: list[float] = []
-            for _ in range(3):
-                t0 = time.thread_time()
+            # net stays with the alarm above. Stop once a sample
+            # meets the bound; only failures need all three attempts.
+            def measured_work():
                 block = domain_bug_patterns(tmp_path, "a.c", "f", src)
-                samples.append(time.thread_time() - t0)
                 assert block is None
-            dt = min(samples)
+
+            dt = _best_cpu_until_below(
+                measured_work, 5.0, clock=time.thread_time,
+            )
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
