@@ -20,15 +20,21 @@ from core.sandbox import telemetry_mac
 from core.sandbox import triage as triage_mod
 from core.sandbox.tests.capability import requires_landlock
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setattr(summary_mod, "_run_postures", {})
-    monkeypatch.setattr(summary_mod, "_degraded_markers", {})
-    summary_mod.set_active_run_dir(None)
-    yield
-    summary_mod.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+            monkeypatch.setattr(summary_mod, "_run_postures", {})
+            monkeypatch.setattr(summary_mod, "_degraded_markers", {})
+            summary_mod.set_active_run_dir(None)
+            yield
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 def _write_real_summary(run_dir):

@@ -1,0 +1,92 @@
+[
+  {
+    "file": "core/sandbox/tests/test_audit_integration.py",
+    "fixture": "_isolate_active_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_denial_io_recovery.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_denial_security_log_arguments.py",
+    "fixture": "active_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_disable_attribution.py",
+    "fixture": "_isolated_state",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_evidence_dangling_input.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_proxy_audit.py",
+    "fixture": "active_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_security_event_denials.py",
+    "fixture": "active_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary.py",
+    "fixture": "_isolate_active_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary_inode_idempotence.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary_missing_evidence.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary_repeated_failure.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary_run_generation.py",
+    "fixture": "isolated_state",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_summary_utf8.py",
+    "fixture": "isolated_run",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_telemetry_key_posture.py",
+    "fixture": "_isolated_state",
+    "class": null
+  },
+  {
+    "file": "core/sandbox/tests/test_triage.py",
+    "fixture": "_isolate_active_run",
+    "class": "TestEndToEndWithRealSummaryApi"
+  },
+  {
+    "file": "core/sandbox/tests/test_triage.py",
+    "fixture": "_isolate_active_run",
+    "class": "TestLifecycleIntegration"
+  },
+  {
+    "file": "core/sandbox/tests/test_triage.py",
+    "fixture": "_isolate_active_run",
+    "class": "TestVerdictSurfacedInRunStatus"
+  },
+  {
+    "file": "core/sandbox/tests/test_triage_inode_memory.py",
+    "fixture": "isolated_run",
+    "class": null
+  }
+]

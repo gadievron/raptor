@@ -16,6 +16,27 @@ from pathlib import Path
 import core.security.capped_read as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
+
+@pytest.fixture(autouse=True)
+def _owned_suffix_cache(monkeypatch):
+    """Snapshot fault tests must not clear the caller's parsed suffix cache."""
+    from functools import lru_cache
+    from core.domains import public_suffix
+    from core.testing.module_state import isolated_module_state
+
+    original = public_suffix.load_suffix_rules
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with (
+        isolated_module_state(public_suffix, {"load_suffix_rules": private}),
+        isolated_module_state(triage_mod, {"load_suffix_rules": private}),
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
@@ -517,10 +538,14 @@ class TestCliFailClosedDefault:
 
 class TestEndToEndWithRealSummaryApi:
     @pytest.fixture(autouse=True)
-    def _isolate_active_run(self):
-        summary_mod.set_active_run_dir(None)
-        yield
-        summary_mod.set_active_run_dir(None)
+    def _isolate_active_run(self, monkeypatch):
+        with isolated_summary_state():
+            try:
+                summary_mod.set_active_run_dir(None)
+                yield
+                summary_mod.set_active_run_dir(None)
+            finally:
+                monkeypatch.undo()
 
     def test_triage_over_real_summarize_and_write_output(self, tmp_path):
         summary_mod.set_active_run_dir(tmp_path)
@@ -544,10 +569,14 @@ class TestLifecycleIntegration:
     _finalize_sandbox_summary in every terminal-state transition)."""
 
     @pytest.fixture(autouse=True)
-    def _isolate_active_run(self):
-        summary_mod.set_active_run_dir(None)
-        yield
-        summary_mod.set_active_run_dir(None)
+    def _isolate_active_run(self, monkeypatch):
+        with isolated_summary_state():
+            try:
+                summary_mod.set_active_run_dir(None)
+                yield
+                summary_mod.set_active_run_dir(None)
+            finally:
+                monkeypatch.undo()
 
     def test_complete_run_writes_triage_alongside_summary(self, tmp_path):
         from core.run.metadata import start_run, complete_run
@@ -735,10 +764,14 @@ class TestCliOutputSanitisation:
 
 class TestVerdictSurfacedInRunStatus:
     @pytest.fixture(autouse=True)
-    def _isolate_active_run(self):
-        summary_mod.set_active_run_dir(None)
-        yield
-        summary_mod.set_active_run_dir(None)
+    def _isolate_active_run(self, monkeypatch):
+        with isolated_summary_state():
+            try:
+                summary_mod.set_active_run_dir(None)
+                yield
+                summary_mod.set_active_run_dir(None)
+            finally:
+                monkeypatch.undo()
 
     def _run_with_denial(self, tmp_path, name):
         from core.run.metadata import start_run

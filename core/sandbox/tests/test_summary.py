@@ -14,6 +14,8 @@ from core.sandbox import summary as summary_mod
 import core.sandbox.summary as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
@@ -42,12 +44,15 @@ def _denials_path(run_dir):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_active_run():
-    """Each test starts and ends with no active run set, regardless of
-    whether the test itself sets one."""
-    summary_mod.set_active_run_dir(None)
-    yield
-    summary_mod.set_active_run_dir(None)
+def _isolate_active_run(monkeypatch):
+    """Own active recording state and evidence without clearing the caller."""
+    with isolated_summary_state():
+        try:
+            summary_mod.set_active_run_dir(None)
+            yield
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 class TestActiveRunState:

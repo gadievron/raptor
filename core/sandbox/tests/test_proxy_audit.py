@@ -26,6 +26,8 @@ from core.sandbox import proxy as proxy_mod
 from core.sandbox import summary as summary_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture
 def reset_proxy():
@@ -34,12 +36,16 @@ def reset_proxy():
 
 
 @pytest.fixture
-def active_run(tmp_path):
+def active_run(tmp_path, monkeypatch):
     """Set up an active sandbox-summary recording target so record_denial
     has somewhere to write."""
-    summary_mod.set_active_run_dir(tmp_path)
-    yield tmp_path
-    summary_mod.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            summary_mod.set_active_run_dir(tmp_path)
+            yield tmp_path
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture(autouse=True)

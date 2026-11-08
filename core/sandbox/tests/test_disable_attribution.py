@@ -34,19 +34,25 @@ import pytest
 from core.sandbox import summary as summary_mod
 from core.sandbox import triage as triage_mod
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path: Path,
                     monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setattr(summary_mod, "_cli_disables", {})
-    monkeypatch.setattr(summary_mod, "_run_postures", {})
-    monkeypatch.setattr(summary_mod, "_floor_refusals", {})
-    summary_mod.set_active_run_dir(None)
-    yield
-    summary_mod.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+            monkeypatch.setattr(summary_mod, "_cli_disables", {})
+            monkeypatch.setattr(summary_mod, "_run_postures", {})
+            monkeypatch.setattr(summary_mod, "_floor_refusals", {})
+            summary_mod.set_active_run_dir(None)
+            yield
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 def _write_real_denial_summary(run_dir: Path) -> dict[str, Any] | None:
