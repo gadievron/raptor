@@ -54,7 +54,7 @@ from packages.checker_synthesis.library import RuleLibrary
 
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
-from .claim_verification import ClaimVerification, supported_claims
+from .claim_verification import ClaimVerification, supported_claims, unverified_critique
 from .dark_verify._admission import SANITIZER_RECEIPT, witness_can_confirm
 from .dark_verify._dispatch import automatic_witness_skip_reason, witness_requests_defect_oracle
 from .claim_counters import _DISMISSIVE_COUNTERS, has_claim_counter, matching_claims
@@ -14706,7 +14706,6 @@ def _multi_pass_review(
                     # a coin-flip second sample saying clean).
                     from .adversarial_refute import (
                         VERDICT_NEEDS_EVIDENCE,
-                        VERDICT_REFUTED,
                         pick_refuter_model,
                         run_refutation,
                     )
@@ -14730,16 +14729,17 @@ def _multi_pass_review(
                             "refuted": False,
                             "reason": "refutation call failed",
                         }
-                    return {
-                        "refuted": ref.verdict == VERDICT_REFUTED,
+                    return unverified_critique({
                         "verdict": ref.verdict,
+                        "hypothesis": finding.get("hypothesis", "") or "",
                         "reason": ref.counter_argument,
                         "defeating_mechanism": ref.defeating_mechanism,
                         "settling_evidence": ref.settling_evidence,
+                        "refuter_model": ref.model,
                         "needs_evidence": (
                             ref.verdict == VERDICT_NEEDS_EVIDENCE
                         ),
-                    }
+                    })
 
             cost_gate = (
                 _ClientBudgetGate(config.llm_budget_client)
@@ -31190,36 +31190,16 @@ def _adversarial_refute_pass(
     start_time: float | None = None,
     max_workers: int = 1,
 ) -> None:
-    """Post-loop pass: genuinely attack finding/suspicious hypotheses.
+    """Record model critiques without changing claim adjudication.
 
-    For each positive outcome, a SEPARATE LLM call with a purpose-built
-    refutation prompt (``core.audit.adversarial_refute``) attacks the
-    specific hypothesis. Verdict routing:
+    A model's ``refuted`` verdict is an unverified objection, including
+    when it names a guard or a proposed mechanical check. It cannot
+    demote findings or clear independent claims. Existing scoped checker
+    refutations remain owned by the evidence-resolution path.
 
-    - ``stands`` — annotate and keep. The refuter could not defeat it.
-    - ``refuted`` with named mechanical evidence — dispatch the
-      hypothesis through the standard tool chains: a non-detection-role
-      confirmation OVERTURNS the refutation (the outcome keeps its
-      status and gains the tool receipt); an unconfirmed chain
-      corroborates the refuter and the outcome is demoted.
-    - ``refuted`` textually only — demote one level with the refuter's
-      argument recorded: finding → suspicious, suspicious → clean.
-      Tool-backed outcomes never demote below suspicious
-      (``is_tool_evidence`` guard) and are never silently dropped.
-    - ``needs_evidence`` — mark the outcome for dark verification (the
-      dark pass runs later and executes a witness).
-
-    Single-model runs are self-adversarial (same model, adversarial
-    prompt); multi-model runs prefer a refuter model different from the
-    producer. Refuter failures are no-ops — an errored refutation must
-    never demote anything.
-
-    Refutations are independent per outcome (each writes only its own
-    outcome slot; shared counters update under the result lock), so
-    with ``max_workers > 1`` they fan out across threads. A budget or
-    SIGTERM trip stops further dispatch — calls already in flight
-    finish and their verdicts are folded. Single-worker and
-    single-item runs keep the plain serial loop.
+    ``stands`` records unsuccessful critique, not confirmation.
+    ``needs_evidence`` retains the existing diagnostic routing. Budget,
+    cancellation and parallel-dispatch controls apply to every call.
     """
     from .adversarial_refute import (
         VERDICT_NEEDS_EVIDENCE,
@@ -31227,7 +31207,6 @@ def _adversarial_refute_pass(
         pick_refuter_model,
         run_refutation,
     )
-    from .evidence_grade import is_tool_evidence
 
     llm_client = config.llm_client
     if llm_client is None:
@@ -31353,13 +31332,14 @@ def _adversarial_refute_pass(
 
         if outcome.review_result is None:
             outcome.review_result = {}
-        outcome.review_result["adversarial_review"] = {
+        outcome.review_result["adversarial_review"] = unverified_critique({
             "verdict": ref.verdict,
+            "hypothesis": hypothesis,
             "counter_argument": ref.counter_argument[:500],
             "defeating_mechanism": ref.defeating_mechanism[:300],
             "settling_evidence": ref.settling_evidence[:300],
             "refuter_model": ref.model or refuter_model or "",
-        }
+        })
 
         log_entry = {
             "action": "adversarial_refutation",
@@ -31367,6 +31347,9 @@ def _adversarial_refute_pass(
             "file": outcome.file,
             "function": outcome.function,
             "verdict": ref.verdict,
+            "hypothesis": hypothesis,
+            "adjudication": "unverified",
+            "critique": outcome.review_result["adversarial_review"],
             "prior_status": outcome.status,
             "status": outcome.status,
         }
@@ -31401,164 +31384,23 @@ def _adversarial_refute_pass(
             append_audit_log(config.out_dir, log_entry)
             return
 
-        # ── verdict == refuted ─────────────────────────────────────
-        # Named mechanical evidence: give the tools the last word.
-        # A chain confirmation of the ORIGINAL hypothesis overturns
-        # the textual refutation.
-        named_evidence = ref.settling_evidence or ref.defeating_mechanism
-        overturned = False
-        if named_evidence:
-            cwe = _effective_cwe(outcome, result.tier_counters)
-            _hint = _inventory_language_hint(config, outcome.file)
-            chain = _hypothesis_to_tool_chain(
-                hypothesis, outcome.file, cwe=cwe, language=_hint,
-            )
-            if not chain:
-                chain = _hypothesis_to_tool_chain(
-                    named_evidence, outcome.file, cwe=cwe, language=_hint,
-                )
-            if chain:
-                confirmed = _run_tool_chain(
-                    chain,
-                    config=config,
-                    file_path=outcome.file,
-                    function_name=outcome.function,
-                    source=source,
-                    hypothesis=hypothesis,
-                    line_start=outcome.line,
-                    sarif_cache=None,
-                    tier_counters=result.tier_counters,
-                    joern_server=joern_server,
-                    cwe=cwe,
-                    # One verification-role receipt overturns the
-                    # textual refutation on its own.
-                    early_exit_check=_promotion_grade_receipt,
-                )
-                high_prec = [
-                    t for t in (confirmed or [])
-                    if _promotion_grade_receipt(t)
-                ]
-                if high_prec:
-                    overturned = True
-                    tool = "+".join(high_prec)
-                    if not outcome.evidence_tool:
-                        outcome.evidence_tool = tool
-                        outcome.review_result["evidence_tool"] = tool
-                    outcome.review_result["adversarial_review"][
-                        "overturned_by"] = tool
-                    with result._lock:
-                        result.adversarial_stands += 1
-                    _increment_tier_dict(
-                        result.tier_counters, "adversarial_refute",
-                        "confirmed",
-                    )
-                    log_entry["verdict"] = "refutation_overturned"
-                    log_entry["evidence_tool"] = tool
-                    # Graded adjudication, both sides: the receipt
-                    # confirmed the producer's hypothesis and
-                    # contradicted the refuter's refutation claim.
-                    _sc_record_adversarial(
-                        result.scorecard_events, outcome,
-                        producer_model=outcome.model or "",
-                        refuter_model=ref.model or refuter_model or "",
-                        verdict="refuted",
-                        defeating_mechanism=(
-                            ref.defeating_mechanism
-                            or ref.counter_argument or ""
-                        ),
-                        overturned_by=tool,
-                        models=config.models,
-                    )
-                    append_audit_log(config.out_dir, log_entry)
-                    logger.info(
-                        "adversarial refutation overturned %s:%s — tool "
-                        "receipt %s confirms the hypothesis",
-                        outcome.file, outcome.function, tool,
-                    )
-        if overturned:
-            return
-
-        # Demote one level, never silently below a tool receipt.
-        reason = (
-            f"[adversarial-refuted: "
-            f"{(ref.defeating_mechanism or ref.counter_argument)[:200]}]"
-        )
-        tool_backed = is_tool_evidence(outcome.evidence_tool or "")
-        if outcome.status == "finding":
-            demoted = _demote_outcome(outcome, reason)
-            demoted.review_result = outcome.review_result
-            with result._lock:
-                result.outcomes[i] = demoted
-                result.findings -= 1
-                result.suspicious += 1
-                result.adversarial_refuted += 1
-            log_entry["status"] = "suspicious"
-        elif tool_backed:
-            # suspicious + mechanical receipt: record the refutation,
-            # keep the outcome queued for re-review / validate.
-            outcome.body = f"{reason}\n\n{outcome.body}"
-            log_entry["status"] = "suspicious"
-        else:
-            cleaned = ReviewOutcome(
-                file=outcome.file,
-                function=outcome.function,
-                status="clean",
-                body=f"{reason}\n\n{outcome.body}",
-                hypothesis=outcome.hypothesis,
-                hypotheses=outcome.hypotheses,
-                evidence_tool=outcome.evidence_tool,
-                cost_usd=outcome.cost_usd,
-                model=outcome.model,
-                duration_s=outcome.duration_s,
-                review_result=outcome.review_result,
-                line=outcome.line,
-            )
-            cleaned.tools_dispatched = outcome.tools_dispatched
-            cleaned.tools_errored = outcome.tools_errored
-            cleaned.tools_inconclusive = outcome.tools_inconclusive
-            cleaned.tools_skipped = outcome.tools_skipped
-            with result._lock:
-                result.outcomes[i] = cleaned
-                result.suspicious -= 1
-                result.clean += 1
-                result.adversarial_refuted += 1
-            log_entry["status"] = "clean"
-
-        # The refuter overruled the verdict and the pipeline demoted
-        # on its ruling — but a 1-vs-1 LLM ruling is policy, not
-        # ground truth, so this records on a consistency axis
-        # (self_consistency flipped / cross_family_consistency
-        # disputed), never a merge weight. Receipt-floored outcomes
-        # (tool_backed) stay ungraded entirely — the refutation and
-        # the receipt conflict and re-review owns the resolution.
-        if not tool_backed:
-            _sc_record_adversarial(
-                result.scorecard_events, outcome,
-                producer_model=outcome.model or "",
-                refuter_model=ref.model or refuter_model or "",
-                verdict="refuted",
-                defeating_mechanism=(
-                    ref.defeating_mechanism or ref.counter_argument or ""
-                ),
-                models=config.models,
-            )
+        # A critique is not a scoped refutation. In particular, checking
+        # the original hypothesis and finding no confirmation would not
+        # verify the critic's proposed guard or caller-side guarantee.
         _increment_tier_dict(
-            result.tier_counters, "adversarial_refute", "refuted",
+            result.tier_counters, "adversarial_refute", "inconclusive",
         )
         append_audit_log(config.out_dir, log_entry)
         logger.info(
-            "adversarial refuter demoted %s:%s (%s → %s): %s",
+            "adversarial objection retained without adjudication: %s:%s",
             outcome.file, outcome.function,
-            log_entry["prior_status"], log_entry["status"],
-            (ref.defeating_mechanism or ref.counter_argument)[:120],
         )
 
     workers = max(1, max_workers)
     if joern_server is not None:
-        # Refuted-verdict routing can dispatch a per-item tool chain
-        # through the Joern lane — same single-JVM cap as the sweep.
+        # Retain the existing concurrency limit during the authority
+        # migration, even though this pass no longer dispatches checks.
         workers = min(workers, _JOERN_PASS_MAX_WORKERS)
-
     if workers <= 1 or len(candidates) <= 1:
         for item in candidates:
             _refute_one(item)

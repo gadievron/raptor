@@ -460,6 +460,12 @@ def build_graded_finding(
             confidence = Confidence.LOW
             finding["confidence"] = confidence.value
 
+    critique = review_result.get("adversarial_review")
+    if isinstance(critique, dict):
+        from .claim_verification import unverified_critique
+
+        finding["adversarial_review"] = unverified_critique(critique)
+
     discovery_sources = []
     if evidence_record is not None:
         if getattr(evidence_record, "joern_flows", None):

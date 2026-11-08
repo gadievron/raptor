@@ -472,7 +472,7 @@ class TestPhraseDecidesNothing:
         ("plain", "finding", ("dark", 1)),
         ("plain", "suspicious", ("suspicious", 1)),
         ("all-refuted", "finding", ("clean", 0)),
-        ("adversarial-refuted", "suspicious", ("clean", 0)),
+        ("adversarial-refuted", "suspicious", ("suspicious", 1)),
         ("adversarial-stands", "suspicious", ("suspicious", 1)),
         ("joern-up-covered", "finding", ("dark", 1)),
         ("joern-down-covered", "suspicious", ("suspicious", 1)),

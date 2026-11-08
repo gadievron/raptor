@@ -153,11 +153,10 @@ class TestSerialParallelEquivalence:
         )
 
         assert _snapshot(serial) == _snapshot(parallel)
-        # Refuted findings demote one level; refuted suspicious
-        # (no tool receipt) demote to clean; stands keep status.
+        # Model objections preserve assessments in both execution modes.
         by_fn = {o.function: o.status for o in parallel.outcomes}
-        assert by_fn["fn2"] == "suspicious"  # finding, refuted
-        assert by_fn["fn1"] == "clean"       # suspicious, refuted
+        assert by_fn["fn2"] == "finding"     # proposed objection
+        assert by_fn["fn1"] == "suspicious"  # proposed objection
         assert by_fn["fn0"] == "finding"     # stands
         assert by_fn["fn3"] == "suspicious"  # stands
 
@@ -280,7 +279,7 @@ class TestSerialFallback:
             result, _config(tmp_path, client), max_workers=1,
         )
         assert client.calls == ["fn0", "fn1"]
-        assert result.outcomes[0].status == "suspicious"
+        assert result.outcomes[0].status == "finding"
 
     def test_single_item_takes_serial_path(self, tmp_path, monkeypatch):
         self._forbid_parallel(monkeypatch)

@@ -5,15 +5,16 @@ dict that no prompt builder consumed — the "refutation" was an
 independent re-review of identical context and "refuted" meant the
 second sample happened to say clean. These tests pin the replacement:
 a purpose-built refutation prompt (envelope-disciplined), structured
-refuted/stands/needs_evidence verdicts, tool-chain arbitration for
-refutations that name mechanical evidence, one-level demotion with the
-is_tool_evidence guard for textual refutations, and dark routing for
-needs_evidence. All LLM calls are stubbed.
+refuted/stands/needs_evidence judgments, unverified objections that cannot
+change verdicts, and existing routing for needs_evidence. All LLM calls
+are stubbed; no new verification is dispatched by the critic.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 from types import SimpleNamespace
 
 from core.audit.adversarial_refute import (
@@ -208,7 +209,7 @@ class TestAdversarialRefutePass:
         note = result.outcomes[0].review_result["adversarial_review"]
         assert note["verdict"] == "stands"
 
-    def test_textual_refutation_demotes_finding_one_level(self, tmp_path):
+    def test_textual_objection_preserves_finding(self, tmp_path):
         client = _StubClient({
             "verdict": "refuted",
             "counter_argument": "the caller contract rules it out",
@@ -217,13 +218,13 @@ class TestAdversarialRefutePass:
         outcome = _outcome("finding")
         result = _result(outcome)
         _adversarial_refute_pass(result, _config(tmp_path, client))
-        assert result.outcomes[0].status == "suspicious"
-        assert result.findings == 0
-        assert result.suspicious == 1
-        assert result.adversarial_refuted == 1
-        assert "[adversarial-refuted:" in result.outcomes[0].body
+        assert result.outcomes[0].status == "finding"
+        assert result.findings == 1
+        assert result.suspicious == 0
+        assert result.adversarial_refuted == 0
+        assert result.outcomes[0].review_result["adversarial_review"]["adjudication"] == "unverified"
 
-    def test_textual_refutation_demotes_suspicious_to_clean(self, tmp_path):
+    def test_textual_objection_cannot_clear_suspicious(self, tmp_path):
         client = _StubClient({
             "verdict": "refuted",
             "counter_argument": "bounds check at line 3",
@@ -232,11 +233,11 @@ class TestAdversarialRefutePass:
         outcome = _outcome("suspicious")
         result = _result(outcome)
         _adversarial_refute_pass(result, _config(tmp_path, client))
-        assert result.outcomes[0].status == "clean"
-        assert result.clean == 1
-        assert result.suspicious == 0
-        # the refuter's argument is recorded, never a silent drop
-        assert "[adversarial-refuted:" in result.outcomes[0].body
+        assert result.outcomes[0].status == "suspicious"
+        assert result.clean == 0
+        assert result.suspicious == 1
+        assert result.adversarial_refuted == 0
+        assert result.outcomes[0].review_result["adversarial_review"]["proposed_refutation"] is True
 
     def test_tool_backed_suspicious_never_drops_below_suspicious(
         self, tmp_path,
@@ -251,7 +252,8 @@ class TestAdversarialRefutePass:
         _adversarial_refute_pass(result, _config(tmp_path, client))
         assert result.outcomes[0].status == "suspicious"
         assert result.suspicious == 1
-        assert "[adversarial-refuted:" in result.outcomes[0].body
+        assert result.outcomes[0].body == "claimed bug"
+        assert result.outcomes[0].evidence_tool == "smt:check-overflow"
 
     def test_needs_evidence_routes_to_dark(self, tmp_path):
         client = _StubClient({
@@ -267,64 +269,46 @@ class TestAdversarialRefutePass:
         rr = result.outcomes[0].review_result
         assert rr["adversarial_needs_evidence"] is True
 
-    def test_named_evidence_chain_confirm_overturns_refutation(
-        self, tmp_path, monkeypatch,
+    @pytest.mark.parametrize("status", ["finding", "suspicious"])
+    def test_named_check_remains_a_proposal_without_dispatch(
+        self, tmp_path, monkeypatch, status,
     ):
         import core.audit.orchestrator as orch
+        from core.audit.record import load_audit_log
 
+        def unexpected(*args, **kwargs):
+            pytest.fail("A critic must not rerun the original hypothesis as proof of its objection")
+
+        monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", unexpected)
+        monkeypatch.setattr(orch, "_run_tool_chain", unexpected)
         client = _StubClient({
             "verdict": "refuted",
-            "counter_argument": "the size is checked upstream",
-            "settling_evidence": "prove the multiplication cannot wrap",
+            "counter_argument": "an unseen caller bounds the value",
+            "settling_evidence": "check the caller guarantee",
         })
-        monkeypatch.setattr(
-            orch, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="", language=None, **kw: [
-                {"type": "smt", "config": {"verb": "check-overflow"}},
-            ],
-        )
-        monkeypatch.setattr(
-            orch, "_run_tool_chain",
-            lambda chain, **kw: ["smt:check-overflow"],
-        )
-        monkeypatch.setattr(orch, "_is_detection_only", lambda t: False)
-
-        outcome = _outcome("finding")
+        outcome = _outcome(status)
+        outcome.hypotheses = [
+            {"mechanism": outcome.hypothesis}, {"mechanism": "independent concern"},
+        ]
         result = _result(outcome)
-        _adversarial_refute_pass(result, _config(tmp_path, client))
-        # tool receipt confirms the ORIGINAL hypothesis → refutation
-        # overturned, status kept, evidence recorded
-        assert result.outcomes[0].status == "finding"
-        assert result.outcomes[0].evidence_tool == "smt:check-overflow"
-        note = result.outcomes[0].review_result["adversarial_review"]
-        assert note["overturned_by"] == "smt:check-overflow"
+        config = _config(tmp_path, client)
+        _adversarial_refute_pass(result, config)
+        assert result.outcomes[0] is outcome
+        assert outcome.status == status
+        assert len(outcome.hypotheses) == 2
+        assert outcome.evidence_tool == ""
         assert result.adversarial_refuted == 0
-
-    def test_named_evidence_chain_unconfirmed_still_demotes(
-        self, tmp_path, monkeypatch,
-    ):
-        import core.audit.orchestrator as orch
-
-        client = _StubClient({
-            "verdict": "refuted",
-            "counter_argument": "guarded",
-            "settling_evidence": "prove the multiplication cannot wrap",
-        })
-        monkeypatch.setattr(
-            orch, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="", language=None, **kw: [
-                {"type": "smt", "config": {"verb": "check-overflow"}},
-            ],
-        )
-        monkeypatch.setattr(
-            orch, "_run_tool_chain", lambda chain, **kw: [],
-        )
-
-        outcome = _outcome("finding")
-        result = _result(outcome)
-        _adversarial_refute_pass(result, _config(tmp_path, client))
-        assert result.outcomes[0].status == "suspicious"
-        assert result.adversarial_refuted == 1
+        assert result.tier_counters["adversarial_refute"].inconclusive == 1
+        assert result.cost_tracker.phases["adversarial"].calls == 1
+        entries = load_audit_log(config.out_dir)
+        entry = next(e for e in entries if e["action"] == "adversarial_refutation")
+        assert entry["verdict"] == "refuted"  # proposed model judgment
+        assert entry["adjudication"] == "unverified"
+        assert entry["status"] == entry["prior_status"] == status
+        assert entry["critique"]["counter_argument"] == "an unseen caller bounds the value"
+        assert entry["critique"]["settling_evidence"] == "check the caller guarantee"
+        assert entry["critique"]["hypothesis"] == outcome.hypothesis
+        assert entry["critique"]["refuted"] is False
 
     def test_failed_refuter_is_noop(self, tmp_path):
         class _Boom:
@@ -396,7 +380,7 @@ class TestDarkEligibility:
 # ---------------------------------------------------------------------------
 
 class TestMultiModelRefutation:
-    def test_refuted_verdict_downgrades_panel_item(self, tmp_path):
+    def test_model_objection_preserves_panel_item(self, tmp_path):
         client = _StubClient({
             "verdict": "refuted",
             "counter_argument": "guard dominates",
@@ -417,12 +401,15 @@ class TestMultiModelRefutation:
         ctx = {"file": "a.c", "function": "f", "line_start": 1,
                "source": "int f() {}"}
         outcome = _multi_pass_review(review_fn, ctx, config, passes=1)
-        # both models said finding; the refuter defeated it — LLM-only
-        # evidence downgrades to clean, with the refutation recorded
-        assert outcome.status == "clean"
+        # Consensus and a critic's disagreement remain model judgments.
+        assert outcome.status == "finding"
         assert client.calls, "refuter must actually be called"
         rr = outcome.review_result or {}
-        assert rr.get("adversarial_review", {}).get("verdict") == "refuted"
+        note = rr["adversarial_review"]
+        assert note["verdict"] == "refuted"
+        assert note["adjudication"] == "unverified"
+        assert note["refuted"] is False
+        assert note["proposed_refutation"] is True
 
     def test_needs_evidence_marks_dark_routing(self, tmp_path):
         client = _StubClient({

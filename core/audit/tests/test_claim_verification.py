@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.audit import orchestrator as orch
-from core.audit.claim_verification import ClaimVerification, supported_claims
+from core.audit.claim_verification import ClaimVerification, supported_claims, unverified_critique
 
 
 WEAK = "smt:check-early-release"
@@ -185,3 +185,22 @@ def test_immediate_dispatch_keeps_secondary_receipts_bound_to_their_claim(tmp_pa
     assert out.hypothesis == out.review_result["hypothesis"] == secondary["mechanism"]
     assert out.review_result["cwe"] == secondary["cwe"]
     assert out.evidence_tool == STRONG
+
+
+@pytest.mark.parametrize("record", [
+    {"refuted": True, "reason": "Caller guards the value"},
+    {"verdict": "refuted", "defeating_mechanism": "named guard"},
+    {"verdict": "refuted", "adjudication": "confirmed", "refuted": True},
+    {"verdict": "stands"},
+    {"verdict": "needs_evidence", "needs_evidence": True},
+])
+def test_critique_boundary_is_advisory_and_idempotent(record):
+    from copy import deepcopy
+
+    before = deepcopy(record)
+    assessed = unverified_critique(record)
+    assert record == before
+    assert assessed["adjudication"] == "unverified"
+    assert assessed["refuted"] is False
+    assert unverified_critique(assessed) == assessed
+    assert assessed.get("defeating_mechanism") == record.get("defeating_mechanism")

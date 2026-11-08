@@ -5,6 +5,24 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def unverified_critique(record: dict[str, Any]) -> dict[str, Any]:
+    """Retain a model's objection without granting refutation authority.
+
+    A named guard or proposed check is still a model judgment. Scoped
+    checker refutations are admitted separately through ClaimRefutation;
+    neither a callback flag nor model agreement can substitute for them.
+    """
+    return {
+        **record,
+        "proposed_refutation": (
+            record.get("verdict") == "refuted" or record.get("refuted") is True
+            or record.get("proposed_refutation") is True
+        ),
+        "refuted": False,
+        "adjudication": "unverified",
+    }
+
+
 @dataclass(frozen=True)
 class ClaimVerification:
     hypothesis: dict[str, Any]
