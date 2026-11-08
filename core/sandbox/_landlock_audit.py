@@ -99,6 +99,9 @@ _TRACER_REAP_TIMEOUT_S = 5.0
 # re-checking that the target is still alive. Idle ticks are NOT
 # treated as EOF — see _drain_pipes_until_eof.
 _DRAIN_IDLE_POLL_S = 30.0
+# A target can exit after its probe without producing pipe activity; a
+# surviving writer must not hide that exit for the entire idle deadline.
+_DRAIN_LIVENESS_POLL_S = 0.05
 
 # Per-fd accumulation bound for _drain_pipes_until_eof. Audit pipes
 # carry JSONL event records — 32 MiB is orders of magnitude above any
@@ -415,7 +418,7 @@ def _drain_pipes_until_eof(
             # the pipes, but don't block for more.
             wait = 0.0
         else:
-            wait = _DRAIN_IDLE_POLL_S
+            wait = min(_DRAIN_IDLE_POLL_S, _DRAIN_LIVENESS_POLL_S)
             if deadline is not None:
                 wait = min(wait, max(0.0, deadline - time.monotonic()))
         ready = _readable_fds(fds_open, wait)

@@ -43,6 +43,7 @@ from ._fake_home import prepare_home as _prepare_fake_home
 from ._pathpin import canonical_bind_path
 from . import seccomp as _seccomp
 from . import state
+from ._capture import BoundedCommunicator, limit_result
 
 # mount.py retained for its standalone tests; no longer imported from
 # context — mount-ns goes through core.sandbox._spawn / mount_ns.
@@ -290,6 +291,7 @@ _TEARDOWN_KILL_GRACE_S = 5.0
 
 def _run_teardown_first_timeout(
     cmd: list, pk: dict, death_w_holder: list, start_new_session: bool,
+    *, max_capture_bytes: int | None = None, teardown_first: bool = True,
 ) -> subprocess.CompletedProcess:
     """subprocess.run equivalent whose failures tear down sweeper-first.
 
@@ -338,17 +340,30 @@ def _run_teardown_first_timeout(
         if pk.get("stdin") is not None:
             raise ValueError("stdin and input arguments may not both be used")
         pk["stdin"] = subprocess.PIPE
+    bounded = (BoundedCommunicator(max(0, int(max_capture_bytes)))
+               if max_capture_bytes is not None else None)
     proc = subprocess.Popen(cmd, start_new_session=start_new_session, **pk)
     try:
-        out, err = proc.communicate(input=inp, timeout=timeout)
+        if bounded is not None:
+            bounded.attach(proc)
+        out, err = (bounded.communicate(input=inp, timeout=timeout) if bounded is not None
+                    else proc.communicate(input=inp, timeout=timeout))
     except BaseException as failure:
-        _finish_teardown_first(proc, death_w_holder, failure)
+        if bounded is not None:
+            try:
+                bounded.stop_input()
+            except BaseException as cleanup_error:
+                failure.add_note("sandbox input cleanup: " + type(cleanup_error).__name__)
+        _finish_teardown_first(proc, death_w_holder, failure, bounded=bounded,
+                               teardown_first=teardown_first)
         raise
     finally:
         # Popen owns only PIPE streams; caller-supplied file objects are
         # not proc.stdin/stdout/stderr and must remain open.
         _close_teardown_streams(proc)
     result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    if bounded is not None:
+        result._capture_limit_snapshot = (bounded.cap, out, err)
     if check:
         result.check_returncode()
     return result
@@ -388,7 +403,8 @@ def _timeout_snapshot(failure, proc, out=None, err=None) -> None:
         setattr(failure, attr, current)
 
 
-def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException) -> None:
+def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
+                           *, bounded=None, teardown_first: bool = True) -> None:
     """Signal the sweeper before escalation on every communication failure.
 
     One deadline covers each grace/kill phase, including a fallback wait
@@ -413,20 +429,26 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException) -
             # rather than blindly restoring and retrying its number.
             death_close_pending = True
             issues.append(type(exc).__name__ + " while closing death pipe")
-    for killing, budget in ((False, _TEARDOWN_SWEEP_GRACE_S),
-                            (True, _TEARDOWN_KILL_GRACE_S)):
+    phases = (((False, _TEARDOWN_SWEEP_GRACE_S), (True, _TEARDOWN_KILL_GRACE_S))
+              if teardown_first else ((True, _TEARDOWN_KILL_GRACE_S),))
+    for killing, budget in phases:
         deadline = time.monotonic() + budget
         if killing and proc.returncode is None:
-            with suppress(OSError, ValueError):
-                logger.warning(
-                    "Sandbox: teardown-first sweep did not finish within "
-                    "its grace period; killing the owned sweeper")
+            if teardown_first:
+                with suppress(OSError, ValueError):
+                    logger.warning(
+                        "Sandbox: teardown-first sweep did not finish within "
+                        "its grace period; killing the owned sweeper")
             try:
                 proc.kill()
             except BaseException as exc:
                 issues.append(type(exc).__name__ + " while killing sweeper")
         try:
-            out, err = proc.communicate(timeout=max(0, deadline - time.monotonic()))
+            out, err = (bounded.communicate(timeout=max(0, deadline - time.monotonic()))
+                        if bounded is not None else
+                        proc.communicate(timeout=max(0, deadline - time.monotonic())))
+            if bounded is not None:
+                out, err = bounded.outputs()
             _timeout_snapshot(failure, proc, out, err)
         except BaseException as exc:
             if isinstance(exc, subprocess.TimeoutExpired):
@@ -436,6 +458,11 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException) -
                     issues.append(type(snapshot_error).__name__ + " while preserving output")
             else:
                 issues.append(type(exc).__name__ + " while draining sweeper")
+        if bounded is not None:
+            try:
+                _timeout_snapshot(failure, proc, *bounded.outputs())
+            except BaseException as snapshot_error:
+                issues.append(type(snapshot_error).__name__ + " while preserving bounded output")
         try:
             proc.wait(timeout=max(0, deadline - time.monotonic()))
         except BaseException as exc:
@@ -458,37 +485,12 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException) -
 def _apply_capture_ceiling(
     result: subprocess.CompletedProcess, cap: int,
 ) -> None:
-    """Clamp captured stdout/stderr to *cap* bytes per stream (UTF-8 for text),
-    appending the spawn backend's truncation-marker shape.
+    """Apply the result-size bound and format loss once across executors.
 
-    Keep-head semantics matching ``_spawn.run_sandboxed``'s drain cap.
-    This is a RESULT-size bound only: the fork spawn backend bounds
-    its capture transiently during the drain; the subprocess-backed
-    lanes buffer their pipes fully before this clamp runs (documented
-    at the ``max_capture_bytes`` pop in ``run()``).
+    Streaming owners bound retained bytes while draining. Other platform
+    executors still need this final clamp on their already-buffered output.
     """
-    cap = max(0, int(cap))
-    for attr, label in (("stdout", "stdout"), ("stderr", "stderr")):
-        val = getattr(result, attr, None)
-        if val is None:
-            continue
-        prefix: bytes | str
-        if isinstance(val, bytes):
-            if len(val) <= cap:
-                continue
-            prefix = val[:cap]
-        else:
-            # At most cap characters can fit in cap UTF-8 bytes. Encode only
-            # that prefix, not the entire already-buffered subprocess output.
-            raw = val[:cap].encode("utf-8", errors="replace")
-            if len(val) <= cap and len(raw) <= cap:
-                continue
-            prefix = raw[:cap].decode("utf-8", errors="ignore")
-        marker = f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
-        if isinstance(prefix, bytes):
-            setattr(result, attr, prefix + marker.encode("ascii"))
-        else:
-            setattr(result, attr, prefix + marker)
+    limit_result(result, cap)
 
 
 # Byte ceiling for recounting the (target-writable) event log. A
@@ -3736,9 +3738,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # fork spawn backend enforces it DURING the pipe drain — a
         # true transient bound on the trusted parent's memory (rootfs
         # runs are pinned to that backend by the rootfs fail-closed
-        # gates); every other lane gets a result-size clamp at the
-        # dispatch chokepoint, which bounds what flows downstream but
-        # not the lane's own transient buffering.
+        # gates). Plain subprocess calls also drain through a bounded
+        # owner when this kwarg is present. Other platform lanes retain
+        # a result-size clamp at the dispatch chokepoint.
         _max_capture_bytes = kwargs.pop("max_capture_bytes", None)
 
         # Audit-mode + missing output= handling. Two distinct cases:
@@ -8001,7 +8003,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         if (
                             _reaper_cell is not None
                             and _death_w is not None
-                        ):
+                        ) or _max_capture_bytes is not None:
                             # Teardown-first failure cleanup: a plain
                             # subprocess.run timeout SIGKILLs
                             # Popen.pid, which on this path IS the
@@ -8024,6 +8026,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         cmd, _pk,
                                         _death_w_holder,
                                         _start_new_session,
+                                        max_capture_bytes=_max_capture_bytes,
+                                        teardown_first=(_reaper_cell is not None
+                                                        and _death_w is not None),
                                     ),
                             )
                         else:
