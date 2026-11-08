@@ -159,6 +159,48 @@ def test_record_snapshots_the_claim_it_verified():
     assert record.hypothesis["mechanism"] == "overflow"
 
 
+@pytest.mark.parametrize("mutate_input", [False, True])
+def test_nested_claim_data_cannot_change_after_verification(mutate_input):
+    hypothesis = {"mechanism": "discarded error", "assumptions": [{"callee": "decode"}]}
+    record = ClaimVerification(hypothesis, (STRONG,))
+    exposed = hypothesis if mutate_input else record.hypothesis
+    exposed["assumptions"][0]["callee"] = "unrelated"
+    exposed["assumptions"].append({"caller": "invented"})
+    assert record.hypothesis == {
+        "mechanism": "discarded error", "assumptions": [{"callee": "decode"}],
+    }
+
+
+def test_mutating_a_selected_claim_cannot_rebind_its_receipts(tmp_path):
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.json import load_json
+
+    record = ClaimVerification({"mechanism": "discarded error", "cwe": "CWE-252"}, (STRONG,))
+    selected = select(record)[0]
+    selected.verification.hypothesis.update({"mechanism": "unrelated race", "cwe": "CWE-362"})
+    out, _, _ = aggregate(tmp_path, [record], status="suspicious")
+    assert out.hypothesis == out.review_result["hypothesis"] == "discarded error"
+    assert out.review_result["cwe_class"] == "CWE-252"
+    assert out.evidence_tool == STRONG
+    write_graded_findings(export_findings([out]), tmp_path)
+    finding = load_json(tmp_path / "findings-graded.json")["findings"][0]
+    assert finding["hypothesis"] == "discarded error"
+    assert finding["discovery"]["evidence_tool"] == STRONG
+
+
+def test_a_consumer_cannot_erase_a_recorded_cross_function_premise(tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "_note_premise_blocked_validation", lambda *a, **kw: None)
+    claim = {"mechanism": "overflow", "counter_scope": "cross_function",
+             "counter": "The caller clamps the length before calling."}
+    record = ClaimVerification(claim, (STRONG,))
+    record.hypothesis.update({"counter_scope": "local", "counter": ""})
+    out, result, _ = aggregate(tmp_path, [record], status="suspicious")
+    assert out.status == "suspicious"
+    assert out.review_result["ihv_gate_blocked"] == "cross-function-premise"
+    assert not out.review_result.get("immediate_verified")
+    assert result.immediate_verified == 0
+
+
 def test_immediate_dispatch_keeps_secondary_receipts_bound_to_their_claim(tmp_path, monkeypatch):
     primary = {"mechanism": "unproven race", "confidence": "high", "cwe": "CWE-362"}
     secondary = {"mechanism": "discarded error", "confidence": "medium", "cwe": "CWE-252"}
