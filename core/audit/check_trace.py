@@ -123,6 +123,21 @@ def record_claim_scope_rejection(out_dir, binding, *, attempted_scope, reason, r
     )
 
 
+def record_synthesis_exclusion(out_dir, binding, *, attempted_scope, excluded_receipts) -> None:
+    """Retain receipt-policy exclusions without inventing producer scope."""
+    from .verification_results import VerificationScope
+
+    reported = binding if binding is not None else VerificationScope("", "", 0, "")
+    record_check_observation(
+        out_dir, reported, tool="synthesis_admission", verdict="inconclusive",
+        rule_id="synth-receipt-excluded", reason="synthesized receipt is not promotion evidence for this claim",
+        result=SimpleNamespace(outcome="inconclusive", details={
+            "attempted_scope": attempted_scope, "excluded_receipts": excluded_receipts,
+            "producer_scope_recorded": binding is not None,
+        }),
+    )
+
+
 def _apply_source_invalidations(checks: list[dict]) -> dict:
     """Reporting-only links to admitted, exactly scoped source withdrawals.
 

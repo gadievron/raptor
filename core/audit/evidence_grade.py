@@ -873,8 +873,17 @@ def is_verification_evidence(ev: str) -> bool:
     Detection-role receipts remain observations regardless of how many
     namespaces they span. At least one verification receipt is required.
     """
+    return next(iter_verification_receipts(ev), None) is not None
+
+
+def iter_verification_receipts(ev: str):
+    """Yield admitted parts without crossing model-claim provenance markers.
+
+    Outcome-specific policies may further restrict these receipts. Splitting
+    a composite directly must not turn model-owned suffix text into proof.
+    """
     if not ev or ev.startswith(_NON_MECHANICAL_LEAD):
-        return False
+        return
     for part in ev.split("+"):
         part = part.strip()
         if not part:
@@ -890,7 +899,7 @@ def is_verification_evidence(ev: str) -> bool:
             # verification nor recognized diagnostic evidence, ignored.
             role = registered_spelling_role(part)
             if role == _ROLE_VERIFICATION:
-                return True
+                yield part
             continue
         # Import guard only: evidence_grade↔orchestrator is a
         # potential import cycle; _is_detection_only itself is a pure
@@ -903,8 +912,7 @@ def is_verification_evidence(ev: str) -> bool:
         if detection:
             continue
         if is_tool_evidence(part):
-            return True
-    return False
+            yield part
 
 
 _RECEIPT_MAP: dict[str, tuple] = {
