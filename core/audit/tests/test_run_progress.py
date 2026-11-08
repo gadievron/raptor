@@ -11,6 +11,17 @@ from core.audit.orchestrator import _update_run_progress
 
 
 
+
+@pytest.fixture(autouse=True)
+def _reset_term_state():
+    """Own shutdown events and bookkeeping until test workers finish."""
+    from core.audit import orchestrator as orch
+    from core.testing.audit_shutdown import isolated_audit_shutdown
+
+    with isolated_audit_shutdown(orch):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _owned_source_lines():
     """Restore borrowed caches after this test's mutations."""

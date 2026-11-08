@@ -15,11 +15,13 @@ CASES = [
     "core/audit/tests/test_sigterm_grace.py",
     "core/audit/tests/test_sigterm_joern_reap.py",
     "core/audit/tests/test_joern_exit_release.py",
+    "core/audit/tests/test_executor.py",
+    "core/audit/tests/test_run_progress.py",
 ]
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _prepare(path, initial, fail_at=None):
+def _prepare(path, initial, fail_at=None, failure_type=RuntimeError):
     owner = ModuleType("private_audit_orchestrator")
     owner._sigterm_event = threading.Event()
     owner._shutdown_event = threading.Event()
@@ -39,9 +41,13 @@ def _prepare(path, initial, fail_at=None):
             super().setattr(*args, **kwargs)
             steps.append(None)
             if len(steps) == fail_at:
-                raise RuntimeError("injected setup failure")
+                raise failure_type("injected setup failure")
 
     def fixture_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core.audit":
+            view = ModuleType(name)
+            view.orchestrator = owner
+            return view
         if name == "core.testing.audit_shutdown":
             helper = import_module(name).isolated_audit_shutdown.__wrapped__
             pytest_view = ModuleType("private_pytest")
@@ -81,7 +87,7 @@ def _restored(owner, snapshot, initial):
     assert len(owner._sigterm_flush_hooks) == 1
 
 
-@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release"])
+@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release", "executor", "progress"])
 @pytest.mark.parametrize("initial", ["clear", "term", "shutdown"])
 @pytest.mark.parametrize("mode", ["normal", "close", "throw"])
 def test_shutdown_fixture_preserves_borrowed_state(path, initial, mode):
@@ -124,20 +130,21 @@ def test_shutdown_fixture_preserves_borrowed_state(path, initial, mode):
     _restored(owner, snapshot, initial)
 
 
-@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release"])
-@pytest.mark.parametrize("fail_at", [1, 4, 6])
-def test_shutdown_setup_failure_restores_completed_pins(path, fail_at):
-    fixture, owner, snapshot = _prepare(path, "term", fail_at)
+@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release", "executor", "progress"])
+@pytest.mark.parametrize("fail_at", range(1, 7))
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_shutdown_setup_failure_restores_completed_pins(path, fail_at, failure_type):
+    fixture, owner, snapshot = _prepare(path, "term", fail_at, failure_type)
     generator = fixture()
     try:
-        with pytest.raises(RuntimeError, match="injected setup failure"):
+        with pytest.raises(failure_type, match="injected setup failure"):
             next(generator)
     finally:
         generator.close()
     _restored(owner, snapshot, "term")
 
 
-@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release"])
+@pytest.mark.parametrize("path", CASES, ids=["grace", "reap", "release", "executor", "progress"])
 def test_shutdown_fixture_finishes_workers_before_restoring_state(path):
     fixture, owner, snapshot = _prepare(path, "clear")
     generator = fixture()

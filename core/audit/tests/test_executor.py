@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,6 +12,17 @@ from unittest.mock import MagicMock
 from core.audit.executor import ExecutorConfig, run_executor_sync
 from core.audit.task_graph import TaskGraph
 from core.llm.concurrency import derive_max_workers
+
+
+
+@pytest.fixture(autouse=True)
+def _reset_term_state():
+    """Own shutdown events and bookkeeping until test workers finish."""
+    from core.audit import orchestrator as orch
+    from core.testing.audit_shutdown import isolated_audit_shutdown
+
+    with isolated_audit_shutdown(orch):
+        yield
 
 
 def _gap(file: str, name: str, priority: float = 0.5) -> dict[str, Any]:
