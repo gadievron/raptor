@@ -22,7 +22,7 @@ from core.json import load_json, save_json
 from core.json.jsonl import load_jsonl
 from core.logging import get_logger
 from core.paths import confine
-from core.project.findings_utils import finding_file, load_findings_from_dir
+from core.project.findings_utils import FindingsLoadDisclosure, finding_file, load_findings_from_dir
 from core.run import load_run_metadata
 from core.tp_harvest import candidates as candidates_mod
 from core.tp_harvest import labels as labels_mod
@@ -169,8 +169,11 @@ def harvest_run(
             "no .raptor-run.json — span hashes and target-tree seeds "
             "unavailable")
 
-    findings = load_findings_from_dir(run_dir)
-    if not findings:
+    disclosure = FindingsLoadDisclosure()
+    findings = load_findings_from_dir(run_dir, disclosure=disclosure)
+    if not findings and disclosure.discarded_rows:
+        notes.append("no valid findings remain — malformed rows were skipped")
+    elif not findings:
         notes.append("no findings artifact (or empty) — nothing to harvest")
 
     outcomes: list[Any] = []
@@ -188,6 +191,8 @@ def harvest_run(
 
     harvested: list[str] = []
     skipped: dict[str, int] = {}
+    if disclosure.discarded_rows:
+        skipped[SKIP_FINDING_MALFORMED] = disclosure.discarded_rows
     seen_this_pass: set[str] = set()
 
     # Backlog hids already on disk — pointer appends are keyed so a
@@ -236,7 +241,7 @@ def harvest_run(
         "run_dir": str(run_dir),
         "target_path": target_path,
         "command": command,
-        "findings_total": len(findings),
+        "findings_total": disclosure.total_rows,
         "harvested": harvested,
         "skipped": skipped,
         "notes": notes,

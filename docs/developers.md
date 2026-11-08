@@ -651,6 +651,11 @@ writer, authentication binding, and downstream readers together. Keep data
 quality separate from behavior classification: filtering bookkeeping records
 must not erase capture loss or turn an unobserved event into proven absence.
 Include an end-to-end reader check alongside local serialization tests.
+When a shared reader starts filtering records, trace downstream counters and
+persisted summaries too. For example, findings-loader filtering must disclose
+discarded rows so harvest retains its `finding_malformed` skips and original
+input totals. Keep malformed-row accounting assertions alongside tolerant
+loading tests.
 
 ### Refactors and audit records
 
