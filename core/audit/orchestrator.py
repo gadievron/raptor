@@ -22076,9 +22076,9 @@ def _promotion_grade_receipt(receipt: str) -> bool:
     corroborates via aggregation and may not end the chain (later
     channels are exactly what aggregation needs).
     """
-    from .evidence_grade import is_tool_evidence
+    from .evidence_grade import is_verification_evidence
 
-    return is_tool_evidence(receipt) and not _is_detection_only(receipt)
+    return is_verification_evidence(receipt)
 
 
 def _memoized_sweep_step(
@@ -29802,29 +29802,14 @@ def _is_detection_only(tool_id: str) -> bool:
     metadata: ``// @role:`` in coccinelle rules, ``_SMT_VERB_ROLES``
     for SMT verbs.
 
-    Only stock library rules (in engine/coccinelle/rules/) are checked;
-    dynamically-generated per-hypothesis rules are always allowed to
-    promote because they target the specific hypothesis.
+    Stock filenames and emitted variants inherit their owning rule role.
+    Unknown per-hypothesis rules retain their existing authority only
+    when the complete installed library establishes they are not stock.
+    Ambiguous ownership or unavailable metadata stays detection-only.
     """
     if tool_id.startswith("coccinelle:"):
-        rule_name = tool_id.split("coccinelle:", 1)[1]
-        try:
-            raptor_dir = os.environ["RAPTOR_DIR"]
-        except KeyError:
-            # No repo root — a stock rule cannot be told apart from a
-            # dynamic per-hypothesis one, so fail CLOSED (detection
-            # role, no promotion). The old "." fallback resolved
-            # against CWD, missed the isfile check, and read stock
-            # detection rules as promotion-grade.
-            return True
-        rule_path = os.path.join(
-            raptor_dir,
-            "engine", "coccinelle", "rules", f"{rule_name}.cocci",
-        )
-        if not os.path.isfile(rule_path):
-            return False
-        from core.audit.sweep import get_rule_role
-        return get_rule_role(rule_path) == "detection"
+        from core.analysis.coccinelle_metadata import is_detection_rule_id
+        return is_detection_rule_id(tool_id)
 
     if tool_id.startswith("joern:"):
         # Bare taint reachability (joern:live / joern:pre_sweep)

@@ -669,9 +669,9 @@
     "kind": "literal"
   },
   "core/audit/evidence_grade.py::_DETECTION_CLASSIFIER_MODULES": {
-    "count": 13,
+    "count": 14,
     "kind": "literal",
-    "note": "registry of evidence-channel keys -> classifier module paths (code registry, not a target-API name vocabulary; grows one entry per new evidence channel)"
+    "note": "registry of evidence-channel keys -> classifier module paths (code registry, not a target-API name vocabulary; grows one entry per new evidence channel); Coccinelle uses shared installed-rule ownership so emitted variants retain the owner role"
   },
   "core/audit/evidence_grade.py::_TOOL_NAMESPACES": {
     "count": 27,

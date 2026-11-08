@@ -430,6 +430,11 @@ covering C/C++ structural patterns that require control-flow sensitivity:
 
 Run `ls engine/coccinelle/rules/` for the current file list.
 
+A rule can report several check IDs. In `/audit`, each variant inherits its
+rule’s evidence role: a detection-only variant supplies review context and
+cannot independently promote a finding. Ambiguous ownership or unavailable
+rule metadata also stays review context.
+
 ### Non-base deallocation
 
 Pointer-arithmetic deallocation warnings require review of the allocation

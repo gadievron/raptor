@@ -204,21 +204,24 @@ class TestVerifyImmediate:
         out = _verify_hypotheses_immediate(o, cfg, result)
         assert out is o
 
-    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", [
-        pytest.param("use_after_free", "use after free of a pointer", "CWE-416", False, id="detection-uaf"),
-        pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
-        pytest.param("mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
-        pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
+    @pytest.mark.parametrize("rule,owner,hypothesis,cwe,promotes", [
+        pytest.param("use_after_free", "use_after_free", "use after free of a pointer", "CWE-416", False, id="detection-uaf"),
+        pytest.param("mmap_leak_err", "mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
+        pytest.param("mmap_free", "mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
+        pytest.param("free_nonbase_ptr_inc", "free_nonbase_ptr", "invalid free of an offset pointer", "CWE-761", False, id="detection-offset-alias"),
+        pytest.param("double_fclose", "double_close", "double close of a stream", "CWE-415", False, id="detection-stream-alias"),
+        pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", True, id="verified-stack-alias"),
+        pytest.param("free_stack_array", "free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ])
     def test_prep_phase_correlation_requires_verification_grade(
-        self, tmp_path, monkeypatch, rule, hypothesis, cwe, promotes,
+        self, tmp_path, monkeypatch, rule, owner, hypothesis, cwe, promotes,
     ):
         from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
 
         monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         receipt = f"coccinelle:{rule}"
-        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{owner}.cocci").is_file()
         assert is_verification_evidence(receipt) is promotes
         cfg = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path / "out", on_demand_synthesis=False,
@@ -246,6 +249,8 @@ class TestVerifyImmediate:
         pytest.param("coccinelle:use_after_free", "use after free of a pointer", "CWE-416", id="detection-uaf"),
         pytest.param("coccinelle:mmap_leak_err", "mapping memory leak at return", "CWE-401", id="detection-mapping-leak"),
         pytest.param("coccinelle:mmap_free", "mapping pointer passed to free", "CWE-762", id="detection-mapping-release"),
+        pytest.param("coccinelle:free_nonbase_ptr_inc", "invalid free of an offset pointer", "CWE-761", id="detection-offset-alias"),
+        pytest.param("coccinelle:double_fclose", "double close of a stream", "CWE-415", id="detection-stream-alias"),
     ])
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
     def test_prep_phase_detection_receipt_cannot_bypass_aggregation(

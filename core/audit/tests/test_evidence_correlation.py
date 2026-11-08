@@ -363,10 +363,13 @@ class TestMechDetectorPromotion:
 
     UAF_HYP = "use after free: object written after early free"
     ROLE_CASES = [
-        pytest.param("use_after_free", UAF_HYP, "CWE-416", False, id="detection-uaf"),
-        pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
-        pytest.param("mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
-        pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
+        pytest.param("use_after_free", "use_after_free", UAF_HYP, "CWE-416", False, id="detection-uaf"),
+        pytest.param("mmap_leak_err", "mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
+        pytest.param("mmap_free", "mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
+        pytest.param("free_nonbase_ptr_inc", "free_nonbase_ptr", "invalid free of an offset pointer", "CWE-761", False, id="detection-offset-alias"),
+        pytest.param("double_fclose", "double_close", "double close of a stream", "CWE-415", False, id="detection-stream-alias"),
+        pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", True, id="verified-stack-alias"),
+        pytest.param("free_stack_array", "free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ]
 
     @pytest.fixture(autouse=True)
@@ -384,14 +387,14 @@ class TestMechDetectorPromotion:
             }],
         }
 
-    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", ROLE_CASES)
-    def test_correlated_cocci_hit_requires_verification_role(self, rule, hypothesis, cwe, promotes):
+    @pytest.mark.parametrize("rule,owner,hypothesis,cwe,promotes", ROLE_CASES)
+    def test_correlated_cocci_hit_requires_verification_role(self, rule, owner, hypothesis, cwe, promotes):
         from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import _correlated_mech_detector_tool
 
         receipt = f"coccinelle:{rule}"
         # An unknown dynamic-rule fallback is not a valid positive control.
-        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{owner}.cocci").is_file()
         assert is_verification_evidence(receipt) is promotes
         outcome = _mk_outcome(hypothesis, cwe)
         tool = _correlated_mech_detector_tool(
@@ -435,9 +438,9 @@ class TestMechDetectorPromotion:
         )
         assert tool is None
 
-    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", ROLE_CASES)
+    @pytest.mark.parametrize("rule,owner,hypothesis,cwe,promotes", ROLE_CASES)
     def test_promote_suspicious_requires_verification_grade_mech_hit(
-        self, tmp_path, monkeypatch, rule, hypothesis, cwe, promotes,
+        self, tmp_path, monkeypatch, rule, owner, hypothesis, cwe, promotes,
     ):
         from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import (
@@ -446,7 +449,7 @@ class TestMechDetectorPromotion:
         )
 
         receipt = f"coccinelle:{rule}"
-        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{owner}.cocci").is_file()
         assert is_verification_evidence(receipt) is promotes
         outcome = _mk_outcome(hypothesis, cwe)
         outcome.status = "suspicious"

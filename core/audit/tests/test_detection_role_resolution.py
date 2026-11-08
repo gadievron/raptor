@@ -36,6 +36,11 @@ class TestDetectionRoleResolution:
         assert _is_detection_only(
             "coccinelle:hypothesis-generated-nonexistent-rule",
         ) is False
+        from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+
+        receipt = "coccinelle:hypothesis-generated-nonexistent-rule"
+        assert is_tool_evidence(receipt)
+        assert is_verification_evidence(receipt)
 
     def test_nonbase_free_requires_independent_origin_evidence(self, monkeypatch, tmp_path):
         from core.audit.sweep import get_rule_role
@@ -150,3 +155,82 @@ class TestDetectionRoleResolution:
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only(f"coccinelle:{rule_name}") is True
         assert not is_verification_evidence(f"coccinelle:{rule_name}")
+
+
+@pytest.mark.parametrize("owner,alias,role", [
+    ("free_nonbase_ptr", "free_nonbase_ptr_inc", "detection"),
+    ("double_close", "double_fclose", "detection"),
+    ("stack_addr_escape", "stack_addr_escape_outparam", "verification"),
+    ("va_arg_mismatch", "va_arg_promoted_type", "verification"),
+    ("va_arg_mismatch", "va_arg_promoted_type_short", "verification"),
+])
+def test_shipped_variants_inherit_their_real_owner(monkeypatch, tmp_path, owner, alias, role):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rules = Path(_RAPTOR_DIR) / "engine/coccinelle/rules"
+    assert not (rules / f"{alias}.cocci").exists()
+    assert get_rule_role(str(rules / f"{owner}.cocci")) == role
+    assert _is_detection_only(f"coccinelle:{alias}") is (role == "detection")
+    assert is_verification_evidence(f"coccinelle:{alias}") is (role == "verification")
+    assert is_tool_evidence(f"coccinelle:{alias}") is (role == "verification")
+
+
+@pytest.mark.parametrize("stamp", [
+    "coccinelle:free_nonbase_ptr_inc+coccinelle:double_fclose",
+    "llm-claimed:coccinelle:free_nonbase_ptr_inc",
+])
+def test_variant_stamps_cannot_manufacture_verification(monkeypatch, stamp):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.orchestrator import _promotion_grade_receipt
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    assert not is_tool_evidence(stamp)
+    assert not is_verification_evidence(stamp)
+    assert not _promotion_grade_receipt(stamp)
+
+
+def test_export_does_not_attribute_verification_to_detection_alias(monkeypatch):
+    from core.audit.evidence_grade import EvidenceSource, grade_review_result
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    stamp = "semgrep:independent-proof+coccinelle:free_nonbase_ptr_inc"
+    sources = {item.source for item in grade_review_result({"hypothesis": "candidate"}, stamp)}
+    assert EvidenceSource.SEMGREP in sources
+    assert EvidenceSource.COCCINELLE not in sources
+    sources = {item.source for item in grade_review_result(
+        {"hypothesis": "candidate"}, "coccinelle:va_arg_promoted_type",
+    )}
+    assert EvidenceSource.COCCINELLE in sources
+
+
+def test_classifier_unavailable_cannot_grant_variant_authority(monkeypatch):
+    import core.audit.evidence_grade as grading
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    original = grading._channel_detection_classifier
+    monkeypatch.setattr(grading, "_channel_detection_classifier",
+                        lambda ns: None if ns == "coccinelle" else original(ns))
+    for receipt in ("coccinelle:free_nonbase_ptr_inc", "coccinelle:va_arg_promoted_type",
+                    "coccinelle:hypothesis-generated"):
+        assert not grading.is_tool_evidence(receipt)
+        assert not grading.is_verification_evidence(receipt)
+        assert grading.is_tool_evidence(f"semgrep:independent-proof+{receipt}")
+
+
+@pytest.mark.parametrize("stamp", [
+    "coccinelle:free_nonbase_ptr_inc+semgrep:independent-proof",
+    "semgrep:independent-proof+coccinelle:free_nonbase_ptr_inc",
+    "coccinelle:free_nonbase_ptr_inc+coccinelle:va_arg_promoted_type",
+    "coccinelle:va_arg_promoted_type+coccinelle:free_nonbase_ptr_inc",
+])
+def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, stamp):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.orchestrator import _promotion_grade_receipt
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    assert is_tool_evidence(stamp)
+    assert is_verification_evidence(stamp)
+    assert _promotion_grade_receipt(stamp)
