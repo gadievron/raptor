@@ -55,9 +55,13 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from core.source.lines import split_lines
+from core.source.lines import slice_source_lines, split_lines
+from .field_census import FunctionSpan
 
 logger = logging.getLogger(__name__)
+
+_REGION_LINES_IMPL = split_lines
+_REGION_TYPE_IMPL = type
 
 _REGION_LOCK_PUNCT_RE = re.compile(r"[\s&()]")
 _REGION_CALL_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
@@ -207,7 +211,9 @@ def _spans_cached(source: str, file_path: str) -> tuple:
 
 @lru_cache(maxsize=128)
 def _lines_cached(source: str) -> tuple[str, ...]:
-    return tuple(source.splitlines())
+    # Census spans count LF; adapters keep their existing split operation.
+    return tuple(_REGION_LINES_IMPL(source) if _REGION_TYPE_IMPL(source) is str
+                 else source.splitlines())
 
 
 @lru_cache(maxsize=128)
@@ -219,7 +225,9 @@ def _scan_lines_cached(source: str) -> tuple[str, ...]:
     mints a 'release precedes every callback-shaped invocation'
     refutation for a genuine callback-under-lock."""
     from .source_view import sanitized_view
-    return tuple(sanitized_view(source, language="c").splitlines())
+    view = sanitized_view(source, language="c")
+    return tuple(_REGION_LINES_IMPL(view) if _REGION_TYPE_IMPL(view) is str
+                 else view.splitlines())
 
 
 def _normalize_lock_var(arg: str) -> str:
@@ -610,6 +618,27 @@ def status_for(result: LockRegionEvidence) -> str:
 # ── channel entry points ────────────────────────────────────────────
 
 
+def _raw_function_lines(source: str, span: Any) -> list[str]:
+    if (_REGION_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+            and split_lines is _REGION_LINES_IMPL and _REGION_TYPE_IMPL(span) is FunctionSpan
+            and _REGION_TYPE_IMPL(span.start) is int and _REGION_TYPE_IMPL(span.end) is int
+            and span.start > 0 and span.end >= span.start):
+        return slice_source_lines(source, span.start, span.end)
+    lines = split_lines(source)
+    return lines[span.start - 1:span.end]
+
+
+def _scan_function_lines(source: str, span: Any) -> list[str]:
+    lines = _scan_lines_cached(source)
+    if (_REGION_TYPE_IMPL(lines) is tuple and _REGION_TYPE_IMPL(span) is FunctionSpan
+            and _REGION_TYPE_IMPL(span.start) is int and _REGION_TYPE_IMPL(span.end) is int):
+        # Copy only this function, rather than every cached row per candidate.
+        return list(lines[span.start - 1:span.end])
+    # Materialize custom providers before accessing coordinate adapters.
+    rows = list(lines)
+    return rows[span.start - 1:span.end]
+
+
 def _adjudicate_function(
     source_texts: dict[str, str],
     file_path: str,
@@ -622,12 +651,10 @@ def _adjudicate_function(
     """Adjudicate one function. Returns None when the function has no
     lock shape at all (prepass skip)."""
     source = source_texts.get(file_path, "")
-    lines = split_lines(source)
-    raw_segment = lines[span.start - 1:span.end]
+    raw_segment = _raw_function_lines(source, span)
     # Matching runs on the sanitized view only (comments/strings
     # blanked); raw lines feed the human-facing receipt fields.
-    scan_lines = list(_scan_lines_cached(source))
-    segment = scan_lines[span.start - 1:span.end]
+    segment = _scan_function_lines(source, span)
     regions, unresolved = _find_regions(segment, span.start, vocab)
     if not regions and not unresolved:
         return None

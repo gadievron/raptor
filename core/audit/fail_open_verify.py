@@ -114,9 +114,12 @@ from .fail_open_roles import (
     RoleEvidence,
     bind_role,
 )
-from core.source.lines import split_lines
+from core.source.lines import slice_source_lines, split_lines
 
 logger = logging.getLogger(__name__)
+
+_SEGMENT_LINES_IMPL = split_lines
+_SEGMENT_TYPE_IMPL = type
 
 # Rule-id namespace: fail_open:<leg>. (The mechanical detector's
 # "fail_open" name lives in mechanical-findings.json, a different
@@ -377,6 +380,24 @@ def _read_source(target_path: Path, file_path: str) -> str | None:
 
 def _function_tail(name: str) -> str:
     return name.rsplit(".", 1)[-1] if name else ""
+
+
+def _native_segment_span(source: str, span: Any) -> bool:
+    return (
+        _SEGMENT_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+        and split_lines is _SEGMENT_LINES_IMPL and _SEGMENT_TYPE_IMPL(span) is tuple
+        and tuple.__len__(span) == 2
+        and _SEGMENT_TYPE_IMPL(span[0]) is int and _SEGMENT_TYPE_IMPL(span[1]) is int
+        and span[0] > 0 and span[1] >= span[0]
+    )
+
+
+def _segment_for_span(source: str, span: Any) -> str:
+    """Prepare only native function rows; keep adapter operations eager."""
+    if _native_segment_span(source, span):
+        return "\n".join(slice_source_lines(source, span[0], span[1]))
+    lines = split_lines(source)
+    return "\n".join(lines[span[0] - 1:span[1]])
 
 
 def _python_function_segment(source: str, function_name: str) -> str:
@@ -1307,8 +1328,7 @@ def _run_swift_erasure_check(
             "not evidence about this function)",
             language="swift", rule_id=RULE_IGNORED_RETURN,
         )
-    lines = split_lines(source)
-    segment = "\n".join(lines[span[0] - 1:span[1]])
+    segment = _segment_for_span(source, span)
 
     candidates = _candidate_callees(hypothesis, segment)
     if not candidates:
@@ -1761,9 +1781,11 @@ def _run_c_check(
     inventory: dict[str, Any] | None,
 ) -> FailOpenResult:
     span = c_function_span(source, function_name, language=language)
-    lines = split_lines(source)
+    bounded = _native_segment_span(source, span)
+    lines = [] if bounded else split_lines(source)
     if span:
-        segment = "\n".join(lines[span[0] - 1:span[1]])
+        segment = (_segment_for_span(source, span) if bounded
+                   else "\n".join(lines[span[0] - 1:span[1]]))
     else:
         # Whole-file fallback removed: with function_span=None the
         # site classifiers ran over the entire file, so a "confirmed"
@@ -1932,8 +1954,7 @@ def _go_segment(source: str, function_name: str) -> str:
     span = go_function_span(source, function_name)
     if span is None:
         return ""
-    lines = split_lines(source)
-    return "\n".join(lines[span[0] - 1:span[1]])
+    return _segment_for_span(source, span)
 
 
 def _inventory_signature(
@@ -2280,8 +2301,7 @@ def _js_segment(source: str, function_name: str, language: str) -> str:
     span = js_function_span(source, function_name, language=language)
     if span is None:
         return ""
-    lines = split_lines(source)
-    return "\n".join(lines[span[0] - 1:span[1]])
+    return _segment_for_span(source, span)
 
 
 def _js_fallibility(
@@ -2742,8 +2762,7 @@ def _run_rust_check(
             "not evidence about this function)",
             language="rust", rule_id=RULE_IGNORED_RETURN,
         )
-    lines = split_lines(source)
-    segment = "\n".join(lines[span[0] - 1:span[1]])
+    segment = _segment_for_span(source, span)
 
     candidates = _candidate_callees(hypothesis, segment)
     if not candidates:
