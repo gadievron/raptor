@@ -358,6 +358,11 @@
     "count": 44,
     "kind": "alternation"
   },
+  "core/audit/check_trace.py::write_check_results": {
+    "count": 10,
+    "kind": "literal",
+    "note": "verification_summary JSON field schema in findings-graded.json: artifact/export status, event admission, source-validation withdrawals and rejected inputs, finding/clean-review counts, observation summaries and limitations. Fixed report keys, not target function/API names or detection vocabulary; produced by write_check_results and read back by source-freshness/check-trace tests. Source-validation metadata withdraws applicability and grants no proof authority."
+  },
   "core/audit/cocci_flow.py::_PROSE_VICTIMS": {
     "count": 30,
     "kind": "literal"

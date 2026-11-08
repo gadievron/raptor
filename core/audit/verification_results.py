@@ -1,9 +1,14 @@
 """Explicit checker outcomes beside the legacy positive-receipt list."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_non_refuting_smt_rule
+
+SOURCE_CHANGED_REASON = "source changed or became unavailable before tool-chain completion"
+SOURCE_VALIDATION_TOOL = "source_binding"
+SOURCE_INPUT_RULE = "source-input-unbound"
+SOURCE_INPUT_REASON = "reviewed input could not be bound to the identifiable target source file"
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,24 @@ class ToolChainResult(list[str]):
 
     def observe(self, tool: str, verdict: str, rule_id: str, reason: str = "") -> None:
         self.outcomes.append(ProbeOutcome(tool, verdict, rule_id, reason))
+
+    def invalidate_for_source(self, source_identity: SourceIdentity | None) -> bool:
+        """Withdraw probative results when a known dispatch snapshot changed.
+
+        Unknown dispatch identities retain their legacy behavior; False is
+        not a freshness certificate. The caller owns the bounded file read
+        and records the prior results before publishing this invalidation.
+        """
+        if self.source_identity is None or self.source_identity == source_identity:
+            return False
+        changed = bool(self) or any(outcome.verdict in {"confirmed", "refuted"} for outcome in self.outcomes)
+        self.clear()
+        self.outcomes = [
+            replace(outcome, verdict="inconclusive", reason=f"{SOURCE_CHANGED_REASON}; prior {outcome.verdict}: {outcome.reason}")
+            if outcome.verdict in {"confirmed", "refuted"} else outcome
+            for outcome in self.outcomes
+        ]
+        return changed
 
     def refutations(self, *, file, function, line_start, hypothesis) -> tuple[ProbeOutcome, ...]:
         if self.scope != (file, function, line_start or 0, hypothesis):

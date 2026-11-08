@@ -59,7 +59,14 @@ from .dark_verify._admission import SANITIZER_RECEIPT, witness_can_confirm
 from .dark_verify._dispatch import automatic_witness_skip_reason, witness_requests_defect_oracle
 from .claim_counters import _DISMISSIVE_COUNTERS, has_claim_counter, matching_claims
 from .refutation_source import capture_source_identity
-from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
+from .verification_results import (
+    SOURCE_INPUT_REASON,
+    SOURCE_INPUT_RULE,
+    SOURCE_VALIDATION_TOOL,
+    ClaimRefutation,
+    ToolChainResult,
+    claims_refuted,
+)
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
 )
@@ -22210,6 +22217,26 @@ def _run_tool_chain(
         hypothesis=hypothesis,
         source_identity=capture_source_identity(effective_target, file_path, excerpt=source, line_start=line_start),
     )
+    if confirmed.source_identity is None and source is not None:
+        current_source = capture_source_identity(effective_target, file_path)
+        if current_source is not None:
+            # A real file exists, but the supplied review text was not bound
+            # to it. Do not let a stale excerpt acquire cached confirmations.
+            # No checker looked, so preserve requested channels as skipped.
+            requested_tools = {entry["type"] for entry in chain}
+            if skipped_types is not None:
+                skipped_types.update(requested_tools)
+            confirmed.observe(SOURCE_VALIDATION_TOOL, "inconclusive", SOURCE_INPUT_RULE, SOURCE_INPUT_REASON)
+            try:
+                from .check_trace import record_source_input_rejection
+
+                record_source_input_rejection(
+                    config.out_dir, confirmed, current_source=current_source,
+                    requested_tools=requested_tools,
+                )
+            except Exception:
+                logger.warning("could not record source input rejection", exc_info=True)
+            return confirmed
 
     def _observe_sweep(sweep_result) -> str:
         verdict = _classify_sweep_outcome(sweep_result)
@@ -24560,6 +24587,29 @@ def _run_tool_chain(
                 "tool_chain early-exit journal row failed",
                 exc_info=True,
             )
+
+    # A later entry (or early-exit predicate) may outlive the source version
+    # used by an earlier confirmation. Check once at return, including paths
+    # that append receipts without a SweepResult. Unknown identities, such
+    # as existing binary-sentinel paths, gain no new freshness guarantee.
+    if confirmed.source_identity is not None and (
+        confirmed or any(probe.verdict in {"confirmed", "refuted"} for probe in confirmed.outcomes)
+    ):
+        current_source = capture_source_identity(effective_target, file_path)
+        prior_receipts, prior_outcomes = tuple(confirmed), tuple(confirmed.outcomes)
+        if confirmed.invalidate_for_source(current_source):
+            if inconclusive_types is not None:
+                inconclusive_types.update(_ran_types - (errored_types or set()) - (skipped_types or set()))
+            try:
+                from .check_trace import record_source_invalidation
+
+                record_source_invalidation(
+                    config.out_dir, confirmed, source_identity_after=current_source,
+                    prior_receipts=prior_receipts, prior_outcomes=prior_outcomes,
+                )
+            except Exception:
+                # Trace failures cannot reinstate stale verdict authority.
+                logger.warning("could not record source invalidation", exc_info=True)
 
     if inconclusive_types is not None:
         for _t, _hits in _inconclusive_hits.items():

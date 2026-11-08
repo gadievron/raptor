@@ -252,3 +252,254 @@ def test_a_new_refutation_of_edited_source_can_resolve_again(tmp_path, monkeypat
     assert resolve(outcome, config, {"joern": True}).status == "dark"
     retain(outcome, config)
     assert resolve(outcome, config, {"joern": True}).status == "clean"
+
+
+@pytest.mark.parametrize("mutation", ["unchanged", "edit", "outside_excerpt", "delete", "replacement", "restore"])
+def test_confirmation_is_usable_only_while_its_captured_source_stays_current(tmp_path, monkeypatch, mutation):
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    before = path.stat()
+
+    def checker(**kwargs):
+        if mutation == "edit":
+            path.write_text("int Read(int n) { return n + 2; }\n")
+        elif mutation == "outside_excerpt":
+            path.write_text(original + "int helper(void) { return 0; }\n")
+        elif mutation == "delete":
+            path.unlink()
+        elif mutation == "replacement":
+            replacement = tmp_path / "replacement.c"
+            replacement.write_text(original)
+            replacement.replace(path)
+        elif mutation == "restore":
+            path.write_text("int Read(int n) { return n + 2; }\n")
+            path.write_text(original)
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow", details={"reason": "fixture witness"})
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    inconclusive = set()
+    result = orch._run_tool_chain(
+        [{"type": "smt", "config": {"verb": "check-overflow"}}], config=config,
+        file_path=outcome.file, function_name=outcome.function, line_start=outcome.line,
+        source=original, hypothesis=outcome.hypothesis, inconclusive_types=inconclusive,
+    )
+    assert list(result) == (["smt:check-overflow"] if mutation == "unchanged" else [])
+    assert result.outcomes[0].verdict == ("confirmed" if mutation == "unchanged" else "inconclusive")
+    assert inconclusive == (set() if mutation == "unchanged" else {"smt"})
+
+
+def test_a_later_chain_entry_cannot_preserve_an_earlier_confirmation_for_changed_source(tmp_path, monkeypatch):
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    calls = []
+
+    def checker(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 2:
+            path.write_text(original + "// changed after first probe\n")
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed" if len(calls) == 1 else "inconclusive", rule_id="smt:check-overflow")
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    inconclusive = set()
+    result = orch._run_tool_chain(
+        [{"type": "smt", "config": {"verb": "check-overflow"}},
+         {"type": "smt", "config": {"verb": "check-oob"}}],
+        config=config, file_path=outcome.file, function_name=outcome.function,
+        source=original, hypothesis=outcome.hypothesis, inconclusive_types=inconclusive,
+    )
+    assert len(calls) == 2
+    assert result == []
+    assert [probe.verdict for probe in result.outcomes] == ["inconclusive", "inconclusive"]
+    assert inconclusive == {"smt"}
+
+
+def test_source_change_after_early_exit_still_withdraws_the_receipt_without_extra_dispatch(tmp_path, monkeypatch):
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    calls = []
+
+    def checker(**kwargs):
+        calls.append(kwargs)
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow")
+
+    def qualifies(receipt):
+        path.write_text(original + "// edit during early-exit admission\n")
+        return True
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    skipped, inconclusive = set(), set()
+    result = orch._run_tool_chain(
+        [{"type": "smt", "config": {"verb": "check-overflow"}},
+         {"type": "codeql", "config": {"query": "must-not-run.ql"}}],
+        config=config, file_path=outcome.file, function_name=outcome.function,
+        source=original, hypothesis=outcome.hypothesis, early_exit_check=qualifies,
+        skipped_types=skipped, inconclusive_types=inconclusive,
+    )
+    assert len(calls) == 1
+    assert result == []
+    assert skipped == {"codeql"}
+    assert inconclusive == {"smt"}
+
+
+def test_source_invalidation_is_enforced_when_its_trace_writer_fails(tmp_path, monkeypatch, caplog):
+    from core.audit import check_trace
+
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+
+    def checker(**kwargs):
+        path.write_text(original + "// changed\n")
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow")
+
+    def fail(*args, **kwargs):
+        raise OSError("fixture telemetry failure")
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    monkeypatch.setattr(check_trace, "record_source_invalidation", fail)
+    result = orch._run_tool_chain(
+        [{"type": "smt", "config": {"verb": "check-overflow"}}], config=config,
+        file_path=outcome.file, function_name=outcome.function, source=original,
+        hypothesis=outcome.hypothesis,
+    )
+    assert result == []
+    assert result.outcomes[0].verdict == "inconclusive"
+    assert "could not record source invalidation" in caplog.text
+
+
+def test_immediate_verification_exports_the_raw_witness_and_its_source_invalidation(tmp_path, monkeypatch):
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.json import load_json
+
+    outcome, config = case(tmp_path, monkeypatch)
+    outcome.hypothesis = "signed addition can overflow"
+    outcome.review_result = {"hypothesis": outcome.hypothesis, "cwe": "CWE-190"}
+    outcome.tools_dispatched = None
+    config.immediate_verify = True
+    path = tmp_path / outcome.file
+    original = path.read_text()
+
+    def checker(**kwargs):
+        path.write_text(original + "// changed during check\n")
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow", details={"reason": "fixture witness"})
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    monkeypatch.setattr(orch, "_correlated_mech_detector_tool", lambda *a: None)
+    monkeypatch.setattr(orch, "_gather_library_candidates", lambda *a: [])
+    monkeypatch.setattr(orch, "_get_llm_client", lambda *a: None)
+    monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", lambda *a, **kw: [
+        {"type": "smt", "config": {"verb": "check-overflow"}},
+    ])
+    final = orch._verify_hypotheses_immediate(outcome, config, orch.OrchestratorResult(), source=original)
+    assert final.status == "suspicious"
+    assert not final.evidence_tool
+    assert not final.review_result.get("immediate_verified")
+    assert final.tools_inconclusive == {"smt"}
+    write_graded_findings(export_findings([final]), config.out_dir)
+    sidecar = load_json(config.out_dir / "verification-checks.json")
+    graded = load_json(config.out_dir / "findings-graded.json")
+    witness, invalidation = sidecar["checks"]
+    assert witness["outcome"] == witness["result"]["data"]["outcome"] == "confirmed"
+    assert witness["source_applicability"] == {"status": "invalidated", "validation_ids": [invalidation["id"]]}
+    assert invalidation["tool"] == "source_binding"
+    assert invalidation["result"]["data"]["details"]["prior_receipts"] == ["smt:check-overflow"]
+    assert invalidation["result"]["data"]["details"]["source_identity_after"]["sha256"] != witness["scope"]["source_identity"]["sha256"]
+    assert sidecar["source_validation"]["invalidated_observations"] == 1
+    assert graded["verification_summary"]["source_validation"] == sidecar["source_validation"]
+    assert graded["findings"][0]["status"] == "suspicious"
+    assert graded["findings"][0]["discovery"]["confirmed_by"] == []
+
+
+def test_retry_with_stale_excerpt_cannot_reuse_a_confirmed_memo_entry(tmp_path, monkeypatch):
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.json import load_json
+
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    calls = []
+
+    def checker(**kwargs):
+        calls.append(kwargs)
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow")
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
+    kwargs = dict(config=config, file_path=outcome.file, function_name=outcome.function,
+                  source=original, hypothesis=outcome.hypothesis)
+    assert orch._run_tool_chain(chain, **kwargs) == ["smt:check-overflow"]
+    path.write_text(original.replace("return n;", "return n + 1;"))
+    skipped, inconclusive = set(), set()
+    result = orch._run_tool_chain(chain, **kwargs, skipped_types=skipped, inconclusive_types=inconclusive)
+    assert result == []
+    assert result.source_identity is None
+    assert len(calls) == 1
+    assert skipped == {"smt"} and inconclusive == set()  # no checker executed on the retry
+    assert result.outcomes[0].tool == "source_binding"
+    assert result.outcomes[0].rule_id == "source-input-unbound"
+    write_graded_findings(export_findings([outcome]), config.out_dir)
+    sidecar = load_json(config.out_dir / "verification-checks.json")
+    rejected = sidecar["checks"][-1]
+    assert rejected["scope"]["source_identity"] is None
+    assert rejected["result"]["data"]["details"]["checker_execution"] == "not_run"
+    assert rejected["result"]["data"]["details"]["requested_tools"] == ["smt"]
+    assert sidecar["source_validation"]["unbound_inputs"] == 1
+
+
+def test_unbound_excerpt_remains_skipped_when_rejection_reporting_fails(tmp_path, monkeypatch, caplog):
+    from core.audit import check_trace
+
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    path.write_text(original.replace("return n;", "return n + 1;"))
+
+    def forbidden(**kwargs):
+        pytest.fail("unbound input must not reach the checker")
+
+    def fail(*args, **kwargs):
+        raise OSError("fixture telemetry failure")
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", forbidden)
+    monkeypatch.setattr(check_trace, "record_source_input_rejection", fail)
+    skipped = set()
+    result = orch._run_tool_chain(
+        [{"type": "smt", "config": {"verb": "check-overflow"}}], config=config,
+        file_path=outcome.file, function_name=outcome.function, source=original,
+        hypothesis=outcome.hypothesis, skipped_types=skipped,
+    )
+    assert result == [] and skipped == {"smt"}
+    assert "could not record source input rejection" in caplog.text
+
+
+def test_an_unchanged_excerpt_can_still_use_the_memo_after_an_unrelated_file_edit(tmp_path, monkeypatch):
+    outcome, config = case(tmp_path, monkeypatch)
+    path = tmp_path / outcome.file
+    original = path.read_text()
+    calls = []
+
+    def checker(**kwargs):
+        calls.append(kwargs)
+        return SweepResult(tool="smt", file_path=outcome.file, function_name=outcome.function,
+                           outcome="confirmed", rule_id="smt:check-overflow")
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", checker)
+    chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
+    kwargs = dict(config=config, file_path=outcome.file, function_name=outcome.function,
+                  source=original, hypothesis=outcome.hypothesis)
+    assert orch._run_tool_chain(chain, **kwargs) == ["smt:check-overflow"]
+    path.write_text(original + "// edit outside the supplied excerpt\n")
+    result = orch._run_tool_chain(chain, **kwargs)
+    assert result == ["smt:check-overflow"]
+    assert len(calls) == 1
+    assert result.source_identity == source.capture_source_identity(tmp_path, outcome.file)

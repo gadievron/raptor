@@ -173,3 +173,36 @@ def test_live_semgrep_verdict_reaches_ihv_with_its_receipt(tmp_path, monkeypatch
     else:
         assert result.evidence_tool.startswith("semgrep:")
         assert not refutations
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_source_invalidation_withdraws_confirmations_and_refutations_without_erasing_history(available):
+    from core.audit.refutation_source import SourceIdentity
+
+    initial = SourceIdentity("a" * 64, (1, 2, 3, 4, 5))
+    current = SourceIdentity("b" * 64, (1, 2, 3, 4, 6)) if available else None
+    result = ToolChainResult(["semgrep:fixture"], **SCOPE, source_identity=initial)
+    result.observe("semgrep", "confirmed", "fixture", "original witness")
+    result.observe("smt", "refuted", "check-overflow", "original negative")
+    result.observe("codeql", "error", "fixture", "unavailable")
+    originals = tuple(result.outcomes)
+    assert result.invalidate_for_source(current)
+    assert result == []
+    assert [probe.verdict for probe in result.outcomes] == ["inconclusive", "inconclusive", "error"]
+    assert [probe.verdict for probe in originals] == ["confirmed", "refuted", "error"]
+    assert "original witness" in result.outcomes[0].reason
+    assert result.source_identity == initial
+    assert not result.refutations(**SCOPE)
+    assert not result.invalidate_for_source(current)
+
+
+@pytest.mark.parametrize("known", [False, True])
+def test_source_invalidation_does_not_invent_freshness_for_unknown_or_unchanged_inputs(known):
+    from core.audit.refutation_source import SourceIdentity
+
+    current = SourceIdentity("a" * 64, (1, 2, 3, 4, 5))
+    result = ToolChainResult(["semgrep:fixture"], **SCOPE, source_identity=current if known else None)
+    result.observe("semgrep", "confirmed", "fixture")
+    assert not result.invalidate_for_source(current)
+    assert result == ["semgrep:fixture"]
+    assert result.outcomes[0].verdict == "confirmed"

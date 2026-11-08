@@ -446,3 +446,125 @@ def test_conflicting_ids_do_not_link_reviews_or_individual_hypothesis_traces(tmp
     assert graded["verification_summary"][kind]["without_matching_observations"] == 1
     assert graded["verification_summary"]["event_admission"]["conflicting_ids"] == 1
     assert outcome.status == status
+
+
+@pytest.mark.parametrize("validation_first", [False, True])
+def test_source_withdrawal_links_exact_snapshot_independently_of_delivery_order(tmp_path, validation_first):
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    old = SourceIdentity("a" * 64, (1, 2, 3, 4, 5))
+    current = SourceIdentity("b" * 64, (1, 2, 3, 4, 6))
+    scope = {"file": "a.c", "function": "f", "line_start": 1, "hypothesis": "Fixture assertion"}
+    results = ToolChainResult(**scope, source_identity=old)
+
+    def withdraw():
+        check_trace.record_source_invalidation(tmp_path, results, source_identity_after=current,
+                                              prior_receipts=("semgrep:fixture-rule",), prior_outcomes=())
+
+    if validation_first:
+        withdraw()
+    _record(tmp_path, FIXTURES[0])
+    if not validation_first:
+        withdraw()
+    # Same claim and occurrence, but a different source snapshot: no transfer.
+    check_trace.record_check_observation(tmp_path, ToolChainResult(**scope, source_identity=current),
+        tool="semgrep", verdict="confirmed", rule_id="fixture-rule", result=_result(FIXTURES[0]))
+    invalidation = next(row for row in load_verified_audit_log(tmp_path) if row["tool"] == "source_binding")
+    append_audit_log(tmp_path, invalidation)  # duplicate delivery is still one event
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    witnesses = [check for check in sidecar["checks"] if check["tool"] == "semgrep"]
+    old_witness = next(check for check in witnesses if check["scope"]["source_identity"]["sha256"] == old.sha256)
+    current_witness = next(check for check in witnesses if check["scope"]["source_identity"]["sha256"] == current.sha256)
+    assert old_witness["outcome"] == "confirmed"
+    assert old_witness["source_applicability"] == {"status": "invalidated", "validation_ids": [invalidation["id"]]}
+    assert "source_applicability" not in current_witness  # absence is not a freshness certificate
+    assert sidecar["source_validation"] == {
+        "invalidations": 1, "invalidated_observations": 1, "unbound_inputs": 0,
+        "scope": "source_file_only", "revalidated_at_export": False,
+    }
+    assert sidecar["event_admission"]["duplicate_records"] == 1
+
+
+@pytest.mark.parametrize("provenance", ["unsigned", "tampered", "foreign"])
+def test_unverified_source_withdrawals_do_not_annotate_retained_checks(tmp_path, provenance):
+    from core.audit.record import load_verified_audit_log, stamp_audit_log_row
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion",
+                              source_identity=SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    check_trace.record_source_invalidation(seed, results, source_identity_after=None,
+                                          prior_receipts=("semgrep:fixture-rule",), prior_outcomes=())
+    row = load_verified_audit_log(seed)[0]
+    out = tmp_path / "out"
+    out.mkdir()
+    _record(out, FIXTURES[0])
+    if provenance == "unsigned":
+        row.pop("integrity")
+    elif provenance == "tampered":
+        row = stamp_audit_log_row(row, out)
+        row["reason"] = "edited after signing"
+    with (out / ".audit-log.jsonl").open("a") as stream:
+        stream.write(json.dumps(row) + "\n")
+    write_graded_findings(export_findings([]), out)
+    sidecar = json.loads((out / "verification-checks.json").read_text())
+    assert len(sidecar["checks"]) == 1
+    assert "source_applicability" not in sidecar["checks"][0]
+    assert sidecar["source_validation"]["invalidations"] == 0
+
+
+def test_conflicting_source_withdrawal_ids_are_quarantined_before_scope_linking(tmp_path):
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    _record(tmp_path, FIXTURES[0])
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion",
+                              source_identity=SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    check_trace.record_source_invalidation(tmp_path, results, source_identity_after=None,
+                                          prior_receipts=("semgrep:fixture-rule",), prior_outcomes=())
+    row = load_verified_audit_log(tmp_path)[1]
+    append_audit_log(tmp_path, {**row, "reason": "conflicting payload for the same event"})
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    assert len(sidecar["quarantined_checks"]) == 2
+    assert len(sidecar["checks"]) == 1
+    assert "source_applicability" not in sidecar["checks"][0]
+    assert sidecar["source_validation"]["invalidations"] == 0
+
+
+def test_source_withdrawal_survives_payload_truncation(tmp_path):
+    _record(tmp_path, FIXTURES[0])
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion",
+                              source_identity=SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    check_trace.record_source_invalidation(tmp_path, results, source_identity_after=None,
+        prior_receipts=("x" * (check_trace._PAYLOAD_BYTES + 1),), prior_outcomes=())
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    witness, withdrawal = sidecar["checks"]
+    assert withdrawal["result"]["complete"] is False
+    assert witness["source_applicability"] == {"status": "invalidated", "validation_ids": [withdrawal["id"]]}
+
+
+def test_source_withdrawal_cannot_bind_an_unknown_dispatch_identity(tmp_path):
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion")
+    check_trace.record_check_observation(tmp_path, results, tool="semgrep", verdict="confirmed",
+                                        rule_id="fixture-rule", result=_result(FIXTURES[0]))
+    check_trace.record_source_invalidation(tmp_path, results, source_identity_after=None,
+                                          prior_receipts=("semgrep:fixture-rule",), prior_outcomes=())
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    assert sidecar["source_validation"]["invalidations"] == 0
+    assert "source_applicability" not in sidecar["checks"][0]
+
+
+def test_source_withdrawal_does_not_attach_to_an_independent_claim(tmp_path):
+    _record(tmp_path, FIXTURES[0], hypothesis="Independent claim")
+    results = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis="Fixture assertion",
+                              source_identity=SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    check_trace.record_source_invalidation(tmp_path, results, source_identity_after=None,
+                                          prior_receipts=("semgrep:fixture-rule",), prior_outcomes=())
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    assert sidecar["source_validation"]["invalidations"] == 1
+    assert sidecar["source_validation"]["invalidated_observations"] == 0
+    assert "source_applicability" not in sidecar["checks"][0]
