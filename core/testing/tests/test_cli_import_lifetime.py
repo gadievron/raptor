@@ -9,10 +9,11 @@ import pytest
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("stale_launch", [False, True])
 @pytest.mark.parametrize("key", ["PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"])
 @pytest.mark.parametrize("value", [None, "", "/owned/interpreter-override"],
                          ids=["missing", "empty", "borrowed"])
-def test_review_parser_child_preserves_parent(tmp_path, monkeypatch, key, value):
+def test_review_parser_child_preserves_parent(tmp_path, monkeypatch, key, value, stale_launch):
     if value is None:
         monkeypatch.delenv(key, raising=False)
     else:
@@ -24,7 +25,11 @@ def test_review_parser_child_preserves_parent(tmp_path, monkeypatch, key, value)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
-    module.TestToolsCommand().test_subcommand_registered_in_cli(tmp_path)
+    with monkeypatch.context() as child_patch:
+        child_patch.setenv("XDG_DATA_HOME", str(tmp_path / "data-home"))
+        module.TestToolsCommand().test_subcommand_registered_in_cli(
+            tmp_path, child_patch, stale_launch,
+        )
     assert dict(os.environ) == environment
     assert sys.path is path
     assert sys.path == values
