@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_LINES_IMPL = split_lines
 _SUMMARY_TYPE_IMPL = type
+_SUMMARY_STR_IMPL = str
 _SUMMARY_LEN_IMPL = len
 _SUMMARY_MIN_IMPL = min
 _SUMMARY_MAX_IMPL = max
@@ -511,7 +512,17 @@ def _ground_summary(
         base = str(raw).rsplit(":", 1)[-1].split("(")[0].strip()
         return bool(base) and base in idents
 
-    norm_source = " ".join(source.split())
+    # Native text is immutable: defer its whitespace copy until the error
+    # paths need it. Source adapters keep their original split timing.
+    norm_source = (None if _SUMMARY_TYPE_IMPL(source) is _SUMMARY_STR_IMPL
+                   else " ".join(source.split()))
+
+    def _normalised_source() -> str:
+        nonlocal norm_source
+        if norm_source is None:
+            norm_source = " ".join(source.split())
+        return norm_source
+
     summary.taint_rules = [
         t for t in summary.taint_rules
         if t.source_param in idents and _known_name(t.sink_call)
@@ -531,7 +542,7 @@ def _ground_summary(
     summary.callers = [c for c in summary.callers if _known_name(c)]
     summary.error_paths = [
         e for e in summary.error_paths
-        if " ".join(str(e).split()) in norm_source
+        if " ".join(str(e).split()) in _normalised_source()
     ]
     return summary
 
