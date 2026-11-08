@@ -12,12 +12,15 @@ DB or LLM. Real-CodeQL E2E lives in the manual smoke runs documented
 in the PR.
 """
 
+
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.testing.module_registry import mock_module_registry
 
 from packages.llm_analysis.dataflow_validation import tier1_check_finding
 
@@ -440,8 +443,7 @@ class TestSmtPreFlight:
         """When the SMT substrate isn't importable, no_check (silent
         fallthrough) — exploit gen continues blind."""
         v = self._make_vuln_with_conditions(["x > 1"])
-        with patch.dict("sys.modules",
-                        {"packages.exploit_feasibility.smt_path": None}):
+        with mock_module_registry({"packages.exploit_feasibility.smt_path": None}):
             agent = self._agent(tmp_path)
             assert agent._smt_pre_flight(v) == "no_check"
 

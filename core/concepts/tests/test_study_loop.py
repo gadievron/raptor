@@ -1,5 +1,7 @@
 """Tests for libexec/raptor-study-loop orchestrator."""
 
+from core.testing.module_registry import mock_module_registry
+
 import importlib.machinery
 import importlib.util
 import json
@@ -347,7 +349,7 @@ class TestStoreInSage:
         dm = {"version": "1", "concepts": [], "invariants": [], "contracts": []}
         (tmp_path / "domain-model.json").write_text(
             json.dumps(dm), encoding="utf-8")
-        with patch.dict("sys.modules", {"core.sage.hooks": None}):
+        with mock_module_registry({"core.sage.hooks": None}):
             _loop._store_in_sage(tmp_path, "/repos/myproj")
 
 

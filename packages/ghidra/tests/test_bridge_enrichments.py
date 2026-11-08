@@ -7,6 +7,8 @@ touched.
 
 from __future__ import annotations
 
+from core.testing.module_registry import mock_module_registry
+
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -70,8 +72,7 @@ class TestApplyEnrichmentsProgramLookup(unittest.TestCase):
         with patch.object(GhidraSession, "ensure_jvm"), patch(
             "packages.ghidra.detect.get_project_name",
             return_value="proj",
-        ), patch.dict(
-            "sys.modules",
+        ), mock_module_registry(
             {"pyghidra": fake_pyghidra, "pyghidra.api": fake_api},
         ), patch.object(
             GhidraBridge, "_apply_comments", return_value=0,
@@ -142,8 +143,7 @@ class TestApplyEnrichmentsProgramLookup(unittest.TestCase):
         with patch.object(GhidraSession, "ensure_jvm"), patch(
             "packages.ghidra.detect.get_project_name",
             return_value="proj",
-        ), patch.dict(
-            "sys.modules",
+        ), mock_module_registry(
             {"pyghidra": fake_pyghidra, "pyghidra.api": fake_api},
         ), self.assertRaises(GhidraSessionError):
             bridge._apply_enrichments_pyghidra(
@@ -191,8 +191,7 @@ class TestExceptionTextScrubbing(unittest.TestCase):
         with patch.object(GhidraSession, "ensure_jvm"), patch(
             "packages.ghidra.detect.get_project_name",
             return_value="proj",
-        ), patch.dict(
-            "sys.modules",
+        ), mock_module_registry(
             {"pyghidra": fake_pyghidra, "pyghidra.api": fake_api},
         ), self.assertRaises(GhidraSessionError) as cm:
             bridge._apply_enrichments_pyghidra(

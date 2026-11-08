@@ -4,6 +4,7 @@ Replaces the old LiteLLM callback tests. Now tests the provider-based
 architecture (OpenAI SDK + Anthropic SDK) without any LiteLLM dependency.
 """
 
+
 import pytest
 import re
 import sys
@@ -14,6 +15,8 @@ from unittest.mock import patch, MagicMock
 # packages/llm_analysis/tests/test_llm_callbacks.py -> repo root
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parents[3]))
+
+from core.testing.module_registry import mock_module_registry
 
 import core.llm.client as _client_mod
 from core.llm.client import (
@@ -54,7 +57,7 @@ class TestLLMClientInit:
         )
 
         # Ensure litellm is NOT required
-        with patch.dict(sys.modules, {"litellm": None}):
+        with mock_module_registry({"litellm": None}):
             client = LLMClient(config)
 
         assert client is not None

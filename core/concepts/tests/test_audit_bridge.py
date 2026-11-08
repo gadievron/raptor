@@ -1,8 +1,10 @@
 """Tests for core.concepts.audit_bridge."""
 
+from core.testing.module_registry import mock_module_registry
+
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -488,7 +490,7 @@ class TestDomainModelContextWithSage:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             block = domain_model_context(
                 tmp_path, "auth/token.c", "validate_token")
             assert block is not None
@@ -730,14 +732,14 @@ class TestInferRepoPath:
 
 class TestSageRecallForContext:
     def test_returns_none_when_sage_not_installed(self, tmp_path):
-        with patch.dict("sys.modules", {"core.sage.hooks": None}):
+        with mock_module_registry({"core.sage.hooks": None}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is None
 
     def test_returns_none_when_client_unavailable(self, tmp_path):
         mock_hooks = MagicMock()
         mock_hooks._get_client.return_value = None
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is None
 
@@ -754,7 +756,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "raptor-concepts-myproj"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "kernel/locking.c", "do_lock")
 
         assert result is not None
@@ -773,7 +775,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is None
 
@@ -787,7 +789,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is None
 
@@ -804,7 +806,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is not None
             assert "second line" not in result
@@ -823,7 +825,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is not None
             assert "valid result" in result
@@ -832,7 +834,7 @@ class TestSageRecallForContext:
         """When _infer_repo_path returns None, SAGE is skipped."""
         mock_hooks = MagicMock()
         mock_hooks._get_client.return_value = MagicMock()
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
             assert result is None
 
@@ -848,7 +850,7 @@ class TestSageRecallForContext:
         mock_hooks._get_client.return_value = mock_client
         mock_hooks._concepts_domain.return_value = "test-domain"
 
-        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+        with mock_module_registry({"core.sage.hooks": mock_hooks}):
             _sage_recall_for_context(
                 tmp_path, "foo.c", "bar",
                 max_results=5, min_confidence=0.5,

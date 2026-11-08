@@ -5,6 +5,7 @@ post-merge audit of #309. If a test in this file fails, treat it as a
 security regression — never weaken the assertion to make it pass.
 """
 
+
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
@@ -30,6 +31,8 @@ def _isolate_host_probe_patches(monkeypatch):
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.testing.module_registry import mock_module_registry
 
 from packages.hypothesis_validation.adapters import (
     CoccinelleAdapter,
@@ -409,7 +412,6 @@ class TestMakeSandboxRunner:
                                                     monkeypatch):
         """Silent bare-subprocess fallback is gone: sandbox
         unimportable -> SandboxUnavailableError naming the remedy."""
-        import sys
 
         from core.run.sandbox_policy import (
             ALLOW_UNSANDBOXED_ENV,
@@ -417,7 +419,7 @@ class TestMakeSandboxRunner:
         )
         from packages.hypothesis_validation.adapters import base as base_mod
         monkeypatch.delenv(ALLOW_UNSANDBOXED_ENV, raising=False)
-        with patch.dict(sys.modules, {"core.sandbox": None}):
+        with mock_module_registry({"core.sandbox": None}):
             with pytest.raises(SandboxUnavailableError, match="refuses"):
                 base_mod.make_sandbox_runner(target=tmp_path)
 
@@ -569,7 +571,6 @@ class TestMakeSandboxRunner:
         """RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1 is the only degraded path:
         returns subprocess.run and records a security event."""
         import subprocess
-        import sys
 
         import core.run.sandbox_policy as policy_mod
         from packages.hypothesis_validation.adapters import base as base_mod
@@ -579,7 +580,7 @@ class TestMakeSandboxRunner:
             policy_mod, "log_security_event",
             lambda etype, msg, **kw: events.append(etype),
         )
-        with patch.dict(sys.modules, {"core.sandbox": None}):
+        with mock_module_registry({"core.sandbox": None}):
             runner = base_mod.make_sandbox_runner(target=tmp_path)
         assert runner is subprocess.run
         assert events == ["unsandboxed_tool_fallback"]

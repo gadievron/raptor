@@ -1,5 +1,6 @@
 """Tests for IRIS-style dataflow validation."""
 
+
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +15,8 @@ from core.testing.module_bindings import patch_module_attribute
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.testing.module_registry import mock_module_registry
 
 from packages.llm_analysis.dataflow_dispatch_client import DispatchClient
 from packages.llm_analysis.dataflow_validation import (
@@ -3695,9 +3698,8 @@ class TestTier4SmtRefine:
         """When validate_path's substrate isn't importable, fall through
         to smt_unavailable — verdict unchanged."""
         from packages.llm_analysis import dataflow_validation as mod
-        from unittest.mock import patch
         analysis = {"path_conditions": ["x > 1"]}
-        with patch.dict("sys.modules", {"packages.exploit_feasibility.smt_path": None}):
+        with mock_module_registry({"packages.exploit_feasibility.smt_path": None}):
             r, outcome = mod._tier4_smt_refine(
                 self._result("confirmed"), {"finding_id": "f"}, analysis,
             )

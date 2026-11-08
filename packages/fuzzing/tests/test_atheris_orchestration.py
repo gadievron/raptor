@@ -2,8 +2,9 @@
 override, harness resolution, witness recording, and the
 verified-outcomes join."""
 
+from core.testing.module_registry import mock_module_registry
+
 import shutil
-import sys
 import tempfile
 import types
 import unittest
@@ -41,7 +42,7 @@ def _plan(case: unittest.TestCase, target: Path, **kwargs):
     detector reports the engine available without the real dep."""
     with patch("packages.fuzzing.orchestrator.probe_capabilities",
                return_value=_caps()), \
-         patch.dict(sys.modules, {"atheris": types.ModuleType("atheris")}):
+         mock_module_registry({"atheris": types.ModuleType("atheris")}):
         orch = FuzzingOrchestrator()
         return orch.plan(target, **kwargs)
 
@@ -62,7 +63,7 @@ class TestAtherisPlanning(unittest.TestCase):
         tmp = _tmpdir(self)
         with patch("packages.fuzzing.orchestrator.probe_capabilities",
                    return_value=_caps()), \
-             patch.dict(sys.modules, {"atheris": None}):
+             mock_module_registry({"atheris": None}):
             orch = FuzzingOrchestrator()
             plan = orch.plan(_python_pkg(tmp))
         self.assertEqual(plan.target.kind, "python-pkg")

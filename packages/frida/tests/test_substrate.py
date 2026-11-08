@@ -3,6 +3,8 @@ template existence, and drcov round-trip through core.coverage.collect."""
 
 from __future__ import annotations
 
+from core.testing.module_registry import mock_module_registry
+
 import json
 import struct
 from pathlib import Path
@@ -338,7 +340,7 @@ class TestSandboxedMain:
 
         with mock_patch.object(sandboxed, "sys") as mock_sys, \
              mock_patch("packages.frida.sandboxed.sys", mock_sys), \
-             mock_patch.dict("sys.modules", {"core.sandbox": MagicMock()}):
+             mock_module_registry({"core.sandbox": MagicMock()}):
             mock_sys.argv = [
                 "sandboxed", "--spawn", "--out", "/tmp/run", "--",
                 "python3", "-m", "packages.frida.cli", "--target", "./x",
@@ -366,7 +368,7 @@ class TestSandboxedMain:
 
         with mock_patch.object(sandboxed, "sys") as mock_sys, \
              mock_patch("packages.frida.sandboxed.sys", mock_sys), \
-             mock_patch.dict("sys.modules", {"core.sandbox": MagicMock()}):
+             mock_module_registry({"core.sandbox": MagicMock()}):
             mock_sys.argv = [
                 "sandboxed", "--out", "/tmp/run", "--",
                 "python3", "-m", "packages.frida.cli", "--target", "1234",
@@ -401,7 +403,7 @@ class TestSandboxedMain:
 
         with mock_patch.object(sandboxed, "sys") as mock_sys, \
              mock_patch("packages.frida.sandboxed.sys", mock_sys), \
-             mock_patch.dict("sys.modules", {"core.sandbox": None}), \
+             mock_module_registry({"core.sandbox": None}), \
              mock_patch("subprocess.call", return_value=0) as mock_call:
             mock_sys.argv = [
                 "sandboxed", "--out", "/tmp/run", "--",

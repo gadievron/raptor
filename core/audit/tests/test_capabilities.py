@@ -1,5 +1,7 @@
 """Tests for core.audit.capabilities."""
 
+from core.testing.module_registry import mock_module_registry
+
 from unittest.mock import patch
 
 from core.audit.capabilities import (
@@ -93,10 +95,7 @@ class TestProbeCapabilities:
 
     def test_joern_issues_on_import_error(self):
         """joern_issues populated when packages.joern is not importable."""
-        import sys
-        with patch.dict(
-            sys.modules,
-            {"packages.joern": None, "packages.joern.prereqs": None},
+        with mock_module_registry({"packages.joern": None, "packages.joern.prereqs": None},
         ):
             caps = probe_capabilities()
         assert not caps.joern
