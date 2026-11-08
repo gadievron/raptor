@@ -252,7 +252,7 @@ class TestTier4AttachesSmtWitness:
         assert analysis["smt_witness"]["path_conditions"] == ["x > 0"]
         assert analysis["smt_witness"]["path_profile"] == "uint32"
 
-    def test_refuted_branch_does_not_attach_witness(self):
+    def test_unsat_branch_does_not_attach_witness(self):
         """Unsat conditions ⇒ no witness; analysis must be untouched
         on this axis (don't leak stale data from a prior call)."""
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
@@ -282,7 +282,7 @@ class TestTier4AttachesSmtWitness:
             }
             _, outcome = _tier4_smt_refine(inconclusive, finding, analysis)
 
-        assert outcome == "smt_refuted"
+        assert outcome == "smt_no_change"
         assert "smt_witness" not in analysis
 
     def test_no_check_branch_does_not_attach_witness(self):

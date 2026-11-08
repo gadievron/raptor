@@ -25,9 +25,8 @@ actually carries; tier assignment is pure dict inspection, no LLM):
   NOT confirm: a hostile scanned repo can mint them with a printed
   fake sanitizer report or an exit(139).
 * ``tool_backed`` — a static mechanical validator corroborated the
-  verdict beyond the original detector match: an SMT sat witness on
-  the finding's path conditions (``analysis.smt_witness.model``), or a
-  dataflow validation verdict produced by a mechanical method
+  verdict beyond the original detector match: a dataflow validation
+  verdict produced by a mechanical method
   (``method`` of ``codeql-iris`` / ``structural-treesitter``, or the
   IRIS Tier 1 pre-flight's ``tier: iris_tier1`` record), or a
   fail-open channel receipt whose role evidence is registry-grade
@@ -45,7 +44,7 @@ actually carries; tier assignment is pure dict inspection, no LLM):
 Non-receipts, deliberately: the original SARIF rule hit (it produced
 the candidate — it cannot also corroborate it), ``exploit_compiled``
 (a building PoC proves the code compiles, not that the bug is real),
-and ``intent_match`` (an LLM judge).
+``intent_match`` (an LLM judge), and unbound SMT predicate models.
 """
 
 from __future__ import annotations
@@ -89,6 +88,23 @@ _TIER_ORDER = {
 }
 
 
+def unbound_smt_refutation(dv: dict[str, Any]) -> bool:
+    """Recognise saved Tier 4 refutations derived only from LLM predicates."""
+    if dv.get("verdict") != "refuted":
+        return False
+    evidence = dv.get("evidence")
+    if isinstance(evidence, (list, tuple)) and any(
+        isinstance(item, dict) and item.get("tool") == "smt"
+        and item.get("rule") == "path-feasibility:refuted"
+        for item in evidence
+    ):
+        return True
+    reasoning = dv.get("reasoning")
+    return isinstance(reasoning, str) and (
+        "[smt] inconclusive → refuted: unsat path conditions" in reasoning.splitlines()
+    )
+
+
 def dataflow_premises_mechanical(dv: dict[str, Any]) -> bool:
     """True when a ``dataflow_validation`` block's verdict rests on
     MECHANICAL query premises.
@@ -103,6 +119,8 @@ def dataflow_premises_mechanical(dv: dict[str, Any]) -> bool:
     prove its premises were mechanical, so it never earns mechanical
     authority (it keeps its steering/dispute weight downstream).
     """
+    if unbound_smt_refutation(dv):
+        return False
     dv_tier = dv.get("tier")
     return dv_tier not in LLM_AUTHORED_DV_TIERS and (
         dv.get("method") in _MECHANICAL_METHODS
@@ -141,10 +159,6 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
             if intent.get("verdict") != "off_target":
                 return VerificationTier.CONFIRMED.value
 
-    smt = analysis.get("smt_witness") or finding.get("smt_witness") or {}
-    if isinstance(smt, dict) and smt.get("model"):
-        return VerificationTier.TOOL_BACKED.value
-
     # Fail-open channel receipt (core.orchestration.fail_open_channel):
     # a mechanical confirmed/refuted adjudication with role + handler +
     # fallibility receipts. Detection-grade role variants (the
@@ -180,9 +194,8 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
     Companion to :func:`derive_verification_tier` for the SAGE
     verdict-store path: the store's ``evidence_tool`` receipt must name
     a mechanical receipt the finding dict actually carries AND whose
-    direction matches the verdict being stored — an SMT sat witness
-    (the path is satisfiable) must never receipt a ``false_positive``
-    suppression, and a mechanical refutation must never receipt an
+    direction matches the verdict being stored. Unbound predicate models
+    grant no receipt, and a mechanical refutation must never receipt an
     ``exploitable``. Direction-mismatched or absent receipts return
     ``""``: the verdict still stores (hint tier, lower confidence), it
     just earns no cross-run skip.
@@ -224,12 +237,6 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
                     return "dynamic:crash"
                 return "dynamic"
 
-        # An SMT model is a sat witness on the path conditions —
-        # confirming direction only.
-        smt = analysis.get("smt_witness") or finding.get("smt_witness") or {}
-        if isinstance(smt, dict) and smt.get("model"):
-            return "smt"
-
     fo = analysis.get("fail_open") or finding.get("fail_open") or {}
     if isinstance(fo, dict):
         fo_outcome = fo.get("outcome")
@@ -249,6 +256,8 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
         or {}
     )
     if isinstance(dv, dict):
+        if unbound_smt_refutation(dv):
+            return ""
         dv_verdict = dv.get("verdict")
         dv_tier = dv.get("tier")
         direction_ok = (

@@ -62,16 +62,16 @@ class TestDeriveVerificationTier:
         f = _finding(execute_outcome="no_obvious_effect")
         assert derive_verification_tier(f) == "llm_only"
 
-    def test_smt_witness_is_tool_backed(self):
+    def test_unbound_smt_witness_remains_diagnostic(self):
         f = _finding(
             analysis={"smt_witness": {"model": {"len": 32}}},
         )
-        assert derive_verification_tier(f) == "tool_backed"
+        assert derive_verification_tier(f) == "llm_only"
 
     def test_smt_witness_top_level_shape(self):
         # cc-dispatch merge copies result keys onto the finding itself.
         f = _finding(smt_witness={"model": {"len": 32}})
-        assert derive_verification_tier(f) == "tool_backed"
+        assert derive_verification_tier(f) == "llm_only"
 
     def test_empty_smt_model_does_not_count(self):
         f = _finding(analysis={"smt_witness": {"model": {}}})
@@ -230,9 +230,9 @@ class TestMechanicalReceipt:
         )
         assert mechanical_receipt(f, "exploitable") == ""
 
-    def test_smt_witness_receipts_exploitable(self):
+    def test_smt_witness_mints_no_mechanical_receipt(self):
         f = _finding(analysis={"smt_witness": {"model": {"len": 32}}})
-        assert mechanical_receipt(f, "exploitable") == "smt"
+        assert mechanical_receipt(f, "exploitable") == ""
 
     def test_smt_witness_never_receipts_a_suppression(self):
         # Direction pin: a sat witness says the path IS satisfiable —
@@ -351,9 +351,6 @@ class TestMechanicalReceipt:
                 execute_outcome="exit_signal",
                 execute_detail={"evidence_grade": "mechanical"},
             ), "exploitable"),
-            mechanical_receipt(_finding(
-                analysis={"smt_witness": {"model": {"x": 1}}},
-            ), "exploitable"),
             mechanical_receipt(_finding(analysis={"dataflow_validation": {
                 "verdict": "refuted", "method": "codeql-iris",
             }}), "false_positive"),
@@ -411,7 +408,7 @@ class TestToDictStamping:
             "smt_witness": {"model": {"n": 1}},
         }
         d = vuln.to_dict()
-        assert d["verification_tier"] == "tool_backed"
+        assert d["verification_tier"] == "llm_only"
 
     def test_not_stamped_in_prep_only(self, tmp_path):
         vuln = self._vuln(tmp_path)
@@ -464,12 +461,12 @@ class TestMergedReportWiring:
         ]
         merged = _merge_results(prep, cc, no_exploits=True, no_patches=True)
         by_id = {r["finding_id"]: r for r in merged["results"]}
-        assert by_id["f-1"]["verification_tier"] == "tool_backed"
+        assert by_id["f-1"]["verification_tier"] == "llm_only"
         assert by_id["f-2"]["verification_tier"] == "llm_only"
         assert "verification_tier" not in by_id["f-3"]  # never dispatched
         assert merged["verification_tiers"] == {
-            "tool_backed": 1, "llm_only": 1,
+            "llm_only": 2,
         }
-        # tool_backed sorts ahead of llm_only; undispatched trails.
+        # Equal diagnostic tiers retain order; undispatched trails.
         order = [r["finding_id"] for r in merged["results"]]
         assert order == ["f-1", "f-2", "f-3"]

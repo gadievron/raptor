@@ -3606,10 +3606,9 @@ class TestSourceRuleLabelHostile:
 class TestTier4SmtRefine:
     """Tier 4 SMT path-feasibility refinement on Tier 1/2/3 verdicts.
 
-    Conservative refinement: may convert ``inconclusive`` → ``refuted``
-    on unsat conditions, attaches witness model to ``confirmed`` on
-    sat. Never downgrades ``confirmed`` → ``refuted`` on SMT alone
-    (CodeQL's signal wins on disagreement, with a warning logged).
+    LLM predicates supply diagnostic mathematical models. Their native
+    verdicts retain the source verdict and its evidence; confirmed results
+    may retain a display-only model without additional proof evidence.
     """
 
     def _result(self, verdict):
@@ -3627,7 +3626,7 @@ class TestTier4SmtRefine:
         assert outcome == "no_check"
         assert r.verdict == "confirmed"
 
-    def test_inconclusive_plus_unsat_promotes_to_refuted(self):
+    def test_inconclusive_plus_unsat_retains_source_verdict(self):
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
         analysis = {
             "path_conditions": ["x > 100", "x < 5"],
@@ -3636,12 +3635,12 @@ class TestTier4SmtRefine:
         r, outcome = _tier4_smt_refine(
             self._result("inconclusive"), {"finding_id": "f"}, analysis,
         )
-        assert outcome == "smt_refuted"
-        assert r.verdict == "refuted"
-        # SMT evidence appended to the trail.
-        assert any(ev.tool == "smt" for ev in r.evidence)
+        assert outcome == "smt_no_change"
+        assert r.verdict == "inconclusive" and r.evidence == []
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is False
+        assert analysis["smt_diagnostics"]["conflicts"]
 
-    def test_confirmed_plus_unsat_keeps_confirmed_with_disagreement_log(self):
+    def test_confirmed_plus_unsat_keeps_diagnostic_conflicts(self):
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
         analysis = {
             "path_conditions": ["x > 100", "x < 5"],
@@ -3650,11 +3649,9 @@ class TestTier4SmtRefine:
         r, outcome = _tier4_smt_refine(
             self._result("confirmed"), {"finding_id": "f"}, analysis,
         )
-        assert outcome == "smt_disagree"
-        # Conservative: CodeQL wins; verdict unchanged.
-        assert r.verdict == "confirmed"
-        # Disagreement still recorded in evidence trail for offline review.
-        assert any(ev.tool == "smt" for ev in r.evidence)
+        assert outcome == "smt_no_change"
+        assert r.verdict == "confirmed" and r.evidence == []
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is False
 
     def test_confirmed_plus_sat_attaches_witness(self):
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
@@ -3667,10 +3664,9 @@ class TestTier4SmtRefine:
         )
         assert outcome == "smt_witness"
         assert r.verdict == "confirmed"
-        # Witness model lands as a new Evidence record.
-        smt_ev = [ev for ev in r.evidence if ev.tool == "smt"]
-        assert len(smt_ev) == 1
-        assert "witness" in (smt_ev[0].summary or "").lower()
+        assert r.evidence == []
+        assert analysis["smt_witness"]["model"]
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is True
 
     def test_inconclusive_plus_sat_no_change(self):
         """SMT-sat alone shouldn't UPGRADE inconclusive — CodeQL never
@@ -4446,10 +4442,9 @@ class TestTier4NeverRaises:
         # Coerced to the default profile; outcome depends on host z3
         # availability — the contract under test is only "never raises".
         assert outcome in (
-            "smt_unavailable", "smt_error", "smt_no_change",
-            "smt_refuted", "smt_witness", "smt_disagree",
+            "smt_unavailable", "smt_error", "smt_no_change", "smt_witness",
         )
-        assert r.verdict in ("inconclusive", "refuted")
+        assert r.verdict == "inconclusive"
 
     def test_non_dict_dataflow_validation_does_not_raise(self):
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
@@ -4483,29 +4478,29 @@ class TestTier4NeverRaises:
         r, outcome = _tier4_smt_refine(
             self._result("inconclusive"), {"finding_id": "f"}, analysis,
         )
-        assert outcome == "smt_refuted"
-        assert r.verdict == "refuted"
+        assert outcome == "smt_no_change"
+        assert r.verdict == "inconclusive"
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is False
 
 
-class TestSmtEvidenceLabels:
-    """SMT evidence records carry the outcome label in the structured
-    `rule` field so consumers need not parse the free-text summary."""
+class TestSmtDiagnosticLabels:
+    """Predicate diagnostics carry their scope without source proof evidence."""
 
     def _result(self, verdict):
         from packages.hypothesis_validation.result import ValidationResult
         return ValidationResult(verdict=verdict, evidence=[], iterations=1,
                                 reasoning="r")
 
-    def test_refuted_record_labeled(self):
+    def test_unsat_record_is_diagnostic(self):
         pytest.importorskip("z3")
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
         analysis = {"path_conditions": ["x > 100", "x < 5"]}
         r, outcome = _tier4_smt_refine(
             self._result("inconclusive"), {}, analysis,
         )
-        assert outcome == "smt_refuted"
-        smt_ev = [e for e in r.evidence if e.tool == "smt"]
-        assert smt_ev and smt_ev[0].rule == "path-feasibility:refuted"
+        assert outcome == "smt_no_change" and r.evidence == []
+        assert analysis["smt_diagnostics"]["oracle_scope"] == "llm-extracted-predicates"
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is False
 
     def test_witness_record_labeled(self):
         pytest.importorskip("z3")
@@ -4515,19 +4510,19 @@ class TestSmtEvidenceLabels:
             self._result("confirmed"), {}, analysis,
         )
         assert outcome == "smt_witness"
-        smt_ev = [e for e in r.evidence if e.tool == "smt"]
-        assert smt_ev and smt_ev[0].rule == "path-feasibility:witness"
+        assert r.evidence == []
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is True
+        assert analysis["smt_witness"]["model"]
 
-    def test_disagreement_record_labeled(self):
+    def test_contradiction_does_not_claim_source_disagreement(self):
         pytest.importorskip("z3")
         from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
         analysis = {"path_conditions": ["x > 100", "x < 5"]}
         r, outcome = _tier4_smt_refine(
             self._result("confirmed"), {}, analysis,
         )
-        assert outcome == "smt_disagree"
-        smt_ev = [e for e in r.evidence if e.tool == "smt"]
-        assert smt_ev and smt_ev[0].rule == "path-feasibility:disagreement"
+        assert outcome == "smt_no_change" and r.evidence == []
+        assert analysis["smt_diagnostics"]["modeled_feasible"] is False
 
 
 # Cache key scope -----------------------------------------------------------------
