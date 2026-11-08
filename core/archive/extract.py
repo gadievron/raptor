@@ -30,6 +30,7 @@ from core.zip import (
     extract_files_from_zip,
 )
 
+from contextlib import closing
 from itertools import chain
 
 from .compression import _TAR_MAGIC_OFFSET, iter_decompressed, looks_like_tar
@@ -282,21 +283,22 @@ def extract_to_dir(path, dest, *,
             # gz/bz2/xz/zst: a compressed tar OR a single compressed
             # file. Stream-decompress either way; buffer only enough
             # head bytes to sniff the tar magic at offset 257.
-            chunks = iter_decompressed(src, fmt, max_bytes=max_total_bytes)
-            head = b""
-            for chunk in chunks:
-                head += chunk
-                if len(head) > _TAR_MAGIC_OFFSET + 8:
-                    break
-            if looks_like_tar(head):
-                extract_files_from_tar(
-                    chain([head], chunks), selector=_keep_files, mode="r|",
-                    max_member_bytes=max_member_bytes,
-                    max_total_bytes=max_total_bytes, max_entry_count=max_files,
-                    sink=sink, on_skipped=_count_skip)
-                stats = sink.stats()
-            else:
-                stats = _write_single_file(chain([head], chunks), src, dest)
+            with preserving_stream_error(closing(
+                    iter_decompressed(src, fmt, max_bytes=max_total_bytes))) as chunks:
+                head = b""
+                for chunk in chunks:
+                    head += chunk
+                    if len(head) > _TAR_MAGIC_OFFSET + 8:
+                        break
+                if looks_like_tar(head):
+                    extract_files_from_tar(
+                        chain([head], chunks), selector=_keep_files, mode="r|",
+                        max_member_bytes=max_member_bytes,
+                        max_total_bytes=max_total_bytes, max_entry_count=max_files,
+                        sink=sink, on_skipped=_count_skip)
+                    stats = sink.stats()
+                else:
+                    stats = _write_single_file(chain([head], chunks), src, dest)
     except (ZipTotalBytesExceeded, TarTotalBytesExceeded) as e:
         raise DecompressionLimitExceeded(str(e), cap="total_bytes") from e
     except (ZipEntryCountExceeded, TarEntryCountExceeded) as e:
