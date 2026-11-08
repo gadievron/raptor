@@ -7,7 +7,8 @@ own extension-based target selection silently SKIPS such a file for a
 language-keyed rule (``paths.scanned`` stays empty — pinned live
 below), so without ``--scan-unknown-extensions`` the scanned-witness
 gate capped every sweep there at inconclusive and a content-probed
-file could never earn a tool-confirmed outcome in either direction.
+file could not earn a witnessed tool outcome. Scanning a file does not
+make a confirm-only rule capable of refuting its whole dispatched class.
 
 Both language gates stay honest: the dispatch resolver admits the
 curated leg only when the probe names one of the rule's declared
@@ -361,12 +362,10 @@ class TestLiveProbedTarget:
         assert result.outcome == "confirmed", (result.outcome, result.errors)
         assert result.matches
 
-    def test_probed_sanitized_mod_refutes_with_witness(
+    def test_probed_sanitized_confirm_only_mod_stays_inconclusive(
         self, tmp_path: Path,
     ):
-        """The promotion trigger: paths.scanned now witnesses the
-        probed file, so a clean scan is a licensed refutation (was
-        capped at inconclusive — no witness — before the hint)."""
+        """A scanned clean file cannot widen a confirm-only rule's role."""
         (tmp_path / "check.mod").write_text(_SANITIZED_MOD)
         result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
@@ -375,7 +374,32 @@ class TestLiveProbedTarget:
             rule_config=self._rule(),
             language="php",
         )
-        assert result.outcome == "refuted", (result.outcome, result.errors)
+        assert result.outcome == "inconclusive", (result.outcome, result.details)
+        assert not result.matches
+        assert (result.details or {}).get("reason", "").startswith("confirm-only rule:")
+        substrate = (result.details or {}).get("substrate") or {}
+        assert substrate.get("covered") == "unknown"
+        assert substrate.get("reason", "").startswith("confirm-only rule:")
+        assert substrate.get("tier") == "scanned-witness"
+
+    def test_unmarked_rule_clean_probe_has_scanned_witness(self, tmp_path: Path):
+        """An unmarked fixture rule can attest to absence of its literal call."""
+        (tmp_path / "check.mod").write_text(_SANITIZED_MOD)
+        rule = tmp_path / "coverage.yaml"
+        rule.write_text(
+            "rules:\n  - id: coverage-marker\n    languages: [php]\n"
+            "    pattern: coverage_marker(...)\n    message: marker call\n"
+            "    severity: WARNING\n",
+        )
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path,
+            file_path="check.mod",
+            function_name="interstitial:2-4",
+            rule_config=str(rule),
+            language="php",
+        )
+        assert result.outcome == "refuted", (result.outcome, result.details, result.errors)
+        assert not result.matches
         substrate = (result.details or {}).get("substrate") or {}
         assert substrate.get("covered") is True
         assert substrate.get("tier") == "scanned-witness"
