@@ -715,7 +715,8 @@ def check_invariant_multi_site(
     scalar/object bindings; ambiguous sites retain an explicit refusal
     receipt and do not enter the solver batch. Source-backed census code
     must match the selected mutation and cannot add guards absent from it.
-    Preservation also requires no reported collector truncation; a checked
+    Preservation also requires no reported collector truncation or missing
+    direct source field writes in a bounded syntax coverage check; a checked
     counterexample can remain valid without a complete input census."""
     t0 = time.monotonic()
     variables = _invariant_variables(invariant)
@@ -735,7 +736,19 @@ def check_invariant_multi_site(
         if capped:
             break
 
+    from .protocol_invariant_bindings import census_coverage_refusal
+
+    def coverage_check():
+        # Universal preservation needs coverage; an admitted counterexample
+        # does not. Spend this budget only before reporting preservation.
+        return census_coverage_refusal(
+            ((path, source) for path, source in source_texts.items() if path.endswith(_SOURCE_SUFFIXES)),
+            variables, fields, deadline=t0 + budget_s, clock=time.monotonic,
+        )
+
     if not sites:
+        coverage_refusal = coverage_check()
+        source_incomplete = source_incomplete or bool(coverage_refusal)
         # Vacuous: the regex census found NO write site for any
         # invariant variable.  That is bounded negative evidence — the
         # census can be blind (macro-hidden writes, pointer aliases),
@@ -747,7 +760,7 @@ def check_invariant_multi_site(
             "sites": [],
             "reason": (
                 "no checked mutation sites in a partial census "
-                "(source index incomplete or analysis cap reached) — not refuting"
+                f"({coverage_refusal or 'source index incomplete or analysis cap reached'}) — not refuting"
                 if source_incomplete or capped else
                 "no census write site mutates an invariant variable "
                 "(vacuously preserved; base case not checked)"
@@ -824,6 +837,8 @@ def check_invariant_multi_site(
             "(inductive step, dominating guards encoded)"
         )
     elif aggregate == "preserved":
+        coverage_refusal = coverage_check()
+        source_incomplete = source_incomplete or bool(coverage_refusal)
         if skipped or capped or source_incomplete:
             # Budget-skipped or cap-truncated sites were never
             # checked: "every CHECKED site preserves" over a partial
@@ -838,7 +853,8 @@ def check_invariant_multi_site(
                 "invariant but the census was truncated "
                 f"({skipped} skipped on budget, cap "
                 f"{'reached' if capped else 'not reached'}, source index "
-                f"{'incomplete' if source_incomplete else 'complete'}) — "
+                f"{'incomplete' if source_incomplete else 'complete'}"
+                f"{': ' + coverage_refusal if coverage_refusal else ''}) — "
                 "not refuting on a partial census"
             )
         else:
