@@ -40,6 +40,28 @@ _ITEM = {
 }
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_domain_slice_memos(monkeypatch):
+    """Keep record/fold model memoization separate from borrowed state."""
+    from collections import OrderedDict
+    from functools import lru_cache
+    from core.concepts import audit_bridge
+    from core.testing.module_state import isolated_module_state
+
+    original = audit_bridge._load_cached
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(
+        audit_bridge,
+        {"_load_cached": private, "_slice_memos": OrderedDict()},
+        lock=audit_bridge._slice_memo_lock,
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _write_target(tmp_path):
     target = tmp_path / "target"
     target.mkdir(exist_ok=True)

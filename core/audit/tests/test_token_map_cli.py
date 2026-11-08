@@ -8,6 +8,8 @@ core/concepts/tests.
 
 from __future__ import annotations
 
+import pytest
+
 import importlib.util
 import json
 import sys
@@ -32,6 +34,25 @@ MODEL = {
          "provenance": "mechanical"},
     ],
 }
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_token_cli_memos(monkeypatch):
+    """Keep token-map CLI cache clears within test-owned wrappers."""
+    from functools import lru_cache
+    from core.concepts import audit_bridge
+    from core.testing.module_state import isolated_module_state
+
+    replacements = {}
+    for name in ("_load_cached", "_token_map_for_run"):
+        original = getattr(audit_bridge, name)
+        replacements[name] = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(audit_bridge, replacements):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _load_cli():

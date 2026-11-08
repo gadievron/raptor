@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from packages.sca.models import Manifest
 from packages.sca.supply_chain.typosquat_domain import scan_target
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_suffix_loader(monkeypatch):
+    """Keep missing-snapshot cases from clearing borrowed suffix rules."""
+    from functools import lru_cache
+    from core.domains import public_suffix
+    from packages.sca.supply_chain import typosquat_domain
+    from core.testing.module_state import isolated_module_state
+
+    original = public_suffix.load_suffix_rules
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(public_suffix, {"load_suffix_rules": private}):
+        try:
+            monkeypatch.setattr(typosquat_domain, "load_suffix_rules", private)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _manifests(target: Path) -> list:
