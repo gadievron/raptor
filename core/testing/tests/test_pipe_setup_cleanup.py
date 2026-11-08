@@ -1,6 +1,8 @@
 """Pipe ownership across failed child startup and readiness writes."""
 
+import ast
 from contextlib import contextmanager
+import inspect
 import errno
 import os
 import signal
@@ -17,6 +19,7 @@ _DRAINS = [
     "test_drain_detects_exit_when_deadline_shorter_than_poll_interval",
     "test_drain_respects_deadline",
     "test_drain_caps_per_fd_accumulation",
+    "test_target_exit_without_pipe_activity_has_a_bounded_liveness_wait",
 ]
 
 
@@ -31,12 +34,12 @@ def _owned(fd, identity):
 
 
 @contextmanager
-def _pipes(monkeypatch, error, second_fails=False):
+def _pipes(monkeypatch, error, second_fails=False, *, fail_at=None):
     descriptors, pairs = [], []
     real_pipe = os.pipe
 
     def pipe():
-        if second_fails and pairs:
+        if (second_fails and pairs) or len(pairs) + 1 == fail_at:
             raise error("injected pipe setup failure")
         pair = real_pipe()
         pairs.append(pair)
@@ -60,7 +63,8 @@ def _pipes(monkeypatch, error, second_fails=False):
 
 
 _DRAIN_FAULTS = [(name, "spawn") for name in _DRAINS]
-_DRAIN_FAULTS += [(_DRAINS[0], "second-pipe")]
+_DRAIN_FAULTS += [(_DRAINS[0], "pipe-2"), (_DRAINS[-1], "pipe-2"),
+                  (_DRAINS[-1], "pipe-3")]
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="owned Linux drain fixtures")
@@ -72,17 +76,41 @@ def test_drain_startup_failure_releases_pipes(name, fault, error, monkeypatch):
     def fail(*args, **kwargs):
         raise error("injected pipe setup failure")
 
-    with _pipes(monkeypatch, error, fault == "second-pipe"):
+    with _pipes(monkeypatch, error,
+                fail_at=int(fault[5:]) if fault.startswith("pipe-") else None):
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "_spawn_child", fail)
-            kwargs = (
-                {}
-                if name
-                == "test_drain_detects_exit_when_deadline_shorter_than_poll_interval"
-                else {"monkeypatch": patcher}
-            )
+            kwargs = {"monkeypatch": patcher}
             with pytest.raises(error, match="injected pipe setup failure"):
                 getattr(module, name)(**kwargs)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="owned Linux drain fixtures")
+def test_pipe_owning_drain_tests_have_companion_fault_cases():
+    from core.sandbox.tests import test_landlock_audit_drain as module
+
+    tree = ast.parse(inspect.getsource(module))
+    owners = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_") and any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == "pipes_for_setup" for call in ast.walk(node)
+        )
+    }
+    assert set(_DRAINS) == owners, "update pipe startup fault cases with drain-test ownership"
+    expected = {(name, "spawn") for name in owners}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in owners:
+            for call in ast.walk(node):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                        and call.func.id == "pipes_for_setup"):
+                    assert len(call.args) == 1 and isinstance(call.args[0], ast.Constant)
+                    expected.update((node.name, f"pipe-{n}") for n in range(2, call.args[0].value + 1))
+    assert set(_DRAIN_FAULTS) == expected, "cover every partial pipe-acquisition boundary"
+    for name in _DRAINS:
+        # Guard the actual caller contract before any fault is injected.
+        inspect.signature(getattr(module, name)).bind(monkeypatch=object())
+        assert (name, "spawn") in _DRAIN_FAULTS
 
 
 @pytest.mark.skipif(os.name != "posix", reason="owned ready-pipe fixtures")

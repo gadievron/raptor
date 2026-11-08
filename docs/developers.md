@@ -310,6 +310,13 @@ status after printing the paths, without exiting your interactive shell.
 preserves a failing pipeline status. The text log remains useful if the
 process crashes; JUnit XML may be incomplete if pytest cannot finish.
 
+When a sandbox test launches the running Python under read confinement,
+include `python_runtime_tool_paths()` in its `tool_paths`; keep
+`restrict_reads=True`. System-directory Python can hide missing runtime
+grants. Validate affected execution with an interpreter and standard library
+outside the system directories, and retain an unrelated-file read-denial
+control.
+
 ### Sandbox wrapper tests
 
 Every policy-owning sandbox wrapper must have an executable test case. The
@@ -608,7 +615,7 @@ and rerun its check after rebasing onto changes to the same helpers.
 | --- | --- |
 | Add, rename, or remove a live compiler, Semgrep, or preprocessor test | Use the guarded runner in `core/audit/tests/_live_transport.py`; update the corresponding exact caller inventory in `core/audit/tests/test_live_transport_guards.py` and run that file. Keep expected callers explicit so new unguarded calls remain detectable. |
 | Move a fault injection from a native OS/module attribute to a helper, or change its consumer | Update the relevant inventory under `core/testing/tests/`, such as `test_os_fault_fixture_scope.py`. Remove obsolete native-patch entries only when that patch no longer exists; retain the domain test for the replacement helper's behavior. Run the inventory and the affected domain tests. |
-| Change a fixture helper's API | Update fake adapters used by ownership and fault-injection tests. For example, a monkeypatch adapter must forward supported `raising=` arguments and `setitem` operations. Preserve undo behavior, borrowed object identities, and error/interrupt coverage; run affected ownership tests in randomized serial and xdist modes. |
+| Change a fixture helper or directly called test function's API | Update every direct caller, including companion harnesses that pass fixture arguments explicitly. Exercise their error and interrupt paths. Update fake adapters used by ownership and fault-injection tests. For example, a monkeypatch adapter must forward supported `raising=` arguments and `setitem` operations. Preserve undo behavior, borrowed object identities, and error/interrupt coverage; run affected ownership tests in randomized serial and xdist modes. |
 | Change a curated rule's evidence role | Update tests that pin that rule's role and its result semantics. A confirm-only rule's zero-match is inconclusive; do not restore refutation authority merely to satisfy an old assertion. |
 | Add a workflow or checker test under `.github/tests` or `.github/scripts/tests` | Keep it compatible with the `ci-lint-tests` lane, which installs only pinned pytest and uses the standard library. A developer environment with PyYAML installed can hide a collection failure. Reuse the existing scoped workflow-block extraction patterns; do not skip required workflow assertions when an optional parser is absent. |
 
