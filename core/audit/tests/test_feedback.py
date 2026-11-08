@@ -1248,13 +1248,12 @@ class TestDowngradeReferee:
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
         assert entry.verdict == "clean"
 
-    def test_smt_all_paths_infeasible_cleans(
+    def test_predicate_only_unsat_cannot_clear_source_finding(
         self, tmp_path: Path, monkeypatch,
     ):
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
         ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
-        # Sweep-stamped records — unstamped ones are ignored (see
-        # test_feedback_sibling_provenance for the forged-record side).
+        # Authentic solver-origin predicates still lack source binding.
         from core.witness.provenance import (
             smt_conditions_hash,
             stamp_smt_feasibility,
@@ -1279,7 +1278,7 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
-        assert entry.verdict == "clean"
+        assert entry.verdict == "suspicious"
 
     def test_smt_one_feasible_path_blocks_clean(self, tmp_path: Path):
         ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])

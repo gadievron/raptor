@@ -94,12 +94,11 @@ def test_forged_smt_record_is_ignored(tmp_path: Path) -> None:
         [{"finding_id": "F3", "smt_feasibility": {"feasible": False}}],
     )
     sib = _ValidationSiblings(report)
-    assert sib.smt_all_paths_infeasible("F3") is False
     finding = {"id": "F3", "file": "a.c", "function": "h", "ruling": {}}
     assert _mechanical_disqualifier(finding, sib) is None
 
 
-def test_stamped_smt_record_counts(tmp_path: Path) -> None:
+def test_stamped_predicate_record_does_not_refute_source(tmp_path: Path) -> None:
     base = tmp_path / "run"
     base.mkdir(parents=True)
     path = {"finding_id": "F3", "path_conditions": ["x > 0"]}
@@ -114,14 +113,13 @@ def test_stamped_smt_record_counts(tmp_path: Path) -> None:
     path["smt_feasibility"] = record
     report = _write_siblings(base, [], [path])
     sib = _ValidationSiblings(report)
-    assert sib.smt_all_paths_infeasible("F3") is True
     finding = {"id": "F3", "file": "a.c", "function": "h", "ruling": {}}
-    assert _mechanical_disqualifier(finding, sib) == "smt_paths_infeasible"
+    assert prov.verify_smt_feasibility(path, base)
+    assert _mechanical_disqualifier(finding, sib) is None
 
 
 def test_one_forged_path_blocks_the_refutation(tmp_path: Path) -> None:
-    """A finding with one verified-unsat path and one forged one is
-    NOT mechanically refuted — every path must verify."""
+    """Neither genuine nor forged predicate records refute source findings."""
     base = tmp_path / "run"
     base.mkdir(parents=True)
     p1 = {"finding_id": "F3", "path_conditions": ["x > 0"]}
@@ -135,7 +133,7 @@ def test_one_forged_path_blocks_the_refutation(tmp_path: Path) -> None:
           "smt_feasibility": {"feasible": False, "conditions_hash": "bb"}}
     report = _write_siblings(base, [], [p1, p2])
     sib = _ValidationSiblings(report)
-    assert sib.smt_all_paths_infeasible("F3") is False
+    assert _mechanical_disqualifier({"id": "F3"}, sib) is None
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +223,10 @@ def test_stamped_record_copied_onto_sibling_path_is_refused(
     # The forgery: overwrite the SAT path's record with the unsat
     # path's genuinely-stamped one.
     p_sat["smt_feasibility"] = dict(p_unsat["smt_feasibility"])
+    assert not prov.verify_smt_feasibility(p_sat, base)
     report = _write_siblings(base, [], [p_unsat, p_sat])
 
     sib = _ValidationSiblings(report)
-    assert sib.smt_all_paths_infeasible("F3") is False
     finding = {"id": "F3", "file": "a.c", "function": "h", "ruling": {}}
     assert _mechanical_disqualifier(finding, sib) is None
 
@@ -249,6 +247,18 @@ def test_record_on_conditionless_path_is_refused(tmp_path: Path) -> None:
     }
     stamp_smt_feasibility(donor, record, base)
     bare = {"finding_id": "F4", "smt_feasibility": dict(record)}
+    assert not prov.verify_smt_feasibility(bare, base)
     report = _write_siblings(base, [], [bare])
     sib = _ValidationSiblings(report)
-    assert sib.smt_all_paths_infeasible("F4") is False
+    assert _mechanical_disqualifier({"id": "F4"}, sib) is None
+
+
+def test_native_sweep_stamp_is_not_a_source_refutation(tmp_path):
+    pytest.importorskip("z3")
+    from packages.exploitability_validation.smt_paths import sweep_attack_paths
+
+    path = {"finding_id": "F3", "path_conditions": ["x == 0", "x == 1"]}
+    assert sweep_attack_paths([path], run_dir=tmp_path)["unsat"] == 1
+    assert prov.verify_smt_feasibility(path, tmp_path)
+    report = _write_siblings(tmp_path, [], [path])
+    assert _mechanical_disqualifier({"id": "F3"}, _ValidationSiblings(report)) is None

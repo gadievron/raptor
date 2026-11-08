@@ -713,3 +713,20 @@ class TestBindingNonceRead:
         nonce = prov._load_or_create_run_nonce(tmp_path)
         assert nonce
         assert prov._read_run_nonce(tmp_path) == nonce
+
+
+@pytest.mark.parametrize("mutation", ["path-profile", "record-profile", "scope"])
+def test_scoped_smt_cache_stamp_binds_profile(tmp_path, mutation):
+    path = {"finding_id": "F1", "path_conditions": ["x < 0"], "path_profile": "uint8"}
+    record = {"feasible": False, "conditions_hash": prov.smt_conditions_hash(["x < 0"]),
+              "oracle_scope": "supplied-predicates", "profile": "uint8"}
+    prov.stamp_smt_feasibility(path, record, tmp_path)
+    path["smt_feasibility"] = record
+    assert prov.verify_smt_feasibility(path, tmp_path)
+    if mutation == "path-profile":
+        path["path_profile"] = "int8"
+    elif mutation == "record-profile":
+        path["path_profile"] = record["profile"] = "int8"
+    else:
+        record.pop("oracle_scope")
+    assert not prov.verify_smt_feasibility(path, tmp_path)
