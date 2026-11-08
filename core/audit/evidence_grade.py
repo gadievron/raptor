@@ -730,7 +730,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "evidence_chain", "file_dampening", "from_composition",
     "g2_invariant_bypass",
     "g2_invariant_bypass_tiers", "gadget_absence",
-    "ondemand_synth_blocked", "ondemand_synth_receipt",
+    "ondemand_synth_blocked", "ondemand_synth_hypothesis", "ondemand_synth_receipt",
     "precondition_verification", "premise_blocked_confirms", "primitive",
     "promotion_gate_demoted", "prompt_budget_event",
     "rationale_consistency_demotion", "rationale_consistency_mismatch",

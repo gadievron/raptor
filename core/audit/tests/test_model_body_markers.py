@@ -1618,14 +1618,19 @@ class TestReviewKeyScannerWrites:
             [Site("core/audit/fx.py", 2, "f", "value-expression",
                   _digest("m"))], [])
 
-    def test_edited_pinned_expression_fails_its_pin(self, tmp_path):
+    @pytest.mark.parametrize("rel,qualname,shape,old,new", [
+        ("core/audit/calibrated_merge.py", "calibrated_decision", "dict-from-expression",
+         "dict(primary_entry[0])", "dict(primary_entry[-1])"),
+        ("core/audit/orchestrator.py", "_synthesize_unmapped_suspicious", "value-expression",
+         "deepcopy(outcome.review_result or {})", "deepcopy(outcome.review_result)"),
+    ], ids=["panel-copy", "late-synthesis-copy"])
+    def test_edited_pinned_expression_fails_its_pin(self, tmp_path, rel, qualname, shape, old, new):
         """A pin binds the written expression's content. Editing a pinned write
         turns it into an unpinned site and makes its old pin stale."""
         # The pin binds the expression's content: an edit to a pinned
-        # write (here, which panel entry is copied) is a new, unpinned
+        # write (the selected record or copy input) is a new, unpinned
         # site, and its old pin goes stale.
         from core.audit.tests._review_keys import pin_violations, scan_full
-        rel = "core/audit/calibrated_merge.py"
         src = (_REPO / rel).read_text()
         pins = {p: why for p, why in PINNED_REVIEW_RESULT_WRITES.items()
                 if p[0] == rel}
@@ -1635,15 +1640,13 @@ class TestReviewKeyScannerWrites:
         dst.write_text(src)
         _, _, unresolved = scan_full(tmp_path)
         assert pin_violations(unresolved, pins) == ([], [])
-        old = "primary = dict(primary_entry[0])"
         assert src.count(old) == 1
-        dst.write_text(src.replace(old, "primary = dict(primary_entry[-1])"))
+        dst.write_text(src.replace(old, new))
         _, _, unresolved = scan_full(tmp_path)
         unpinned, stale = pin_violations(unresolved, pins)
         assert [(s.file, s.qualname, s.shape, s.digest) for s in unpinned] \
-            == [(rel, "calibrated_decision", "dict-from-expression",
-                 _digest("dict(primary_entry[-1])"))]
-        assert stale == sorted(pins)
+            == [(rel, qualname, shape, _digest(new))]
+        assert stale == [(rel, qualname, shape, _digest(old))]
 
     def test_repo_unresolved_writes_are_pinned(self):
         """Every unresolved review_result write in the tree is pinned, and no
@@ -1729,6 +1732,12 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
      "computed-key", "05edb1da5eb3a080"):
         "gate-blocked proposal restores only hypothesis/cwe/cwe_class from "
         "the prior review; finite model-owned keys, no pipeline stamp copied",
+    ("core/audit/orchestrator.py", "_synthesize_unmapped_suspicious",
+     "value-expression", "f8d435454ebf36ec"):
+        "deepcopy(outcome.review_result or {}): isolated copy of an admitted "
+        "review; existing model-authored and pipeline-owned classifications "
+        "are retained. Selected hypothesis/cwe/cwe_class are classified; "
+        "ondemand_synth_hypothesis is a pipeline-owned diagnostic",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).
