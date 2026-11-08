@@ -296,15 +296,23 @@ class TestPreSweepWindow(unittest.TestCase):
                         f"{rel}: unguarded sweep line: {stripped!r}")
 
     def test_clean_env_unaffected(self):
-        # Hermetic: python-side deps may be absent on a CI runner, so
-        # assert the bash window (sweep + resolution + strip) ran
-        # clean rather than demanding the python CLI succeeds.
-        proc = subprocess.run(
-            ["bash", str(REPO / "bin/cve-diff"), "--help"],
-            capture_output=True, text=True, timeout=60,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                 "HOME": os.environ.get("HOME", "/tmp")},
-        )
+        # Exercise the real shell launcher without importing the downstream CLI.
+        with tempfile.TemporaryDirectory() as home:
+            stub = Path(home) / "python3"
+            stub.write_text('#!/bin/sh\nprintf "launcher-ready\\n"\nprintf "%s\\n" "$@"\n')
+            stub.chmod(0o700)
+            proc = subprocess.run(
+                ["bash", str(REPO / "bin/cve-diff"), "--help"],
+                capture_output=True, text=True, timeout=10,
+                env={"PATH": f"{home}:/usr/bin:/bin", "HOME": home},
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
+        lines = proc.stdout.splitlines()
+        self.assertEqual(lines[0], "launcher-ready")
+        self.assertEqual(lines[1], "-c")
+        self.assertEqual(lines[-1], "--help")
+        self.assertIn("from cve_diff.cli.main import app", lines[2])
         combined = proc.stdout + proc.stderr
         self.assertNotIn("cannot find RAPTOR installation", combined)
         self.assertNotIn("symlink hop limit", combined)
