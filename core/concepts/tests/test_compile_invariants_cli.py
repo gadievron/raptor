@@ -14,10 +14,12 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+
+from core.testing.module_views import scoped_function_imports
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-compile-invariants"
@@ -83,15 +85,22 @@ def _run_main(cli, monkeypatch, tmp_path: Path, invariants, results,
         lambda *a, **k: results,
     )
 
-    from core.llm import client as client_mod
-    monkeypatch.setattr(client_mod, "LLMClient", lambda **k: object())
+    client_mod = ModuleType("core.llm.client")
+    client_mod.LLMClient = lambda **k: object()
+    # Dispatcher routing has its own contracts in test_llm_dispatcher_bootstrap.
+    lifecycle_mod = ModuleType("core.llm.dispatcher.lifecycle")
+    lifecycle_mod.ensure_route_for_client = lambda *a, **k: None
 
     monkeypatch.setattr(
         "sys.argv",
         ["raptor-compile-invariants", str(tmp_path),
          *(extra_argv or [])],
     )
-    return cli.main()
+    with scoped_function_imports(cli, ("main",), {
+        "core.llm.client": client_mod,
+        "core.llm.dispatcher.lifecycle": lifecycle_mod,
+    }):
+        return cli.main()
 
 
 class TestExitCode:
@@ -140,3 +149,47 @@ class TestEligibleCount:
         err = capsys.readouterr().err
         # 3 pass the confidence floor, capped at --max 2.
         assert "2 invariant(s) eligible for compilation" in err
+
+
+@pytest.mark.parametrize("finish", ["normal", "error", "interrupt"])
+def test_run_main_restores_private_client_imports(finish, tmp_path):
+    from core.concepts import compiler as compiler_mod
+    from core.concepts import model as model_mod
+
+    cli_mod = ModuleType("owned_compile_cli")
+    exec("def main():\n    from core.llm.client import LLMClient\n"
+         "    assert LLMClient() is not None\n"
+         "    from core.llm.dispatcher.lifecycle import ensure_route_for_client\n"
+         "    ensure_route_for_client(object(), 'owned')\n"
+         "    if failure is not None: raise failure('injected')\n"
+         "    return 7\n", vars(cli_mod))
+    cli_mod.failure = {"normal": None, "error": RuntimeError, "interrupt": KeyboardInterrupt}[finish]
+    borrowed = ModuleType("core.llm.client")
+    borrowed.LLMClient = object()
+    borrowed_lifecycle = ModuleType("core.llm.dispatcher.lifecycle")
+    borrowed_lifecycle.ensure_route_for_client = object()
+    original_main = cli_mod.main
+    original_load = vars(model_mod.DomainModel)["load"]
+    original_compile = compiler_mod.compile_model
+    missing = object()
+    inherited_client = sys.modules.get("core.llm.client", missing)
+    inherited_lifecycle = sys.modules.get("core.llm.dispatcher.lifecycle", missing)
+
+    with pytest.MonkeyPatch.context() as scope:
+        scope.setitem(sys.modules, "core.llm.client", borrowed)
+        scope.setitem(sys.modules, "core.llm.dispatcher.lifecycle", borrowed_lifecycle)
+        if cli_mod.failure is None:
+            assert _run_main(cli_mod, scope, tmp_path, [], []) == 7
+        else:
+            with pytest.raises(cli_mod.failure, match="injected"):
+                _run_main(cli_mod, scope, tmp_path, [], [])
+        assert cli_mod.main is original_main
+        assert sys.modules["core.llm.client"] is borrowed
+        assert not callable(borrowed.LLMClient), "borrowed client binding was replaced"
+        assert sys.modules["core.llm.dispatcher.lifecycle"] is borrowed_lifecycle
+        assert not callable(borrowed_lifecycle.ensure_route_for_client)
+
+    assert sys.modules.get("core.llm.client", missing) is inherited_client
+    assert sys.modules.get("core.llm.dispatcher.lifecycle", missing) is inherited_lifecycle
+    assert vars(model_mod.DomainModel)["load"] is original_load
+    assert compiler_mod.compile_model is original_compile

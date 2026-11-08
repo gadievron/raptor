@@ -75,3 +75,10 @@ def test_dated_snapshot_of_two_part_id_still_gates():
     assert supports_temperature("claude-sonnet-4-7-20260115") is False
     assert supports_temperature("claude-opus-4-7-20260301") is False
     assert supports_temperature("claude-sonnet-4-6-20260115") is True
+
+
+def test_provider_exports_keep_lightweight_policy_identity():
+    from core.llm import model_capabilities, providers
+
+    assert providers.supports_temperature is model_capabilities.supports_temperature
+    assert providers.thinking_shares_output_budget is model_capabilities.thinking_shares_output_budget

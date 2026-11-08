@@ -33,6 +33,23 @@ _CVSS_RE = re.compile(
 _CWE_RE = re.compile(r"^CWE-\d+$")
 
 
+def _llm_truncation_error(msg: str) -> RuntimeError:
+    """Output-truncation error with the typed classification marker.
+
+    Every output-truncation guard raises through this constructor so
+    consumers can classify ATTRIBUTE-FIRST (``llm_truncation=True``)
+    instead of matching the four guards' divergent message phrasings
+    (the Gemini native guard says neither "output token limit" nor
+    the instructor leg's exact wording). Message-phrase matching
+    stays a legacy fallback for wrappers that re-raise with a copied
+    string. Stays a ``RuntimeError`` (not a subclass) so existing
+    ``except RuntimeError`` call sites and retry taxonomies are
+    untouched.
+    """
+    err = RuntimeError(msg)
+    err.llm_truncation = True  # type: ignore[attr-defined]
+    return err
+
 class SchemaUnknownFieldError(ValueError):
     """An LLM structured response carried top-level fields outside the
     requested schema.

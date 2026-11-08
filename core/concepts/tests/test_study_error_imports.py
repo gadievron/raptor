@@ -22,12 +22,36 @@ assert not is_refusal_error(error)
 ''',
     "study-truncation": '''
 from core.concepts.study import _is_truncation_error
+from core.llm.response_validation import _llm_truncation_error
+assert _is_truncation_error(_llm_truncation_error("anything at all"))
 inner = RuntimeError("provider stopped")
 inner.llm_truncation = True
 error = RuntimeError("wrapper")
 error.__cause__ = inner
 assert _is_truncation_error(error)
 assert not _is_truncation_error(RuntimeError("ordinary failure"))
+''',
+    "study-output-budget": '''
+from core.concepts.study import _study_max_output_tokens, _study_text_output_tokens
+from core.llm.model_capabilities import supports_temperature, thinking_shares_output_budget
+text = _study_text_output_tokens()
+assert _study_max_output_tokens("claude-fable-5") == 2 * text
+assert _study_max_output_tokens("claude-sonnet-4-6") == text
+assert _study_max_output_tokens("unknown-model") == text
+assert not supports_temperature("claude-fable-5")
+assert thinking_shares_output_budget("claude-fable-5")
+assert supports_temperature("claude-opus-4-20250514")
+assert not thinking_shares_output_budget("claude-opus-4-20250514")
+''',
+    "invariant-cli": '''
+from core.concepts.tests.test_compile_invariants_cli import cli, _run_main, _invariant, _result
+fixture = cli.__wrapped__()
+try:
+    script = next(fixture)
+    with pytest.MonkeyPatch.context() as scope:
+        assert _run_main(script, scope, target, [_invariant("i1")], [_result("i1", False)]) == 1
+finally:
+    fixture.close()
 ''',
     "study-spend-failure": '''
 from core.concepts.tests.test_study_budget import TestStudyRunMaxCost
