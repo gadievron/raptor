@@ -151,12 +151,10 @@ class TestClassifierUnavailableFailClosed:
     @pytest.mark.parametrize("stamp", [
         # Enumerated verification spellings survive the fallback
         # byte-identical to the classifier-present grading.
-        "smt",
         "smt:check-overflow",
+        "smt:check-array-bounds",
         "smt:check-overflow:witness",
-        # A concrete solver model keeps its receipt on detection
-        # verbs too (mirrors sweep.is_detection_rule_id).
-        "smt:check-overflow:witness",
+        "clean-refuted:smt:check-overflow",
         "smt:disproof:sat",
         "joern",
         "joern:flow",
@@ -177,6 +175,18 @@ class TestClassifierUnavailableFailClosed:
     ])
     def test_enumerated_spelling_preserved(self, stamp: str) -> None:
         assert eg.is_tool_evidence(stamp), stamp
+
+    @pytest.mark.parametrize("stamp", [
+        "smt", "clean-refuted:smt", "clean-refuted:clean-refuted:smt",
+    ])
+    def test_unqualified_smt_is_not_fallback_verification(self, stamp: str) -> None:
+        assert not eg.is_tool_evidence(stamp), stamp
+        assert not eg.is_verification_evidence(stamp), stamp
+
+    def test_bare_smt_does_not_poison_an_independent_receipt(self) -> None:
+        stamp = "smt+smt:check-overflow"
+        assert eg.is_tool_evidence(stamp)
+        assert eg.is_verification_evidence(stamp)
 
     @pytest.mark.parametrize("stamp", [
         # Known detection variants keep their heuristic grading —
