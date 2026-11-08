@@ -1,21 +1,8 @@
-"""Tests for SMT witness → /exploit PoC seed wiring.
+"""Conditional SMT model and summary wiring through validation and rendering.
 
-Tier 4 SMT (packages/llm_analysis/dataflow_validation.py) attaches a
-satisfying assignment to `analysis["smt_witness"]` when Z3 proves the
-LLM-emitted path conditions are jointly satisfiable. The /exploit
-prompt builder reads that field and surfaces it to the exploit-gen
-LLM as a starter PoC — concrete trigger values that are guaranteed
-to make the program take the dangerous code path, so the LLM doesn't
-have to derive them from first principles (the hardest part of
-integer-overflow / OOB / null-deref exploitation).
-
-These tests cover the wiring at both ends:
-  1. _tier4_smt_refine attaches a structured `smt_witness` field
-     when the SMT outcome is sat (witness branch).
-  2. build_exploit_prompt_bundle includes a dedicated `smt-witness`
-     UntrustedBlock when the field is present, omits when absent.
-  3. The block content is a parseable PoC seed (concrete values in
-     decimal AND hex).
+Models describe encoded constraints, not proven program reachability or input
+controllability. Tests preserve diagnostic values, call identities and summary
+metadata without promoting them into verified program inputs.
 """
 
 import sys
@@ -71,20 +58,14 @@ class TestFormatSmtWitness:
         })
         assert "x > 0" in out
 
-    def test_emphasises_solver_guarantee(self):
-        """The whole point of the witness is "Z3 has done this work
-        for you, don't redo it." The framing must be unambiguous."""
+    def test_keeps_the_solver_model_conditional(self):
         out = _format_smt_witness({
             "model": {"x": 1},
             "path_conditions": ["x > 0"],
         })
-        # Must convey that the values are solver-verified, not
-        # LLM-guessed. Look for any of: "guaranteed", "verified",
-        # "solver", "Z3" — at least one must appear.
-        assert any(w in out.lower() for w in ("guarantee", "verified", "solver", "z3")), (
-            f"witness block should make it clear values are solver-verified; "
-            f"got: {out[:200]}"
-        )
+        assert "SMT diagnostic model" in out
+        assert "not verified program inputs" in out
+        assert "does not establish source reachability" in out
 
     def test_non_int_value_renders_unchanged(self):
         """Defensive: if the model has a non-int (shouldn't happen
@@ -397,16 +378,12 @@ class TestSmtPathValidatorAnonMap:
         assert r.anon_var_map["_anon_1"] == "strlen(other)"
 
 
-# -- Phase 9: weakest-precondition predicate as a hard constraint ----------
+# -- Conditional constraint summaries ------------------------------------
 
 class TestWpPredicateInWitness:
-    """The WP predicate (Phase 8) rides on the smt_witness record and is
-    rendered as a HARD CONSTRAINT in the exploit prompt: the witness
-    model is one solution; the predicate is what every valid trigger
-    must satisfy, so the LLM can generalise the seed without leaving the
-    dangerous path."""
+    """Summary metadata survives transport without a source-proof claim."""
 
-    def test_predicate_renders_as_hard_constraint(self):
+    def test_predicate_renders_as_a_conditional_summary(self):
         out = _format_smt_witness({
             "model": {"count": 268435457},
             "path_conditions": ["count > 0x10000000"],
@@ -415,7 +392,7 @@ class TestWpPredicateInWitness:
             "wp_conjuncts": ["count > 0x10000000"],
             "wp_complete": True,
         })
-        assert "HARD CONSTRAINT" in out
+        assert "Reduced SMT constraint summary" in out
         assert "(bvugt count #x10000000)" in out
 
     def test_no_predicate_no_hard_constraint(self):
@@ -435,8 +412,8 @@ class TestWpPredicateInWitness:
             "wp_conjuncts": ["x > 0"],
             "wp_complete": False,
         })
-        assert "HARD CONSTRAINT" in out
-        assert "cap" in out.lower()  # the not-minimal caveat
+        assert "Reduced SMT constraint summary" in out
+        assert "reduction completeness is unestablished" in out
 
     def test_tier4_attaches_wp_fields(self):
         """validate_path's wp_* fields flow through _tier4_smt_refine
@@ -488,7 +465,7 @@ class TestWpPredicateInWitness:
         )
         text = "\n".join(m.content for m in bundle.messages)
         assert "(bvugt count #x10000000)" in text
-        assert "HARD CONSTRAINT" in text
+        assert "Reduced SMT constraint summary" in text
 
 
 class TestWitnessValueRendering:
