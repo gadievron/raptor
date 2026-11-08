@@ -68,6 +68,8 @@ from core.sandbox._request_head import (
 from core.testing.sockets import socket_worker_setup
 from core.testing.proxy_scope import isolated_proxy_scope
 
+from core.testing.threads import retiring_threads
+
 # ---------------------------------------------------------------------------
 # corpus: normal + hostile request lines (raw bytes, CRLF already
 # stripped — exactly what the proxy's line reader hands over)
@@ -925,9 +927,13 @@ class TestConcurrency:
         verdict (the mutex + id echo forbid cross-talk)."""
         n_threads, n_iter = 8, 25
         errors: "list[str]" = []
+        stop = threading.Event()
+        completed = [0] * n_threads
 
         def worker(idx: int) -> None:
             for i in range(n_iter):
+                if stop.is_set():
+                    return
                 port = 1 + (idx * n_iter + i) % 65535
                 raw = f"CONNECT host-{idx}.test:{port} HTTP/1.1".encode()
                 got = fresh_jail.parse(raw)
@@ -935,14 +941,17 @@ class TestConcurrency:
                                          port=port)
                 if got != want:
                     errors.append(f"{got!r} != {want!r}")
+                completed[idx] += 1
 
         threads = [threading.Thread(target=worker, args=(i,))
                    for i in range(n_threads)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
-        assert not errors, errors[:5]
+        with retiring_threads(threads, release=stop.set, timeout=60):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=60)
+            assert not errors, errors[:5]
+            assert completed == [n_iter] * n_threads
 
 
 # ---------------------------------------------------------------------------

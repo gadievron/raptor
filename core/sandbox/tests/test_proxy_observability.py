@@ -58,9 +58,20 @@ from core.sandbox.tests.socket_server import SocketServer
 from core.testing.logging_state import owned_log_handler
 from core.testing.proxy_scope import isolated_proxy_scope
 
+from core.testing.threads import retiring_threads
+
 # Far above a loopback round-trip, far below any proxy timeout —
 # same bound rationale as test_proxy_teardown.py.
 _DEADLINE = 5.0
+
+
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
 
 
 @pytest.fixture
@@ -516,10 +527,13 @@ class TestScanPermitContention:
             _ident(), proxy._loop).result(timeout=_DEADLINE)
         n_threads, per_thread = 8, 25
         errors: list = []
+        stop = threading.Event()
         try:
             def worker(base: int) -> None:
                 try:
                     for i in range(per_thread):
+                        if stop.is_set():
+                            return
                         fut = asyncio.run_coroutine_threadsafe(
                             proxy._lookup_peer_uid(
                                 ("127.0.0.1", base + i),
@@ -531,35 +545,36 @@ class TestScanPermitContention:
 
             ts = [threading.Thread(target=worker, args=(i * 1000,))
                   for i in range(n_threads)]
-            for t in ts:
-                t.start()
-            for t in ts:
-                t.join(timeout=60)
-            assert not errors, f"hammer raised: {errors[:3]}"
-            # The race net: every stats write ran on the loop thread.
-            off_loop = sorted({
-                (key, ident) for key, ident in write_stamps
-                if ident != loop_ident})
-            assert not off_loop, (
-                f"stats increments executed off the event-loop "
-                f"thread: {off_loop}")
-            # The instrumentation itself saw the seam under test —
-            # a refactor that stops routing scan verdicts through
-            # _stats must not turn this pin vacuous.
-            stamped_keys = {key for key, _ in write_stamps}
-            assert "uid_scan_hit" in stamped_keys
-            assert "scan_concurrency_cur" in stamped_keys
-            # Sanity only (NOT a race net — see the docstring).
-            c = proxy.snapshot()["counters"]
-            total = n_threads * per_thread
-            assert c["uid_scan_hit"] == total, (
-                f"lost updates: {c['uid_scan_hit']} != {total}")
-            assert c["uid_scan_miss"] == 0
-            assert c["uid_netlink_hit"] == 0
-            assert c["scan_concurrency_cur"] == 0, (
-                "concurrency gauge did not conserve to 0")
-            assert 1 <= c["scan_concurrency_peak"] <= (
-                proxy_mod._PEER_SCAN_MAX_CONCURRENCY)
+            with retiring_threads(ts, release=stop.set, timeout=60):
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(timeout=60)
+                assert not errors, f"hammer raised: {errors[:3]}"
+                # The race net: every stats write ran on the loop thread.
+                off_loop = sorted({
+                    (key, ident) for key, ident in write_stamps
+                    if ident != loop_ident})
+                assert not off_loop, (
+                    f"stats increments executed off the event-loop "
+                    f"thread: {off_loop}")
+                # The instrumentation itself saw the seam under test —
+                # a refactor that stops routing scan verdicts through
+                # _stats must not turn this pin vacuous.
+                stamped_keys = {key for key, _ in write_stamps}
+                assert "uid_scan_hit" in stamped_keys
+                assert "scan_concurrency_cur" in stamped_keys
+                # Sanity only (NOT a race net — see the docstring).
+                c = proxy.snapshot()["counters"]
+                total = n_threads * per_thread
+                assert c["uid_scan_hit"] == total, (
+                    f"lost updates: {c['uid_scan_hit']} != {total}")
+                assert c["uid_scan_miss"] == 0
+                assert c["uid_netlink_hit"] == 0
+                assert c["scan_concurrency_cur"] == 0, (
+                    "concurrency gauge did not conserve to 0")
+                assert 1 <= c["scan_concurrency_peak"] <= (
+                    proxy_mod._PEER_SCAN_MAX_CONCURRENCY)
         finally:
             proxy.stop()
 
@@ -625,11 +640,13 @@ class TestSummaryAndHeartbeat:
             # beat after stop() begins, so the close-time fold lands
             # inside the drain window.
             closer = threading.Timer(0.2, s.close)
-            closer.start()
-            with caplog.at_level(logging.INFO,
-                                 logger="core.sandbox.proxy"):
-                proxy.stop()
-            closer.join()
+            with retiring_threads([closer], release=closer.cancel, timeout=5):
+                closer.start()
+                with caplog.at_level(logging.INFO,
+                                     logger="core.sandbox.proxy"):
+                    proxy.stop()
+                closer.join(timeout=5)
+                assert not closer.is_alive()
         finally:
             with contextlib.suppress(OSError):
                 if s is not None:

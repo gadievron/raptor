@@ -29,6 +29,8 @@ from core.testing.module_bindings import mock_module_attribute
 from core.sandbox import proxy as proxy_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
+from core.testing.threads import retiring_threads
+
 
 @pytest.fixture(autouse=True)
 def _confined_parser_floor(confined_parser_floor: None) -> None:
@@ -487,32 +489,41 @@ class TestBufferSnapshot:
         try:
             stop = threading.Event()
             errors = []
+            completed = [0] * 6
+            ready = [threading.Event() for _ in completed]
 
-            def hammer_record():
+            def hammer_record(index):
                 try:
                     while not stop.is_set():
                         proxy._record({"host": "h", "port": 1,
                                         "result": "allowed"})
+                        completed[index] += 1
+                        ready[index].set()
                 except Exception as e:  # noqa: BLE001 — hammer thread: collect for the assertion
                     errors.append(e)
 
-            def hammer_register():
+            def hammer_register(index):
                 try:
                     while not stop.is_set():
                         t = proxy.register_sandbox()
                         proxy.unregister_sandbox(t)
+                        completed[index] += 1
+                        ready[index].set()
                 except Exception as e:  # noqa: BLE001 — hammer thread: collect for the assertion
                     errors.append(e)
 
-            ts = [threading.Thread(target=hammer_record) for _ in range(4)]
-            ts += [threading.Thread(target=hammer_register) for _ in range(2)]
-            for t in ts:
-                t.start()
-            time.sleep(0.5)
-            stop.set()
-            for t in ts:
-                t.join(timeout=5)
-            assert not errors, f"concurrent run raised: {errors}"
+            ts = [threading.Thread(target=hammer_record, args=(i,)) for i in range(4)]
+            ts += [threading.Thread(target=hammer_register, args=(4 + i,)) for i in range(2)]
+            with retiring_threads(ts, release=stop.set, timeout=5):
+                for t in ts:
+                    t.start()
+                assert all(event.wait(5) for event in ready), f"stress worker did not start: {errors}"
+                time.sleep(0.5)
+                stop.set()
+                for t in ts:
+                    t.join(timeout=5)
+                assert not errors, f"concurrent run raised: {errors}"
+                assert all(count > 0 for count in completed)
         finally:
             proxy.stop()
 

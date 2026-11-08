@@ -1,6 +1,6 @@
 """Socket and serving-thread ownership for in-process test workers."""
 
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 import os
 import socket
 import threading
@@ -43,3 +43,37 @@ def socket_worker_setup(fd):
         finally:
             owned.close()
         raise
+
+
+@contextmanager
+def isolated_socket_servers(owner, monkeypatch):
+    """Close test-created backends before restoring the consumer's factory.
+
+    SocketServer already cleans partially failed construction. Keep completed
+    instances too, since later test setup can fail before its local finally.
+    """
+    from core.testing.module_state import isolated_module_state
+
+    servers = []
+    original = owner.SocketServer
+
+    class OwnedServer(original):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            servers.append(self)
+
+    def close(server):
+        try:
+            server.close()
+        except BaseException:
+            original.close(server)
+            raise
+
+    with isolated_module_state(owner, {"SocketServer": OwnedServer}):
+        try:
+            yield
+        finally:
+            with ExitStack() as cleanup:
+                cleanup.callback(monkeypatch.undo)
+                for server in servers:
+                    cleanup.callback(close, server)

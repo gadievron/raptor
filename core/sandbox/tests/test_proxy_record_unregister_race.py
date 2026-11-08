@@ -26,6 +26,8 @@ import pytest
 from core.sandbox import proxy as proxy_mod
 from core.testing.proxy_scope import isolated_proxy_scope
 
+from core.testing.threads import retiring_threads
+
 
 @pytest.fixture(autouse=True)
 def _confined_parser_floor(confined_parser_floor: None) -> None:
@@ -75,38 +77,42 @@ class TestRecordUnregisterRace:
                 "resolved_ip": None, "lane": "main", "lane_id": None,
                 "bytes_c2u": 0, "bytes_u2c": 0, "duration": 0.0,
             }
-            recorder = threading.Thread(
-                target=proxy._record, args=(event,), daemon=True)
-            recorder.start()
-            assert append_entered.wait(timeout=5), \
-                "recorder never reached the buffer append"
+            workers = []
+            with retiring_threads(workers, release=release_append.set, timeout=5):
+                recorder = threading.Thread(
+                    target=proxy._record, args=(event,), daemon=True)
+                workers.append(recorder)
+                recorder.start()
+                assert append_entered.wait(timeout=5), \
+                    "recorder never reached the buffer append"
 
-            result: dict = {}
-            unregisterer = threading.Thread(
-                target=lambda: result.update(
-                    events=proxy.unregister_sandbox(token)),
-                daemon=True)
-            unregisterer.start()
-            # Give unregister every chance to complete while the
-            # recorder is still parked mid-append. Pre-fix it did
-            # (the recorder held no lock) and the append landed on
-            # the orphaned, already-copied list.
-            time.sleep(0.3)
-            release_append.set()
-            recorder.join(timeout=5)
-            unregisterer.join(timeout=5)
-            assert not recorder.is_alive()
-            assert not unregisterer.is_alive()
+                result: dict = {}
+                unregisterer = threading.Thread(
+                    target=lambda: result.update(
+                        events=proxy.unregister_sandbox(token)),
+                    daemon=True)
+                workers.append(unregisterer)
+                unregisterer.start()
+                # Give unregister every chance to complete while the
+                # recorder is still parked mid-append. Pre-fix it did
+                # (the recorder held no lock) and the append landed on
+                # the orphaned, already-copied list.
+                time.sleep(0.3)
+                release_append.set()
+                recorder.join(timeout=5)
+                unregisterer.join(timeout=5)
+                assert not recorder.is_alive()
+                assert not unregisterer.is_alive()
 
-            events = result["events"]
-            hosts = [e.get("host") for e in events]
-            assert "final.test" in hosts, (
-                f"final audit event dropped by concurrent unregister — "
-                f"returned events: {events}"
-            )
-            # The registration label must still be stamped on it.
-            final = [e for e in events if e.get("host") == "final.test"][0]
-            assert final.get("caller") == "race"
+                events = result["events"]
+                hosts = [e.get("host") for e in events]
+                assert "final.test" in hosts, (
+                    f"final audit event dropped by concurrent unregister — "
+                    f"returned events: {events}"
+                )
+                # The registration label must still be stamped on it.
+                final = [e for e in events if e.get("host") == "final.test"][0]
+                assert final.get("caller") == "race"
         finally:
             proxy.stop()
 
