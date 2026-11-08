@@ -11,9 +11,12 @@ pipeline run uses — and exits without sending anything.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LLM_ASK = REPO_ROOT / "libexec" / "raptor-llm-ask"
@@ -30,24 +33,28 @@ _AMBIENT_SIGNALS = (
 )
 
 
-def _run(args, tmp_path, models=None, timeout=120):
+@pytest.fixture(autouse=True)
+def _isolate_scorecard(tmp_path):
+    """Only child processes construct clients; keep the parent SDK-free."""
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("RAPTOR_SCORECARD_PATH", str(tmp_path / "scorecard.json"))
+        yield
+
+
+def _run(args, tmp_path, models=None, timeout=120, **kwargs):
     """Run raptor-llm-ask hermetically against a temp models config."""
     import os
     env = {k: v for k, v in os.environ.items() if k not in _AMBIENT_SIGNALS}
     env["_RAPTOR_TRUSTED"] = "1"
-    # HOME → tmp: no ambient ~/.config/raptor/models.json, no
-    # ~/.aws/credentials SigV4 signal, no litellm migration state.
-    env["HOME"] = str(tmp_path)
-    env["XDG_DATA_HOME"] = str(tmp_path / "xdg")
     env["RAPTOR_SCORECARD_PATH"] = str(tmp_path / "scorecard.json")
     cfg = tmp_path / "models.json"
     if models is not None:
         cfg.write_text(json.dumps({"models": models}))
     env["RAPTOR_CONFIG"] = str(cfg)
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(LLM_ASK), *args],
         capture_output=True, text=True, timeout=timeout, env=env,
-        cwd=str(tmp_path),
+        cwd=str(tmp_path), **kwargs,
     )
 
 
@@ -96,22 +103,9 @@ def test_show_primary_rejects_explicit_model(tmp_path):
 def test_show_primary_ignores_piped_stdin(tmp_path):
     # Scripted probes commonly run with stdin attached to a pipe; the
     # probe must not block on (or consume) it as a prompt.
-    import os
-    env = {k: v for k, v in os.environ.items() if k not in _AMBIENT_SIGNALS}
-    env["_RAPTOR_TRUSTED"] = "1"
-    env["HOME"] = str(tmp_path)
-    env["XDG_DATA_HOME"] = str(tmp_path / "xdg")
-    env["RAPTOR_SCORECARD_PATH"] = str(tmp_path / "scorecard.json")
-    cfg = tmp_path / "models.json"
-    cfg.write_text(json.dumps({"models": [
+    proc = _run(["--show-primary"], tmp_path, models=[
         {"provider": "gemini", "model": "gemini-2.5-pro",
          "api_key": "test-key"},
-    ]}))
-    env["RAPTOR_CONFIG"] = str(cfg)
-    proc = subprocess.run(
-        [sys.executable, str(LLM_ASK), "--show-primary"],
-        input="not a prompt\n", capture_output=True, text=True,
-        timeout=120, env=env, cwd=str(tmp_path),
-    )
+    ], input="not a prompt\n")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == "gemini/gemini-2.5-pro\n"
