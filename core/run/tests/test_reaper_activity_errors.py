@@ -1,4 +1,5 @@
 """Unobservable activity retains scratch; old readable siblings still reap."""
+from contextlib import contextmanager
 import errno
 import os
 import time
@@ -20,6 +21,30 @@ def aged_tree(root, now):
     return hidden, leaf
 
 
+def activity_fault(monkeypatch, phase, failure, root, leaf, reached):
+    original = os.scandir
+    class Entry:
+        def __init__(self, entry):
+            self.entry = entry
+        def __getattr__(self, name):
+            return getattr(self.entry, name)
+        def stat(self, *, follow_symlinks=True):
+            assert not follow_symlinks
+            if self.entry.path == str(leaf):
+                reached.append(phase)
+                raise failure
+            return self.entry.stat(follow_symlinks=follow_symlinks)
+    @contextmanager
+    def scan(path):
+        if phase == 'walk':
+            assert path == root
+            reached.append(phase)
+            raise failure
+        with original(path) as entries:
+            yield (Entry(entry) for entry in entries)
+    patch_module_attribute(monkeypatch, tmp_reaper, 'os', 'scandir', scan)
+
+
 @pytest.mark.parametrize('phase', ['walk', 'metadata'])
 @pytest.mark.parametrize('error', [errno.EACCES, errno.EIO, errno.ENOENT])
 def test_activity_errors_retain_an_unjudgeable_tree(tmp_path, monkeypatch, phase, error):
@@ -28,22 +53,7 @@ def test_activity_errors_retain_an_unjudgeable_tree(tmp_path, monkeypatch, phase
     _, leaf = aged_tree(root, now)
     reached = []
     failure = OSError(error, 'owned activity probe failure')
-    if phase == 'walk':
-        def walk(path, *, followlinks, onerror=None):
-            assert path == root and not followlinks
-            reached.append(phase)
-            if onerror is not None:
-                onerror(failure)
-            return iter(())
-        patch_module_attribute(monkeypatch, tmp_reaper, 'os', 'walk', walk)
-    else:
-        original = os.lstat
-        def lstat(path, *args, **kwargs):
-            if os.fspath(path) == str(leaf):
-                reached.append(phase)
-                raise failure
-            return original(path, *args, **kwargs)
-        patch_module_attribute(monkeypatch, tmp_reaper, 'os', 'lstat', lstat)
+    activity_fault(monkeypatch, phase, failure, root, leaf, reached)
     assert tmp_reaper._recent_activity(root, now, 3600)
     assert reached == [phase]
     assert leaf.read_bytes() == b'owned output'
@@ -57,19 +67,7 @@ def test_activity_probe_does_not_swallow_cancellation(tmp_path, monkeypatch, pha
     _, leaf = aged_tree(root, now)
     failure = failure_type('cancelled activity probe')
     reached = []
-    if phase == 'walk':
-        def walk(*args, **kwargs):
-            reached.append(phase)
-            raise failure
-        patch_module_attribute(monkeypatch, tmp_reaper, 'os', 'walk', walk)
-    else:
-        original = os.lstat
-        def lstat(path, *args, **kwargs):
-            if os.fspath(path) == str(leaf):
-                reached.append(phase)
-                raise failure
-            return original(path, *args, **kwargs)
-        patch_module_attribute(monkeypatch, tmp_reaper, 'os', 'lstat', lstat)
+    activity_fault(monkeypatch, phase, failure, root, leaf, reached)
     with pytest.raises(failure_type) as caught:
         tmp_reaper._recent_activity(root, now, 3600)
     assert caught.value is failure
