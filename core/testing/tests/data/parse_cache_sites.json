@@ -1,0 +1,52 @@
+[
+  {
+    "file": "core/audit/tests/test_context.py",
+    "fixture": "_owned_header_memo",
+    "module": "core.audit.context",
+    "owner": "context",
+    "fields": [
+      "_header_cache"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/audit/tests/test_detector_cache.py",
+    "fixture": "_owned_detector_fingerprints",
+    "module": "core.audit.detector_cache",
+    "owner": "detector_cache",
+    "fields": [
+      "_module_fp_memo"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/audit/tests/test_detector_cache.py",
+    "fixture": "_owned_call_graph_memo",
+    "module": "core.audit.orchestrator",
+    "owner": "orchestrator",
+    "fields": [
+      "_call_graphs_cache"
+    ],
+    "lock": "_call_graphs_lock"
+  },
+  {
+    "file": "core/audit/tests/test_ts_extract.py",
+    "fixture": "_owned_parse_cache",
+    "module": "core.audit.ts_extract",
+    "owner": "ts_extract",
+    "fields": [
+      "_PARSE_CACHE"
+    ],
+    "lock": "_PARSE_CACHE_LOCK"
+  },
+  {
+    "file": "core/audit/tests/test_ts_extract_enums.py",
+    "fixture": "_owned_parse_cache",
+    "module": "core.audit.ts_extract",
+    "owner": "ts_extract",
+    "fields": [
+      "_PARSE_CACHE"
+    ],
+    "lock": "_PARSE_CACHE_LOCK"
+  }
+]

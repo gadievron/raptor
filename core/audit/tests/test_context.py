@@ -44,6 +44,23 @@ from core.testing.module_bindings import patch_module_attribute
 _discovery_imports = ModuleType("catalog_discovery_imports")
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_header_memo():
+    """Keep cache mutations private to this test."""
+    from core.audit.run_memo import BoundedMemo
+    from core.audit import context
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        context,
+        {
+            "_header_cache": BoundedMemo(16),
+        },
+    ):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _owned_catalog_discovery(monkeypatch):
     with (

@@ -66,6 +66,24 @@ int handle_partial(enum pkt_kind k) {
 """
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_parse_cache():
+    """Keep cache mutations private to this test."""
+    from collections import OrderedDict
+    from core.audit import ts_extract
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        ts_extract,
+        {
+            "_PARSE_CACHE": OrderedDict(),
+        },
+        lock=ts_extract._PARSE_CACHE_LOCK,
+    ):
+        yield
+
+
 class TestEnumDefinitions:
     @requires_ts("c")
     def test_named_and_anonymous_definitions(self):

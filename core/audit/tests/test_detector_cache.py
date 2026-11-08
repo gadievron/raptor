@@ -86,6 +86,39 @@ _GAPS = [
 ]
 
 
+
+
+@pytest.fixture(autouse=True)
+def _owned_call_graph_memo():
+    """Keep cache mutations private to this test."""
+    from core.audit import orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        orchestrator,
+        {
+            "_call_graphs_cache": {},
+        },
+        lock=orchestrator._call_graphs_lock,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _owned_detector_fingerprints():
+    """Keep cache mutations private to this test."""
+    from core.audit import detector_cache
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        detector_cache,
+        {
+            "_module_fp_memo": {},
+        },
+    ):
+        yield
+
+
 def _make_target(tmp_path: Path) -> Path:
     target = tmp_path / "target"
     target.mkdir()
