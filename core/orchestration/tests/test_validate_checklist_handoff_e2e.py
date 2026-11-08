@@ -30,6 +30,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.testing.state_isolation import pin_user_state_dirs
+
 # Dispatch here is stubbed/mocked — pass wiring is under test, so the
 # transport kill switch the root conftest sets is cleared for this
 # module.
@@ -48,18 +50,20 @@ def _isolated_active_project(tmp_path_factory, monkeypatch):
     pointer write — making the test fail in operator-local
     environments while passing in CI (which has no active project).
 
-    Force a clean projects dir for the duration of the test by
-    pointing HOME at a fresh tmpdir (so the subprocess's
-    ``Path.home() / .raptor / projects`` resolves to an empty tree)
-    and patching the in-process module constant to match.
+    Own the registry through its shared parent/child resolution seam;
+    HOME alone cannot override an inherited RAPTOR_REGISTRY_HOME.
+    Scratch and session credentials also belong to this fixture.
     """
     fake_home = tmp_path_factory.mktemp("isolated-home")
+    registry = fake_home / ".raptor"
+    pin_user_state_dirs(monkeypatch, registry)
     monkeypatch.setenv("HOME", str(fake_home))
-    fake_projects_dir = fake_home / ".raptor" / "projects"
-    fake_projects_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        "core.project.project.PROJECTS_DIR", fake_projects_dir,
-    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_home / ".local/share"))
+    scratch = fake_home / "tmp"
+    scratch.mkdir()
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(key, str(scratch))
+    monkeypatch.delenv("_RAPTOR_SCRATCH_AUTH", raising=False)
     yield
 
 
