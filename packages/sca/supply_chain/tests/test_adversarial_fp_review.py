@@ -29,6 +29,8 @@ import json
 import struct
 from pathlib import Path
 
+import pytest
+
 from packages.sca.models import (
     Confidence,
     Dependency,
@@ -42,6 +44,15 @@ from packages.sca.supply_chain import (
     python_lifecycle_hooks,
     rubygems_lifecycle_hooks,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_binary_allowlist():
+    from packages.sca.supply_chain import binary_in_package
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(binary_in_package, {"_ALLOWLIST": None}):
+        yield
 
 
 def _dep(name: str, ecosystem: str, *, declared_in: Path) -> Dependency:

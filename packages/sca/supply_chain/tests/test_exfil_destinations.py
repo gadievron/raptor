@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from core.testing.module_state import isolated_module_state
+
 from packages.sca.supply_chain import exfil_destinations
 from packages.sca.supply_chain.exfil_destinations import scan_target
 
 
-def setup_function() -> None:
-    # Force a fresh load of the bundled rules between tests so a custom
-    # data-file injection in any test doesn't leak.
-    exfil_destinations._RULES_CACHE = None
+@pytest.fixture(autouse=True)
+def _owned_rule_cache():
+    with isolated_module_state(exfil_destinations, {"_RULES_CACHE": None}):
+        yield
 
 
 def _write(p: Path, body: str) -> None:

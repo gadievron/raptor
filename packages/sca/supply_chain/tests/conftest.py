@@ -7,17 +7,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_registry_metadata_meta_cache():
-    """Clear the process-lifetime ``_Meta`` memo between tests.
+    """Own the parsed metadata memo under the production publication lock."""
+    from packages.sca.supply_chain import registry_metadata
+    from core.testing.module_state import isolated_module_state
 
-    ``packages.sca.supply_chain.registry_metadata`` memoises parsed
-    ``_Meta`` records keyed on ``(ecosystem, name)`` for the run
-    lifetime — see commit-trail. Tests that swap fake registry
-    clients for the same package name across cases would otherwise
-    see the first case's parsed result on every subsequent call.
-    """
-    from packages.sca.supply_chain.registry_metadata import (
-        _reset_meta_cache_for_tests,
-    )
-    _reset_meta_cache_for_tests()
-    yield
-    _reset_meta_cache_for_tests()
+    with isolated_module_state(registry_metadata, {"_META_CACHE": {}}, lock=registry_metadata._META_CACHE_LOCK):
+        yield

@@ -99,7 +99,7 @@ def test_sca_pattern_data_files_have_no_members() -> None:
     )
 
 
-def test_sca_data_arm_detects_a_planted_exfil_member(tmp_path) -> None:
+def test_sca_data_arm_detects_a_planted_exfil_member(tmp_path, monkeypatch) -> None:
     """Self-check: a MULTILINE-idiom pattern row planted in a scratch
     copy of exfil_destinations.json must be flagged (and only it, on
     the fixed corpus) — this is exactly the plant that stayed live
@@ -114,13 +114,8 @@ def test_sca_data_arm_detects_a_planted_exfil_member(tmp_path) -> None:
         "pattern": "(?m)^\\s*planted-quadratic\\s*$",
     })
     scratch.write_text(json.dumps(data), encoding="utf-8")
-    original = _exfil._DATA_FILE
-    _exfil._DATA_FILE = scratch
-    try:
-        members = _sca_data_file_members()
-    finally:
-        _exfil._DATA_FILE = original
-        _exfil._RULES_CACHE = None
+    monkeypatch.setattr(_exfil, "_DATA_FILE", scratch)
+    members = _sca_data_file_members()
     assert members == [
         ("exfil:planted", "(?m)^\\s*planted-quadratic\\s*$"),
     ]
@@ -140,9 +135,6 @@ def test_sca_data_arm_detects_a_planted_name_suffix_member(
     ).append("(?m)^\\s*planted-quadratic\\s*$")
     scratch.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(_bip, "_allowlist_path", lambda: scratch)
-    try:
-        members = _sca_data_file_members()
-    finally:
-        _bip._ALLOWLIST = None
+    members = _sca_data_file_members()
     assert ("binary-name-suffix", "(?m)^\\s*planted-quadratic\\s*$") \
         in members

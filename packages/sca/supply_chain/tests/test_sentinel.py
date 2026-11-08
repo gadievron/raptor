@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.supply_chain.sentinel import scan_deps, _load_sentinels
+
+
+@pytest.fixture(autouse=True)
+def _owned_sentinel_cache():
+    from packages.sca.supply_chain import sentinel
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(sentinel, {"_CACHE": None}):
+        yield
 
 
 def _dep(name: str, ecosystem: str = "npm", version: str = "1.0.0") -> Dependency:

@@ -1,0 +1,51 @@
+[
+  {
+    "file": "packages/sca/supply_chain/tests/conftest.py",
+    "fixture": "_reset_registry_metadata_meta_cache",
+    "legacy": "_reset_registry_metadata_meta_cache",
+    "owner": "registry_metadata",
+    "field": "_META_CACHE",
+    "lock": "_META_CACHE_LOCK",
+    "loader": null
+  },
+  {
+    "file": "packages/sca/supply_chain/tests/test_exfil_destinations.py",
+    "fixture": "_owned_rule_cache",
+    "legacy": "setup_function",
+    "owner": "exfil_destinations",
+    "field": "_RULES_CACHE",
+    "loader": "_load_rules"
+  },
+  {
+    "file": "packages/sca/supply_chain/tests/test_binary_allowlist_paths.py",
+    "fixture": "_owned_binary_allowlist",
+    "legacy": null,
+    "owner": "binary_in_package",
+    "field": "_ALLOWLIST",
+    "loader": "_load_allowlist"
+  },
+  {
+    "file": "packages/sca/supply_chain/tests/test_binary_forensic_evidence.py",
+    "fixture": "_owned_binary_allowlist",
+    "legacy": null,
+    "owner": "binary_in_package",
+    "field": "_ALLOWLIST",
+    "loader": "_load_allowlist"
+  },
+  {
+    "file": "packages/sca/supply_chain/tests/test_adversarial_fp_review.py",
+    "fixture": "_owned_binary_allowlist",
+    "legacy": null,
+    "owner": "binary_in_package",
+    "field": "_ALLOWLIST",
+    "loader": "_load_allowlist"
+  },
+  {
+    "file": "packages/sca/supply_chain/tests/test_sentinel.py",
+    "fixture": "_owned_sentinel_cache",
+    "legacy": null,
+    "owner": "sentinel",
+    "field": "_CACHE",
+    "loader": "_load_sentinels"
+  }
+]
