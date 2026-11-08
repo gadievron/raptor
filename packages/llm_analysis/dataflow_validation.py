@@ -19,6 +19,7 @@ pre-built CodeQL database (typically produced by the same /agentic run's
 exhausted, the helper is a no-op.
 """
 
+import copy
 import functools
 import logging
 import os
@@ -49,6 +50,7 @@ from .dataflow_query_builder import (
 from .verification_tier import (
     LLM_AUTHORED_DV_TIERS,
     dataflow_premises_mechanical,
+    unbound_smt_refutation,
 )
 
 logger = logging.getLogger(__name__)
@@ -760,18 +762,9 @@ def validate_dataflow_claims(
             cache[cache_key] = (result, tier_used)
             metrics["n_validated"] += 1
 
-        # ----- Tier 4: SMT path-feasibility refinement -----
-        # Reads `path_conditions` + `path_profile` from the LLM analysis
-        # (added in this PR's schema extension). Conservative refinement:
-        # may upgrade `inconclusive` → `refuted` when SMT proves the
-        # conditions are unsatisfiable, and may attach a witness model
-        # to `confirmed` for downstream consumers (/exploit). NEVER
-        # downgrades `confirmed` → `refuted` on SMT alone — when CodeQL
-        # and SMT disagree the more conservative CodeQL signal wins
-        # (logged as a disagreement metric for offline review).
-        # Same always-init pattern as the path_conditions counters
-        # above: present-with-zero is meaningfully distinct from
-        # absent. Runs for cache hits too — see the cache-hit comment.
+        # Tier 4 records LLM-predicate diagnostics, not source proof.
+        # Rechecks run per finding, including pre-Tier-4 cache hits. Retain
+        # legacy refuted/disagree counters at zero for report compatibility.
         metrics.setdefault("n_tier4_smt_refuted", 0)
         metrics.setdefault("n_tier4_smt_witness", 0)
         metrics.setdefault("n_tier4_smt_disagree", 0)
@@ -779,13 +772,8 @@ def validate_dataflow_claims(
         result, smt_outcome = _tier4_smt_refine(
             result, finding, analysis, metrics=metrics,
         )
-        if smt_outcome and smt_outcome != "no_check":
-            if smt_outcome == "smt_refuted":
-                metrics["n_tier4_smt_refuted"] += 1
-            elif smt_outcome == "smt_witness":
-                metrics["n_tier4_smt_witness"] += 1
-            elif smt_outcome == "smt_disagree":
-                metrics["n_tier4_smt_disagree"] += 1
+        if smt_outcome == "smt_witness":
+            metrics["n_tier4_smt_witness"] += 1
 
         _attach_result(analysis, result, tier=tier_used)
         if analysis.get("dataflow_validation", {}).get("recommends_downgrade"):
@@ -975,8 +963,8 @@ def _build_hypothesis(finding: dict, analysis: dict, repo_path: Path):
         cwe=cwe,
         context="\n".join(parts),
         # Dataflow-claim validation asserts the reported flow IS
-        # real/reachable — a conclusive empty tool result (SMT unsat)
-        # therefore mechanically REFUTES it. Declared here, at
+        # real/reachable — a covered source-bound zero-flow result can
+        # therefore refute it. Declared here, at
         # formation time, so the verdict ladder never needs the
         # evaluating LLM's phrasing-aware reading to pick the
         # direction of a zero-match proof.
@@ -1611,44 +1599,29 @@ def _tier4_smt_refine(
     analysis: dict,
     metrics: dict[str, Any] | None = None,
 ) -> "tuple[ValidationResult, str]":
-    """Tier 4: SMT path-feasibility refinement on a Tier 1/2/3 result.
+    """Record SMT predicate diagnostics without changing a source verdict.
 
-    Reads the LLM's `path_conditions` and `path_profile` (added in
-    PR-G+ schema extension) from either:
-      * `analysis['dataflow_validation']` (deep-validation output), or
-      * `analysis` (top-level analysis output).
+    Conditions and profile hints come from LLM analysis, not an admitted
+    source/type/reachability model. SAT, UNSAT and unknown therefore retain
+    the original ValidationResult object and its evidence. An owned diagnostic
+    record preserves the mathematical result and its assumptions. A model for
+    an already confirmed result also retains the legacy display-only witness.
 
-    Conservative refinement rules:
-      * `inconclusive` + SMT proves unsat → `refuted` (with unsat-core
-        as evidence)
-      * `confirmed` + SMT proves sat → keep `confirmed`, attach witness
-        model as additional evidence (downstream /exploit uses this as
-        a PoC seed)
-      * `confirmed` + SMT proves unsat → DISAGREEMENT — keep `confirmed`
-        (CodeQL-found path is the conservative signal), log + count as
-        disagreement metric for offline review
-      * Anything else → no change
-
-    Returns (possibly-refined ValidationResult, outcome label).
-    Outcome label is one of: "no_check", "smt_unavailable", "smt_error",
-    "smt_no_change", "smt_refuted", "smt_witness", "smt_disagree".
-
-    Never raises — failure modes (Z3 missing, conditions unparseable,
-    parser exception) all fall through to "no_check" / "smt_unavailable"
-    / "smt_error" so production callers stay unaffected. The call site
-    sits outside the per-finding try, and validate_dataflow_claims
-    promises the same contract, so this wrapper is the enforcement
-    point: any unexpected exception (schema-violating LLM output
-    shapes included) degrades to "smt_error" instead of killing the
-    whole validation pass.
+    Returns the original result and one of no_check, smt_unavailable,
+    smt_error, smt_no_change or smt_witness. Never raises: malformed inputs,
+    missing solvers and unexpected failures retain the original result.
     """
     try:
         # This record belongs to the current query. An unavailable, failed
         # or skipped recheck cannot leave a previous model in its place.
         if isinstance(analysis, dict):
             analysis.pop("smt_witness", None)
+            analysis.pop("smt_diagnostics", None)
         return _tier4_smt_refine_inner(result, finding, analysis, metrics=metrics)
     except Exception as e:  # noqa: BLE001 — never-raises contract (see docstring)
+        if isinstance(analysis, dict):
+            analysis.pop("smt_witness", None)
+            analysis.pop("smt_diagnostics", None)
         logger.warning("Tier 4 SMT refinement errored: %s", e)
         return result, "smt_error"
 
@@ -1670,15 +1643,9 @@ def _tier4_smt_refine_inner(
     )
     if not conditions:
         return result, "no_check"
-    # LLMs routinely violate structured-output schemas: `path_profile`
-    # can arrive as an int/list/dict. Coerce non-strings to None
-    # instead of crashing on `.strip()` — shared with the
-    # `_smt_pre_flight` twin in agent.py so the sites cannot drift.
-    # None means GUESSED signedness: validate_path reports infeasible
-    # only when both signedness profiles agree. A pinned "uint64"
-    # default asserted knowledge the LLM never declared — the
-    # ubiquitous C signed error check (ret < 0) encoded as
-    # ULT(ret, 0), unsat, and refuted a live finding outright.
+    # Invalid profile shapes request dual-signedness diagnostics. A declared
+    # LLM hint still supplies only a uniform-width mathematical assumption,
+    # not source integer types, conversions or reachability evidence.
     profile_name = to_lower_token_safe(
         dataflow_validation.get("path_profile")
         or (analysis or {}).get("path_profile"),
@@ -1738,111 +1705,43 @@ def _tier4_smt_refine_inner(
     if smt.get("smt_available") is not True:
         return result, "smt_unavailable"
 
-    # Build a one-line evidence record describing the SMT outcome.
-    # Goes onto the existing ValidationResult.evidence list so the
-    # report renderer + /exploit downstream can see why the verdict
-    # was refined.
-    def _smt_evidence(label: str, summary: str) -> Evidence:
-        # The outcome label rides in the structured `rule` field
-        # ("path-feasibility:refuted" / ":witness" / ":disagreement")
-        # so evidence consumers can distinguish the record kinds
-        # without parsing the free-text summary.
-        return Evidence(
-            tool="smt",
-            rule=f"path-feasibility:{label}",
-            summary=summary,
-            matches=[],
-            success=True,
-            error=None,  # type: ignore[arg-type]
-        )
-
+    # These predicates and type hints are LLM-authored. Their mathematical
+    # verdict never establishes a source path or refutes a source finding.
     feasible = smt.get("feasible")
-    unsat_list = smt.get("unsatisfied") or []
-    model = smt.get("model") or {}
-
-    # Decision matrix.
-    if feasible is False:
-        unsat = ", ".join(unsat_list) or "(no specific core)"
-        if result.verdict == "inconclusive":
-            ev = _smt_evidence(
-                "refuted",
-                f"SMT proved path conditions unsatisfiable; conflict: {unsat}",
-            )
-            refined = ValidationResult(
-                verdict="refuted",
-                evidence=list(result.evidence) + [ev],
-                iterations=result.iterations,
-                reasoning=(
-                    (result.reasoning or "") +
-                    "\n[smt] inconclusive → refuted: unsat path conditions"
-                ),
-            )
-            return refined, "smt_refuted"
-        if result.verdict == "confirmed":
-            # SMT-CodeQL disagreement. Keep CodeQL's signal (conservative)
-            # but record the divergence.
-            logger.warning(
-                "Tier 4 SMT-CodeQL disagreement on %s: CodeQL confirmed but "
-                "SMT proves path conditions unsat (conflict: %s). Keeping "
-                "CodeQL verdict.",
-                finding.get("finding_id") or finding.get("file_path"),
-                unsat,
-            )
-            ev = _smt_evidence(
-                "disagreement",
-                f"SMT-CodeQL disagreement: SMT unsat (conflict: {unsat})",
-            )
-            refined = ValidationResult(
-                verdict=result.verdict,
-                evidence=list(result.evidence) + [ev],
-                iterations=result.iterations,
-                reasoning=result.reasoning,
-            )
-            return refined, "smt_disagree"
-
+    if type(feasible) is not bool or (feasible is True and (
+        smt.get("unknown") or smt.get("unknown_reasons")
+    )):
+        feasible = None
+    model = dict(smt.get("model") or {})
+    analysis["smt_diagnostics"] = {
+        "oracle_scope": "llm-extracted-predicates",
+        "modeled_feasible": feasible,
+        "path_conditions": copy.deepcopy(conditions),
+        "path_profile": profile_name,
+        "reasoning": smt.get("reasoning") or "",
+        "conflicts": copy.deepcopy(smt.get("unsatisfied") or []),
+        "unknown": copy.deepcopy(smt.get("unknown") or []),
+        "unknown_reasons": copy.deepcopy(smt.get("unknown_reasons") or []),
+        "model": dict(model),
+        "anon_var_map": dict(smt.get("anon_var_map") or {}),
+        "summary_axioms": list(smt.get("summary_axioms") or []),
+        "refutation_uses_call_terms": smt.get("refutation_uses_call_terms"),
+    }
     if feasible is True and result.verdict == "confirmed":
-        model_str = ", ".join(f"{k}={v}" for k, v in model.items())
-        ev = _smt_evidence(
-            "witness",
-            f"SMT witness for path conditions: {model_str or '(no model)'}",
-        )
-        # Attach the encoded model as structured diagnostic evidence.
-        # Downstream readers must retain its profile and background theory;
-        # satisfiability alone does not establish a controllable source path.
+        # Preserve the existing display record without adding source proof
+        # evidence, changing the verdict, or claiming controllable inputs.
         if model:
             analysis["smt_witness"] = {
                 "model": dict(model),
-                "path_conditions": list(conditions),
+                "path_conditions": copy.deepcopy(conditions),
                 "path_profile": profile_name,
-                # Map each `_anon_N` in the model to the original
-                # function-call subexpression Z3's parser substituted
-                # (e.g. `strlen(argv[1])`). Lets the /exploit prompt
-                # renderer show meaningful labels — without this the
-                # LLM sees `_anon_0 = 32` and can't connect that to
-                # anything actionable. Empty dict when no
-                # substitution happened (named-locals conditions).
                 "anon_var_map": dict(smt.get("anon_var_map") or {}),
-                # Retain the conditional summary and its background theory.
-                # A scalar model does not establish source reachability or
-                # controllable program inputs; absent evidence stays unknown.
                 "summary_axioms": list(smt.get("summary_axioms") or []),
                 "wp_predicate": smt.get("wp_predicate"),
                 "wp_conjuncts": list(smt.get("wp_conjuncts") or []),
                 "wp_complete": smt.get("wp_complete", False) is True,
             }
-        refined = ValidationResult(
-            verdict=result.verdict,
-            evidence=list(result.evidence) + [ev],
-            iterations=result.iterations,
-            reasoning=(
-                (result.reasoning or "") +
-                f"\n[smt] confirmed + witness: {model_str}"
-            ),
-        )
-        return refined, "smt_witness"
-
-    # feasible is None (Z3 unavailable / conditions unparseable)
-    # or no actionable change. Leave the verdict alone.
+        return result, "smt_witness"
     return result, "smt_no_change"
 
 
@@ -3158,7 +3057,9 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
     query syntax: it takes the SOFT shape instead — the downgrade
     signal is preserved as ``validation_disputed`` plus a
     ``validation_downgrade_withheld`` reason and lowered confidence;
-    only the verdict flip is withheld.
+    only the verdict flip is withheld. Saved Tier 4 refutations derived only
+    from unbound SMT predicates are skipped entirely: they support neither
+    a hard downgrade nor a confidence reduction.
 
     Returns dict {n_hard_downgrades, n_soft_downgrades, n_skipped}.
     """
@@ -3171,6 +3072,10 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
         if not isinstance(v, dict):
             continue
         if not v.get("recommends_downgrade"):
+            continue
+        if unbound_smt_refutation(v):
+            analysis["validation_downgrade_withheld"] = "unbound-smt-predicates"
+            n_skipped += 1
             continue
         if read_verdict(analysis, "is_exploitable") is not True:
             n_skipped += 1
