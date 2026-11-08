@@ -1,6 +1,6 @@
 """Failed output is never a complete extraction suitable for caching."""
 
-import builtins
+import os
 import errno
 import gzip
 import io
@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from core import atomic_fs
+from core.testing.module_bindings import patch_module_attribute
 from core.archive import extract_to_dir
 from core.archive import extract as archive_extract
 
@@ -35,37 +37,43 @@ def test_filesystem_failure_aborts_extraction(tmp_path, monkeypatch, fmt, stage,
     source = make_archive(tmp_path / ("source." + fmt), fmt)
     dest = tmp_path / "out"
     failure = OSError(error, "output failed")
-    real_open = builtins.open
+    real_open, real_write, real_close = os.open, os.write, os.close
+    outputs, reached = set(), []
 
-    class BrokenOutput:
-        def __init__(self, stream):
-            self.stream = stream
-
-        def __enter__(self):
-            return self
-
-        def write(self, data):
-            if stage == "write":
-                self.stream.write(data[:1])
+    def output_open(path, flags, *args, **kwargs):
+        if flags & os.O_CREAT:
+            reached.append('open')
+            if stage == 'open':
                 raise failure
-            return self.stream.write(data)
+        fd = real_open(path, flags, *args, **kwargs)
+        if flags & os.O_CREAT:
+            outputs.add(fd)
+        return fd
 
-        def __exit__(self, *args):
-            self.stream.close()
-            if stage == "close":
+    def write(fd, data):
+        if fd in outputs and stage == 'write':
+            reached.append('write')
+            real_write(fd, data[:1])
+            raise failure
+        return real_write(fd, data)
+
+    def close(fd):
+        real_close(fd)
+        if fd in outputs:
+            outputs.remove(fd)
+            if stage == 'close':
+                reached.append('close')
                 raise failure
 
-    def output_open(path, mode="r", *args, **kwargs):
-        if mode == "wb" and Path(path).is_relative_to(dest):
-            if stage == "open":
-                raise failure
-            return BrokenOutput(real_open(path, mode, *args, **kwargs))
-        return real_open(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "open", output_open)
+    patch_module_attribute(monkeypatch, atomic_fs, 'os', 'open', output_open)
+    patch_module_attribute(monkeypatch, atomic_fs, 'os', 'write', write)
+    patch_module_attribute(monkeypatch, atomic_fs, 'os', 'close', close)
     with pytest.raises(OSError) as caught:
         extract_to_dir(source, dest)
     assert caught.value is failure
+    assert stage in reached
+    assert outputs == set()
+    assert list(dest.rglob('*')) == []
 
 
 @pytest.mark.parametrize("sink", [False, True])
@@ -73,14 +81,16 @@ def test_filesystem_failure_aborts_extraction(tmp_path, monkeypatch, fmt, stage,
 def test_invalid_member_paths_still_drop_and_allow_later_members(
     tmp_path, monkeypatch, sink, error
 ):
-    real_open = builtins.open
+    real_write = archive_extract.write_bytes_atomically
+    reached = []
 
-    def invalid(path, mode="r", *args, **kwargs):
-        if mode == "wb" and Path(path).name == "invalid":
+    def invalid(path, *args, **kwargs):
+        if Path(path).name == "invalid":
+            reached.append(path)
             raise OSError(error, "invalid member path")
-        return real_open(path, mode, *args, **kwargs)
+        return real_write(path, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "open", invalid)
+    monkeypatch.setattr(archive_extract, "write_bytes_atomically", invalid)
     if sink:
         writer = archive_extract._DiskSink(tmp_path, 1000, 100)
         writer("invalid", b"bad")
@@ -90,6 +100,7 @@ def test_invalid_member_paths_still_drop_and_allow_later_members(
         stats = archive_extract._write_members(
             {"invalid": b"bad", "valid": b"good"}, tmp_path, 1000, 100
         )
+    assert len(reached) == 1
     assert stats["files"] == 1
     assert stats["dropped_reasons"] == {"unwritable": 1}
     assert (tmp_path / "valid").read_bytes() == b"good"
