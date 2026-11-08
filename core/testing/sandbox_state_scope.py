@@ -23,7 +23,7 @@ def _private_value(value):
 
 
 @contextmanager
-def isolated_sandbox_state(state_names):
+def isolated_summary_state():
     """Detach borrowed state; close only owned evidence before restoring it.
 
     The fixture's monkeypatch stack must finish inside this scope. Otherwise
@@ -31,7 +31,7 @@ def isolated_sandbox_state(state_names):
     The evidence class inherits the real file implementation and records
     successful construction so an overwritten handle still gets closed.
     """
-    from core.sandbox import state, summary
+    from core.sandbox import summary
 
     owned = []
     real_evidence = summary._evidence.EvidenceFile
@@ -45,8 +45,6 @@ def isolated_sandbox_state(state_names):
             owned.append(self)
 
     evidence.EvidenceFile = OwnedEvidence
-    names = (*state_names, "_speculative_failure_cache", "_unshare_engage_cache")
-    replacements = {name: _private_value(getattr(state, name)) for name in names}
     summary_state = {**SUMMARY_DEFAULTS,
                      **{name: {} for name in SUMMARY_REGISTRIES},
                      "_evidence": evidence}
@@ -59,7 +57,6 @@ def isolated_sandbox_state(state_names):
             raise
 
     with ExitStack() as scope:
-        scope.enter_context(isolated_module_state(state, replacements))
         scope.enter_context(isolated_module_state(
             summary, summary_state, lock=summary._lock))
         # ExitStack runs every cleanup even when finalization or a close fails.
@@ -70,3 +67,14 @@ def isolated_sandbox_state(state_names):
             finally:
                 for handle in owned:
                     cleanup.callback(close_handle, handle)
+
+
+@contextmanager
+def isolated_sandbox_state(state_names):
+    """Own selected sandbox state plus summary resources for the same lifetime."""
+    from core.sandbox import state
+
+    names = (*state_names, "_speculative_failure_cache", "_unshare_engage_cache")
+    replacements = {name: _private_value(getattr(state, name)) for name in names}
+    with isolated_module_state(state, replacements), isolated_summary_state():
+        yield

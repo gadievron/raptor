@@ -22,13 +22,19 @@ import pytest
 
 from core.sandbox import summary as summary_mod
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture
-def active_run(tmp_path):
+def active_run(tmp_path, monkeypatch):
     """Activate a run dir for the module and clean up after."""
-    summary_mod.set_active_run_dir(tmp_path)
-    yield tmp_path
-    summary_mod.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            summary_mod.set_active_run_dir(tmp_path)
+            yield tmp_path
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.fixture

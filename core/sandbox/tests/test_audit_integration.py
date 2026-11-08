@@ -21,12 +21,18 @@ import pytest
 from core.sandbox import summary as summary_mod
 from core.sandbox import tracer
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture(autouse=True)
-def _isolate_active_run():
-    summary_mod.set_active_run_dir(None)
-    yield
-    summary_mod.set_active_run_dir(None)
+def _isolate_active_run(monkeypatch):
+    with isolated_summary_state():
+        try:
+            summary_mod.set_active_run_dir(None)
+            yield
+            summary_mod.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 class TestUnifiedJsonlAggregation:

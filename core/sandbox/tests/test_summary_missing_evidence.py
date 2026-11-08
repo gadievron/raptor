@@ -5,16 +5,22 @@ import pytest
 
 from core.sandbox import summary, telemetry_mac, triage
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture(autouse=True)
 def isolated_run(tmp_path, monkeypatch):
-    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'keys'))
-    summary.set_active_run_dir(None)
-    monkeypatch.setattr(summary, '_floor_refusals', {})
-    monkeypatch.setattr(summary, '_evidence_inode_mismatches', {}, raising=False)
-    monkeypatch.setattr(summary, '_cli_disables', {})
-    yield
-    summary.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'keys'))
+            summary.set_active_run_dir(None)
+            monkeypatch.setattr(summary, '_floor_refusals', {})
+            monkeypatch.setattr(summary, '_evidence_inode_mismatches', {}, raising=False)
+            monkeypatch.setattr(summary, '_cli_disables', {})
+            yield
+            summary.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 def test_missing_held_evidence_produces_flagged_summary(tmp_path):

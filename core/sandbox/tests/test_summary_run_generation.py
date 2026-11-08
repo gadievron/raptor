@@ -8,14 +8,20 @@ import pytest
 from core.sandbox import summary
 from core.sandbox import state
 
+from core.testing.sandbox_state_scope import isolated_summary_state
+
 
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch):
-    summary.set_active_run_dir(None)
-    monkeypatch.setattr(state, '_cli_sandbox_disabled', False)
-    monkeypatch.setattr(summary, '_log_security_event', Mock())
-    yield
-    summary.set_active_run_dir(None)
+    with isolated_summary_state():
+        try:
+            summary.set_active_run_dir(None)
+            monkeypatch.setattr(state, '_cli_sandbox_disabled', False)
+            monkeypatch.setattr(summary, '_log_security_event', Mock())
+            yield
+            summary.set_active_run_dir(None)
+        finally:
+            monkeypatch.undo()
 
 
 @pytest.mark.parametrize('transition', ['different', 'same', 'clear'])
