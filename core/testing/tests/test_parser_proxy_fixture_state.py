@@ -2,6 +2,7 @@
 
 import ast
 from contextlib import contextmanager
+from contextvars import ContextVar
 from importlib import import_module
 from inspect import isgenerator, signature
 from pathlib import Path
@@ -86,7 +87,7 @@ def _prepare(case, initial=True, fail_at=None):
             else _module_view(import_module("core.sandbox.calibrated_hosts"))
         )
     if field == "_INCLUDE_COMMENTED":
-        borrowed = initial
+        borrowed = ContextVar("borrowed_include_commented", default=initial)
     elif field == "_PARSE_CACHE":
         borrowed = {Path("borrowed-missing-file"): None}
     else:
@@ -95,7 +96,7 @@ def _prepare(case, initial=True, fail_at=None):
         borrowed = {("/borrowed/tool", (), ("--version",)): entry}
         owner._CACHE_LOCK = threading.Lock()
     setattr(owner, field, borrowed)
-    contents = borrowed.copy() if isinstance(borrowed, dict) else None
+    contents = borrowed.copy() if isinstance(borrowed, dict) else initial
     overrides = []
     env = {"CLAUDE_CODE_USE_BEDROCK": "1"}
     env_before = env.copy()
@@ -135,7 +136,7 @@ def _prepare(case, initial=True, fail_at=None):
         "_reset_cache_for_tests": reset_cache,
     }
     if kind == "requirements":
-        site.set_include_commented = lambda value: setattr(site, field, value)
+        site.set_include_commented = lambda value: getattr(site, field).set(bool(value))
     elif field == "_CACHE" and site is not None:
         site._reset_calibrate_cache_for_tests = reset_cache
         overrides.append((site, site._OVERRIDE_CONFIG_PATH))
@@ -244,7 +245,9 @@ def _finish(generator, mode):
 
 def _restored(owner, field, borrowed, contents, overrides, env, env_before):
     assert getattr(owner, field) is borrowed
-    if contents is not None:
+    if isinstance(borrowed, ContextVar):
+        assert borrowed.get() is contents
+    else:
         assert borrowed == contents
         for key, value in contents.items():
             assert borrowed[key] is value
@@ -281,12 +284,17 @@ def test_parser_proxy_fixture_preserves_caller_state(case, initial, mode, tmp_pa
     ) = _prepare(case, initial)
     patch = patch_type()
     generator = None
+    active_token = None
     try:
         generator, _ = _start(function, patch, tmp_path)
         active = getattr(owner, field)
         if field == "_INCLUDE_COMMENTED":
-            assert active is False
-            setattr(owner, field, True)
+            assert isinstance(active, ContextVar)
+            assert active is not borrowed
+            assert active.get() is False
+            active_token = active.set(True)
+            assert active.get() is True
+            assert borrowed.get() is initial
         else:
             assert active is not borrowed
             assert active == {}
@@ -298,6 +306,8 @@ def test_parser_proxy_fixture_preserves_caller_state(case, initial, mode, tmp_pa
             owner._CACHE[("/owned/tool", (), ())] = _CacheEntry(identity=("owned",))
     finally:
         try:
+            if active_token is not None:
+                active.reset(active_token)
             _finish(generator, mode)
         finally:
             patch.undo()
