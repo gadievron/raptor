@@ -24954,13 +24954,11 @@ def _verify_hypotheses_immediate(
         if routing is not None and not routing.dominated:
             # Not dominated → synthesis needed.
             # Cap exhaustion = untested (not refuted) — don't increment.
-            if synthesis_counter is not None and synthesis_counter.try_reserve():
-                stamp = _try_ihv_synthesis(
-                    outcome, config, result, hyp, hyp_cwe,
-                    source,
-                )
-                if stamp:
-                    verifications[-1] = ClaimVerification(hyp, (stamp,))
+            verification = _try_bound_ihv_synthesis(
+                outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
+            )
+            if verification is not None:
+                verifications[-1] = verification
             continue
 
         # Dominated → run standing tool chain
@@ -24971,13 +24969,11 @@ def _verify_hypotheses_immediate(
         if not chain:
             # No tools available — try synthesis as fallback.
             # Cap exhaustion = untested (not refuted) — don't increment.
-            if synthesis_counter is not None and synthesis_counter.try_reserve():
-                stamp = _try_ihv_synthesis(
-                    outcome, config, result, hyp, hyp_cwe,
-                    source,
-                )
-                if stamp:
-                    verifications[-1] = ClaimVerification(hyp, (stamp,))
+            verification = _try_bound_ihv_synthesis(
+                outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
+            )
+            if verification is not None:
+                verifications[-1] = verification
             continue
 
         # Strip Joern from the immediate chain (design: Joern exclusion).
@@ -25074,6 +25070,50 @@ def _gather_library_candidates(cwe: str) -> list:
 def _get_llm_client(config: OrchestratorConfig):
     """Return the LLM client from config, or None."""
     return getattr(config, "llm_client", None)
+
+
+def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter):
+    """Bind the immediate synthesis request before spending an attempt.
+
+    The existing aggregator rechecks this binding after synthesis and
+    context validation. Missing legacy and binary identities stay unknown.
+    """
+    if synthesis_counter is None:
+        return None
+    snippet = source or (outcome.review_result or {}).get("source_snippet", "")
+    if snippet is None:
+        snippet = ""
+    if not isinstance(snippet, str) or (source is not None and not isinstance(source, str)):
+        outcome.tools_skipped = (outcome.tools_skipped or set()) | {"checker_synthesis"}
+        request = ToolChainResult(file=outcome.file, function=outcome.function,
+            line_start=outcome.line, hypothesis=hyp["mechanism"])
+        _record_ihv_scope_rejection(ClaimVerification(hyp, binding=request.binding), outcome, config,
+                                  hypothesis=hyp["mechanism"], reason="invalid-source-input")
+        return None
+    identity = None if outcome.file.startswith(BINARY_PATH_PREFIX) else capture_source_identity(
+        config.target_path, outcome.file, excerpt=snippet, line_start=outcome.line,
+    )
+    request = ToolChainResult(file=outcome.file, function=outcome.function,
+        line_start=outcome.line, hypothesis=hyp["mechanism"], source_identity=identity)
+    if identity is None and snippet and not outcome.file.startswith(BINARY_PATH_PREFIX):
+        current_source = capture_source_identity(config.target_path, outcome.file)
+        if current_source is not None:
+            outcome.tools_skipped = (outcome.tools_skipped or set()) | {"checker_synthesis"}
+            try:
+                from .check_trace import record_source_input_rejection
+
+                record_source_input_rejection(config.out_dir, request, current_source=current_source,
+                                              requested_tools={"checker_synthesis"})
+            except Exception:
+                logger.warning("could not record synthesis source input rejection", exc_info=True)
+            return None
+    if not synthesis_counter.try_reserve():
+        return None
+    snapshot = ClaimVerification(hyp, binding=request.binding)
+    stamp = _try_ihv_synthesis(outcome, config, result, snapshot.hypothesis, cwe, snippet)
+    if stamp:
+        return ClaimVerification(snapshot.hypothesis, (stamp,), binding=request.binding)
+    return None
 
 
 def _try_ihv_synthesis(
