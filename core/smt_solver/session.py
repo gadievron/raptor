@@ -58,6 +58,8 @@ def check_solver(solver: Any, *assumptions: Any) -> Any:
     Preserve the factory's per-query cap and restore it after the query.
     Native models/cores survive timeout-parameter changes. A restoration
     failure propagates instead of presenting a cleanly completed query.
+    If query and restoration both fail, retain both errors, including
+    cancellation and control-flow exceptions.
     Optional assumptions are forwarded to this native check only; they do
     not become persistent assertions or extend the shared query budget.
     """
@@ -75,9 +77,19 @@ def check_solver(solver: Any, *assumptions: Any) -> Any:
         return z3.unknown
     solver.set("timeout", min(timeout, remaining))
     try:
-        return solver.check(*assumptions)
-    finally:
+        result = solver.check(*assumptions)
+    except BaseException as query_error:
+        try:
+            solver.set("timeout", timeout)
+        except BaseException as restore_error:
+            raise BaseExceptionGroup(
+                "check_solver: query and timeout restoration both failed",
+                [query_error, restore_error],
+            ) from None
+        raise
+    else:
         solver.set("timeout", timeout)
+        return result
 
 
 def solver_reason_unknown(solver: Any) -> str:
@@ -174,7 +186,7 @@ def scoped(solver: Any) -> Iterator[Any]:
     except BaseException as body_error:
         try:
             _pop_scope(solver)
-        except RuntimeError as cleanup_error:
+        except BaseException as cleanup_error:
             raise BaseExceptionGroup("scoped: body and rollback both failed", [body_error, cleanup_error]) from None
         raise
     else:
