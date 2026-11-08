@@ -501,6 +501,22 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "dark_verify": True,
     },
     # Resource management
+    # Direct local array origins can verify non-heap release. Mapping-name
+    # chains remain leads until mapping results and API provenance are checked.
+    "CWE-590": {
+        "smt": None,
+        "cocci": "free_stack_array.cocci",
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+    },
+    "CWE-762": {
+        "smt": None,
+        "cocci": "mmap_free.cocci",
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+    },
     "CWE-401": {
         "smt": "check-resource-leak",
         "cocci": ["resource_leak_err.cocci", "realloc_losing_ptr.cocci", "mmap_leak_err.cocci"],

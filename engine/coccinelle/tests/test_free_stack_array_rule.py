@@ -1,10 +1,4 @@
-"""Fixture tests for the free_stack_array rule.
-
-Verification-role rule (fires mint confirmed CWE-590 verdicts):
-free() on a constant-size named array corrupts heap allocator
-metadata. The positive pins free of a stack array; the negative
-pins the legitimate malloc'd-pointer free.
-"""
+"""Native local-array origin contracts, including VLAs and shadowing."""
 
 from __future__ import annotations
 
@@ -19,9 +13,10 @@ _RULE = (
     Path(__file__).resolve().parents[1] / "rules" / "free_stack_array.cocci"
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("spatch") is None, reason="coccinelle not installed",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(shutil.which("spatch") is None, reason="coccinelle not installed"),
+]
 
 
 def _run_rule(
@@ -56,3 +51,30 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+def test_array_storage_forms_and_pointer_controls(tmp_path):
+    cases = [
+        ("void", "void", "char buf[8]; free(buf);", True),
+        ("void", "unsigned long n", "char buf[n]; free(buf);", True),
+        ("void", "unsigned long n", "char buf[n + 1]; free(buf);", True),
+        ("void", "void", "char buf[2][8]; free(buf);", True),
+        ("void", "void", "static char buf[8]; free(buf);", True),
+        ("void", "void", "char buf[8] = {0}; free(buf);", True),
+        ("void", "void", "char *buf = malloc(8); free(buf);", False),
+        ("void", "char buf[8]", "free(buf);", False),
+        ("void", "unsigned long n, char buf[n]", "free(buf);", False),
+        ("void", "void", "char buf[8]; { char *buf = malloc(8); free(buf); }", False),
+        ("void", "void", "char buf[8]; consume(buf);", False),
+        ("void", "void", "char buf[8]; consume(sizeof(({ free(buf); 0; })));", False),
+    ]
+    lines = []
+    expected = []
+    for index, (result, params, body, positive) in enumerate(cases):
+        lines.extend([f"{result} case_{index}({params}) {{", body, "}"])
+        if positive:
+            expected.append(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert sorted(row["line"] for row in rows) == expected
+    assert all(row["rule"] == "free_stack_array" for row in rows)
+    assert all(row["line_end"] == row["line"] and row["col_end"] > row["col"] for row in rows)

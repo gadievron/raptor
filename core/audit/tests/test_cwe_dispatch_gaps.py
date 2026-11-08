@@ -133,6 +133,17 @@ class TestNewDispatchEntries:
         assert [path.name for path in paths] == expected
         assert all(path.is_absolute() and path.is_file() for path in paths)
 
+    @pytest.mark.parametrize("cwe,rule", [
+        ("CWE-590", "free_stack_array.cocci"),
+        ("CWE-762", "mmap_free.cocci"),
+    ])
+    def test_release_origin_dispatch_resolves_shipped_rules(self, cwe, rule):
+        chain = _hypothesis_to_tool_chain("", "a.c", cwe=cwe)
+        paths = [Path(entry["config"]["rule"]) for entry in chain if entry["type"] == "coccinelle"]
+        assert [path.name for path in paths] == [rule]
+        assert all(path.is_absolute() and path.is_file() for path in paths)
+        assert cocci_rule_for_cwe(cwe) == rule
+
 
 def _suspicious_outcome(cwe: str, counter: str) -> ReviewOutcome:
     return ReviewOutcome(

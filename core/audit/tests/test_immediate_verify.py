@@ -207,6 +207,7 @@ class TestVerifyImmediate:
     @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", [
         pytest.param("use_after_free", "use after free of a pointer", "CWE-416", False, id="detection-uaf"),
         pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
+        pytest.param("mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
         pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ])
     def test_prep_phase_correlation_requires_verification_grade(
@@ -244,6 +245,7 @@ class TestVerifyImmediate:
     @pytest.mark.parametrize("receipt,hypothesis,cwe", [
         pytest.param("coccinelle:use_after_free", "use after free of a pointer", "CWE-416", id="detection-uaf"),
         pytest.param("coccinelle:mmap_leak_err", "mapping memory leak at return", "CWE-401", id="detection-mapping-leak"),
+        pytest.param("coccinelle:mmap_free", "mapping pointer passed to free", "CWE-762", id="detection-mapping-release"),
     ])
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
     def test_prep_phase_detection_receipt_cannot_bypass_aggregation(

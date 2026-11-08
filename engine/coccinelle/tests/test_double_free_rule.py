@@ -323,7 +323,7 @@ def test_heap_rules_keep_production_batching(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("rule_name", ["double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err"])
+@pytest.mark.parametrize("rule_name", ["double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err", "mmap_free", "free_stack_array", "popen_fclose"])
 def test_heap_silence_stays_inconclusive_after_file_memo_and_function_scoping(tmp_path, rule_name):
     from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
     from core.audit.sweep_memo import SweepMemo
@@ -344,6 +344,9 @@ def test_heap_silence_stays_inconclusive_after_file_memo_and_function_scoping(tm
         "resource_leak_err": ["p = kmalloc(sizeof(*p), 0);", "if (p && failure()) { return -1; }"],
         "mmap_leak_err": ["p = mmap(0, 4096, 1, 2, -1, 0);", "if (p == MAP_FAILED) return -1;",
                           "if (failure()) return -22;", "munmap(p, 4096);"],
+        "mmap_free": ["p = mmap(0, 4096, 1, 2, -1, 0);", "free(p);"],
+        "free_stack_array": ["char local[8];", "free(local);"],
+        "popen_fclose": ["p = popen(\"true\", \"r\");", "fclose(p);"],
     }[rule_name]
     lines = ["struct node { int value; };", "int bad(struct node *p) {", *body, "return 0;", "}",
              "void quiet(void) {", "return;", "}"]
