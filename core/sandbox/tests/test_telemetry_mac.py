@@ -13,6 +13,20 @@ from core.testing.module_bindings import patch_module_attribute
 
 import core.sandbox.telemetry_mac as _os_fault_consumer
 
+from core.testing.module_state import isolated_module_state
+
+
+@pytest.fixture(autouse=True)
+def _owned_key_warnings(monkeypatch):
+    """Keep key-refusal deduplication local to this test's key files."""
+    from core.sandbox import telemetry_mac
+
+    with isolated_module_state(telemetry_mac, {"_warned_paths": set()}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):

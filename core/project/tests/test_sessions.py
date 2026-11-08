@@ -13,6 +13,7 @@ launcher wiring) that must keep working unchanged.
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import os
 import subprocess
@@ -25,8 +26,26 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from core.project import sessions
+from core.testing.module_state import isolated_module_state
 from core.project.cli import main
 from core.project.project import ProjectManager
+
+@pytest.fixture(autouse=True)
+def _owned_identity_caches(monkeypatch):
+    """Keep session tests' cold identity caches separate from the caller's."""
+    names = ('boot_id', 'pidns_id', 'machine_id')
+    replacements = {}
+    for name in names:
+        original = getattr(sessions, name)
+        replacements[name] = functools.lru_cache(**original.cache_parameters())(
+            original.__wrapped__,
+        )
+    with isolated_module_state(sessions, replacements):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = REPO_ROOT / "bin" / "raptor"
@@ -323,25 +342,33 @@ class PriorBootEntryTest(unittest.TestCase):
                 boot_id="none-darwin")))
 
     def test_machine_id_is_a_hash_never_the_raw_value(self):
-        # Hygiene contract: the recorded identity is a digest — the
-        # raw /etc/machine-id must never appear in metadata.
-        sessions.machine_id.cache_clear()
-        try:
-            mid = sessions.machine_id()
-            if mid is None:
-                self.skipTest("no readable /etc/machine-id on this host")
-            self.assertRegex(mid, r"^[0-9a-f]{64}$")
-            raw = Path("/etc/machine-id").read_text(
-                encoding="utf-8").strip()
-            if raw:
-                self.assertNotIn(raw, mid)
-                # Domain-separated: not the bare digest another
-                # application would compute from the same file.
-                import hashlib
-                self.assertNotEqual(
-                    mid, hashlib.sha256(raw.encode()).hexdigest())
-        finally:
-            sessions.machine_id.cache_clear()
+        # Read an owned machine-id file through the consumer's Path binding.
+        # The production function still hashes bytes and domain-separates them.
+        with TemporaryDirectory() as directory:
+            identity = Path(directory) / "machine-id"
+            identity.write_text("test-owned-machine-id\n", encoding="utf-8")
+            real_path = Path
+
+            def machine_path(path):
+                return identity if str(path) == "/etc/machine-id" else real_path(path)
+
+            with patch.object(sessions, "Path", machine_path):
+                sessions.machine_id.cache_clear()
+                try:
+                    mid = sessions.machine_id()
+                    self.assertIsNotNone(mid)
+                    self.assertRegex(mid, r"^[0-9a-f]{64}$")
+                    raw = identity.read_text(
+                        encoding="utf-8").strip()
+                    if raw:
+                        self.assertNotIn(raw, mid)
+                        # Domain-separated: not the bare digest another
+                        # application would compute from the same file.
+                        import hashlib
+                        self.assertNotEqual(
+                            mid, hashlib.sha256(raw.encode()).hexdigest())
+                finally:
+                    sessions.machine_id.cache_clear()
 
 
 class SessionBindingTest(_RegistryCase):
