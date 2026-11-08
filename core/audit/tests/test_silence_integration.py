@@ -22,10 +22,11 @@ Cells (one function each; every model verdict is an evidence-free
 * ``by_attr_rule`` — CWE-79 body-context XSS; the dispatched curated
   rule (php/attr-xss.yaml) adjudicates only the attribute-context
   sub-shape. Pre-fix: its silence refuted the class → clean, dropped.
-* ``by_argument``  — CONTROL: CWE-88 claim; the curated
-  argument-injection rule adjudicates the class it is dispatched for,
-  and its scanned silence is a probative refutation → clean before AND
-  after (the fix starves no genuine refutation).
+* ``by_argument``  — CWE-88 claim; the curated argument-injection rule
+  is confirm-only. Its scanned silence leaves the claim dark and exported.
+* ``by_control``   — CONTROL: a claim about a literal fixture-marker call;
+  an unmarked fixture rule covers that complete bounded claim. Its scanned
+  silence remains a probative refutation → clean.
 * ``by_lineless``  — (own file) a CORRELATED SQL-injection SARIF result
   with no placeable line. Pre-fix: placed in every function's range,
   it corroborated the claim → suspicious; now unplaceable → no
@@ -37,8 +38,8 @@ Cells (one function each; every model verdict is an evidence-free
   importing it.
 
 Pinned flip set (pre-fix → now): by_alias clean→dark, by_keyword
-clean→dark, by_attr_rule clean→dark, by_lineless suspicious→dark;
-by_argument clean→clean.
+clean→dark, by_attr_rule clean→dark, by_argument clean→dark,
+by_lineless suspicious→dark; by_control clean→clean.
 """
 
 from __future__ import annotations
@@ -77,6 +78,9 @@ _APP = (
     "function unrelated() {\n"                                    # 14
     "    phpinfo();\n"                                            # 15
     "}\n"                                                         # 16
+    "function by_control($flag) {\n"                              # 17
+    "    return $flag;\n"                                         # 18
+    "}\n"                                                         # 19
 )
 _TINY = "<?php\nfunction tiny($a) {\n    return $a + 1;\n}\n"
 _LINELESS = (
@@ -94,6 +98,7 @@ _CLAIMS = {
     "by_keyword": ("CWE-89", "SQL injection: id reaches the query unescaped"),
     "by_attr_rule": ("CWE-79", "the name is echoed into the page unescaped"),
     "by_argument": ("CWE-88", "the flag is passed to the command unescaped"),
+    "by_control": ("", "the fixture_marker call is present"),
     "by_lineless": ("CWE-89", "the id reaches the database lookup unescaped"),
 }
 
@@ -101,8 +106,9 @@ _EXPECTED = {
     "by_alias": "dark",
     "by_keyword": "dark",
     "by_attr_rule": "dark",
-    "by_argument": "clean",
+    "by_argument": "dark",
     "by_lineless": "dark",
+    "by_control": "clean",
 }
 _PRE_FIX = {
     "by_alias": "clean",
@@ -110,6 +116,7 @@ _PRE_FIX = {
     "by_attr_rule": "clean",
     "by_argument": "clean",
     "by_lineless": "suspicious",
+    "by_control": "clean",
 }
 
 
@@ -127,6 +134,7 @@ def _write_tree(tmp_path: Path) -> tuple[Path, Path]:
         {"name": "by_attr_rule", "line_start": 8, "line_end": 10},
         {"name": "by_argument", "line_start": 11, "line_end": 13},
         {"name": "unrelated", "line_start": 14, "line_end": 16},
+        {"name": "by_control", "line_start": 17, "line_end": 19},
     ]
     checklist = {"files": [
         {"path": "app.php", "language": "php", "items": items},
@@ -200,11 +208,29 @@ class TestPopulatedSarifCacheSeam:
     def run(self, tmp_path, monkeypatch):
         _reset_substrate_caches()
         target, out = _write_tree(tmp_path)
+        # Keep a genuinely probative control independent of curated rule roles.
+        # This rule covers only the fixture's literal-call presence claim.
+        control_rule = tmp_path / "control.yaml"
+        control_rule.write_text(
+            "rules:\n  - id: fixture-marker\n    languages: [php]\n"
+            "    pattern: fixture_marker(...)\n    message: marker call\n"
+            "    severity: WARNING\n",
+        )
+        original_chain = orch._hypothesis_to_tool_chain
+
+        def tool_chain(hypothesis, *args, **kwargs):
+            if hypothesis == _CLAIMS["by_control"][1]:
+                return [{"type": "semgrep", "config": {"rule": str(control_rule)}}]
+            return original_chain(hypothesis, *args, **kwargs)
+
+        monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", tool_chain)
         # This seam exercises scanner receipts and resolution, not background
         # study, unrelated detectors, or LLM-generated witness probes.
         monkeypatch.setattr(orch, "_run_mechanical_detectors", lambda *a, **k: ({}, set()))
         monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
         monkeypatch.setattr(orch, "_run_dark_verification", lambda *a, **k: None)
+        # No CodeQL channel participates in this Semgrep receipt fixture.
+        monkeypatch.setattr(orch, "_resolved_codeql_query", lambda *a, **k: None)
         # semgrep at the runner boundary: available, scans the target
         # (scanned-path witness present), matches nothing.
         monkeypatch.setattr(semgrep_runner, "is_available", lambda: True)
@@ -229,6 +255,8 @@ class TestPopulatedSarifCacheSeam:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             inventory=checklist, batch_sloc_threshold=0,
+            # Canned synchronous reviews do not need model-derived parallelism.
+            max_workers=1,
             verdict_reuse=False,
             immediate_verify=False, on_demand_synthesis=False,
         )
@@ -242,16 +270,14 @@ class TestPopulatedSarifCacheSeam:
         assert list(out.rglob("*.sarif"))
 
     def test_exact_flip_set(self, run):
-        """Exactly the four silence-shaped claims (alias, keyword,
-        attr-xss rule, line-less SARIF) change status against the pre-fix
-        result; the control does not move."""
+        """Non-probative claims stay dark; the bounded control stays clean."""
         result, _out = run
         final = {o.function: o.status for o in result.outcomes
                  if o.function in _CLAIMS}
         assert final == _EXPECTED
         flipped = {fn for fn in _CLAIMS if _PRE_FIX[fn] != final[fn]}
         assert flipped == {
-            "by_alias", "by_keyword", "by_attr_rule", "by_lineless"}
+            "by_alias", "by_keyword", "by_attr_rule", "by_argument", "by_lineless"}
 
     def test_flipped_rows_are_exported_and_the_control_is_not(self, run):
         """The flipped rows reach the export; the probatively refuted
@@ -262,19 +288,18 @@ class TestPopulatedSarifCacheSeam:
             export_findings(result.outcomes)["findings"]
         }
         assert {"by_alias", "by_keyword", "by_attr_rule",
-                "by_lineless"} <= exported
-        assert "by_argument" not in exported
+                "by_argument", "by_lineless"} <= exported
+        assert "by_control" not in exported
 
     def test_records_name_the_non_probative_channel(self, run):
-        """The keyword and attr-xss rows record semgrep as inconclusive;
-        the control's clean is stamped gate_resolved."""
+        """Non-probative rules record inconclusive; the control is resolved."""
         result, _out = run
         by_fn = {o.function: o for o in result.outcomes}
-        for fn in ("by_keyword", "by_attr_rule"):
+        for fn in ("by_keyword", "by_attr_rule", "by_argument"):
             o = by_fn[fn]
             assert "semgrep" in (o.tools_dispatched or set())
             assert "semgrep" in (o.tools_inconclusive or set())
-        control = by_fn["by_argument"]
+        control = by_fn["by_control"]
         assert "semgrep" in (control.tools_dispatched or set())
         assert not (control.tools_inconclusive or set())
         assert control.clean_basis == "gate_resolved"
