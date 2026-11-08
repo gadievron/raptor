@@ -18,12 +18,18 @@ from core.analysis.summaries import FunctionSummary, Precondition, TaintRule
 from core.evidence import EvidenceTier
 from core.orchestration.llm_json import strip_json_fences
 from core.security.prompt_framing import with_audit_framing
-from core.source.lines import split_lines
+from core.source.lines import slice_text, split_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_LINES_IMPL = split_lines
+_SUMMARY_TYPE_IMPL = type
+_SUMMARY_LEN_IMPL = len
+_SUMMARY_MIN_IMPL = min
+_SUMMARY_MAX_IMPL = max
 
 # Audit-purpose framing: this class was AUP-refused 18/18 in one
 # comparison audit and again 15/15 with the v1 one-paragraph framing;
@@ -431,6 +437,14 @@ def _read_source(
                 file_path, line_start, line_end,
             )
             return None
+        if (_SUMMARY_TYPE_IMPL(text) is str and str.__len__(text) >= 16 * 1024
+                and _SUMMARY_TYPE_IMPL(line_start) is int
+                and (line_end is None or _SUMMARY_TYPE_IMPL(line_end) is int)
+                and split_lines is _SUMMARY_LINES_IMPL
+                and len is _SUMMARY_LEN_IMPL and min is _SUMMARY_MIN_IMPL
+                and max is _SUMMARY_MAX_IMPL):
+            end = max(line_end or line_start, line_start)
+            return slice_text(text, line_start, end)
         lines = split_lines(text)
         start = max(0, line_start - 1)
         # A missing/zero line_end clamps to the start line rather than

@@ -48,12 +48,18 @@ from .callsite_consistency import (
 from .fail_open_roles import SecurityFlag, security_flag_role
 from .peer_evidence import FamilyMember, PeerEvidence, PeerExhibit
 from typing import TYPE_CHECKING
-from core.source.lines import split_lines
+from core.source.lines import slice_text, split_lines
 
 if TYPE_CHECKING:
     from tree_sitter import Node
 
 logger = logging.getLogger(__name__)
+
+# Native source splitting is pure. Capture its binding before traversal:
+# later callbacks must not replace the snapshot eager preparation made.
+_CONSISTENCY_LINES_IMPL = split_lines
+_CONSISTENCY_TYPE_IMPL = type
+_CONSISTENCY_LEN_IMPL = len
 
 try:
     from .ts_extract import (
@@ -207,7 +213,11 @@ def _arg_sites_for_file(
     call_types = _CALL_TYPES.get(lang, ())
     if call_types:
         src = source.encode("utf-8", errors="replace")
-        lines = split_lines(source)
+        line_split = split_lines
+        defer_lines = (_CONSISTENCY_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                       and line_split is _CONSISTENCY_LINES_IMPL)
+        lines_pending = defer_lines
+        lines = [] if lines_pending else line_split(source)
         for node in _walk_descendants(tree.root_node):
             if node.type not in call_types:
                 continue
@@ -237,6 +247,9 @@ def _arg_sites_for_file(
                 if enclosing else "<module>"
             )
             line = _node_line(node)
+            if lines_pending:
+                lines = line_split(source)
+                lines_pending = False
             snippet = (
                 lines[line - 1].strip()[:200]
                 if 1 <= line <= len(lines) else ""
@@ -702,13 +715,20 @@ def _function_spans_for_file(
     if not func_types:
         return False
     src = source.encode("utf-8", errors="replace")
-    lines = split_lines(source)
+    line_split = split_lines
+    defer_lines = (_CONSISTENCY_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                   and line_split is _CONSISTENCY_LINES_IMPL)
+    lines_pending = defer_lines
+    lines = [] if lines_pending else line_split(source)
     for node in _walk_descendants(tree.root_node):
         if node.type not in func_types:
             continue
         name = _get_func_name(node, lang, src)
         start = node.start_point[0] + 1
         end = node.end_point[0] + 1
+        if lines_pending:
+            lines = line_split(source)
+            lines_pending = False
         spans.append((file_path, name, start, lines[start - 1:end]))
     return True
 
@@ -1173,7 +1193,11 @@ def _shape_sites_for_file(
     call_types = _CALL_TYPES.get(lang, ())
     if call_types:
         src = source.encode("utf-8", errors="replace")
-        lines = split_lines(source)
+        line_split = split_lines
+        defer_lines = (_CONSISTENCY_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                       and line_split is _CONSISTENCY_LINES_IMPL)
+        lines_pending = defer_lines
+        lines = [] if lines_pending else line_split(source)
         # Repeated sizeof(name) arguments share the same declaration
         # search. Admission is bounded; overflow still searches normally.
         declaration_cache: dict[tuple[int | None, str], tuple[str, str]] = {}
@@ -1192,16 +1216,33 @@ def _shape_sites_for_file(
                 if enclosing else "<module>"
             )
             line = _node_line(node)
-            snippet = (
-                lines[line - 1].strip()[:200]
-                if 1 <= line <= len(lines) else ""
-            )
+            snippet = ""
+            snippet_len = len
+            snippet_pending = (defer_lines and _CONSISTENCY_TYPE_IMPL(line) is int
+                               and snippet_len is _CONSISTENCY_LEN_IMPL)
+            if not snippet_pending:
+                if lines_pending:
+                    lines = line_split(source)
+                    lines_pending = False
+                snippet = (
+                    lines[line - 1].strip()[:200]
+                    if 1 <= line <= len(lines) else ""
+                )
             pos = 0
             for child in arg_node.children:
                 if not child.is_named or child.type in {"comment", "keyword_argument"}:
                     continue
                 if pos >= _MAX_ARG_POSITIONS:
                     break
+                if snippet_pending:
+                    if lines_pending:
+                        lines = line_split(source)
+                        lines_pending = False
+                    snippet = (
+                        lines[line - 1].strip()[:200]
+                        if 1 <= line <= snippet_len(lines) else ""
+                    )
+                    snippet_pending = False
                 arg_text = _node_text(child, src).strip()
                 shape, detail = _classify_arg_shape(
                     arg_text, enclosing, src,
@@ -1876,7 +1917,11 @@ def _call_events_for_file(
     if not call_types:
         return False
     src = source.encode("utf-8", errors="replace")
-    lines = split_lines(source)
+    line_split = split_lines
+    defer_lines = (_CONSISTENCY_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                   and line_split is _CONSISTENCY_LINES_IMPL)
+    lines_pending = defer_lines
+    lines = [] if lines_pending else line_split(source)
     # One read index per file: the per-site fallback would rebuild a
     # full scope index for every call site, costing more than the
     # per-site walk it replaced.
@@ -1896,6 +1941,9 @@ def _call_events_for_file(
         if len(bucket) >= _MAX_EVENTS_PER_FUNCTION:
             continue
         line = _node_line(node)
+        if lines_pending:
+            lines = line_split(source)
+            lines_pending = False
         bucket.append(_CallEvent(
             callee=callee,
             line=line,
@@ -2291,11 +2339,19 @@ def detect_sanitize_sink_deviations(
     def _exhibit_snippet(fp: str, line: int) -> str:
         key = (fp, line)
         if key not in exhibit_snippets:
-            lines = split_lines(source_texts.get(fp, ""))
-            exhibit_snippets[key] = (
-                lines[line - 1].strip()[:200]
-                if 1 <= line <= len(lines) else ""
-            )
+            source = source_texts.get(fp, "")
+            if (_CONSISTENCY_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                    and _CONSISTENCY_TYPE_IMPL(line) is int
+                    and split_lines is _CONSISTENCY_LINES_IMPL and len is _CONSISTENCY_LEN_IMPL):
+                exhibit_snippets[key] = (
+                    slice_text(source, line, line).strip()[:200] if line >= 1 else ""
+                )
+            else:
+                lines = split_lines(source)
+                exhibit_snippets[key] = (
+                    lines[line - 1].strip()[:200]
+                    if 1 <= line <= len(lines) else ""
+                )
         return exhibit_snippets[key]
 
     deviations: list[SanitizeSinkDeviation] = []
